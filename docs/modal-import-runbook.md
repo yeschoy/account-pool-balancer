@@ -7,9 +7,10 @@
 | 项 | 值 |
 |---|---|
 | 目标服务 | 远程 OVH：`ssh ovh-server`（167.114.158.4，port 49555） |
-| 部署目录 | `/home/ubuntu/project/opendesign-balancer` |
+| 部署目录 | `/home/ubuntu/project/account-pool-balancer`（旧路径 `/home/ubuntu/project/opendesign-balancer` 是指向它的软链） |
 | 数据目录 | 同上 `data/`（`config.json` 是账号池真实存储） |
-| 容器 | `opendesign-balancer`，`127.0.0.1:8790:8790`，健康检查 `/healthz` |
+| 容器 | `account-pool-balancer`，`127.0.0.1:8790:8790`，健康检查 `/healthz` |
+| 网络名 | `http://account-pool-balancer:8790`（旧名 `opendesign-balancer` 保留为 ai-internal 上的兼容别名） |
 | 公网入口 | `https://ods.yeschoy.io` |
 | 导入密钥 | 管理台「下游密钥 → 导入密钥」，`sk-odbimp-…`。当前唯一一把：`杨总`（`ik_d783236e3d71d33e3fa4843a`，默认分组 `default`）。明文在远程 `data/config.json` 的 `importKeys[].key` |
 | 归属分组 | 不指定分组时 `wk-` 账号自动进 `modal` 组 |
