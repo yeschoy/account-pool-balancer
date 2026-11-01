@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 // Rolling counters wait for sampleSaveEvery; routing state is saved at once.

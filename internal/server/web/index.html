@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenDesign 账号池</title>
+<title>Account Pool Balancer</title>
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script>
+<script src="/assets/perch.js" defer></script>
 </head>
 <body>
 <div id="auth" class="auth hidden">
   <form id="auth-form" class="auth-card">
-    <div class="brand"><span class="logo">◆</span> OpenDesign 账号池</div>
+    <div class="brand"><span class="logo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 3v15M6 18h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5C7.5 7.5 16.5 7.5 20 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5v3M20 8.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M18 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="7.8" r="1.8" fill="currentColor"/></svg></span> Account Pool Balancer</div>
     <p id="auth-hint" class="muted"></p>
     <input id="auth-password" type="password" autocomplete="current-password" placeholder="管理员密码" required minlength="8">
     <input id="auth-password2" type="password" autocomplete="new-password" placeholder="再次输入密码" class="hidden" minlength="8">
@@ -21,7 +22,7 @@
 
 <div id="app" class="app hidden">
   <aside class="side">
-    <div class="brand"><span class="logo">◆</span> 账号池</div>
+    <div class="brand"><span class="logo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 3v15M6 18h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5C7.5 7.5 16.5 7.5 20 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5v3M20 8.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M18 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="7.8" r="1.8" fill="currentColor"/></svg></span> Account Pool</div>
     <nav id="nav">
       <a data-page="overview" class="active">概览</a>
       <a data-page="accounts">账号</a>
@@ -30,6 +31,10 @@
       <a data-page="requests">请求日志</a>
       <a data-page="errors">错误日志</a>
       <a data-page="details">详细日志</a>
+      <div class="nav-sep" data-pool-nav="perch" hidden>Perch</div>
+      <a data-page="perch" data-pool-nav="perch" hidden>Perch 概览</a>
+      <a data-page="paccounts" data-pool-nav="perch" hidden>Perch 账号</a>
+      <a data-page="psettings" data-pool-nav="perch" hidden>Perch 设置</a>
     </nav>
     <div class="side-foot">
       <button class="btn ghost small" id="btn-password">修改密码</button>
@@ -42,6 +47,7 @@
       <button class="pool-tab" data-pool="river" role="tab">River 号池</button>
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
+      <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
     </div>
     <section id="page-overview" class="page">
       <header class="page-head"><h1>概览</h1><span class="muted" id="ov-updated"></span></header>
@@ -53,6 +59,135 @@
       <div class="grid2">
         <div class="panel"><h2>最近 24 小时请求</h2><div id="ov-chart" class="chart"></div><div class="legend"><span class="sw ok"></span>成功 <span class="sw bad"></span>失败 <span class="sw cancel"></span>取消</div></div>
         <div class="panel"><h2>套餐窗口（按工作区去重）</h2><div id="ov-windows"></div><h2 class="mt">账号状态</h2><div id="ov-status" class="chips"></div></div>
+      </div>
+    </section>
+
+    <section id="page-perch" class="page hidden">
+      <header class="page-head"><h1>Perch 账号池</h1>
+        <div class="actions">
+          <button class="btn" id="btn-pc-refresh">刷新</button>
+          <button class="btn primary" id="btn-pc-import">导入账号 JSON</button>
+        </div>
+      </header>
+      <div id="pc-alert" class="panel hidden"></div>
+      <div id="pc-cards" class="cards"></div>
+      <div class="panel">
+        <div class="head-row"><h2>状态趋势（按天）</h2><span class="muted small">每次自动/手动检测记一次，保留最近 90 天</span></div>
+        <div id="pc-trend" class="chips"></div>
+      </div>
+    </section>
+
+    <section id="page-paccounts" class="page hidden">
+      <header class="page-head"><h1>Perch 账号</h1>
+        <div class="actions">
+          <input id="pc-q" placeholder="搜索邮箱 / User ID / 名称" size="24">
+          <select id="pc-status">
+            <option value="">全部状态</option>
+            <option value="normal">正常</option>
+            <option value="pending">待验证</option>
+            <option value="login-expired">登录失效</option>
+            <option value="refresh-failed">刷新失败</option>
+            <option value="restricted">套餐受限</option>
+            <option value="quota-exhausted">额度耗尽</option>
+            <option value="rate-limited">请求限流</option>
+            <option value="service-down">服务不可用</option>
+            <option value="disabled">已禁用</option>
+          </select>
+          <select id="pc-group"><option value="">全部分组</option></select>
+          <select id="pc-plan"><option value="">全部套餐</option></select>
+          <select id="pc-remaining">
+            <option value="">全部额度</option>
+            <option value="unknown">额度未知</option>
+            <option value="exhausted">已耗尽</option>
+            <option value="10%">剩余 ≥10%</option>
+            <option value="50%">剩余 ≥50%</option>
+          </select>
+          <select id="pc-sort">
+            <option value="status">按状态</option>
+            <option value="email">按邮箱</option>
+            <option value="expires">按到期时间</option>
+            <option value="checked">按最近检测</option>
+            <option value="quota">按剩余额度</option>
+            <option value="created">按创建时间</option>
+            <option value="plan">按套餐</option>
+          </select>
+          <select id="pc-dir"><option value="asc">升序</option><option value="desc">降序</option></select>
+          <button class="btn" id="btn-pc-search">查询</button>
+          <button class="btn primary" id="btn-pc-import2">导入</button>
+        </div>
+      </header>
+      <div class="panel flush">
+        <div class="head-row batch-bar">
+          <span class="muted small" id="pc-count">—</span>
+          <div class="actions">
+            <select id="pc-batch-action">
+              <option value="">批量操作…</option>
+              <option value="enable">启用</option>
+              <option value="disable">禁用</option>
+              <option value="check">检测登录状态</option>
+              <option value="refresh">刷新 Session</option>
+              <option value="quota">同步额度</option>
+              <option value="group">移动到分组…</option>
+              <option value="tags">设置标签…</option>
+              <option value="delete">删除</option>
+            </select>
+            <select id="pc-batch-scope">
+              <option value="selected">选中的账号</option>
+              <option value="abnormal">所有异常账号</option>
+              <option value="due">所有即将过期账号</option>
+              <option value="login-expired">所有登录失效账号</option>
+              <option value="all">全部账号</option>
+            </select>
+            <button class="btn" id="btn-pc-batch">执行</button>
+            <button class="btn ghost small" id="btn-pc-export">导出脱敏</button>
+            <button class="btn ghost small" id="btn-pc-backup">加密备份</button>
+            <button class="btn ghost small" id="btn-pc-restore">恢复备份</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="table" id="pc-table">
+          <thead><tr>
+            <th class="pick"><input type="checkbox" id="pc-all"></th>
+            <th>账号</th><th>状态</th><th>套餐</th><th>剩余额度</th><th>Access Token 到期</th>
+            <th>最近刷新</th><th>最近检测</th><th>分组 / 标签</th><th></th>
+          </tr></thead><tbody></tbody></table></div>
+        <div class="more pc-pager">
+          <button class="btn ghost small" id="pc-prev">上一页</button>
+          <span class="muted small" id="pc-page">—</span>
+          <button class="btn ghost small" id="pc-next">下一页</button>
+        </div>
+        <p id="pc-empty" class="empty hidden">还没有 Perch 账号。点「导入账号 JSON」上传账号导出的 JSON（支持多选与 ZIP）。</p>
+      </div>
+      <div class="panel" id="pc-detail-panel">
+        <h2 class="panel-title">账号详情与事件</h2>
+        <div id="pc-detail" class="muted small">在表格里点一个账号查看。</div>
+      </div>
+    </section>
+
+    <section id="page-psettings" class="page hidden">
+      <header class="page-head"><h1>Perch 设置</h1>
+        <div class="actions"><span class="muted" id="pc-set-rev"></span><button class="btn primary" id="btn-pc-save">保存</button></div>
+      </header>
+      <div class="grid2">
+        <div class="panel">
+          <h2>Session 续期</h2>
+          <div class="form" id="form-perch-refresh"></div>
+          <h2 class="mt">状态检测与额度</h2>
+          <div class="form" id="form-perch-monitor"></div>
+        </div>
+        <div class="panel">
+          <h2>日志与提醒</h2>
+          <div class="form" id="form-perch-logs"></div>
+          <h2 class="mt">模型调用（OpenAI 兼容）</h2>
+          <div class="form" id="form-perch-gate"></div>
+          <h2 class="mt">存储</h2>
+          <div id="pc-store" class="muted small"></div>
+          <h2 class="mt">事件日志</h2>
+          <div class="row">
+            <input id="pc-log-before" placeholder="清理此时间之前的日志（2026-11-01）">
+            <button class="btn ghost" id="btn-pc-clear-logs">清理</button>
+          </div>
+          <div class="table-wrap mt"><table class="table" id="pc-log-table"><thead><tr><th>时间</th><th>账号</th><th>事件</th><th>结果</th><th>说明</th></tr></thead><tbody></tbody></table></div>
+        </div>
       </div>
     </section>
 

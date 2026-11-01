@@ -21,10 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/pool"
-	"opendesign-balancer/internal/rules"
-	"opendesign-balancer/internal/stats"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/pool"
+	"account-pool-balancer/internal/rules"
+	"account-pool-balancer/internal/stats"
 )
 
 // ---- log records: strict projections, never a request, account or error object ----
@@ -264,9 +264,27 @@ func modalPath(p string) bool {
 	return false
 }
 
+// perchPath: what the Perch relay can translate. Chat Completions and
+// Responses only; everything else has no Perch counterpart.
+func perchPath(p string) bool {
+	for _, base := range []string{"/v1/chat/completions", "/v1/responses"} {
+		if p == base || strings.HasPrefix(p, base+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // poolPathOK says whether an account's pool serves the path.
+//
+// The Perch pool serves OpenAI Chat Completions and Responses: its model-call
+// proxy takes Perch's own envelope and answers with Perch's event stream, and
+// attemptPerch translates in both directions. Completions/embeddings have no
+// Perch equivalent, so they are refused locally rather than sent upstream.
 func poolPathOK(provider, path string) bool {
 	switch provider {
+	case config.ProviderPerch:
+		return perchPath(path)
 	case config.ProviderRiver:
 		return riverPath(path)
 	case config.ProviderOllama:
@@ -842,6 +860,14 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	timer := time.AfterFunc(limit, func() { timedOut.Store(true); cancel() })
 	defer timer.Stop()
+
+	// Perch has no OpenAI-compatible endpoint: its one model-call proxy takes
+	// Perch's own envelope and answers with Perch's own event stream. It is
+	// served here, inside the same lease/retry/logging path every other pool
+	// uses, so selection, cooldowns and the error rules all apply unchanged.
+	if acct.Provider == config.ProviderPerch {
+		return s.attemptPerch(w, r, cfg, lease, body, proto, rec, actx, res, &timedOut)
+	}
 
 	var sentOnce sync.Once
 	markSent := func() { sentOnce.Do(func() { res.sent = true; lease.MarkSent() }) }

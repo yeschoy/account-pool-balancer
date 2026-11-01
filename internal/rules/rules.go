@@ -249,6 +249,66 @@ func DefaultModalRetryRules() []RetryRule {
 		400, 404, 413, 422)
 }
 
+// DefaultPerchErrorRules are the Perch pool's: a spent allowance and a
+// throttled turn are Perch's own announcements, and a refused session is an
+// account that needs signing in again rather than a key to replace.
+func DefaultPerchErrorRules() []ErrorRule {
+	return []ErrorRule{
+		{ID: "perch-session-invalid", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 401,
+			When: Match{Statuses: []int{401}},
+			Note: "Perch 会话已失效（Access Token 不被接受且刷新失败）：需重新登录该账号并粘贴新的 Session，然后点“恢复”"},
+		{ID: "perch-surface-required", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 403,
+			When: Match{Statuses: []int{403}, BodyContains: []string{"perch_surface_required", "starter_model_blocked"}},
+			Note: "Perch 套餐限制：该模型不在当前套餐的可用范围内（starter_model_blocked / perch_surface_required），需人工处理"},
+		{ID: "perch-banned", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 403,
+			When: Match{Statuses: []int{403, 401}, BodyContains: []string{"banned"}},
+			Note: "账号被 Perch 封禁：不可自动恢复，需人工处理"},
+		{ID: "perch-allowance-spent", Scope: ScopeAccount, Action: ActionCooldown, RefreshQuota: true, DownstreamStatus: 429,
+			When:  Match{Statuses: []int{429}, BodyContains: []string{"usage_limit_reached", "allowance", "rate_limit_error"}},
+			Reset: &Reset{Fallback: "15m", Max: "6h", Escalate: true},
+			Note:  "本月额度已用尽：整号冷却，15 分钟起逐次翻倍，最长 6 小时，成功一次清零；并重新读 usage meter"},
+		// Perch's client treats these three as "the allowance ran out", whatever
+		// the status: provider_limit is a provider-side quota/billing refusal
+		// the model-call proxy reports in a done frame, so it can arrive as 200.
+		{ID: "perch-provider-limit", Scope: ScopeAccount, Action: ActionCooldown, RefreshQuota: true, DownstreamStatus: 429,
+			When:  Match{Statuses: []int{429, 402, 403}, BodyContains: []string{"provider_limit"}},
+			Reset: &Reset{Fallback: "15m", Max: "6h", Escalate: true},
+			Note:  "上游供应商额度/计费拒绝（provider_limit）：整号冷却并重新读额度"},
+		// Capacity is Perch's own side being full — not this account's fault, so
+		// it must not be cooled or quarantined. The retry rule below stops the
+		// request rather than burning the pool's other accounts on it.
+		{ID: "perch-capacity-reached", Scope: ScopeModel, Action: ActionIgnore, DownstreamStatus: 503,
+			When: Match{Statuses: []int{429, 503}, BodyContains: []string{"capacity_reached"}},
+			Note: "Perch 侧容量已满（capacity_reached）：不是账号的问题，不冷却、不隔离；重试规则会让请求直接返回"},
+		{ID: "perch-turn-rate-limited", Scope: ScopeModel, Action: ActionCooldown,
+			When:  Match{Statuses: []int{429}, BodyContains: []string{"turn_rate_limited"}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "30s", Max: "10m"},
+			Note:  "Perch 每次调用的配额（turn ticket）被限流：按 Retry-After 冷却后换号，不是账号失效"},
+		{ID: "perch-unavailable", Scope: ScopeAccount, Action: ActionCooldown,
+			When:  Match{Statuses: []int{500, 502, 503, 504}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "20s", Max: "5m"},
+			Note:  "Perch 服务暂时不可用：短冷却后换号"},
+	}
+}
+
+// DefaultPerchRetryRules retry nothing on a bad request: Perch's envelope is
+// this program's to build, so a 400 means our bug, not the account's.
+// DefaultPerchRetryRules stop a request when switching accounts cannot help.
+//
+// A malformed request is ours to fix. A capacity limit is Perch's own side
+// being full: every account would meet the same wall, so switching would only
+// spend the pool's other accounts on a request that cannot succeed.
+func DefaultPerchRetryRules() []RetryRule {
+	return []RetryRule{
+		{ID: "perch-bad-request", Decision: DecisionStop,
+			When: Match{Statuses: []int{400, 413, 422}},
+			Note: "Perch 认为请求本身有错（参数无效、体积超限），换号也没用"},
+		{ID: "perch-capacity", Decision: DecisionStop,
+			When: Match{Statuses: []int{429, 503}, BodyContains: []string{"capacity_reached"}},
+			Note: "Perch 侧容量已满（capacity_reached）：所有账号都会遇到同一个限制，换号没有意义"},
+	}
+}
+
 func retryRulesFor(id, note string, statuses ...int) []RetryRule {
 	return []RetryRule{{ID: id, Decision: DecisionStop, When: Match{Statuses: statuses}, Note: note}}
 }

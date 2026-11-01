@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 var secretPatterns = []*regexp.Regexp{

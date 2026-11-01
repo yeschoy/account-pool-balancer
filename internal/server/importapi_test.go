@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 const testImportKey = "sk-odbimp-test-import-key-00000001"

@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/fsutil"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/fsutil"
 )
 
 const (
@@ -263,7 +263,7 @@ func (s *Server) handleOpenImport(w http.ResponseWriter, r *http.Request) {
 	ik, ok := s.importKeyFromRequest(r)
 	if !ok {
 		s.openAuth.fail(ip)
-		w.Header().Set("WWW-Authenticate", `Bearer realm="opendesign-balancer import"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="account-pool-balancer import"`)
 		apiError(w, http.StatusUnauthorized, errors.New("invalid or missing import key"))
 		return
 	}
@@ -329,7 +329,7 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 	name := strings.TrimSpace(it.Name)
 	group := strings.TrimSpace(it.Group)
 	if p := strings.TrimSpace(it.Provider); p != "" && !config.KnownProvider(p) {
-		return importResult{Status: "error", Name: name, Error: "provider must be opendesign, river, ollama or modal"}
+		return importResult{Status: "error", Name: name, Error: "provider must be opendesign, river, ollama, modal or perch (a perch account carries no API key: use POST /open/v1/perch/import with its export JSON)"}
 	}
 	// the item's own provider wins, else the import key's pool (it names the
 	// pool its accounts join), else the key's prefix
@@ -349,6 +349,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 	case runtimeKey == "":
 		return fail("runtimeKey is required")
 	case !config.ValidRuntimeKeyFor(provider, runtimeKey) || len(runtimeKey) > 512:
+		if provider == config.ProviderPerch {
+			return fail("perch accounts take no API key: POST the account export to /open/v1/perch/import instead")
+		}
 		return fail("runtimeKey must start with sk-amr- (OpenDesign), rv_ (River) or wk- (Modal); an Ollama key has no prefix and needs \"provider\":\"ollama\"")
 	case controlKey != "" && provider != config.ProviderOpenDesign:
 		return fail(provider + " accounts have no controlKey")

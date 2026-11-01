@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/fsutil"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/fsutil"
 )
 
 // maxImportLog is how many records ONE pool keeps: the console reads a pool

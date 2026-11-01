@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 // Snapshot is what was last read for one account. Each part keeps its own
@@ -53,6 +53,13 @@ type Snapshot struct {
 	Ollama    *OllamaBalance `json:"ollama,omitempty"`
 	BalanceAt time.Time      `json:"balanceAt,omitzero"`
 
+	// Perch is the usage meter the Perch pool reads: Perch's own numbers, in
+	// Perch's units. It is separate from Windows (which are OpenDesign's
+	// shape) so neither provider's figures are misread as the other's.
+	Perch      *PerchMeter `json:"perch,omitempty"`
+	PerchAt    time.Time   `json:"perchAt,omitzero"`
+	PerchError string      `json:"perchError,omitempty"`
+
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
 	LastErrorAt time.Time `json:"lastErrorAt,omitzero"`
@@ -66,6 +73,76 @@ type Coverage struct {
 	Covered *bool     `json:"covered"`
 	Funding string    `json:"funding"`
 	At      time.Time `json:"at"`
+}
+
+// PerchMeter is what Perch's usage meter reported, converted to Perch's PT
+// unit (a thousandth of a dollar, rounded up). Every figure is what Perch
+// said; a figure Perch did not report stays zero and is shown as unknown.
+type PerchMeter struct {
+	// Plan is the plan label Perch announced.
+	Plan string `json:"plan,omitempty"`
+	// PlanCode is the raw code ("pilot", "pro", "ultra", …); it decides the
+	// fallback caps below.
+	PlanCode string `json:"planCode,omitempty"`
+	// AllowancePT is the month's cap, and AllowanceSource says where it came
+	// from: an entitlement Perch stated, Perch's own plan-code fallback, or
+	// "none" (genuinely unknown).
+	AllowancePT     int64  `json:"allowancePt,omitempty"`
+	AllowanceSource string `json:"allowanceSource,omitempty"`
+	// ManualLimitPT caps manual (non-plan) model calls, same provenance.
+	ManualLimitPT     int64  `json:"manualLimitPt,omitempty"`
+	ManualLimitSource string `json:"manualLimitSource,omitempty"`
+	// CreditBalancePT is purchased credit, which sits outside the plan.
+	CreditBalancePT int64 `json:"creditBalancePt,omitempty"`
+	// RoostUnlimited: the plan's roost entitlement is unlimited.
+	RoostUnlimited bool `json:"roostUnlimited,omitempty"`
+	// Unlimited: an internal/staff account Perch does not meter.
+	Unlimited bool `json:"unlimited,omitempty"`
+	// UsedPT is this month's plan spend (the month's total less the manual
+	// part, which the plan's allowance does not cover).
+	UsedPT        int64     `json:"usedPt"`
+	ManualPT      int64     `json:"manualPt"`
+	DailyPT       int64     `json:"dailyPt"`
+	WeeklyPT      int64     `json:"weeklyPt"`
+	DailyCalls    int64     `json:"dailyCalls"`
+	WeeklyCalls   int64     `json:"weeklyCalls"`
+	MonthlyCalls  int64     `json:"monthlyCalls"`
+	WeeklyTokens  int64     `json:"weeklyTokens"`
+	MonthlyTokens int64     `json:"monthlyTokens"`
+	PeriodStart   string    `json:"periodStart,omitempty"`
+	ResetsAt      time.Time `json:"resetsAt,omitzero"`
+	// Raw is Perch's answer, for the console's detail view.
+	Raw map[string]any `json:"raw,omitempty"`
+}
+
+// RemainingPT is the month's headroom when Perch stated a cap, else 0 with
+// known=false: the console shows "unknown" rather than inventing a number.
+func (m *PerchMeter) RemainingPT() (int64, bool) {
+	if m == nil || m.Unlimited || m.AllowancePT <= 0 {
+		return 0, false
+	}
+	rem := m.AllowancePT - m.UsedPT
+	if rem < 0 {
+		rem = 0
+	}
+	return rem, true
+}
+
+// Exhausted reports whether the meter says the month's allowance is spent.
+// Without a stated cap there is no such verdict to give.
+func (m *PerchMeter) Exhausted(now time.Time) bool {
+	if m == nil || m.Unlimited || m.AllowancePT <= 0 {
+		return false
+	}
+	if !m.ResetsAt.IsZero() && now.After(m.ResetsAt) {
+		return false // the period rolled over; the meter is stale
+	}
+	return m.UsedPT >= m.AllowancePT
+}
+
+// FreshPerch: the meter was read within stale and the last read did not fail.
+func (s *Snapshot) FreshPerch(now time.Time, stale time.Duration) bool {
+	return s != nil && s.Perch != nil && s.PerchError == "" && !s.PerchAt.IsZero() && now.Sub(s.PerchAt) < stale
 }
 
 const (
@@ -150,6 +227,10 @@ func (s *Snapshot) clone() *Snapshot {
 	if s.Ollama != nil {
 		ob := *s.Ollama
 		c.Ollama = &ob
+	}
+	if s.Perch != nil {
+		pm := *s.Perch
+		c.Perch = &pm
 	}
 	return &c
 }
@@ -376,6 +457,11 @@ type Poller struct {
 	Cfg      func() *config.Config
 	HTTPFor  func(proxyURL string) *http.Client
 	OnUpdate func(accountID string)
+	// PerchFetch reads a Perch account's usage meter. It is a hook so this
+	// package needs no knowledge of Perch's session handling (which lives in
+	// internal/perchstore): given an account it returns the meter, or an
+	// error whose text the console shows.
+	PerchFetch func(ctx context.Context, a config.Account) (*PerchMeter, error)
 
 	mu      sync.Mutex
 	snaps   map[string]*Snapshot
@@ -574,13 +660,14 @@ func (p *Poller) dispatch(ctx context.Context) {
 
 // RefreshNow reads one account synchronously (admin button).
 func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
-	if a.ControlKey == "" || a.Provider == config.ProviderModal {
+	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
 		p.mu.Lock()
 		if s := p.snaps[a.ID]; s != nil {
 			c := *s
 			c.CatalogAt = time.Time{}
 			c.BalanceAt = time.Time{}
+			c.PerchAt = time.Time{}
 			p.snaps[a.ID] = &c
 		}
 		p.mu.Unlock()
@@ -602,6 +689,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchOllama(ctx, cfg, a)
 	case config.ProviderModal:
 		return p.fetchCatalogOnly(ctx, cfg, a)
+	case config.ProviderPerch:
+		return p.fetchPerch(ctx, cfg, a)
 	}
 	client := &Client{Base: cfg.Upstream.ControlBase, HTTP: p.HTTPFor(a.ProxyURL)}
 	p.mu.Lock()
@@ -695,6 +784,39 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		s.LastError = ""
 	}
 	s.NextAt = now.Add(time.Duration(cfg.Quota.IntervalSec) * time.Second)
+	p.store(a.ID, s)
+	return nil
+}
+
+// fetchPerch reads a Perch account's usage meter. It reads recorded spend
+// through Perch's own RPC, so it consumes no model allowance; a failure here
+// is Parked against the meter only and never against the session, which the
+// Perch pool's own keeper maintains independently.
+func (p *Poller) fetchPerch(ctx context.Context, cfg *config.Config, a config.Account) error {
+	p.mu.Lock()
+	prev := p.snaps[a.ID].clone()
+	p.mu.Unlock()
+	s := prev
+	if s == nil {
+		s = &Snapshot{}
+	}
+	now := time.Now()
+
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
+	met, err := p.PerchFetch(c, a)
+	cancel()
+	if err != nil {
+		s.PerchError, s.LastError, s.LastErrorAt = err.Error(), err.Error(), now
+		s.Failures++
+		s.NextAt = now.Add(backoff(s.Failures))
+		p.store(a.ID, s)
+		return err
+	}
+	s.Perch, s.PerchAt, s.PerchError = met, now, ""
+	s.LastOKAt, s.Failures = now, 0
+	s.LastError = ""
+	interval := max(time.Duration(cfg.Perch.QuotaIntervalSec)*time.Second, time.Minute)
+	s.NextAt = now.Add(interval)
 	p.store(a.ID, s)
 	return nil
 }

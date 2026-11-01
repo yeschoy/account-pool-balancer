@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 // shapes as read from the real control plane on 2026-10-23

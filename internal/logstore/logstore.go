@@ -126,6 +126,11 @@ var Filters = map[string][]string{
 	"requests": {"provider", "requestId", "accountId", "status", "result", "model", "errorCategory", "bindingResult", "clientKeyId", "stream", "protocol", "affinityKeyType", "affinityConfidence"},
 	"errors":   {"provider", "requestId", "accountId", "status", "category", "ruleId", "model", "clientKeyId"},
 	"details":  {"provider", "requestId", "accountId", "status", "model", "protocol", "clientKeyId"},
+	// perch is the Perch pool's own event log: imports, renewals, session
+	// expiry, status changes and usage reads. It carries no token: the
+	// records are written by internal/server/perch_log.go and only name
+	// accounts and outcomes.
+	"perch": {"provider", "accountId", "event", "userId", "outcome", "kind"},
 }
 
 func recordLimit(kindName string) int {

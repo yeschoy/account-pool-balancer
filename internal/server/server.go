@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,12 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/fsutil"
-	"opendesign-balancer/internal/logstore"
-	"opendesign-balancer/internal/pool"
-	"opendesign-balancer/internal/quota"
-	"opendesign-balancer/internal/stats"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/fsutil"
+	"account-pool-balancer/internal/logstore"
+	"account-pool-balancer/internal/pool"
+	"account-pool-balancer/internal/quota"
+	"account-pool-balancer/internal/stats"
 )
 
 type metadata struct {
@@ -59,6 +60,15 @@ type Server struct {
 	staging *staging
 	// imports logs every import call: caller IP, time, account counts.
 	imports *importLog
+	// perch is the Perch pool's session keeper and scheduler (nil until
+	// initPerch ran).
+	perch *perchRuntime
+	// The surface-gate preamble is derived once and cached: it comes from a
+	// Perch client installed on this machine, or from settings.
+	perchPrefixMu     sync.Mutex
+	perchPrefix       string
+	perchPrefixSource string
+	perchPrefixKnown  bool
 	// metaDirty: quota, config or the routing secret changed (saved on the next
 	// tick). statsDirty: only the rolling counters changed (saved every
 	// sampleSaveEvery at most).
@@ -137,7 +147,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.logs, err = logstore.Open(filepath.Join(dataDir, "logs"), func() logstore.Limits {
 		l := s.cfg.Get().Logs
 		return logstore.Limits{RetentionDays: l.RetentionDays, MaxTotalBytes: int64(l.MaxTotalMB) << 20,
-			MaxRecords: map[string]int{"requests": l.MaxRequests, "errors": l.MaxErrors, "details": l.MaxDetails}}
+			MaxRecords: map[string]int{"requests": l.MaxRequests, "errors": l.MaxErrors, "details": l.MaxDetails, "perch": 20000}}
 	})
 	if err != nil {
 		return nil, err
@@ -161,11 +171,15 @@ func New(dataDir string, opt Options) (*Server, error) {
 		}
 	}
 	store.OnChange = s.onConfigChange
+	if err := s.initPerch(); err != nil {
+		return nil, fmt.Errorf("perch: %w", err)
+	}
 	return s, s.saveMetadata(true)
 }
 
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
+	s.rebindPerch(next)
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
 		switch {
@@ -223,6 +237,7 @@ func (s *Server) saveCounters(force bool) error {
 // Run starts the background loops until ctx ends, then flushes state.
 func (s *Server) Run(ctx context.Context) {
 	go s.quota.Run(ctx)
+	s.RunPerch(ctx)
 	counters := time.NewTicker(countersSaveEvery)
 	meta := time.NewTicker(metaCheckEvery)
 	defer counters.Stop()
@@ -236,6 +251,7 @@ func (s *Server) Run(ctx context.Context) {
 			if err := s.saveMetadata(true); err != nil {
 				log.Printf("save metadata: %v", err)
 			}
+			s.stopPerch()
 			s.logs.Close()
 			return
 		case <-counters.C:
@@ -296,6 +312,9 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("POST /open/v1/accounts/import", s.handleOpenImport)
+	// Perch's open import takes the account EXPORT (a Supabase session)
+	// rather than an API key, so it has its own endpoint.
+	mux.HandleFunc("POST /open/v1/perch/import", s.apiPerchOpenImport)
 	s.registerAdmin(mux)
 	return mux
 }

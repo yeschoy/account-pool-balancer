@@ -1,5 +1,5 @@
-// Command odb is the OpenDesign account-pool balancer: an OpenAI/Anthropic
-// compatible proxy for new-api in front of a pool of OpenDesign accounts,
+// Command odb is the account-pool-balancer: an OpenAI/Anthropic
+// compatible proxy for new-api in front of a pool of AI upstream accounts,
 // with a web console at /.
 package main
 
@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"opendesign-balancer/internal/server"
+	"account-pool-balancer/internal/server"
 )
 
 func env(k, def string) string {

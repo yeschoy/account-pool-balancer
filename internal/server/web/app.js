@@ -9,14 +9,14 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'perch'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', perch: 'Perch' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', perch: 'perch' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
-const isModal = () => pool === 'modal';
+const isOpenDesign = () => pool === 'opendesign';
 // pools whose key carries no provider prefix the backend can verify: the
 // console declares the pool explicitly when adding an account
 const keyNeedsProvider = () => isOllama();
@@ -183,7 +183,14 @@ function showApp() {
 }
 
 // ---- navigation ----
-const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true) };
+// The Perch pool has no downstream keys, routing rules or proxied requests:
+// it is a session pool, so its pages are its own (perch.js) and the others
+// stay open to the four proxy pools.
+const PROXY_PAGES = ['overview', 'accounts', 'keys', 'routing', 'requests', 'errors', 'details'];
+const PERCH_PAGES = ['perch', 'paccounts', 'psettings'];
+// perch.js loads after this file, so its loaders are looked up at call time
+const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
+  perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), psettings: () => loadPerchSettings() };
 function go(page) {
   if (!pages[page]) page = 'overview';
   currentPage = page;
@@ -198,6 +205,19 @@ function go(page) {
 }
 function renderPoolTabs() {
   $$('#pool-tabs .pool-tab').forEach((b) => b.classList.toggle('active', b.dataset.pool === pool));
+  const isPerch = pool === 'perch';
+  // the sidebar shows one pool's pages at a time. The `hidden` attribute is
+  // what the markup uses, and .side nav a overrides it, so the class is what
+  // actually toggles visibility.
+  $$('#nav a[data-page]').forEach((a) => {
+    const own = PERCH_PAGES.includes(a.dataset.page);
+    a.classList.toggle('hidden', isPerch ? !own : own);
+    a.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="perch"]').forEach((el) => {
+    el.classList.toggle('hidden', !isPerch);
+    el.removeAttribute('hidden');
+  });
   document.title = POOL_LABEL[pool] + ' 账号池';
   document.body.dataset.pool = pool;
   $('#btn-add-device').classList.toggle('hidden', pool !== 'opendesign');
@@ -220,7 +240,9 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   logState.requests = { cursor: '', items: [] }; logState.errors = { cursor: '', items: [] }; logState.details = { cursor: '', items: [] };
   $('#acc-group-filter').value = '';
   renderPoolTabs();
-  go(currentPage);
+  // switching pools lands on that pool's first page
+  const valid = pool === 'perch' ? PERCH_PAGES : PROXY_PAGES;
+  go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });
 
@@ -517,12 +539,14 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" placeholder="${a ? esc(a.runtimeKey) + '（留空不变）' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${isOllama() || isModal() ? `<span></span><span class="hint">${isModal()
-      ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥'
-      : 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可'}</span>`
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isModal()
+      ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
+      : isOllama() 
+        ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
+        : 'River 直接使用 API Key（rv_…）推理，没有额度接口，没有控制密钥。'}</span>`
       : `<label>控制密钥</label><input id="f-ctrl" placeholder="${a && a.hasControlKey ? esc(a.controlKey) + '（留空不变）' : 'vela_ctrl_…（可选，用于读额度）'}" autocomplete="off">
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
-    ${a ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
+    ${a ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
     <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', 0)}">
     <span class="hint">0 表示不限</span>

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 // Identity is the conversation a request belongs to. Only the enum fields

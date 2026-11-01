@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/quota"
-	"opendesign-balancer/internal/routes"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
+	"account-pool-balancer/internal/routes"
 )
 
 // AccountState is set by error rules and cleared by the admin or by time.

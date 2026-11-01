@@ -19,13 +19,14 @@ import (
 	"sync"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/logstore"
-	"opendesign-balancer/internal/pool"
-	"opendesign-balancer/internal/pricing"
-	"opendesign-balancer/internal/quota"
-	"opendesign-balancer/internal/rules"
-	"opendesign-balancer/internal/stats"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/logstore"
+	"account-pool-balancer/internal/perchstore"
+	"account-pool-balancer/internal/pool"
+	"account-pool-balancer/internal/pricing"
+	"account-pool-balancer/internal/quota"
+	"account-pool-balancer/internal/rules"
+	"account-pool-balancer/internal/stats"
 )
 
 //go:embed web
@@ -41,13 +42,14 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	// pair it with a newer index.html.
 	index, _ := fs.ReadFile(sub, "index.html")
 	sum := sha256.New()
-	for _, f := range []string{"app.css", "app.js"} {
+	for _, f := range []string{"app.css", "app.js", "perch.js"} {
 		b, _ := fs.ReadFile(sub, f)
 		sum.Write(b)
 	}
 	ver := "?v=" + hex.EncodeToString(sum.Sum(nil))[:10]
 	index = bytes.ReplaceAll(index, []byte(`/assets/app.css"`), []byte(`/assets/app.css`+ver+`"`))
 	index = bytes.ReplaceAll(index, []byte(`/assets/app.js"`), []byte(`/assets/app.js`+ver+`"`))
+	index = bytes.ReplaceAll(index, []byte(`/assets/perch.js"`), []byte(`/assets/perch.js`+ver+`"`))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", csp)
@@ -102,6 +104,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /api/workflow/preview", s.apiPreview)
 	a("POST /api/workflow/reset-counts", s.apiResetCounts)
 	a("POST /api/config/reload", s.apiReload)
+	s.registerPerch(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {
@@ -262,6 +265,12 @@ type accountView struct {
 	// Usage24h is what this pool sent the account in the last 24h — the only
 	// usage view of an account without a control key.
 	Usage24h stats.Bucket `json:"usage24h"`
+	// Perch accounts have no API key: these carry their session state and
+	// the link to the Perch console page (never a token).
+	PerchUserID        string    `json:"perchUserId,omitempty"`
+	PerchRefreshFailed bool      `json:"perchRefreshFailed,omitempty"`
+	PerchLastError     string    `json:"perchLastError,omitempty"`
+	PerchLastErrorAt   time.Time `json:"perchLastErrorAt,omitzero"`
 }
 
 var proxyAuthRe = regexp.MustCompile(`//[^/@]*@`)
@@ -286,6 +295,24 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
 			HasProxy: a.ProxyURL != "", ProxyURL: maskProxy(a.ProxyURL), CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
+		if a.Provider == config.ProviderPerch {
+			v.PerchUserID, v.PerchRefreshFailed = a.PerchUserID, a.PerchRefreshFailed
+			v.PerchLastError, v.PerchLastErrorAt = a.PerchLastError, a.PerchLastErrorAt
+			// the session lives in perch-secrets.json, not in config.json
+			v.RuntimeKey, v.ControlKey, v.HasControlKey = "", "", false
+			if s.perch != nil {
+				if sec, ok := s.perch.keeper.Get(a.ID); ok {
+					sm := perchstore.Summarize(sec)
+					if sm.ExpiresAt.After(time.Now()) {
+						v.Runtime.Status = "ok"
+					} else if v.Runtime.Status == "no-key" {
+						v.Runtime.Status = "session-expired"
+					}
+				} else if v.Runtime.Status == "" || v.Runtime.Status == "no-key" {
+					v.Runtime.Status = "no-session"
+				}
+			}
+		}
 		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil) {
 			v.Quota = q
 			switch a.Provider {

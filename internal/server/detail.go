@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"opendesign-balancer/internal/config"
+	"account-pool-balancer/internal/config"
 )
 
 // protocolOf names the inbound API protocol by request path.

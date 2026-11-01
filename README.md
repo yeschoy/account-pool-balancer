@@ -1,6 +1,12 @@
-# opendesign-balancer
+# account-pool-balancer
 
-OpenDesign 账号池代理。对下游（new-api 等中转站）提供一把 API 密钥和 OpenAI / Anthropic 兼容接口，把请求分发到一组上游账号上，负责选号、会话粘性、并发与 RPM 控制、额度轮询、错误处理和日志，并带一个 Web 管理台。除 OpenDesign 外，也支持 [River](https://docs.river.ai/)、[Ollama](https://docs.ollama.com/)（云端或自建）与 [Modal](https://modal.com/)（Shared Endpoint）号池，各自独立分组、独立密钥、独立错误规则。
+<p align="center">
+  <img src="docs/logo.svg" width="128" height="128" alt="account-pool-balancer logo" />
+</p>
+
+多上游 AI 账号池负载均衡代理。对下游（new-api、One API 等中转站或直接调用方）提供一把 API 密钥和 OpenAI / Anthropic 兼容接口，把请求智能分发到一组上游账号上，负责选号调度、会话粘性、并发与 RPM 控制、额度轮询、错误重试与故障隔离、统计日志，并自带现代化 Web 管理台。支持 [OpenDesign](https://opendesign.com/)、[River](https://docs.river.ai/)、[Ollama](https://docs.ollama.com/)（云端或自建）与 [Modal](https://modal.com/)（Shared Endpoint）等多种上游号池，各自独立分组、独立密钥、独立调度规则。
+
+另有一个 **Perch 号池**（[chat.perchai.app](https://chat.perchai.app)）：它管理的是 **Supabase 会话池**而不是 API Key —— 导入账号 JSON 后自动续期、自动检测状态、读额度，不需要手工换 Token。见 [Perch 号池](#perch-号池chatperchaiapp)。
 
 单个 Go 二进制，无外部依赖，无数据库。
 
@@ -37,7 +43,7 @@ mkdir -p data && chmod 700 data
 docker compose up -d --build
 ```
 
-- 容器加入共享网络 `ai-internal`（与 new-api 同一网络）。new-api 渠道的 Base URL 填 `http://opendesign-balancer:8790`。
+- 容器加入共享网络 `ai-internal`（与 new-api 同一网络）。new-api 渠道的 Base URL 填 `http://account-pool-balancer:8790`。
 - 管理台只绑定宿主机 `127.0.0.1:8790`，远程访问用 SSH 隧道 `ssh -L 8790:127.0.0.1:8790 主机`，或通过反向代理加 HTTPS。
 - 数据在 `./data`，升级：`git pull && docker compose up -d --build`；回滚：切回旧版本后同样重建。
 - 停止时会等待在途请求最多 30 秒（`stop_grace_period: 35s`）。
@@ -100,6 +106,197 @@ docker compose up -d --build
 - 实测（2026-10-31，一个 deepseek-v4-1-flash + 一个 kimi-k3 的 Shared Endpoint）：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、流式全部可用；`/v1/embeddings` 返回 404，所以本池不接。`/v1/models` 返回的每个 `id` 就是 Endpoint hostname，可直接当模型名用。
 - 错误规则独立一套（`modalErrorRules` / `modalRetryRules`，默认见下表）：token 失效 401 隔离、无权 403 隔离、402 余额不足整号冷却（10 分钟起翻倍）、429 按 `Retry-After` 冷却**该模型**（Shared Endpoint 的并发上限是按模型在整个工作区共享的，只有这个模型会 429）、5xx 短冷却换号；404 命中重试规则 `modal-bad-request`，停止换号、原样返回。已有实例升级后需在「路由设置 → Modal 号池」点「恢复默认规则」再保存。
 - 分组：不指定分组时进 `modal` 组，各池之间不混放；下游密钥填 `modal` 分组（new-api 里再建渠道，Base URL 填本服务地址，模型名填 Endpoint 的 hostname）。导入：开放接口传 `"provider":"modal"` 或直接用 `wk-` 开头的 key。
+
+## Perch 号池（chat.perchai.app）
+
+管理 [Perch](https://chat.perchai.app) 的 Supabase 会话池：导入账号 JSON，之后**自动续期、自动检测状态、读额度**，不需要手工维护 Token。参考 [perchai2api](https://github.com/zoeee1125/perchai2api) 的刷新与 usage meter 实现。
+
+**这个池和别的池不同：账号没有 API Key。** 凭证是一份 Supabase 会话（Access Token + 会轮换的 Refresh Token），由本服务加密保存并自动续期。
+
+**它同时是一个 OpenAI 兼容代理**：`/v1/chat/completions` 与 `/v1/responses` 会被翻译成 Perch 的 `model-call` 信封，Perch 的事件流再翻译回 OpenAI SSE。下游（new-api 等）像接其他池一样接即可，见 [转发模型调用](#转发模型调用openai-兼容)。
+
+### 导入
+
+「Perch 号池 → Perch 账号 → 导入」，支持单文件、多选、拖拽、ZIP，导入前有预览。兼容 CLI 导出的原始格式：
+
+```json
+{
+  "schema_version": "1.0",
+  "provider": "perchai",
+  "auth_provider": "github",
+  "account": { "supabase_user_id": "...", "email": "...", "github_user_id": null, "registered_at": "..." },
+  "session": { "access_token": "...", "refresh_token": "...", "expires_at": 1800000000 },
+  "auth_context": { "supabase_url": "...", "workspace_id": null }
+}
+```
+
+- **唯一性按 `account.supabase_user_id`**：同一 ID 不会建第二个账号。同一次导入里重复的文件算重复；已在池中的账号只补 Session。
+- **旧文件不会覆盖新 Session**：每个会话记 `fetchedAt`，写入时比它旧的直接跳过（管理员手动「更新会话」是例外，那是显式的覆盖）。
+- 校验失败、损坏的 JSON 不影响同一批里的其他文件，逐个报原因。
+- `auth_context.supabase_anon_key` 可选；不带时用内置的 perchai 公共 key，或「Perch 设置」里填的。
+
+### 自动续期（核心）
+
+- 后台每 `refreshTickSec`（默认 30 秒）检查一次，Access Token 剩余不足 `refreshMarginMin`（默认 10 分钟）就刷新。
+- 刷新成功后**立刻落盘**新的 Access Token + 轮换后的 Refresh Token + 到期时间。GoTrue 会作废旧 Refresh Token，所以这一步失败会明确报错。
+- **同一账号并发刷新会合并成一次**：进程内按 Supabase User ID 单飞，8 个并发请求也只消耗一次 Refresh Token。不同账号互不等待、各自持有自己的凭证，不会串号。
+- **网络故障不等于账号失效**：5xx / 超时 / 429 按 `retries` + `retryBackoffMs` 重试，最终仍是「临时错误」，账号保持原状态。
+- **只有刷新令牌被拒才算失效**：401，或 Supabase 的 `400 invalid_grant / validation_failed "Refresh token is not valid"`。这时账号标为「登录失效」并隔离出可用列表，等待重新登录。
+- 重启后从 `perch-secrets.json` 直接恢复，继续按原计划续期。
+
+### 状态
+
+自动检测（`checkIntervalSec`，默认 300 秒）用 GoTrue `/auth/v1/user` 校验会话，**不消耗模型额度**。状态词汇：`正常` / `待验证` / `登录失效` / `刷新失败` / `额度耗尽` / `请求限流` / `服务暂时不可用` / `已禁用`。每账号独立判定，一个账号异常不影响其他账号；支持手动检测与批量检测。
+
+### 额度（usage meter）
+
+读 Perch 自己的 `perch_ai_my_inference_usage_meter` RPC（就是「Settings → Usage」页用的那个），**只读已记录的用量，不产生任何模型调用**。单位 PT = 千分之一美元（向上取整）。展示本月已用、手动调用、今日/本周、请求次数、Token 统计、额度恢复时间。
+
+额度读两个接口，**上限来自 `GET /api/perchai/account` 的 `session.entitlements`**（Perch 自己客户端用的就是这条），已用量来自 usage meter：
+
+| 字段 | 来源 | 说明 |
+|---|---|---|
+| 套餐 | `session.planCode` / `planName` | `pilot`/`demo` 显示为 Starter |
+| 月度上限 | `usage.monthly_pt` 的 `value_json.limit` | **权威**，Perch 明确给出 |
+| 月度上限（回退） | 套餐代码 | Starter→20,000 PT；**仅当 Perch 没给上限且是 Starter 时**，与 Perch 客户端同一逻辑 |
+| 手动调用上限 | `usage.manual_monthly_pt`，否则 `ultra`→225,000 / `pro`→75,000 | |
+| 充值余额 | `creditBalancePt` | 计划外额度 |
+| Roost | `usage.roost` 的 `unlimited` | |
+| 内网/管理员 | `membershipRole` / `planCode=internal` | 不计量 |
+
+界面上会标注上限的**来源**（`Perch 明确给出` / `按套餐估算`）。**服务端真的没有上限时仍显示「未知」**，不会编数字。额度读取失败只影响额度显示，不影响 Session 管理。
+
+### 转发模型调用（OpenAI 兼容）
+
+Perch 的托管模型不是 OpenAI 接口：客户端把一份**自己的信封** POST 到 `/api/perch-terminal/model-call`，读回**自己的事件流**。本服务在两个方向上都做翻译，下游看不到这些差别。
+
+| 下游 | 本服务 | Perch |
+|---|---|---|
+| `POST /v1/chat/completions` | 翻译 | `model-call`（`request.messages` + `runId` + `lane` + `clientSurface:cli`） |
+| `messages[]` / `tools[]` | 原样转换 | 同形（`tool_calls`、`tool_call_id`、`{type:"function",function:{…}}` 都通用） |
+| `delta.content` | `answer_delta` | 助手的正文增量 |
+| `delta.reasoning_content` | `reasoning_delta` | 思考链（`exposeReasoning` 可关） |
+| `tool_calls` | `tool_use_end` / `tool_call_delta` | 工具调用 |
+| `finish_reason` | `done.finishReason` | `stop` / `length` / `tool_calls` / `content_filter` |
+| `usage` | `done.usage` | `inputTokens` / `outputTokens` / `cacheReadInputTokens` |
+
+- **手动锁模型必须发三个字段**：`preferredModelId` + `manualModelOptionId`（同值）+ `strictManual: false`。只发第一个、或把 `strictManual` 设成 `true`，Perch 会**静默换成账号默认模型并返回 200** —— 看起来就像"锁模型不生效"。本服务两者都发，`strictManual` 显式 `false`。
+- **模型名**：`auto`（或空）让 Perch 自己路由；`standard` / `standard_max` / `pro` / `pro_max` 走 `roostModelChoice` 按套餐档；其余当作 registry option id 锁定。
+- **`stream_restart`**（上游中途 failover）会让前面已发的内容作废：本服务重置累积，客户端不会看到"旧答案 + 新答案"拼接。
+- **只接 Chat Completions 与 Responses**；`/v1/embeddings`、`/v1/completions`、`/v1/messages` 本地直接 404，不打上游。
+- **错误映射**（按 Perch 自己的错误码）：
+
+| errorCode | 处理 |
+|---|---|
+| 401 / 刷新令牌被拒 | 隔离该账号，换号 |
+| `perch_surface_required` / `starter_model_blocked` | 「套餐受限」，需人工处理 |
+| `banned` | **永久隔离**，不自动恢复 |
+| `usage_limit_reached` / `provider_limit` | 整号冷却（15 分钟起翻倍），并重读额度 |
+| `turn_rate_limited` | 只冷却**该模型**，换号继续 |
+| `capacity_reached` | **不冷却、不隔离、不重试**：Perch 侧满了，所有账号都会撞同一堵墙 |
+| 5xx | 仅当**尚未发出任何字节**才重试 |
+
+  `capacity_reached` 单独处理很重要：它不是账号的问题，按普通 5xx 冷却会错误地拉低整个池的可用性。
+
+#### Surface Gate（必须知道的一点）
+
+Perch 会拒绝任何首条 system 消息**不以它自己的 persona 开头**的调用，返回 `403 perch_surface_required`（"Your plan includes Perch-hosted models for use in Perch AI Web, Desktop, and CLI only"）。这与 ticket、User-Agent 都无关，比对的是**内容**，大约前 200 个字符。
+
+**本服务不分发 Perch 的这段文本。** 它在你自己的机器上运行时从已安装的 `perchai-cli` 自动派生（读取 `dist/perch.mjs` 里的模板字面量，不执行任何东西），顺序是：
+
+1. 「Perch 设置 → Surface Gate 前缀」里填的；
+2. 环境变量 `ODB_PERCH_SYSTEM_PREFIX`；
+3. 本机 `perchai-cli`（`~/.local/lib/node_modules`、`/opt/homebrew/lib/node_modules`、`npm prefix -g` 等）。
+
+都找不到时**不会**转发请求（否则每个请求都会在 Perch 那边 403），而是本地直接报错说明怎么配。
+
+拿到前缀后，本服务在它后面依次放：一段"上面是无效样板"的说明 → 调用方自己的 system 指令 → 最后一段**身份保护**（放最后所以优先级最高），禁止模型自称 Saffron/Perch。`lane` 默认 `code`：它让 Perch 不注入 operator persona，同时仍然满足 gate。
+
+### 开放导入接口（给注册机用）
+
+```http
+POST /open/v1/perch/import
+Authorization: Bearer sk-odbimp-…
+Content-Type: application/json
+```
+
+Perch 账号没有 API Key，凭证就是一份 Supabase 会话，所以这个接口直接吃**账号导出 JSON**（和 CLI 导出的格式完全一致，也就是「Perch 账号 → 导入」用的那个文件）。
+
+**单条**（导出文档原样放顶层）：
+
+```json
+{
+  "schema_version": "1.0",
+  "provider": "perchai",
+  "auth_provider": "github",
+  "account": { "supabase_user_id": "...", "email": "a@b.c", "github_user_id": null, "registered_at": "..." },
+  "session": { "access_token": "...", "refresh_token": "...", "expires_at": 1800000000 },
+  "auth_context": { "supabase_url": "https://xxx.supabase.co", "workspace_id": null }
+}
+```
+
+**批量**（每次最多 200 条）：
+
+```json
+{
+  "accounts": [ {导出文档}, {导出文档} ],
+  "tags": ["signup-batch-1"],
+  "group": "perch",
+  "name": "可选：覆盖账号显示名"
+}
+```
+
+也接受两种省事的写法，注册机自己拼字段时更方便：
+
+- **扁平字段**：`supabaseUserId` / `email` / `accessToken` / `refreshToken` / `expiresAt` / `supabaseUrl` / `supabaseAnonKey` 直接放对象上；
+- **`sessionJson`**：把导出的 JSON 原文作为字符串塞进来。
+
+**响应**：
+
+```json
+{ "batch":"imp_…", "total":3, "added":2, "updated":0, "duplicate":1, "skipped":0, "failed":0,
+  "results":[{"index":0,"status":"added","accountId":"acc_…","userId":"…","email":"…"},
+             {"index":1,"status":"unchanged","error":"与已保存的 Session 完全相同"}] }
+```
+
+状态：`added`（新建）/ `updated`（补了更新的 Session）/ `unchanged`（重复或已是最新）/ `error`（附原因）。
+
+规则与手动导入完全一致（同一个代码路径）：
+
+- **`supabase_user_id` 是唯一身份**：重复提交返回 `unchanged`，不会建第二个账号。注册机可以放心重试。
+- **旧文件不会覆盖新 Session**：导入时按 token 的 `expires_at` 反推签发时间（Access Token 有效期 1 小时）作为 `fetchedAt`，比已存 Session 旧的一律跳过。注册机重放几小时前导出的文件不会把已续期的账号打回原样。
+- **单条失败不影响同批**：`accounts` 里某条缺字段 / 不是对象，只影响它自己，其余照常导入，响应里逐条给原因。
+- **鉴权**用现有的导入密钥（`sk-odbimp-…`），连续失败同样限流。**绑定到其他号池的导入密钥会被拒绝**（403），避免注册机把 Perch 账号塞进 River 池。
+- 导入的账号立即参与续期、状态检测和额度同步。记录在「Perch 设置 → 事件日志」里。
+
+### 分组、批量与导出
+
+- 分组默认 `perch`，可批量移动到任意分组；每组的账号数与正常账号数在 `/api/perch/groups`。
+- 批量：启用、禁用、删除、检测、续期、同步额度、移动分组、设置标签、更新会话。**单个账号失败不会中断整批**，每个账号单独返回结果与原因。
+- 「可用账号」`/api/perch/available` 只返回真正可用的账号（正常状态、启用、会话有效），供授权场景下**人工指定**账号使用 —— 本服务不做轮换规避套餐限额。
+- 导出脱敏（无任何 Token）；备份用口令加密（PBKDF2-SHA256 + AES-256-GCM），恢复时已存在且更新的 Session 不会被旧备份覆盖。
+
+### 设置（`perch`）
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `supabaseKey` | 空 | Publishable key；空则用内置公共 key |
+| `appUrl` | `https://app.perchai.app` | 读额度与模型目录的 host |
+| `refreshMarginMin` | 10 | 到期前多少分钟续期 |
+| `refreshTickSec` | 30 | 续期检查间隔 |
+| `refreshConcurrency` | 4 | 同时续期的账号数 |
+| `retries` / `retryBackoffMs` | 3 / 2000 | 临时错误重试（令牌被拒不重试） |
+| `checkIntervalSec` / `checkConcurrency` | 300 / 4 | 状态检测 |
+| `quotaIntervalSec` | 600 | 额度同步 |
+| `logRetentionDays` | 30 | Perch 事件日志保留天数 |
+| `alertOnFailure` | `true` | 概览页异常提醒 |
+| `adminReadOnlyView` | `false` | 连 Token 尾号也不显示 |
+
+### 加密与脱敏
+
+- Session 全部加密在 `data/perch-secrets.json`（AES-256-GCM，密钥由 `metadata.json` 的 `routingSecret` 派生，文件 0600）。**`config.json` 里没有任何 Token**，账号只存 `perchUserId` 和占位运行密钥 `perch-session:<supabase_user_id>`。
+- 管理台与所有 API 都不返回 Token，只返回脱敏摘要（是否有 Token、到期时间、尾 4 位、代号）。
+- 事件日志（`logs/perch`）记导入、续期成功/失败、会话失效、状态变化、额度读取、批量任务与管理员操作；写日志前再过滤一遍 token 形状的字符串。
 
 ## 下游接口
 
@@ -298,6 +495,7 @@ Modal 的 404 `unknown inference model` 不冷却账号，由重试规则 `modal
 | `staging.json` | 开放导入接口暂存的重复账号（含密钥），等待管理台确认覆盖、添加或丢弃 |
 | `metadata.json` | 账号状态（冷却/隔离）、健康样本、额度快照、统计、`routingSecret`。冷却、隔离、额度和配置变化 15 秒内写盘；只有统计和健康样本变化时最多每分钟写一次 |
 | `selection-counters.json` | 选号计数，最多每 5 秒写一次 |
+| `perch-secrets.json` | Perch 号池的加密会话（Access / Refresh Token、Supabase 项目地址与 key），AES-256-GCM 封装，0600；`config.json` 里不含任何 Token |
 | `logs/` | 请求与错误日志，缓冲写入，每秒刷盘；查询读内存，不受影响 |
 
 所有文件 0600、目录 0700，写盘先写临时文件再 rename。JSON 损坏时启动失败并保留原文件。**整个目录都是机密，不要提交或共享。**

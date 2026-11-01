@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/quota"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
 )
 
 func testConfig(accts ...config.Account) *config.Config {

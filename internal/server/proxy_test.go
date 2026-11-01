@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/quota"
-	"opendesign-balancer/internal/rules"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
+	"account-pool-balancer/internal/rules"
 )
 
 type mockUpstream struct {

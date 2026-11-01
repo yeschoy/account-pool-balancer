@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"opendesign-balancer/internal/config"
-	"opendesign-balancer/internal/logstore"
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/logstore"
 )
 
 func TestHasUsage(t *testing.T) {

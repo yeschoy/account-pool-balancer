@@ -13,3 +13,6 @@ package-lock.json
 pnpm-lock.yaml
 .pnpm-store/
 .env
+
+# 压测产物
+/artifacts/

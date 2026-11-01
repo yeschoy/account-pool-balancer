@@ -1,0 +1,748 @@
+package perch
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Session is one Supabase session as the account JSON keeps it: the pair of
+// tokens plus what they say about the account.
+type Session struct {
+	AccessToken  string
+	RefreshToken string
+	// ExpiresAt is the access token's end, in Unix seconds. Zero means the
+	// account JSON did not say; the token's own exp claim is used instead.
+	ExpiresAt int64
+	// UserID is Supabase's user id — the account's identity.
+	UserID string
+	// Email is the address Supabase reports (the account JSON may name one
+	// too; see Merge).
+	Email string
+	// Provider is the auth provider ("github", "google", "email").
+	Provider string
+	// TokenType is GoTrue's token_type ("bearer").
+	TokenType string
+}
+
+// Valid reports whether the session carries the pair a renewal needs.
+func (s Session) Valid() bool { return s.AccessToken != "" && s.RefreshToken != "" }
+
+// HasAccess reports whether there is an access token to present to Perch.
+func (s Session) HasAccess() bool { return s.AccessToken != "" }
+
+// Expires reports the access token's end; a session with no stated end but a
+// parsable token is read from the token's own exp claim (and reported as
+// unknown when that claim is absent too).
+func (s Session) Expires() (time.Time, bool) {
+	if s.ExpiresAt > 0 {
+		return time.Unix(s.ExpiresAt, 0), true
+	}
+	if exp, ok := ExpiryOf(s.AccessToken); ok {
+		return exp, true
+	}
+	return time.Time{}, false
+}
+
+// Due reports whether the access token should be renewed now: it is absent,
+// its end is unknown, or less than margin remains.
+func (s Session) Due(now time.Time, margin time.Duration) bool {
+	if s.AccessToken == "" {
+		return true
+	}
+	exp, ok := s.Expires()
+	if !ok {
+		// no stated end and no readable claim: treat it as stale, a refresh
+		// is cheap and a refused one is the definitive answer
+		return true
+	}
+	return !now.Add(margin).Before(exp)
+}
+
+// ExpiryOf reads a JWT's exp claim without verifying it. Perch's tokens are
+// the Supabase access tokens whose end is what we schedule our refresh on;
+// the signature is Perch's to check, this only needs the clock.
+func ExpiryOf(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return time.Time{}, false
+	}
+	seg := parts[1]
+	if rem := len(seg) % 4; rem != 0 {
+		seg += strings.Repeat("=", 4-rem)
+	}
+	raw, err := base64.URLEncoding.DecodeString(seg)
+	if err != nil {
+		raw, err = base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(raw, &claims) != nil || claims.Exp <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
+}
+
+// TokensOf reads a JWT's scoped identity claims (uid, wid) and exp without
+// verifying the signature.
+func TokensOf(token string) map[string]any {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	seg := parts[1]
+	if rem := len(seg) % 4; rem != 0 {
+		seg += strings.Repeat("=", 4-rem)
+	}
+	raw, err := base64.URLEncoding.DecodeString(seg)
+	if err != nil {
+		if raw, err = base64.RawURLEncoding.DecodeString(parts[1]); err != nil {
+			return nil
+		}
+	}
+	var out map[string]any
+	if json.Unmarshal(raw, &out) != nil {
+		return nil
+	}
+	return out
+}
+
+// Merge folds in over s: a field in omits keeps s's value, so a bare token
+// renewal can never blank an account's email or user id. The access token is
+// the only field a caller relies on, and renew refuses an answer without one.
+func (s Session) Merge(in Session) Session {
+	out := s
+	if in.AccessToken != "" {
+		out.AccessToken = in.AccessToken
+	}
+	if in.RefreshToken != "" {
+		out.RefreshToken = in.RefreshToken
+	}
+	if in.ExpiresAt > 0 {
+		out.ExpiresAt = in.ExpiresAt
+	} else if exp, ok := ExpiryOf(in.AccessToken); ok {
+		out.ExpiresAt = exp.Unix()
+	}
+	if in.UserID != "" {
+		out.UserID = in.UserID
+	}
+	if in.Email != "" {
+		out.Email = in.Email
+	}
+	if in.Provider != "" {
+		out.Provider = in.Provider
+	}
+	if in.TokenType != "" {
+		out.TokenType = in.TokenType
+	}
+	return out
+}
+
+// SignIn is GoTrue's session answer, narrowed to what an account keeps.
+type SignIn struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	ExpiresAt    int64  `json:"expires_at"`
+	User         struct {
+		ID            string         `json:"id"`
+		Email         string         `json:"email"`
+		UserMetadata  map[string]any `json:"user_metadata"`
+		AppMetadata   map[string]any `json:"app_metadata"`
+		ConfirmedAt   string         `json:"confirmed_at"`
+		EmailVerified bool           `json:"email_verified"`
+	} `json:"user"`
+	// An error answer {error, error_code, msg} is turned into an *Error by
+	// renew, so reaching SignIn means a session came back.
+}
+
+// session normalises the answer: email from user_metadata when user.email is
+// empty, provider from app_metadata, and the end from expires_at, else
+// expires_in, else the token's own claim.
+func (in SignIn) session(now time.Time) Session {
+	s := Session{
+		AccessToken:  strings.TrimSpace(in.AccessToken),
+		RefreshToken: strings.TrimSpace(in.RefreshToken),
+		TokenType:    strings.TrimSpace(in.TokenType),
+		UserID:       strings.TrimSpace(in.User.ID),
+		Email:        strings.TrimSpace(in.User.Email),
+	}
+	if s.Email == "" {
+		if v, ok := in.User.UserMetadata["email"].(string); ok {
+			s.Email = strings.TrimSpace(v)
+		}
+	}
+	if v, ok := in.User.AppMetadata["provider"].(string); ok {
+		s.Provider = strings.TrimSpace(v)
+	}
+	switch {
+	case in.ExpiresAt > 0:
+		s.ExpiresAt = in.ExpiresAt
+	case in.ExpiresIn > 0:
+		s.ExpiresAt = now.Unix() + in.ExpiresIn
+	default:
+		if exp, ok := ExpiryOf(s.AccessToken); ok {
+			s.ExpiresAt = exp.Unix()
+		}
+	}
+	return s
+}
+
+// Creds are what one refresh call needs: the project the session belongs to
+// and the publishable key GoTrue demands as apikey.
+type Creds struct {
+	SupabaseURL string
+	SupabaseKey string
+	// ProxyURL routes this account's calls through a proxy ("" = direct).
+	ProxyURL string
+}
+
+func (c Creds) url() string {
+	u := TrimBase(c.SupabaseURL)
+	if u == "" {
+		u = DefaultSupabaseURL
+	}
+	return u
+}
+
+func (c Creds) key() string {
+	if k := strings.TrimSpace(c.SupabaseKey); k != "" {
+		return k
+	}
+	return DefaultSupabaseKey
+}
+
+// Renew exchanges a refresh token for a new session. GoTrue rotates the
+// refresh token: the answer carries the only copy of the new one, so the
+// caller has to persist it immediately or the account is locked out.
+//
+// A refused refresh is reported as KindAuth — that is the one answer that
+// legitimately means "this account needs signing in again". A transport
+// failure, a 5xx or a 429 is explicitly not that: it is returned as
+// KindTransient/KindRateLimited so a flaky network can never mark an account
+// dead.
+func (c *Client) Renew(ctx context.Context, creds Creds, refreshToken string) (Session, error) {
+	rt := strings.TrimSpace(refreshToken)
+	if rt == "" {
+		return Session{}, &Error{Kind: KindAuth, Code: "no_refresh_token", Message: "the account has no refresh token; sign in again"}
+	}
+	body, _ := json.Marshal(map[string]string{"refresh_token": rt})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, creds.url()+"/auth/v1/token?grant_type=refresh_token", strings.NewReader(string(body)))
+	if err != nil {
+		return Session{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("apikey", creds.key())
+	req.Header.Set("Authorization", "Bearer "+creds.key())
+	var in SignIn
+	if err := c.do(ctx, req, &in); err != nil {
+		return Session{}, err
+	}
+	if strings.TrimSpace(in.AccessToken) == "" {
+		return Session{}, &Error{Kind: KindUnknown, Message: "the refresh answered without an access token"}
+	}
+	s := in.session(c.now())
+	if s.RefreshToken == "" {
+		// GoTrue rotates, so this should not happen; keeping the spent token
+		// would schedule a refresh that is certain to fail.
+		return Session{}, &Error{Kind: KindUnknown, Message: "the refresh answered without a refresh token"}
+	}
+	return s, nil
+}
+
+// User reads the signed-in user's profile. It is the cheap check that says
+// whether an access token still works without spending any allowance.
+func (c *Client) User(ctx context.Context, creds Creds, accessToken string) (Session, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return Session{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, creds.url()+"/auth/v1/user", nil)
+	if err != nil {
+		return Session{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("apikey", creds.key())
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	var u struct {
+		ID            string         `json:"id"`
+		Email         string         `json:"email"`
+		UserMetadata  map[string]any `json:"user_metadata"`
+		AppMetadata   map[string]any `json:"app_metadata"`
+		EmailVerified bool           `json:"email_verified"`
+	}
+	if err := c.do(ctx, req, &u); err != nil {
+		return Session{}, err
+	}
+	s := Session{UserID: u.ID, Email: u.Email}
+	if s.Email == "" {
+		if v, ok := u.UserMetadata["email"].(string); ok {
+			s.Email = v
+		}
+	}
+	if v, ok := u.AppMetadata["provider"].(string); ok {
+		s.Provider = v
+	}
+	return s, nil
+}
+
+// ---- usage meter -------------------------------------------------------------
+
+// Meter is what the Settings → Usage page shows, as
+// perch_ai_my_inference_usage_meter reports it. Perch states each figure in
+// USD; PtOf converts one to Perch's PT (a thousandth of a dollar, rounded up).
+type Meter struct {
+	MonthlyUSD       float64
+	MonthlyManualUSD float64
+	DailyUSD         float64
+	WeeklyUSD        float64
+	DailyCalls       int64
+	WeeklyCalls      int64
+	MonthlyCalls     int64
+	WeeklyTokens     int64
+	MonthlyTokens    int64
+	// PeriodStart is when the month's allowance began; the reset is a month
+	// on. Empty when Perch did not say.
+	PeriodStart string
+	// Raw is Perch's own answer, kept for the console's "raw" view; the
+	// pool's own fields above are what it shows.
+	Raw map[string]any
+
+	// The account route states spend in PT directly. Those figures are exact
+	// (no USD round-trip), so they win over the converted ones when present.
+	MonthlyPTExact, ManualPTExact, WeeklyPTExact, DailyPTExact int64
+	MonthlyPTKnown, ManualPTKnown, WeeklyPTKnown, DailyPTKnown bool
+}
+
+// PtOf converts USD to Perch's PT unit.
+func PtOf(usd float64) int64 {
+	if usd <= 0 {
+		return 0
+	}
+	return int64(usd*PTPerUSD + 0.999999)
+}
+
+// ResetAt is the day the allowance rolls over: a month after the period
+// began. Zero when Perch did not name a readable start.
+func (m Meter) ResetAt() time.Time {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(m.PeriodStart))
+	if err != nil {
+		return time.Time{}
+	}
+	return at.AddDate(0, 1, 0)
+}
+
+// Usage reads the allowance through the Postgres function the app's own
+// Settings → Usage page calls. It costs no model allowance: it is a read of
+// recorded spend, not a turn.
+//
+// The user's own token is what answers; the app's REST route refuses the
+// CLI surface, which is why the RPC is what this calls.
+func (c *Client) Usage(ctx context.Context, creds Creds, accessToken string) (Meter, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return Meter{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
+	}
+	now := c.now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	weekStart := dayStart.AddDate(0, 0, -7)
+	body, _ := json.Marshal(map[string]string{
+		"p_day_start":  dayStart.UTC().Format(time.RFC3339Nano),
+		"p_week_start": weekStart.UTC().Format(time.RFC3339Nano),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, creds.url()+"/rest/v1/rpc/perch_ai_my_inference_usage_meter", strings.NewReader(string(body)))
+	if err != nil {
+		return Meter{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("apikey", creds.key())
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	var raw map[string]any
+	if err := c.do(ctx, req, &raw); err != nil {
+		return Meter{}, err
+	}
+	if raw == nil {
+		return Meter{}, &Error{Kind: KindUnknown, Message: "the usage meter answered nothing"}
+	}
+	return Meter{
+		MonthlyUSD:       num(raw["monthly_usd"]),
+		MonthlyManualUSD: num(raw["monthly_manual_usd"]),
+		DailyUSD:         num(raw["daily_usd"]),
+		WeeklyUSD:        num(raw["weekly_usd"]),
+		DailyCalls:       int64(num(raw["daily_calls"])),
+		WeeklyCalls:      int64(num(raw["weekly_calls"])),
+		MonthlyCalls:     int64(num(raw["monthly_calls"])),
+		WeeklyTokens:     int64(num(raw["weekly_tokens"])),
+		MonthlyTokens:    int64(num(raw["monthly_tokens"])),
+		PeriodStart:      str(raw["period_start"]),
+		Raw:              raw,
+	}, nil
+}
+
+// ---- sign-in config ----------------------------------------------------------
+
+// Config is /api/perch-terminal/cli-auth/config: where the app's Supabase is,
+// which OAuth providers are on, and where a loopback callback may point.
+type Config struct {
+	AppURL       string
+	SupabaseURL  string
+	SupabaseKey  string
+	RedirectHost string
+	Providers    []string
+}
+
+// SignInConfig reads the CLI sign-in config. It is used only to fill in a
+// Supabase URL or key an account did not carry; a failure is not fatal.
+func (c *Client) SignInConfig(ctx context.Context, appURL string) (Config, error) {
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/perch-terminal/cli-auth/config", nil)
+	if err != nil {
+		return Config{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	var raw struct {
+		OK           bool     `json:"ok"`
+		AppURL       string   `json:"appUrl"`
+		SupabaseURL  string   `json:"supabaseUrl"`
+		SupabaseKey  string   `json:"supabaseAnonKey"`
+		RedirectHost string   `json:"redirectHost"`
+		Providers    []string `json:"providers"`
+		ErrorCode    string   `json:"errorCode"`
+		ErrorMessage string   `json:"error"`
+	}
+	if err := c.do(ctx, req, &raw); err != nil {
+		return Config{}, err
+	}
+	if !raw.OK && raw.SupabaseURL == "" {
+		return Config{}, &Error{Kind: KindUnknown, Message: first(raw.ErrorMessage, "Perch gave no sign-in config")}
+	}
+	return Config{
+		AppURL:       first(raw.AppURL, base),
+		SupabaseURL:  raw.SupabaseURL,
+		SupabaseKey:  first(raw.SupabaseKey),
+		RedirectHost: first(raw.RedirectHost, "127.0.0.1"),
+		Providers:    raw.Providers,
+	}, nil
+}
+
+// ---- hosted models -----------------------------------------------------------
+
+// modelDefault is /api/perch-terminal/public-model-default: the model Perch
+// would pick for an account with no preference.
+func (c *Client) DefaultModel(ctx context.Context, appURL, accessToken string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/perch-terminal/public-model-default", nil)
+	if err != nil {
+		return "", &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	var raw map[string]any
+	if err := c.do(ctx, req, &raw); err != nil {
+		return "", err
+	}
+	return first(str(raw["name"]), str(raw["model"]), str(raw["id"])), nil
+}
+
+// QueryEscape is exposed for callers building a Perch URL.
+func QueryEscape(v string) string { return url.QueryEscape(v) }
+
+// IsWeakRefreshError reports whether a refused refresh may simply mean
+// "another client spent this token first". GoTrue names that case
+// refresh_token_already_used; older answers put it in the message.
+func IsWeakRefreshError(err error) bool {
+	var pe *Error
+	if !errors.As(err, &pe) {
+		return false
+	}
+	if pe.Kind != KindAuth {
+		return false
+	}
+	why := strings.ToLower(pe.Code + " " + pe.Message)
+	for _, needle := range []string{"already_used", "invalid_grant", "refresh_token_not_found", "not valid", "validation_failed"} {
+		if strings.Contains(why, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// ---- account: plan, entitlements and the authoritative usage meter -----------
+
+// AllowanceSource names where a monthly cap came from. A cap that Perch
+// actually stated is authoritative; one derived from the plan code is Perch's
+// own fallback (its client applies the same one), and "" means there is none.
+type AllowanceSource string
+
+const (
+	AllowanceEntitlement  AllowanceSource = "entitlement"
+	AllowancePlanFallback AllowanceSource = "plan_fallback"
+	AllowanceNone         AllowanceSource = "none"
+)
+
+// Account is GET /api/perchai/account: the plan the account is on, its
+// entitlements, and the usage meter the app's Settings → Usage page reads.
+//
+// This is the endpoint Perch's own client uses for limits, and it carries what
+// the usage RPC alone cannot: the entitlement list (which states the monthly
+// cap) and the credit balance.
+type Account struct {
+	PlanCode  string
+	PlanName  string
+	PlanLabel string
+	// MembershipRole is "admin"/"internal" for staff accounts, which are
+	// unlimited.
+	MembershipRole string
+	// Unlimited: an internal account, or a roost entitlement marked unlimited.
+	Unlimited bool
+	// RoostUnlimited: the "usage.roost" entitlement says so.
+	RoostUnlimited bool
+	// MonthlyLimitPT is the month's cap: the entitlement when it names one,
+	// else Perch's plan-code fallback, else 0 with Source "none".
+	MonthlyLimitPT int64
+	MonthlySource  AllowanceSource
+	// ManualLimitPT is the cap on manual (non-plan) model calls.
+	ManualLimitPT int64
+	ManualSource  AllowanceSource
+	// CreditBalancePT is purchased credit, which sits outside the plan.
+	CreditBalancePT int64
+	// Meter is the usage figures, in USD (as Perch states them).
+	Meter Meter
+	// MeterPresent: the answer carried a usageMeter object.
+	MeterPresent bool
+	// Entitlements is the raw list, kept for the console's detail view.
+	Entitlements []Entitlement
+	Raw          map[string]any
+}
+
+// Entitlement is one entry of session.entitlements.
+type Entitlement struct {
+	Key   string
+	Value map[string]any
+}
+
+// entitlementLimit reads "limit" out of an entitlement's value_json. present
+// distinguishes "the entitlement exists but states no cap" from "absent",
+// which is what decides whether the plan fallback applies.
+func (a Account) entitlementLimit(key string) (limit int64, present bool) {
+	for _, e := range a.Entitlements {
+		if e.Key != key {
+			continue
+		}
+		present = true
+		if v, ok := numOK(e.Value["limit"]); ok && v > 0 {
+			limit = int64(v)
+		}
+		return limit, present
+	}
+	return 0, false
+}
+
+// planIsStarter: pilot and demo are what Perch labels Starter.
+func planIsStarter(code string) bool { return code == "pilot" || code == "demo" }
+
+// manualPlanFallback is Perch's own per-plan cap for manual model calls.
+func manualPlanFallback(code string) (int64, bool) {
+	switch code {
+	case "ultra":
+		return 225_000, true
+	case "pro":
+		return 75_000, true
+	}
+	return 0, false
+}
+
+// StarterMonthlyPT is the cap Perch's client assumes for a Starter account that
+// states none. It is used only under the same condition Perch uses it.
+const StarterMonthlyPT = 20_000
+
+// ResolveAllowances fills the caps from the entitlement list, applying Perch's
+// own fallback chain. It is deliberately the same precedence the client uses:
+// an entitlement that states a limit wins; otherwise a Starter plan gets
+// 20,000 PT, and a manual cap follows the plan code. A plan that states
+// nothing gets no cap — the console then says the headroom is unknown rather
+// than inventing one.
+func (a *Account) ResolveAllowances() {
+	if lim, present := a.entitlementLimit("usage.monthly_pt"); present && lim > 0 {
+		a.MonthlyLimitPT, a.MonthlySource = lim, AllowanceEntitlement
+	} else if planIsStarter(a.PlanCode) || strings.EqualFold(strings.TrimSpace(a.PlanName), "Starter") {
+		a.MonthlyLimitPT, a.MonthlySource = StarterMonthlyPT, AllowancePlanFallback
+	} else {
+		a.MonthlyLimitPT, a.MonthlySource = 0, AllowanceNone
+	}
+
+	if lim, present := a.entitlementLimit("usage.manual_monthly_pt"); present && lim > 0 {
+		a.ManualLimitPT, a.ManualSource = lim, AllowanceEntitlement
+	} else if lim, ok := manualPlanFallback(a.PlanCode); ok {
+		a.ManualLimitPT, a.ManualSource = lim, AllowancePlanFallback
+	} else {
+		a.ManualLimitPT, a.ManualSource = 0, AllowanceNone
+	}
+
+	for _, e := range a.Entitlements {
+		if e.Key != "usage.roost" {
+			continue
+		}
+		if v, ok := e.Value["unlimited"].(bool); ok && v {
+			a.RoostUnlimited = true
+		}
+	}
+	switch a.MembershipRole {
+	case "admin", "internal":
+		a.Unlimited = true
+	}
+	if a.PlanCode == "internal" {
+		a.Unlimited = true
+	}
+}
+
+// planLabelOf names the plan the way Perch's client does.
+func planLabelOf(planName, planCode string) string {
+	if s := strings.TrimSpace(planName); s != "" {
+		if strings.EqualFold(s, "pilot") {
+			return "Starter"
+		}
+		return s
+	}
+	if planCode == "pilot" {
+		return "Starter"
+	}
+	if s := strings.TrimSpace(planCode); s != "" {
+		return strings.ToUpper(s[:1]) + s[1:]
+	}
+	return "Starter"
+}
+
+// numOK reads a JSON number that may also arrive as a string.
+func numOK(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case json.Number:
+		f, err := x.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return f, err == nil
+	}
+	return 0, false
+}
+
+// Account reads the plan, entitlements and usage meter.
+//
+// It is the same call Perch's client makes to fill its usage card, so the caps
+// it reports are the ones the product itself applies.
+func (c *Client) Account(ctx context.Context, appURL, accessToken string) (Account, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return Account{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
+	}
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/perchai/account", nil)
+	if err != nil {
+		return Account{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	var raw struct {
+		OK      bool           `json:"ok"`
+		Error   string         `json:"error"`
+		Session map[string]any `json:"session"`
+		Usage   map[string]any `json:"usageMeter"`
+		Credit  any            `json:"creditBalancePt"`
+	}
+	if err := c.do(ctx, req, &raw); err != nil {
+		return Account{}, err
+	}
+	if !raw.OK || raw.Session == nil {
+		return Account{}, &Error{Kind: KindUnknown, Message: first(raw.Error, "Perch returned no account")}
+	}
+	out := Account{
+		PlanCode:       strings.TrimSpace(str(raw.Session["planCode"])),
+		PlanName:       strings.TrimSpace(str(raw.Session["planName"])),
+		MembershipRole: strings.TrimSpace(str(raw.Session["membershipRole"])),
+	}
+	out.PlanLabel = planLabelOf(out.PlanName, out.PlanCode)
+	if list, ok := raw.Session["entitlements"].([]any); ok {
+		for _, item := range list {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			key := strings.TrimSpace(str(m["key"]))
+			if key == "" {
+				continue
+			}
+			val, _ := m["value_json"].(map[string]any)
+			if val == nil {
+				val = map[string]any{}
+			}
+			out.Entitlements = append(out.Entitlements, Entitlement{Key: key, Value: val})
+		}
+	}
+	if raw.Usage != nil {
+		out.MeterPresent = true
+		out.Meter = Meter{
+			MonthlyUSD:       num(raw.Usage["monthlyUsd"]),
+			MonthlyManualUSD: num(raw.Usage["monthlyManualPt"]) / PTPerUSD,
+			DailyUSD:         num(raw.Usage["dailyUsd"]),
+			WeeklyUSD:        num(raw.Usage["weeklyUsd"]),
+			DailyCalls:       int64(num(raw.Usage["dailyCalls"])),
+			WeeklyCalls:      int64(num(raw.Usage["weeklyCalls"])),
+			MonthlyCalls:     int64(num(raw.Usage["monthlyCalls"])),
+			WeeklyTokens:     int64(num(raw.Usage["weeklyTokens"])),
+			MonthlyTokens:    int64(num(raw.Usage["monthlyTokens"])),
+			PeriodStart:      str(raw.Usage["periodStart"]),
+			Raw:              raw.Usage,
+		}
+		// the account route states PT directly; keep the PT figures exact
+		if v, ok := numOK(raw.Usage["monthlyPt"]); ok {
+			out.Meter.MonthlyPTExact, out.Meter.MonthlyPTKnown = int64(v), true
+		}
+		if v, ok := numOK(raw.Usage["monthlyManualPt"]); ok {
+			out.Meter.ManualPTExact, out.Meter.ManualPTKnown = int64(v), true
+		}
+		if v, ok := numOK(raw.Usage["weeklyPt"]); ok {
+			out.Meter.WeeklyPTExact, out.Meter.WeeklyPTKnown = int64(v), true
+		}
+		if v, ok := numOK(raw.Usage["dailyPt"]); ok {
+			out.Meter.DailyPTExact, out.Meter.DailyPTKnown = int64(v), true
+		}
+	}
+	if v, ok := numOK(raw.Credit); ok && v > 0 {
+		out.CreditBalancePT = int64(v)
+	}
+	out.ResolveAllowances()
+	return out, nil
+}
