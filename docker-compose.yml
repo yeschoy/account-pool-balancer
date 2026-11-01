@@ -1,8 +1,8 @@
 services:
-  opendesign-balancer:
+  account-pool-balancer:
     build: .
-    image: opendesign-balancer:latest
-    container_name: opendesign-balancer
+    image: account-pool-balancer:latest
+    container_name: account-pool-balancer
     restart: unless-stopped
     # the app drains in-flight requests for up to 30s on SIGTERM
     stop_grace_period: 35s
@@ -16,7 +16,12 @@ services:
     ports:
       - "127.0.0.1:8790:8790"
     networks:
-      - ai-internal
+      ai-internal:
+        aliases:
+          # 兼容别名：改名前的旧服务名。new-api 里仍有渠道写死在
+          # http://opendesign-balancer:8790，保留别名即可零改动、零中断。
+          # 等所有渠道都切到新名字后，可以删掉这一行再重建容器。
+          - opendesign-balancer
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8790/healthz"]
       interval: 30s
@@ -24,6 +29,7 @@ services:
       retries: 3
 
 networks:
-  # shared with new-api: it reaches this service as http://opendesign-balancer:8790
+  # shared with new-api: it reaches this service as http://account-pool-balancer:8790
+  # （旧的 http://opendesign-balancer:8790 通过上面的 alias 继续可用）
   ai-internal:
     external: true
