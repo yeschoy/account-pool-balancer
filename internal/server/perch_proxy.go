@@ -30,6 +30,29 @@ import (
 // under this account's lease, and a failure is recorded against this account
 // only.
 
+// perchConversationFingerprint resolves which conversation a request belongs to,
+// so the pool can give it a stable run id.
+//
+// This is the bridge the delta cache needs: OpenAI chat requests, Responses
+// requests and every agent CLI name their conversation differently — a session
+// header, a prompt_cache_key, a previous_response_id, or (failing those) only
+// their first messages. identity() already normalises all of those into one
+// HMAC fingerprint, so chat and Responses requests from the same agent resolve
+// to the SAME fingerprint and therefore the same run id. That is what lets a
+// delta fire across protocols instead of only within one.
+//
+// An empty result means the request names no conversation; the caller then
+// falls back to the ticket's run id.
+func (s *Server) perchConversationFingerprint(cfg *config.Config, acct config.Account, r *http.Request, body map[string]any) string {
+	// The group keeps one pool's fingerprints separate from another's, matching
+	// how proxy.go scopes session affinity.
+	id := s.identity(cfg, acct.Group, r.Header, body)
+	if id.Fingerprint == "" {
+		return ""
+	}
+	return id.Fingerprint
+}
+
 // perchAttribution builds Perch's own attribution block for one account.
 //
 // The published client (o0) sends this block only when BOTH userId and
@@ -238,7 +261,18 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		// caller's conversation when it has one, else the CLI's cwd thread.
 		opt.ThreadID = s.perchThreadID(cfg, "")
 		opt.ChatMode = cfg.Perch.Lane
-		if ticket != nil && ticket.RunID != "" {
+		// The run id follows the CONVERSATION, not the ticket.
+		//
+		// The delta cache is keyed by endpoint+runId, and a downstream request
+		// is a separate HTTP transaction that re-sends the whole conversation.
+		// Deriving the run id from the caller's conversation fingerprint is what
+		// lets two requests of one chat hit the same cache entry and send only
+		// the new tail. A per-ticket run id would make every request a new run,
+		// which is exactly the case where a delta can never fire.
+		if id := s.perchConversationFingerprint(cfg, acct, r, obj); id != "" {
+			opt.RunID = s.perchClient().RunFor(id)
+		} else if ticket != nil && ticket.RunID != "" {
+			// No conversation to continue: keep the ticket's run, as before.
 			opt.RunID = ticket.RunID
 		}
 		var err error

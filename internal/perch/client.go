@@ -289,6 +289,9 @@ type Client struct {
 	// deltas holds the message prefixes the server confirmed it holds, per
 	// endpoint+run, so a turn can send only what is new (see delta.go).
 	deltas deltaCache
+	// runs maps a conversation to its stable run id (see runid.go), which is
+	// what makes a delta possible across separate downstream requests.
+	runs runRegistry
 }
 
 type proxyContextKey struct{}
