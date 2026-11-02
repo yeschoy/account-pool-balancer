@@ -1,6 +1,7 @@
 package perch
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -903,4 +904,89 @@ func (c *Client) Account(ctx context.Context, appURL, accessToken string) (Accou
 	}
 	out.ResolveAllowances()
 	return out, nil
+}
+
+// ---- privacy: the data-program switch the Settings page toggles -------------
+
+// DataProgramPath is where the web app's Settings page writes the account's
+// data-program (training-data/privacy) switch.
+const DataProgramPath = "/api/perchai/data-program"
+
+// DataProgramUpdate is the body PATCH /api/perchai/data-program takes. The web
+// app sends both fields on every toggle: Enabled is the new state, and
+// AcknowledgeExistingNotice covers the "you already sent data" case, which the
+// app sets only after showing that notice. Turning collection off therefore
+// sends acknowledgeExistingNotice=false: the account is not confirming a
+// notice nothing showed it.
+type DataProgramUpdate struct {
+	Enabled bool `json:"enabled"`
+	// AcknowledgeExistingNotice is a pointer so that an omission stays an
+	// omission; this package only ever sends the explicit false.
+	AcknowledgeExistingNotice *bool `json:"acknowledgeExistingNotice,omitempty"`
+}
+
+// DataProgramResult is what Perch acknowledged.
+type DataProgramResult struct {
+	// OK is Perch's own verdict on the update.
+	OK bool
+	// ResponseCode is Perch's errorCode when the update was refused, for the
+	// caller's logs. It is never shown as user-facing text.
+	ResponseCode string
+}
+
+// PrivacyOff returns the body that turns data collection off.
+func PrivacyOff() DataProgramUpdate {
+	off := false
+	return DataProgramUpdate{Enabled: false, AcknowledgeExistingNotice: &off}
+}
+
+// SetDataProgram writes the account's data-program switch.
+//
+// It is a web-app call, so it carries the account's access token as a Bearer
+// and no turn ticket. A refusal is an error even on a 2xx: Perch answers
+// ok:false when it declines the change, and reporting that as success would
+// say collection is off when it is not.
+func (c *Client) SetDataProgram(ctx context.Context, appURL, accessToken string, body DataProgramUpdate) (DataProgramResult, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return DataProgramResult{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return DataProgramResult{}, &Error{Kind: KindRejected, Message: "invalid data-program request", Err: err}
+	}
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, base+DataProgramPath, bytes.NewReader(raw))
+	if err != nil {
+		return DataProgramResult{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	var reply struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error"`
+		ErrorCode string `json:"errorCode"`
+	}
+	if err := c.do(ctx, req, &reply); err != nil {
+		return DataProgramResult{}, err
+	}
+	res := DataProgramResult{OK: reply.OK, ResponseCode: first(reply.ErrorCode, wireCode(reply.Error))}
+	if !res.OK {
+		return res, &Error{Kind: KindRejected, Code: res.ResponseCode, Message: first(reply.Error, "Perch did not acknowledge the data-program update")}
+	}
+	return res, nil
+}
+
+// wireCode returns s when it reads as a machine code rather than a sentence:
+// Perch puts short codes in `error` for some refusals and prose in others.
+func wireCode(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.Contains(s, " ") || len(s) > 64 {
+		return ""
+	}
+	return s
 }

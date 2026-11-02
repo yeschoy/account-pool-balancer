@@ -63,6 +63,11 @@ type registrationManager struct {
 	running  bool
 	worker   func(context.Context, registrationInput) ([]byte, error)
 	activate func(context.Context, string, []byte) error
+	// privacy turns Perch's data-program switch off for a freshly activated
+	// session. It runs after activation and before the import, so no account
+	// enters the pool with collection still on; its error is reported, never
+	// blocking. Nil means use disablePerchDataProgram.
+	privacy func(context.Context, string, []byte) error
 }
 
 func (s *Server) apiPerchRegister(w http.ResponseWriter, r *http.Request) {
@@ -376,6 +381,9 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 		}
 		started := time.Now()
 		doc, err := worker(ctx, a)
+		// privacyErr is the data-program switch's outcome, which is reported
+		// but never folded into err: it must not fail the account.
+		var privacyErr error
 		if err == nil {
 			var envelope struct {
 				Session json.RawMessage `json:"supabase_session"`
@@ -425,6 +433,17 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 				err = activate(ctx, a.ProxyURL, doc)
 				s.logPerchDiagnostic("", "activate", proxySource, "", started, err)
 			}
+			if err == nil {
+				// The account is usable from here on, so closing its data
+				// collection is never allowed to fail the registration: a
+				// refusal is recorded on the row and left to the operator.
+				stage = "隐私设置"
+				privacy := m.privacy
+				if privacy == nil {
+					privacy = s.disablePerchDataProgram
+				}
+				privacyErr = privacy(ctx, a.ProxyURL, doc)
+			}
 		} else {
 			s.logPerchDiagnostic("", "register", proxySource, "", started, err)
 		}
@@ -444,6 +463,9 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 		} else {
 			row.Status = "activated"
 			row.Detail = "Starter 已激活"
+			if privacyErr != nil {
+				row.Detail += "；隐私收集关闭失败，请在 chat.perchai.app 手动关闭"
+			}
 			row.CanImport = true
 			row.doc = doc
 			row.proxyURL = a.ProxyURL

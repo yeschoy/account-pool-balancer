@@ -613,6 +613,16 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 		s.perchAutoError("Starter 激活结果不确定，请人工核查")
 		return nil, false
 	}
+	// Close the account's data collection before it can be imported. Like the
+	// console's own registration this never fails the candidate: a refusal is
+	// reported on the status line and the operator closes it by hand.
+	privacy := m.privacy
+	if privacy == nil {
+		privacy = s.disablePerchDataProgram
+	}
+	if privacyErr := privacy(ctx, c.ProxyURL, doc); privacyErr != nil {
+		s.perchAutoError("已激活，但隐私收集关闭失败，请在 chat.perchai.app 手动关闭")
+	}
 	if !update(perchsignupstore.Ready, nil, "") {
 		return nil, false
 	}

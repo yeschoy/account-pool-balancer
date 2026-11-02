@@ -123,7 +123,7 @@ func (s *Server) logPerchDiagnostic(accountID, stage, proxySource, target string
 		return
 	}
 	switch stage {
-	case "register", "activate", "refresh", "quota", "models", "model":
+	case "register", "activate", "privacy", "refresh", "quota", "models", "model":
 	default:
 		return
 	}
