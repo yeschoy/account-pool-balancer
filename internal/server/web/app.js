@@ -1073,7 +1073,8 @@ function requestRow(r) {
     <td>${statusBadge(r.status, r.result)}${r.upstreamStatus && r.upstreamStatus !== r.status ? `<div class="acc-sub">上游 ${esc(r.upstreamStatus)}</div>` : ''}${r.errorCategory ? `<div class="acc-sub">${esc(r.errorCategory)}${r.blockedBy ? '/' + esc(r.blockedBy) : ''}</div>` : ''}</td>
     <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div></td>
     <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div class="acc-sub">${costCell(r)}</div></td>
-    <td class="num">${tok}<div>${cacheRateCell(r)}</div></td><td class="num">${r.attempts ? r.attempts.length : 0}</td></tr>`;
+    <td class="num">${tok}<div>${cacheRateCell(r)}</div></td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
+    <td class="act"><button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }
 function detailRow(d) {
   const sz = (n, cut) => num(n) + ' B' + (cut ? ' <span class="badge warn">截断</span>' : '');
@@ -1094,6 +1095,15 @@ function errorRow(e) {
     <td>${e.ruleId ? `${esc(e.ruleId)}<div class="acc-sub">${esc(e.ruleAction)}${e.switched ? ' · 换号' : ''}</div>` : `<span class="muted">${esc(e.matchedBy)}</span>`}${e.retryRuleId ? `<div class="acc-sub">停止重试：${esc(e.retryRuleId)}</div>` : ''}</td>
     <td class="small">${esc(String(e.reason).slice(0, 160))}</td></tr>`;
 }
+// deleteRequestLog removes one record and re-renders the page from the start.
+async function deleteRequestLog(requestId) {
+  if (!requestId) return;
+  if (await modal({ title: '删除日志', body: `<p>确定删除请求 <code>${esc(requestId)}</code> 的日志？只删这一条，同一次的详细日志不受影响。</p>`, buttons: [{ label: '取消', value: 'c' }, { label: '删除', value: 'x', danger: true }] }) !== 'x') return;
+  await api('DELETE', '/api/logs/requests/log/' + encodeURIComponent(requestId));
+  toast('已删除该条日志');
+  await loadLogs('requests', true);
+}
+
 async function loadLogs(kind, reset) {
   if (!accountsCache.length) { try { accountsCache = (await api('GET', withPool('/api/accounts'))).accounts; } catch { /* ignore */ } }
   const p = LOG_PREFIX[kind];
@@ -1123,6 +1133,8 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
     try { await api('DELETE', `/api/logs/${kind}`); loadLogs(kind, true); } catch (e) { toast(e.message); }
   });
   $(`#${p}-table tbody`).addEventListener('click', (ev) => {
+    const del = ev.target.closest('.rq-del');
+    if (del) { deleteRequestLog(del.dataset.rid).catch((e) => toast(e.message)); return; }
     const tr = ev.target.closest('tr');
     if (!tr || !tr.parentElement) return;
     const idx = Array.from(tr.parentElement.children).indexOf(tr);

@@ -451,14 +451,21 @@ async function pcImportRegistration() {
 }
 
 // ---- 自动补号 ----
-const pcAuto = { loaded: false, busy: false, dirty: false, running: false, enabled: false, generation: 0 };
+const pcAuto = { loaded: false, busy: false, dirty: false, running: false, enabled: false, generation: 0, rows: [], picked: new Set() };
+const pcAutoRegisterable = (row) => row && row.canRegister === true;
+function pcAutoUpdateRegisterButtons() {
+  const count = pcAuto.rows.filter(pcAutoRegisterable).length;
+  $('#pc-auto-register-selected').disabled = pcAuto.busy || pcAuto.picked.size === 0;
+  $('#pc-auto-register-all').disabled = pcAuto.busy || count === 0;
+  $('#pc-auto-register-selected').textContent = pcAuto.picked.size ? `注册所选（${pcAuto.picked.size}）` : '注册所选';
+}
 function pcAutoUpdateRunButton() {
   $('#pc-auto-run').disabled = pcAuto.running || pcAuto.busy || !pcAuto.loaded || !pcAuto.enabled;
 }
 const pcAutoLabels = { queued: '等待中', running: '运行中', ready: '已就绪', completed: '已完成', failed: '失败', uncertain: '结果不确定' };
 
 function pcAutoProxy(value) {
-  if (!value) return '未绑定代理';
+  if (!value) return '直连（未使用代理）';
   try {
     const url = new URL(value);
     return url.protocol + '//' + url.host;
@@ -494,11 +501,30 @@ async function loadPerchAutosignup() {
     $('#pc-auto-last-error').textContent = status.lastError ? '最近错误：' + pcRegistrationSafe(status.lastError) : '';
     const proxies = Array.isArray(data.proxies) ? data.proxies : [];
     $('#pc-auto-proxy-rows').innerHTML = proxies.map((proxy) => `<tr><td>${esc(pcAutoProxy(proxy.proxy))}</td><td>${proxy.id ? `<button type="button" class="btn small danger pc-auto-proxy-delete" data-id="${esc(proxy.id)}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">暂无代理库存</td></tr>';
-    $('#pc-auto-rows').innerHTML = rows.map((row) => `<tr><td>${esc(row.login || '—')}</td><td><span class="badge ${row.status === 'failed' ? 'bad' : row.status === 'uncertain' ? 'warn' : row.status === 'completed' ? 'ok' : 'accent'}">${esc(pcAutoLabels[row.status] || row.status || '未知')}</span></td><td>${esc(row.proxy ? pcAutoProxy(row.proxy) : '未绑定')}</td><td>${esc(pcRegistrationSafe(row.detail))}${row.canRetrySave === true ? '<div class="error small">唯一会话仅保存在内存中，服务重启后将丢失。</div>' : ''}</td><td>${row.id && row.canRetrySave === true ? `<button type="button" class="btn small primary pc-auto-retry-save" data-id="${esc(row.id)}">重试保存</button> ` : ''}${row.id && row.status === 'uncertain' && row.canRevalidate === true ? `<button type="button" class="btn small pc-auto-activate" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">验证激活</button> ` : ''}${row.id && row.status === 'ready' ? `<button type="button" class="btn small primary pc-auto-import" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">确认入池</button> ` : ''}${row.id && row.status !== 'running' ? `<button type="button" class="btn small danger pc-auto-delete" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">暂无候选账号</td></tr>';
+    const eligible = new Set(rows.filter(pcAutoRegisterable).map((row) => row.id));
+    pcAuto.rows = rows;
+    pcAuto.picked.forEach((id) => { if (!eligible.has(id)) pcAuto.picked.delete(id); });
+    pcAutoUpdateRegisterButtons();
+    $('#pc-auto-pick-all').checked = eligible.size > 0 && pcAuto.picked.size === eligible.size;
+    $('#pc-auto-register-message').textContent = status.registered ? `${num(status.registered)} 个已注册待入池` : '';
+    $('#pc-auto-rows').innerHTML = rows.map((row) => `<tr><td class="pick">${pcAutoRegisterable(row) ? `<input type="checkbox" class="pc-auto-pick" value="${esc(row.id)}" ${pcAuto.picked.has(row.id) ? 'checked' : ''} aria-label="选择 ${esc(row.login || '')}">` : ''}</td><td>${esc(row.login || '—')}</td><td><span class="badge ${row.status === 'failed' ? 'bad' : row.status === 'uncertain' ? 'warn' : row.status === 'completed' ? 'ok' : 'accent'}">${esc(pcAutoLabels[row.status] || row.status || '未知')}</span></td><td>${esc(pcAutoProxy(row.proxy))}</td><td>${esc(pcRegistrationSafe(row.detail))}${row.canRetrySave === true ? '<div class="error small">唯一会话仅保存在内存中，服务重启后将丢失。</div>' : ''}</td><td>${row.id && row.canRetrySave === true ? `<button type="button" class="btn small primary pc-auto-retry-save" data-id="${esc(row.id)}">重试保存</button> ` : ''}${row.id && row.status === 'uncertain' && row.canRevalidate === true ? `<button type="button" class="btn small pc-auto-activate" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">验证激活</button> ` : ''}${row.id && row.status === 'ready' ? `<button type="button" class="btn small primary pc-auto-import" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">确认入池</button> ` : ''}${row.id && row.status !== 'running' ? `<button type="button" class="btn small danger pc-auto-delete" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无候选账号</td></tr>';
     $('#pc-auto-error').textContent = '';
   } catch (e) {
     if (generation === pcAuto.generation) $('#pc-auto-error').textContent = '获取自动补号状态失败：' + pcRegistrationSafe(e.message);
   }
+}
+
+// pcAutoRegister registers the chosen candidates now and leaves them ready for a
+// later refill; it never imports them.
+async function pcAutoRegister(ids) {
+  if (!ids || !ids.length) return;
+  const group = $('#pc-auto-group').value.trim();
+  if (!group) throw new Error('请先填写入池分组并保存设置');
+  if (await modal({ title: '注册所选候选', body: `<p>立即注册 ${ids.length} 个候选账号？注册完成后停在「已注册并激活」，补号时直接入池，不会再注册一次。</p>`, buttons: [{ label: '取消', value: 'c' }, { label: '开始注册', value: 'x' }] }) !== 'x') return;
+  const res = await api('POST', '/api/perch/autosignup/register', { ids, group });
+  pcAuto.picked.clear();
+  toast(`已排入注册队列 ${res && res.count ? res.count : ids.length} 个`);
+  await loadPerchAutosignup();
 }
 
 async function pcAutoSave(event) {
@@ -1031,6 +1057,15 @@ async function loadPerchRequests(reset, target) {
   }
 }
 
+// pcDeleteRequestLog removes one Perch request record and reloads this page.
+async function pcDeleteRequestLog(requestId) {
+  if (!requestId) return;
+  if (await modal({ title: '删除日志', body: `<p>确定删除请求 <code>${esc(requestId)}</code> 的日志？只删这一条。</p>`, buttons: [{ label: '取消', value: 'c' }, { label: '删除', value: 'x', danger: true }] }) !== 'x') return;
+  await api('DELETE', '/api/perch/logs/log/' + encodeURIComponent(requestId));
+  toast('已删除该条日志');
+  await loadPerchRequests(false, pcLog.page);
+}
+
 // ---- 事件绑定 ----
 document.addEventListener('DOMContentLoaded', () => {
   const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); };
@@ -1041,11 +1076,21 @@ document.addEventListener('DOMContentLoaded', () => {
   on('#pr-next', 'click', () => { if (pcLog.next) pcLogLoad(false, pcLog.page + 1); });
   on('.pc-log-filters', 'keydown', (e) => { if (e.key === 'Enter') pcLogLoad(true); });
   on('#pr-table tbody', 'click', (e) => {
+    const del = e.target.closest('.rq-del');
+    if (del) { pcDeleteRequestLog(del.dataset.rid).catch((err) => toast(err.message)); return; }
     const tr = e.target.closest('tr');
     if (!tr) return;
     const item = pcLog.items[Array.from(tr.parentElement.children).indexOf(tr)];
     if (item) showJSON('请求 ' + item.requestId, item);
   });
+  on('#pc-auto-pick-all', 'change', (e) => {
+    pcAuto.picked.clear();
+    if (e.target.checked) pcAuto.rows.filter(pcAutoRegisterable).forEach((row) => pcAuto.picked.add(row.id));
+    $$('#pc-auto-rows .pc-auto-pick').forEach((box) => { box.checked = pcAuto.picked.has(box.value); });
+    pcAutoUpdateRegisterButtons();
+  });
+  on('#pc-auto-register-selected', 'click', () => pcAutoRegister([...pcAuto.picked]).catch((e) => { $('#pc-auto-register-message').textContent = e.message; }));
+  on('#pc-auto-register-all', 'click', () => pcAutoRegister(pcAuto.rows.filter(pcAutoRegisterable).map((row) => row.id)).catch((e) => { $('#pc-auto-register-message').textContent = e.message; }));
   on('#btn-new-pkey', 'click', () => pkCreateKey('client').then(() => loadPerchKeys()).catch((e) => toast(e.message)));
   on('#btn-new-pik', 'click', () => pkCreateKey('import').then(() => loadPerchKeys()).catch((e) => toast(e.message)));
   on('#btn-pc-refresh', 'click', () => loadPerchOverview().catch((e) => toast(e.message)));
@@ -1064,6 +1109,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (button) pcAutoDeleteProxy(button.dataset.id);
   });
   on('#pc-auto-rows', 'click', (e) => {
+    const pick = e.target.closest('.pc-auto-pick');
+    if (pick) {
+      if (pick.checked) pcAuto.picked.add(pick.value); else pcAuto.picked.delete(pick.value);
+      pcAutoUpdateRegisterButtons();
+      return;
+    }
     const remove = e.target.closest('.pc-auto-delete');
     if (remove) pcAutoDelete(remove.dataset.id, remove.dataset.login);
     const importButton = e.target.closest('.pc-auto-import');

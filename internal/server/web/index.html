@@ -184,7 +184,7 @@
         <select id="pr-protocol" aria-label="协议"><option value="">全部协议</option><option value="openai-chat">openai-chat</option><option value="openai-responses">openai-responses</option></select>
         <button class="btn" id="pr-search">查询</button><button class="btn" id="pr-refresh">刷新</button>
       </div></header>
-      <div class="panel flush"><div class="table-wrap"><table class="table click" id="pr-table"><thead><tr><th>时间</th><th>协议</th><th>模型</th><th>下游密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th></tr></thead><tbody></tbody></table></div>
+      <div class="panel flush"><div class="table-wrap"><table class="table click" id="pr-table"><thead><tr><th>时间</th><th>协议</th><th>模型</th><th>下游密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th><th>操作</th></tr></thead><tbody></tbody></table></div>
         <div class="more pc-pager"><button class="btn small" id="pr-prev">上一页</button><span id="pr-page" class="muted small"></span><button class="btn small" id="pr-next">下一页</button></div>
       </div>
     </section>
@@ -263,7 +263,11 @@
           <h2>代理库存</h2>
           <div class="table-wrap"><table class="table"><thead><tr><th>代理</th><th>操作</th></tr></thead><tbody id="pc-auto-proxy-rows"></tbody></table></div>
           <h2 class="mt">候选账号</h2>
-          <div class="table-wrap"><table class="table"><thead><tr><th>GitHub 账号</th><th>状态</th><th>代理</th><th>详情</th><th>操作</th></tr></thead><tbody id="pc-auto-rows"></tbody></table></div>
+          <div class="actions mb"><button type="button" class="btn" id="pc-auto-register-selected" disabled>注册所选</button>
+            <button type="button" class="btn ghost" id="pc-auto-register-all">注册全部待注册</button>
+            <span id="pc-auto-register-message" class="muted small" role="status"></span></div>
+          <p class="hint">先批量注册、后补号：注册完成的候选停在「已注册并激活」，补号时直接入池、不会再注册一次，方便你先养一段时间。</p>
+          <div class="table-wrap"><table class="table"><thead><tr><th class="pick"><input type="checkbox" id="pc-auto-pick-all" aria-label="全选待注册"></th><th>GitHub 账号</th><th>状态</th><th>代理</th><th>详情</th><th>操作</th></tr></thead><tbody id="pc-auto-rows"></tbody></table></div>
         </section>
       </div>
     </section>
@@ -461,7 +465,7 @@
         </div>
       </header>
       <div class="panel flush"><div class="table-wrap"><table class="table click" id="rq-table">
-        <thead><tr><th>时间</th><th>协议</th><th>模型</th><th>密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th></tr></thead><tbody></tbody></table></div>
+        <thead><tr><th>时间</th><th>协议</th><th>模型</th><th>密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th><th>操作</th></tr></thead><tbody></tbody></table></div>
         <div class="more"><button class="btn ghost hidden" id="rq-more">加载更多</button></div>
       </div>
     </section>

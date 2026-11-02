@@ -49,6 +49,7 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 	a("POST /api/perch/autosignup/candidates/{id}/retry-save", s.apiPerchAutoRetrySave)
 	a("POST /api/perch/autosignup/candidates/{id}/activate", s.apiPerchAutoActivateCandidate)
 	a("POST /api/perch/autosignup/run", s.apiPerchAutoRun)
+	a("POST /api/perch/autosignup/register", s.apiPerchAutoRegisterBatch)
 
 	a("POST /api/perch/batch", s.apiPerchBatch)
 
@@ -64,6 +65,7 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 	a("POST /api/perch/backup", s.apiPerchBackup)
 	a("POST /api/perch/restore", s.apiPerchRestore)
 	a("DELETE /api/perch/logs", s.apiPerchClearLogs)
+	a("DELETE /api/perch/logs/log/{id}", s.apiDeletePerchLog)
 }
 
 // ---- views ---------------------------------------------------------------------

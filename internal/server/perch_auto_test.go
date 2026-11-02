@@ -158,7 +158,7 @@ func TestPerchAutoProxyInventory(t *testing.T) {
 		t.Fatal("proxy not assigned")
 	}
 }
-func TestPerchAutoNoProxyDoesNotClaim(t *testing.T) {
+func TestPerchAutoEmptyInventoryUsesDirect(t *testing.T) {
 	e := newPerchOpenEnv(t)
 	s := e.srv
 	if _, err := s.perchAuto.store.Import([]perchsignupstore.Candidate{{Login: "x", Password: "p", TOTPSecret: "t", MailboxURL: "m"}}); err != nil {
@@ -166,11 +166,19 @@ func TestPerchAutoNoProxyDoesNotClaim(t *testing.T) {
 	}
 	s.perchAuto.settings.Enabled = true
 	s.perchAuto.notBefore = time.Time{}
+	var got registrationInput
 	called := false
-	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) { called = true; return nil, nil }
+	s.perchRegistrations.worker = func(_ context.Context, in registrationInput) ([]byte, error) {
+		called, got = true, in
+		return nil, errors.New("stopped after claim")
+	}
+	s.perchRegistrations.activate = func(context.Context, string, []byte) error { return nil }
 	s.perchAutoCheck(context.Background())
-	if called || s.perchAuto.store.List()[0].Status != perchsignupstore.Queued || !strings.Contains(s.perchAuto.status.LastError, "代理") {
-		t.Fatal("missing proxy must block claim")
+	if !called || got.ProxyURL != "" {
+		t.Fatalf("direct registration not started: %+v", got)
+	}
+	if s.perchAuto.store.List()[0].Status != perchsignupstore.Uncertain || strings.Contains(s.perchAuto.status.LastError, "代理") {
+		t.Fatalf("direct claim blocked: %s", s.perchAuto.status.LastError)
 	}
 }
 func TestPerchAutoCannotDeleteWorkingCandidate(t *testing.T) {
@@ -338,5 +346,141 @@ func TestPerchAutoCancellationIsUncertain(t *testing.T) {
 	}
 	if strings.Contains(s.perchAuto.status.LastError, "sensitive") {
 		t.Fatal("error leaked")
+	}
+}
+
+// A candidate registered ahead of time is imported by the refill, never registered twice.
+func TestPerchAutoImportsRegisteredCandidateWithoutRegistering(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	autoImportCandidate(t, s)
+	// Register ahead of time: the candidate is already ready with a session.
+	rec, err := s.perchAuto.store.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := exportDocAsMap("ahead-user")
+	session := doc["session"].(map[string]any)
+	session["user"] = map[string]any{"id": "ahead-user"}
+	doc["supabase_session"] = session
+	raw, _ := json.Marshal(doc)
+	if err = s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
+		t.Fatal(err)
+	}
+	registered := false
+	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) {
+		registered = true
+		return nil, errors.New("must not register again")
+	}
+	activated := false
+	s.perchRegistrations.activate = func(context.Context, string, []byte) error {
+		activated = true
+		return nil
+	}
+	s.perchAuto.settings.Enabled = true
+	s.perchAuto.notBefore = time.Time{}
+	s.perchAutoCheck(context.Background())
+	if registered || activated {
+		t.Fatalf("registered=%v activated=%v, want neither", registered, activated)
+	}
+	if got := s.perchAuto.store.List(); len(got) != 1 || got[0].Status != perchsignupstore.Completed {
+		t.Fatalf("candidate not imported: %+v", got)
+	}
+	if e.count("ahead-user") != 1 {
+		t.Fatal("registered account was not imported")
+	}
+}
+
+// Pending registrations do not stop a refill when a registered one is available.
+func TestPerchAutoRegisteredCandidateUnblocksRefill(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	// One queued candidate (not yet registered) and one ready candidate.
+	autoImportCandidate(t, s)
+	rec, err := s.perchAuto.store.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := exportDocAsMap("pool-user")
+	session := doc["session"].(map[string]any)
+	session["user"] = map[string]any{"id": "pool-user"}
+	doc["supabase_session"] = session
+	raw, _ := json.Marshal(doc)
+	if err = s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.perchAuto.settings.Enabled = true
+	s.perchAuto.notBefore = time.Time{}
+	registered := false
+	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) {
+		registered = true
+		return nil, errors.New("stop")
+	}
+	s.perchAutoCheck(context.Background())
+	if registered {
+		t.Fatal("refill registered a candidate while a ready one existed")
+	}
+	if e.count("pool-user") != 1 {
+		t.Fatal("ready candidate was not imported")
+	}
+}
+
+// The batch endpoint registers only the chosen candidates and leaves them ready.
+func TestPerchAutoBatchRegisterSelected(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	for _, login := range []string{"batch-a", "batch-b"} {
+		if _, err := s.perchAuto.store.Import([]perchsignupstore.Candidate{{Login: login, Password: "p", TOTPSecret: "t", MailboxURL: "m"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := s.perchAuto.store.List()
+	var chosen string
+	for _, x := range list {
+		if x.Login == "batch-a" {
+			chosen = x.ID
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"ids": []string{chosen}, "group": "perch"})
+	doc := exportDocAsMap("batch-a")
+	session := doc["session"].(map[string]any)
+	session["user"] = map[string]any{"id": "batch-a"}
+	doc["supabase_session"] = session
+	raw, _ := json.Marshal(doc)
+	var registered []string
+	s.perchRegistrations.worker = func(_ context.Context, in registrationInput) ([]byte, error) {
+		registered = append(registered, in.Login)
+		return raw, nil
+	}
+	s.perchRegistrations.activate = func(context.Context, string, []byte) error { return nil }
+	out := httptest.NewRecorder()
+	s.apiPerchAutoRegisterBatch(out, httptest.NewRequest("POST", "/", bytes.NewReader(body)))
+	if out.Code != http.StatusAccepted {
+		t.Fatalf("batch %d %s", out.Code, out.Body.String())
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("batch did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
+		states := map[string]perchsignupstore.Status{}
+		for _, x := range s.perchAuto.store.List() {
+			states[x.Login] = x.Status
+		}
+		if states["batch-a"] == perchsignupstore.Ready {
+			if states["batch-b"] != perchsignupstore.Queued {
+				t.Fatalf("unchosen candidate changed: %v", states)
+			}
+			break
+		}
+	}
+	if len(registered) != 1 || registered[0] != "batch-a" {
+		t.Fatalf("registered %v, want only batch-a", registered)
+	}
+	// Registering ahead of time must not import: that happens on the next refill.
+	if e.count("batch-a") != 0 {
+		t.Fatal("batch register imported the account")
 	}
 }

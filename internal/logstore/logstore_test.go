@@ -1,6 +1,7 @@
 package logstore
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,4 +76,73 @@ func TestDetailRingIsBoundedByBytes(t *testing.T) {
 	if got := len(k.ordered()); got != 2 {
 		t.Fatalf("ring kept %d records of 100 MiB, want 2 within the 256 MiB budget", got)
 	}
+}
+
+// Remove drops the record from memory at once and from its segment on disk,
+// including the live segment still open for appends.
+func TestRemoveDeletesMemoryAndDisk(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	now := time.Now().UTC()
+	for _, id := range []string{"req_a", "req_b", "req_c"} {
+		s.Append("requests", now, keyedRec{TS: now, RequestID: id, Status: 200})
+	}
+	waitFor(t, func() bool {
+		files, _ := filepath.Glob(filepath.Join(dir, "requests-*.jsonl"))
+		var text string
+		for _, f := range files {
+			b, _ := os.ReadFile(f)
+			text += string(b)
+		}
+		return strings.Count(text, "\n") == 3
+	})
+	if removed, err := s.Remove("requests", "req_b"); err != nil || removed.Memory != 1 || removed.Disk != 1 {
+		t.Fatalf("remove = %+v, %v", removed, err)
+	}
+	page, err := s.Query("requests", nil, time.Time{}, time.Time{}, 10, 0)
+	if err != nil || len(page.Items) != 2 {
+		t.Fatalf("ring after remove: %d %v", len(page.Items), err)
+	}
+	for _, raw := range page.Items {
+		if strings.Contains(string(raw), "req_b") {
+			t.Fatal("removed record still in memory")
+		}
+	}
+	// The writer keeps appending to the same (rewritten) segment.
+	s.Append("requests", now, keyedRec{TS: now, RequestID: "req_d", Status: 200})
+	waitFor(t, func() bool {
+		files, _ := filepath.Glob(filepath.Join(dir, "requests-*.jsonl"))
+		var text string
+		for _, f := range files {
+			b, _ := os.ReadFile(f)
+			text += string(b)
+		}
+		return strings.Count(text, "\n") == 3
+	})
+	s.Close()
+	r := open(t, dir)
+	defer r.Close()
+	page, _ = r.Query("requests", nil, time.Time{}, time.Time{}, 10, 0)
+	var got []string
+	for _, raw := range page.Items {
+		var m keyedRec
+		_ = json.Unmarshal(raw, &m)
+		got = append(got, m.RequestID)
+	}
+	if strings.Join(got, ",") != "req_d,req_c,req_a" { // Query returns newest first
+		t.Fatalf("recovered after remove = %v", got)
+	}
+	if _, err := r.Remove("requests", "req_b"); err != ErrNotFound {
+		t.Fatalf("second remove: %v", err)
+	}
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatal("condition not reached")
 }

@@ -101,6 +101,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("PUT /api/settings", s.apiSaveSettings)
 	a("GET /api/logs/{kind}", s.apiLogs)
 	a("DELETE /api/logs/{kind}", s.apiClearLogs)
+	a("DELETE /api/logs/{kind}/log/{id}", s.apiDeleteLog)
 	a("POST /api/workflow/preview", s.apiPreview)
 	a("POST /api/workflow/reset-counts", s.apiResetCounts)
 	a("POST /api/config/reload", s.apiReload)
@@ -1195,6 +1196,68 @@ func (s *Server) apiClearLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// logIDField is the record member DELETE /api/logs/{kind}/log/{id} matches.
+// Each kind is addressed by the identifier it is displayed and searched by.
+var logIDField = map[string]string{"requests": "requestId", "errors": "requestId", "details": "requestId", "perch": "id"}
+
+// logMatches reports whether rec carries id under kind's identity field.
+func logMatches(kind string, rec json.RawMessage, id string) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(rec, &m) != nil {
+		return false
+	}
+	var got string
+	return json.Unmarshal(m[logIDField[kind]], &got) == nil && got == id
+}
+
+// deleteLog removes one record and confirms the store removed the record that
+// carries kind's identity field, not merely a body that mentions the value.
+func (s *Server) deleteLog(kind, id string) (logstore.Removed, error) {
+	page, err := s.logs.Query(kind, map[string]string{logIDField[kind]: id}, time.Time{}, time.Time{}, 1, 0)
+	if err != nil {
+		return logstore.Removed{}, err
+	}
+	if len(page.Items) == 0 || !logMatches(kind, page.Items[0], id) {
+		return logstore.Removed{}, logstore.ErrNotFound
+	}
+	return s.logs.Remove(kind, id)
+}
+
+func (s *Server) apiDeleteLog(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	if _, ok := logIDField[kind]; !ok {
+		apiError(w, http.StatusNotFound, errors.New("unknown log kind"))
+		return
+	}
+	out, err := s.deleteLog(kind, r.PathValue("id"))
+	switch {
+	case errors.Is(err, logstore.ErrNotReady):
+		w.Header().Set("Retry-After", "2")
+		apiError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, logstore.ErrNotFound):
+		apiError(w, http.StatusNotFound, err)
+	case err != nil:
+		apiError(w, http.StatusInternalServerError, errors.New("删除日志失败"))
+	default:
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+func (s *Server) apiDeletePerchLog(w http.ResponseWriter, r *http.Request) {
+	out, err := s.deleteLog("perch", r.PathValue("id"))
+	switch {
+	case errors.Is(err, logstore.ErrNotReady):
+		w.Header().Set("Retry-After", "2")
+		apiError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, logstore.ErrNotFound):
+		apiError(w, http.StatusNotFound, err)
+	case err != nil:
+		apiError(w, http.StatusInternalServerError, errors.New("删除日志失败"))
+	default:
+		writeJSON(w, http.StatusOK, out)
+	}
 }
 
 // ---- workflow ----

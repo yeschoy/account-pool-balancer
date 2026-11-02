@@ -24,6 +24,9 @@ import (
 
 var (
 	ErrNoQueued = errors.New("no queued candidate")
+	ErrNoReady  = errors.New("no registered candidate waiting to be imported")
+	// ErrNoProxy is retained for callers built against the former behavior where
+	// a missing proxy blocked a claim; claiming now falls back to direct connect.
 	ErrNoProxy  = errors.New("no proxy available for queued candidate")
 	ErrNotFound = errors.New("candidate not found")
 	ErrInvalid  = errors.New("invalid candidate or transition")
@@ -405,16 +408,15 @@ func (s *Store) DeleteProxy(id string) error {
 }
 
 // Claim atomically persists queued -> running before returning credentials.
+// A candidate without its own proxy borrows inventory; an empty inventory means
+// direct connect, which the worker treats the same way as an explicit clear.
 func (s *Store) Claim() (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, r := range s.records {
 		if r.Status == Queued {
 			rs := append([]diskRecord(nil), s.records...)
-			if rs[i].Candidate.ProxyURL == "" {
-				if len(s.proxies) == 0 {
-					return Record{}, ErrNoProxy
-				}
+			if rs[i].Candidate.ProxyURL == "" && len(s.proxies) > 0 {
 				rs[i].Candidate.ProxyURL = s.proxies[i%len(s.proxies)].URL
 			}
 			rs[i].Status = Running
@@ -428,8 +430,57 @@ func (s *Store) Claim() (Record, error) {
 	return Record{}, ErrNoQueued
 }
 
+// ClaimByID atomically persists queued -> running for one chosen candidate and
+// binds an inventory proxy the same way Claim does.
+func (s *Store) ClaimByID(id string) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.records {
+		if r.ID != id {
+			continue
+		}
+		if r.Status != Queued {
+			return Record{}, ErrInvalid
+		}
+		rs := append([]diskRecord(nil), s.records...)
+		if rs[i].Candidate.ProxyURL == "" && len(s.proxies) > 0 {
+			rs[i].Candidate.ProxyURL = s.proxies[i%len(s.proxies)].URL
+		}
+		rs[i].Status = Running
+		if err := s.save(rs, s.proxies); err != nil {
+			return Record{}, err
+		}
+		s.records = rs
+		return record(rs[i]), nil
+	}
+	return Record{}, ErrNotFound
+}
+
+// ClaimReady atomically persists ready -> running for the oldest candidate that
+// was already registered and activated, so it can be imported without registering
+// again. Registration and import are separate steps precisely so a batch can be
+// registered ahead of time.
+func (s *Store) ClaimReady() (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.records {
+		if r.Status != Ready || len(r.Session) == 0 {
+			continue
+		}
+		rs := append([]diskRecord(nil), s.records...)
+		rs[i].Status = Running
+		if err := s.save(rs, s.proxies); err != nil {
+			return Record{}, err
+		}
+		s.records = rs
+		return record(rs[i]), nil
+	}
+	return Record{}, ErrNoReady
+}
+
 // ResumeUncertain explicitly claims an interrupted session for reconciliation.
-// It never starts a fresh registration and requires an existing session.
+// It never starts a fresh registration and requires an existing session; an
+// empty proxy resumes on the direct path the interrupted attempt used.
 func (s *Store) ResumeUncertain(id string) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -439,9 +490,6 @@ func (s *Store) ResumeUncertain(id string) (Record, error) {
 		}
 		if r.Status != Uncertain || len(r.Session) == 0 {
 			return Record{}, ErrInvalid
-		}
-		if r.Candidate.ProxyURL == "" {
-			return Record{}, ErrNoProxy
 		}
 		rs := append([]diskRecord(nil), s.records...)
 		rs[i].Status = Running

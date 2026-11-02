@@ -25,10 +25,13 @@ type perchAutoSettings struct {
 	Group        string `json:"group"`
 }
 type perchAutoStatus struct {
-	Available int       `json:"available"`
-	Running   bool      `json:"running"`
-	LastCheck time.Time `json:"lastCheck"`
-	LastError string    `json:"lastError"`
+	Available int `json:"available"`
+	// Registered counts candidates that are registered and activated but not yet
+	// imported: a pool refill draws from these before registering anything.
+	Registered int       `json:"registered"`
+	Running    bool      `json:"running"`
+	LastCheck  time.Time `json:"lastCheck"`
+	LastError  string    `json:"lastError"`
 }
 type perchAutoManager struct {
 	mu             sync.Mutex
@@ -76,10 +79,13 @@ func (s *Server) apiPerchAuto(w http.ResponseWriter, r *http.Request) {
 		Detail        string                  `json:"detail"`
 		CanRetrySave  bool                    `json:"canRetrySave"`
 		CanRevalidate bool                    `json:"canRevalidate"`
+		// CanRegister marks a candidate the operator can register ahead of time.
+		CanRegister bool `json:"canRegister"`
 	}
 	list := make([]candidate, 0)
 	for _, x := range a.store.List() {
-		item := candidate{ID: x.ID, Login: x.Login, Status: x.Status, Proxy: x.Proxy, Detail: autoCandidateDetail(x.Status), CanRevalidate: x.Status == perchsignupstore.Uncertain && x.HasSession && x.Proxy != "" && x.Proxy != "直连"}
+		item := candidate{ID: x.ID, Login: x.Login, Status: x.Status, Proxy: x.Proxy, Detail: autoCandidateDetail(x.Status),
+			CanRevalidate: x.Status == perchsignupstore.Uncertain && x.HasSession, CanRegister: x.Status == perchsignupstore.Queued}
 		if x.ID == pendingID {
 			item.Status = "save-failed"
 			item.Detail = "会话仅存于内存，重启将丢失，请立即重试保存"
@@ -96,7 +102,7 @@ func autoCandidateDetail(st perchsignupstore.Status) string {
 	case perchsignupstore.Failed:
 		return "注册失败，请人工核查"
 	case perchsignupstore.Ready:
-		return "已激活，等待人工核查入池"
+		return "已注册并激活，等待补号时入池（不会再注册）"
 	}
 	return ""
 }
@@ -242,11 +248,12 @@ func (s *Server) apiPerchAutoActivateCandidate(w http.ResponseWriter, r *http.Re
 		return
 	}
 	rec, err := a.store.Get(r.PathValue("id"))
-	if err != nil || rec.Status != perchsignupstore.Uncertain || rec.Candidate.ProxyURL == "" || !validAutoSession(rec.Session) {
+	if err != nil || rec.Status != perchsignupstore.Uncertain || !validAutoSession(rec.Session) {
 		a.mu.Unlock()
 		apiError(w, 409, errors.New("会话不存在、无效或已过期"))
 		return
 	}
+	// An empty proxy is the direct path, not a missing one, so revalidation is allowed.
 	if _, err = a.store.ResumeUncertain(rec.ID); err != nil {
 		a.mu.Unlock()
 		apiError(w, 500, errors.New("保存候选状态失败"))
@@ -334,6 +341,84 @@ func (s *Server) apiPerchAutoRun(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scheduled"})
 }
+
+// apiPerchAutoRegisterBatch registers the selected candidates now, leaving each
+// one ready for a later import. The pool refill then imports them instead of
+// registering again, which is what makes "register a batch first, refill later"
+// possible.
+func (s *Server) apiPerchAutoRegisterBatch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var in struct {
+		IDs   []string `json:"ids"`
+		Group string   `json:"group"`
+	}
+	if readBody(r, &in) != nil || len(in.IDs) == 0 || len(in.IDs) > 100 {
+		apiError(w, 400, errors.New("请选择 1-100 个候选账号"))
+		return
+	}
+	in.Group = strings.TrimSpace(in.Group)
+	if !validAutoSettings(perchAutoSettings{IntervalSec: 60, MinAvailable: 1, Group: in.Group}) {
+		apiError(w, 400, errors.New("分组无效"))
+		return
+	}
+	a := s.perchAuto
+	queued := map[string]bool{}
+	for _, x := range a.store.List() {
+		if x.Status == perchsignupstore.Queued {
+			queued[x.ID] = true
+		}
+	}
+	var todo []string
+	seen := map[string]bool{}
+	for _, id := range in.IDs {
+		if seen[id] || !queued[id] {
+			continue
+		}
+		seen[id] = true
+		todo = append(todo, id)
+	}
+	if len(todo) == 0 {
+		apiError(w, 409, errors.New("所选账号不是等待注册的候选"))
+		return
+	}
+	m := &s.perchRegistrations
+	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		apiError(w, 409, errors.New("已有注册任务运行"))
+		return
+	}
+	m.running = true
+	m.mu.Unlock()
+	go func() {
+		defer func() { m.mu.Lock(); m.running = false; m.mu.Unlock() }()
+		// Detached from the request: the batch outlives the client connection,
+		// and each registration is bounded by its own timeout.
+		ctx := context.Background()
+		for _, id := range todo {
+			a.mu.Lock()
+			if a.workingID != "" || a.pendingID != "" {
+				a.mu.Unlock()
+				return // the scheduler claimed something else; leave the rest queued
+			}
+			a.workingID = id
+			a.status.Running = true
+			a.mu.Unlock()
+			rec, err := a.store.ClaimByID(id)
+			if err == nil {
+				s.perchAutoRegisterOne(ctx, rec)
+			}
+			a.mu.Lock()
+			a.workingID, a.status.Running = "", false
+			a.mu.Unlock()
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "scheduled", "count": len(todo)})
+}
+
 func (s *Server) runPerchAuto(ctx context.Context) {
 	a := s.perchAuto
 	if a == nil {
@@ -401,14 +486,21 @@ func (s *Server) perchAutoCheck(ctx context.Context) {
 			blocked = true
 		}
 	}
+	// Ready means the candidate was registered ahead of time and is waiting to
+	// be imported: that is the normal path here, not a reason to stop.
+	registered := 0
 	for _, x := range a.store.List() {
-		if x.Status == perchsignupstore.Failed || x.Status == perchsignupstore.Uncertain || x.Status == perchsignupstore.Ready || x.Status == perchsignupstore.Running {
+		if x.Status == perchsignupstore.Failed || x.Status == perchsignupstore.Uncertain || x.Status == perchsignupstore.Running {
 			blocked = true
 			break
+		}
+		if x.Status == perchsignupstore.Ready {
+			registered++
 		}
 	}
 	a.mu.Lock()
 	a.status.Available = available
+	a.status.Registered = registered
 	if blocked {
 		a.status.LastError = "账号状态不确定，请人工核查后再补号"
 	}
@@ -430,12 +522,24 @@ func (s *Server) perchAutoCheck(ctx context.Context) {
 		a.mu.Unlock()
 		return
 	}
+	// A candidate registered ahead of time only needs importing: never register it
+	// twice. Registering is the slow, failure-prone half, so import first.
+	if rec, err := a.store.ClaimReady(); err == nil {
+		a.workingID = rec.ID
+		a.status.Running = true
+		a.mu.Unlock()
+		defer func() { a.mu.Lock(); a.workingID = ""; a.status.Running = false; a.mu.Unlock() }()
+		if !s.perchAutoImportOnly(rec, settings.Group) {
+			// The import failed; the candidate is back to ready or uncertain and the
+			// next check retries instead of registering a duplicate account.
+			return
+		}
+		return
+	}
 	rec, err := a.store.Claim()
 	if err != nil {
 		a.mu.Unlock()
-		if errors.Is(err, perchsignupstore.ErrNoProxy) {
-			s.perchAutoError("候选账号未绑定代理，代理库存为空")
-		} else if !errors.Is(err, perchsignupstore.ErrNoQueued) {
+		if !errors.Is(err, perchsignupstore.ErrNoQueued) {
 			s.perchAutoError("领取候选账号失败")
 		}
 		return
@@ -452,7 +556,20 @@ func (s *Server) perchAutoError(msg string) {
 	a.status.LastError = msg
 	a.mu.Unlock()
 }
+
+// perchAutoRegister registers, activates and imports one candidate.
 func (s *Server) perchAutoRegister(parent context.Context, rec perchsignupstore.Record, group string) {
+	if doc, ok := s.perchAutoRegisterOne(parent, rec); ok {
+		rec.Session = doc
+		if err := s.importReadyPerchCandidate(rec, group); err != nil {
+			s.perchAutoError(err.Error())
+		}
+	}
+}
+
+// perchAutoRegisterOne registers and activates one candidate, leaving it ready.
+// ok is false when it stopped and already reported why.
+func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupstore.Record) (doc []byte, ok bool) {
 	a := s.perchAuto
 	m := &s.perchRegistrations
 	update := func(st perchsignupstore.Status, doc []byte, id string) bool {
@@ -476,7 +593,7 @@ func (s *Server) perchAutoRegister(parent context.Context, rec perchsignupstore.
 	if err != nil || ctx.Err() != nil {
 		update(perchsignupstore.Uncertain, nil, "")
 		s.perchAutoError("注册结果不确定，请人工核查")
-		return
+		return nil, false
 	}
 	if !update(perchsignupstore.Running, doc, "") {
 		a.mu.Lock()
@@ -484,29 +601,51 @@ func (s *Server) perchAutoRegister(parent context.Context, rec perchsignupstore.
 		a.pendingSession = append([]byte(nil), doc...)
 		a.status.LastError = "会话保存失败，当前仅保存在内存，重启将丢失；请立即重试保存"
 		a.mu.Unlock()
-		return
+		return nil, false
 	}
 	if !validAutoSession(doc) {
 		update(perchsignupstore.Uncertain, nil, "")
 		s.perchAutoError("注册会话无效，请人工核查")
-		return
+		return nil, false
 	}
 	if s.activateAutoSession(ctx, c.ProxyURL, doc) != nil || ctx.Err() != nil {
 		update(perchsignupstore.Uncertain, nil, "")
 		s.perchAutoError("Starter 激活结果不确定，请人工核查")
-		return
+		return nil, false
 	}
 	if !update(perchsignupstore.Ready, nil, "") {
-		return
+		return nil, false
 	}
 	if ctx.Err() != nil {
 		s.perchAutoError("已激活账号需要人工核查")
-		return
+		return nil, false
 	}
-	rec.Session = doc
+	return doc, true
+}
+
+// perchAutoImportOnly moves an already-registered candidate into the pool. It
+// never registers or activates: the session was written when the candidate was
+// registered ahead of time, so re-running either step would risk a duplicate
+// account or a second activation.
+func (s *Server) perchAutoImportOnly(rec perchsignupstore.Record, group string) bool {
+	a := s.perchAuto
+	fail := func(msg string) bool {
+		if a.store.Update(rec.ID, perchsignupstore.Ready, nil, "") != nil {
+			s.perchAutoError("保存候选状态失败，请人工核查")
+			return false
+		}
+		s.perchAutoError(msg)
+		return false
+	}
+	if !validAutoSession(rec.Session) {
+		// An expired session needs a fresh login: hand it to the operator rather
+		// than registering a new account behind their back.
+		return fail("已注册账号的会话已过期，请人工核查后重新注册")
+	}
 	if err := s.importReadyPerchCandidate(rec, group); err != nil {
-		s.perchAutoError(err.Error())
+		return fail(err.Error())
 	}
+	return true
 }
 
 func validAutoSession(doc []byte) bool {

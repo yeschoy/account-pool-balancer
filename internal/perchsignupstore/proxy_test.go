@@ -151,13 +151,28 @@ func TestClaimAssignsLateProxyAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, e := s.Claim(); !errors.Is(e, ErrNoProxy) || r.ID != "" || s.List()[0].Status != Queued {
-		t.Fatal("missing proxy must not claim")
+	// An empty inventory is the direct path, so the claim must not be blocked.
+	r, err := s.Claim()
+	if err != nil || r.Candidate.ProxyURL != "" {
+		t.Fatalf("direct claim failed: %+v %v", r, err)
+	}
+	if err = s.Update(r.ID, Uncertain, []byte("session"), ""); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.ResumeUncertain(rows[0].ID)
+	if err != nil || r.Status != Running || r.Candidate.ProxyURL != "" {
+		t.Fatalf("direct resume failed: %+v %v", r, err)
+	}
+	if err = s.Update(r.ID, Failed, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Update(r.ID, Queued, nil, ""); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = s.ImportProxies([]string{"http://user:secret@proxy.test:80"}); err != nil {
 		t.Fatal(err)
 	}
-	r, err := s.Claim()
+	r, err = s.Claim()
 	if err != nil || r.Candidate.ProxyURL != "http://user:secret@proxy.test:80" {
 		t.Fatal("late binding failed")
 	}
@@ -192,9 +207,9 @@ func TestClaimAssignsLateProxyAndResume(t *testing.T) {
 	}
 }
 
-func TestUncertainResumeRequiresOriginalProxy(t *testing.T) {
+func TestUncertainResumeWithoutProxyIsDirect(t *testing.T) {
 	s, p := openTest(t)
-	// Simulate an older authenticated file written before proxy enforcement.
+	// Simulate an authenticated file written on the direct path.
 	s.records = []diskRecord{{ID: "old", Candidate: diskCandidate{Login: "legacy"}, Status: Uncertain, Session: []byte("secret-session")}}
 	if err := s.save(s.records, nil); err != nil {
 		t.Fatal(err)
@@ -210,16 +225,21 @@ func TestUncertainResumeRequiresOriginalProxy(t *testing.T) {
 	if err != nil || strings.Contains(string(encoded), "secret-session") {
 		t.Fatal("session leaked")
 	}
+	// Inventory must not be borrowed retroactively: the interrupted attempt was direct.
 	if _, err = s.ImportProxies([]string{"http://proxy.test:80"}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.ResumeUncertain("old")
-	if !errors.Is(err, ErrNoProxy) || r.ID != "" || s.List()[0].Status != Uncertain {
-		t.Fatal("resume without original proxy")
+	if err != nil || r.Status != Running || r.Candidate.ProxyURL != "" || string(r.Session) != "secret-session" {
+		t.Fatalf("direct resume: %+v %v", r, err)
 	}
+	// Reopening marks interrupted work uncertain again; the direct proxy stays empty.
 	s, err = Open(p, testKey)
-	if err != nil || s.List()[0].Status != Uncertain || !s.List()[0].HasSession {
-		t.Fatal("rejected resume changed disk")
+	if err != nil || s.List()[0].Status != Uncertain || s.List()[0].HasSession == false {
+		t.Fatalf("resume not durable: %v", err)
+	}
+	if len(s.ListProxies()) != 1 {
+		t.Fatal("inventory changed")
 	}
 }
 
@@ -248,5 +268,55 @@ func TestConcurrentProxyAndCandidateImports(t *testing.T) {
 	wg.Wait()
 	if len(s.List()) != 20 || len(s.ListProxies()) != 21 {
 		t.Fatal("lost update")
+	}
+}
+
+// ClaimReady hands out only registered candidates, and ClaimByID only the chosen one.
+func TestClaimReadyAndClaimByID(t *testing.T) {
+	s, p := openTest(t)
+	rows, err := s.Import([]Candidate{
+		{Login: "one", Password: "p", TOTPSecret: "t", MailboxURL: "m", ProxyURL: "http://proxy.test:80"},
+		{Login: "two", Password: "p", TOTPSecret: "t", MailboxURL: "m", ProxyURL: "http://proxy.test:80"},
+	})
+	if err != nil || len(rows) != 2 {
+		t.Fatal("import", err)
+	}
+	if _, err = s.ClaimReady(); !errors.Is(err, ErrNoReady) {
+		t.Fatal("queued candidate must not be claimable as ready")
+	}
+	// Register the second one ahead of time.
+	r, err := s.ClaimByID(rows[1].ID)
+	if err != nil || r.Candidate.Login != "two" || r.Status != Running {
+		t.Fatalf("claim by id: %+v %v", r, err)
+	}
+	if got := s.List()[0].Status; got != Queued {
+		t.Fatalf("unchosen candidate changed to %s", got)
+	}
+	if _, err = s.ClaimByID(rows[0].ID + "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("unknown id claimed")
+	}
+	if _, err = s.ClaimByID(rows[1].ID); !errors.Is(err, ErrInvalid) {
+		t.Fatal("running candidate claimed again")
+	}
+	if err = s.Update(r.ID, Ready, []byte("session"), ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimReady()
+	if err != nil || got.Candidate.Login != "two" || got.Status != Running || string(got.Session) != "session" {
+		t.Fatalf("claim ready: %+v %v", got, err)
+	}
+	if _, err = s.ClaimReady(); !errors.Is(err, ErrNoReady) {
+		t.Fatal("empty ready set claimed twice")
+	}
+	// The import completes from running.
+	if err = s.Update(got.ID, Completed, nil, "acct"); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(p, testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list := s.List(); list[0].Status != Queued || list[1].Status != Completed {
+		t.Fatalf("durable state %+v", list)
 	}
 }

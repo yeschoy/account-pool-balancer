@@ -7,6 +7,7 @@ package logstore
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,9 @@ type record struct {
 	ts   time.Time
 	data json.RawMessage
 	keys map[string]string
+	// seg is the segment the record was written to; 0 means it predates the
+	// on-disk pass or was never persisted by this process.
+	seg int64
 }
 
 type kind struct {
@@ -51,16 +55,19 @@ type kind struct {
 	ring    []record
 	head    int // next write position once full
 	seq     int64
+	// current is the newest segment number, stamped on live records so a
+	// rewrite can find them; the writer sets it as the segment really opens.
+	current int64
 	file    *os.File
 	w       *bufio.Writer // over file; flushed every flushEvery
 	size    int64
 }
 
+// push inserts r and stamps it with the current segment; caller holds k.mu.
 func (k *kind) push(r record, max int) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
 	k.seq++
 	r.seq = k.seq
+	r.seg = k.current
 	if len(k.ring) > max {
 		// the limit shrank: keep the newest max
 		k.ring = k.ordered()[len(k.ring)-max:]
@@ -108,7 +115,19 @@ type job struct {
 	k     *kind
 	line  []byte
 	clear bool
-	done  chan struct{}
+	// del runs on the writer goroutine so a rewrite cannot race an append.
+	del  *deleteJob
+	done chan struct{}
+}
+
+// deleteJob removes one record from the segment named by seg: lines stamped
+// after seq were appended later, and a line holding want is the record itself.
+type deleteJob struct {
+	seg  int64
+	seq  int64
+	want string
+	out  Removed
+	err  error
 }
 
 type Store struct {
@@ -207,16 +226,43 @@ func (s *Store) Append(kindName string, ts time.Time, rec any) {
 		keys, _, _ = extractKeys(data, k.filters)
 	}
 	lim := s.limits()
+	// Open the job under the same lock as the ring insert: the writer may bump
+	// k.current between these two steps otherwise, and the record would be
+	// stamped with the previous segment.
+	j := job{k: k, line: append(data, '\n')}
+	k.mu.Lock()
 	k.push(record{ts: ts, data: data, keys: keys}, max(lim.MaxRecords[kindName], 1))
+	k.mu.Unlock()
 	select {
-	case s.ch <- job{k: k, line: append(data, '\n')}:
+	case s.ch <- j:
 	default:
 		s.dropped.Add(1)
 	}
 }
 
-func (s *Store) segmentName(k *kind) string {
-	return filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.jsonl", k.name, time.Now().UTC().Format("20060102-150405"), time.Now().UnixNano()%1e6))
+// segmentName names the next segment: name-stamp-<number>. The trailing number
+// orders segments, encodes the append index (so a rewrite can tell how far each
+// record got in its segment), and ties a live record to its file.
+func (s *Store) segmentName(k *kind, num int64) string {
+	return filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.jsonl", k.name, time.Now().UTC().Format("20060102-150405"), num))
+}
+
+// segmentIndex reads the trailing number of a segment file, -1 if unreadable.
+func segmentIndex(name string) int64 {
+	base := strings.TrimSuffix(name, ".jsonl")
+	_, num, ok := strings.Cut(base, "-")
+	for ok {
+		if _, rest, more := strings.Cut(num, "-"); more {
+			num, ok = rest, true
+			continue
+		}
+		break
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 func (s *Store) writer() {
@@ -236,6 +282,13 @@ func (s *Store) writer() {
 			}
 			if j.clear {
 				s.clearFiles(j.k)
+				close(j.done)
+				continue
+			}
+			if j.del != nil {
+				// This goroutine is the only appender, so nothing writes to the
+				// segment while it is being rewritten.
+				j.del.out.Disk, j.del.err = s.dropSegLine(j.k, j.del.seg, j.del.seq, j.del.want)
 				close(j.done)
 				continue
 			}
@@ -272,7 +325,12 @@ func (s *Store) write(k *kind, line []byte) error {
 		s.enforce()
 	}
 	if k.file == nil {
-		f, err := os.OpenFile(s.segmentName(k), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		// current is read by Append under k.mu; bump it there too.
+		k.mu.Lock()
+		k.current++
+		num := k.current
+		k.mu.Unlock()
+		f, err := os.OpenFile(s.segmentName(k, num), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return err
 		}
@@ -310,6 +368,19 @@ func (s *Store) segments() []segFile {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
 	return out
+}
+
+// segIndex caches segmentIndex per file name for one pass (writer goroutine).
+type segIndex map[string]int64
+
+func (x segIndex) of(path string) int64 {
+	name := filepath.Base(path)
+	if n, ok := x[name]; ok {
+		return n
+	}
+	n := segmentIndex(name)
+	x[name] = n
+	return n
 }
 
 func (s *Store) isCurrent(path string) bool {
@@ -368,6 +439,31 @@ func (s *Store) enforce() {
 	}
 }
 
+// deal streams the lines of one segment that pass keep as JSONL and reports how
+// many it wrote. A record that cannot be read back is not one this store can
+// serve, so dropping unreadable lines is intentional.
+func deal(path string, limit int, keep func(line []byte, idx int64) bool) ([]byte, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	var out bytes.Buffer
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), limit+1024)
+	for idx := int64(1); sc.Scan(); idx++ {
+		line := sc.Bytes()
+		if len(line) == 0 || !keep(line, idx) {
+			continue
+		}
+		out.Write(line)
+		out.WriteByte('\n')
+		n++
+	}
+	return out.Bytes(), n, sc.Err()
+}
+
 func (s *Store) clearFiles(k *kind) {
 	s.closeFile(k)
 	for _, f := range s.segments() {
@@ -392,6 +488,7 @@ func (s *Store) recover() {
 				continue
 			}
 			var recs []record
+			seg := segmentIndex(filepath.Base(segs[i].path)) // stamps the lines for later deletes
 			f, err := os.Open(segs[i].path)
 			if err != nil {
 				continue
@@ -402,10 +499,17 @@ func (s *Store) recover() {
 				line := append([]byte(nil), sc.Bytes()...)
 				keys, ts, ok := extractKeys(line, k.filters)
 				if ok {
-					recs = append(recs, record{ts: ts, data: line, keys: keys})
+					recs = append(recs, record{ts: ts, data: line, keys: keys, seg: seg})
 				}
 			}
 			f.Close()
+			// The writer numbers new segments above everything on disk, and the
+			// rewritten tail describes where this process will next append.
+			k.mu.Lock()
+			if seg > k.current {
+				k.current = seg
+			}
+			k.mu.Unlock()
 			loaded = append(recs, loaded...)
 		}
 		if len(loaded) > max {
@@ -431,7 +535,11 @@ func (s *Store) recover() {
 	}
 }
 
-var ErrNotReady = errors.New("logs are still being recovered")
+var (
+	ErrNotReady  = errors.New("logs are still being recovered")
+	ErrNotFound  = errors.New("log record not found")
+	ErrInvalidID = errors.New("log record id is required")
+)
 
 type Page struct {
 	Items      []json.RawMessage `json:"items"`
@@ -483,6 +591,175 @@ func (s *Store) Query(kindName string, filters map[string]string, since, until t
 		lastSeq = r.seq
 	}
 	return page, nil
+}
+
+// Removed reports the outcome of one Remove: the records it dropped from
+// memory and the lines it rewrote on disk.
+type Removed struct {
+	Memory int `json:"memory"`
+	Disk   int `json:"disk"`
+}
+
+// Remove deletes the record of kind that Query returns for rid, from the live
+// ring and from the segment file holding it. It returns ErrNotFound when no
+// record matches. A record whose segment was already rotated or trimmed away
+// is removed from memory only, and Disk stays 0.
+//
+// rid is compared by value: the store keeps only filter keys, so it cannot
+// prove which JSON member of a record it matched. The API layer checks the
+// returned record before exposing the match.
+func (s *Store) Remove(kindName, rid string) (Removed, error) {
+	if !s.ready.Load() {
+		return Removed{}, ErrNotReady
+	}
+	if rid == "" {
+		return Removed{}, ErrInvalidID
+	}
+	k := s.kinds[kindName]
+	if k == nil {
+		return Removed{}, fmt.Errorf("unknown log kind")
+	}
+	want, _ := json.Marshal(rid)
+	want = want[1 : len(want)-1] // the escaped value without its quotes
+	var kept []record
+	var target *record
+	k.mu.Lock()
+	all := k.ordered()
+	for i := range all {
+		if target == nil && bytes.Contains(all[i].data, want) {
+			target = &all[i]
+			continue
+		}
+		kept = append(kept, all[i])
+	}
+	if target == nil {
+		k.mu.Unlock()
+		return Removed{}, ErrNotFound
+	}
+	// A rewrite keeps the file's line order; records stamped after the target
+	// (and the target's own line) are the only ones past it.
+	seg, seq := target.seg, target.seq
+	out := Removed{Memory: 1}
+	k.ring, k.head = nil, 0
+	k.ring = kept
+	k.mu.Unlock()
+	if seg < 0 {
+		return out, nil // unreachable: recovery keeps unreadable names at -1
+	}
+	j := &deleteJob{seg: seg, seq: seq, want: string(want)}
+	done := make(chan struct{})
+	s.ch <- job{k: k, del: j, done: done}
+	<-done
+	out.Disk = j.out.Disk
+	return out, j.err
+}
+
+// dropSegLine removes the record from its segment (writer goroutine).
+func (s *Store) dropSegLine(k *kind, seg, seq int64, want string) (int, error) {
+	// A record queued before the writer opened its file is stamped 0; it is in
+	// the live segment like anything else stamped at or after the previous one.
+	k.mu.RLock()
+	current, open := k.current, k.file
+	k.mu.RUnlock()
+	floor := seg
+	if floor < current && seg == 0 {
+		floor = current
+	}
+	// The writer opened its latest segment after this record was stamped, so it
+	// holds the record at line seq. Older segments are found by their number.
+	live := open != nil && current >= floor
+	path := ""
+	if live {
+		path = open.Name()
+	}
+	if !live {
+		path = ""
+		for _, f := range s.segments() {
+			if f.kind == k.name && segmentIndex(filepath.Base(f.path)) == seg {
+				path = f.path
+				break
+			}
+		}
+	}
+	if path == "" {
+		return 0, nil // rotated or trimmed away since the record was written
+	}
+	if live && k.w.Buffered() > 0 {
+		// Lines still in the writer's buffer are not on disk yet: flush them or
+		// the scan would miss them and this rewrite would drop them.
+		if err := k.w.Flush(); err != nil {
+			return 0, err
+		}
+	}
+	// Only lines stamped after seq can be the record or follow it, so skip the
+	// rest without scanning their (possibly large) bodies.
+	data, n, err := deal(path, recordLimit(k.name), func(line []byte, idx int64) bool {
+		return idx < seq || !bytes.Contains(line, []byte(want))
+	})
+	if err != nil {
+		return 0, err
+	}
+	if live {
+		// The append handle cannot be written at an offset, so the rewritten
+		// bytes go in through a plain handle that keeps the same inode.
+		if err := rewriteInPlace(path, data); err != nil {
+			return 0, err
+		}
+		k.size = int64(len(data))
+		k.w.Reset(k.file)
+		return 1, nil
+	}
+	if n == 0 {
+		return 1, os.Remove(path)
+	}
+	return 1, writeFileAtomic(path, data)
+}
+
+// rewriteInPlace replaces path's contents with data, keeping the inode so an
+// open append handle (the live segment) stays valid.
+func rewriteInPlace(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// writeFileAtomic replaces path with data through a synced temporary file.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".logseg-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if err = f.Chmod(0o600); err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // Clear empties one kind, memory and files.
