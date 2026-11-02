@@ -858,6 +858,26 @@ func (s *Server) checkPerchAccount(ctx context.Context, a config.Account) perchC
 		res.Reachable = true
 		return res
 	}
+	// The account route answers 200 for a banned account, so a check that stops
+	// here reports a banned account as healthy — which is exactly how a whole
+	// pool of banned accounts looked fine. The plan gate is the one read that
+	// states the ban plainly.
+	if ps, perr := s.perchClient().PlanStatus(ctx, cfg.AppURL, sec.AccessToken); perr == nil {
+		switch {
+		case ps.Banned():
+			res.Status, res.Detail, res.Reachable, res.banStatus = "banned", ps.Detail(), true, ps.Status
+			return res
+		case ps.PlanRequired:
+			// Not a ban: the account has simply never chosen a plan, so no
+			// hosted-model turn can start. Say so instead of "ok".
+			res.Status, res.Detail, res.Reachable = "no-plan", "账号尚未选择套餐（待选套餐），模型调用会被拒绝", true
+			return res
+		case ps.ErrorCode != "":
+			res.Status, res.Detail, res.Reachable = "error", ps.Detail(), true
+			return res
+		}
+	}
+
 	res.Status, res.Reachable = "ok", true
 	if u.Email != "" && u.Email != a.Email {
 		// Perch is the authority on the address; keep the console in step
