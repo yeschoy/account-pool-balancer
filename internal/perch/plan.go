@@ -7,7 +7,7 @@ package perch
 // choose it, and it is the only endpoint that reports a *banned* account
 // plainly: the account route still answers 200 for a banned account, so a check
 // built on it cannot see the ban at all. Reading the status is a plain GET and
-// costs no allowance. See .analysis/perch-desktop-and-ban-analysis.md.
+// costs no allowance. See docs/perch-desktop-and-ban-analysis.md.
 
 import (
 	"bytes"
