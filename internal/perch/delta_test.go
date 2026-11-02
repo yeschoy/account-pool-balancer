@@ -1,0 +1,409 @@
+package perch
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// deltaFake is a model-call proxy that records every request and can answer
+// with the server's held-context confirmation headers.
+type deltaFake struct {
+	srv     *httptest.Server
+	mu      sync.Mutex
+	bodies  []map[string]any
+	headers []http.Header
+	calls   atomic.Int32
+
+	// hold, when set, makes the server echo a confirmation of that many
+	// messages plus the given digest, as Perch does after accepting a call.
+	holdDigest string
+	holdTools  string
+	holdLen    int
+	// refuse makes the next answer a delta refusal.
+	refuse bool
+	status int
+}
+
+func newDeltaFake(t *testing.T) *deltaFake {
+	f := &deltaFake{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.calls.Add(1)
+		if r.URL.Path != ModelCallPath {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		f.mu.Lock()
+		f.bodies = append(f.bodies, body)
+		f.headers = append(f.headers, r.Header.Clone())
+		f.mu.Unlock()
+
+		refuseNow := false
+		f.mu.Lock()
+		if f.refuse {
+			f.refuse = false
+			refuseNow = true
+		}
+		f.mu.Unlock()
+		if refuseNow {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"ok":false,"error":"base mismatch","errorCode":"delta_base_mismatch"}`)
+			return
+		}
+		if f.holdLen > 0 {
+			w.Header().Set(DeltaHeader, "1")
+			w.Header().Set(HeldLengthHeader, itoa(f.holdLen))
+			w.Header().Set(HeldDigestHeader, f.holdDigest)
+			if f.holdTools != "" {
+				w.Header().Set(HeldToolsHeader, f.holdTools)
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, "data: {\"type\":\"answer_delta\",\"text\":\"ok\"}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"done\",\"ok\":true,\"text\":\"ok\"}\n\n")
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *deltaFake) last() (map[string]any, http.Header) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.bodies) == 0 {
+		return nil, nil
+	}
+	return f.bodies[len(f.bodies)-1], f.headers[len(f.headers)-1]
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}
+
+// envelopeFor builds a run's envelope with n messages.
+func envelopeFor(runID string, n int, tools []Tool) Envelope {
+	msgs := make([]Message, n)
+	for i := range msgs {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		msgs[i] = Message{Role: role, Content: "m" + itoa(i)}
+	}
+	env := Envelope{
+		RunID:   runID,
+		Lane:    "chat",
+		Surface: "cli",
+		AvoidIDs: []string{},
+	}
+	env.Request.Messages = msgs
+	if len(tools) > 0 {
+		env.Request.Tools = tools
+	}
+	return env
+}
+
+func envJSON(t *testing.T, env Envelope) []byte {
+	t.Helper()
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// The first call of a run sends the whole request: nothing is held yet.
+func TestDeltaFirstCallIsWhole(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	env := envelopeFor("run-1", 3, nil)
+
+	res, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env),
+	}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("CallModel: %v", err)
+	}
+	_ = res
+
+	body, hdr := f.last()
+	if _, has := body["messagesDelta"]; has {
+		t.Fatal("the first call must not claim a delta")
+	}
+	req, _ := body["request"].(map[string]any)
+	msgs, _ := req["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("whole request must carry all 3 messages, got %v", len(msgs))
+	}
+	if hdr.Get(DeltaHeader) != "" {
+		t.Fatal("a whole request must not carry x-perch-call-delta")
+	}
+}
+
+// A confirmed prefix makes the next call of the same run send only the tail.
+func TestDeltaSecondCallSendsOnlyTail(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+
+	// First call: 3 messages, server confirms holding all 3.
+	env1 := envelopeFor("run-1", 3, nil)
+	dig := digestMessages(env1.Request.Messages)
+	f.holdLen, f.holdDigest = 3, prefixDigest(dig, 3)
+
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Second call: same run, 5 messages (3 shared + 2 new).
+	env2 := envelopeFor("run-1", 5, nil)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 5, prefixDigest(digestMessages(env2.Request.Messages), 5)
+	f.mu.Unlock()
+
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	body, hdr := f.last()
+	if hdr.Get(DeltaHeader) != "1" {
+		k, n := c.DeltaStats()
+		t.Fatalf("a delta must carry x-perch-call-delta: 1 (cache keys=%d snaps=%d)", k, n)
+	}
+	md, ok := body["messagesDelta"].(map[string]any)
+	if !ok {
+		t.Fatalf("no messagesDelta in %v", body)
+	}
+	if int(md["baseLength"].(float64)) != 3 {
+		t.Fatalf("baseLength = %v, want 3", md["baseLength"])
+	}
+	if md["baseDigest"] != prefixDigest(dig, 3) {
+		t.Fatalf("baseDigest = %v", md["baseDigest"])
+	}
+	newMsgs, _ := md["newMessages"].([]any)
+	if len(newMsgs) != 2 {
+		t.Fatalf("newMessages = %d, want 2", len(newMsgs))
+	}
+	req, _ := body["request"].(map[string]any)
+	if _, has := req["messages"]; has {
+		t.Fatal("a delta must not also carry the full messages array")
+	}
+}
+
+// A different run never reuses another run's prefix.
+func TestDeltaIsPerRun(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+
+	env1 := envelopeFor("run-1", 3, nil)
+	f.holdLen, f.holdDigest = 3, prefixDigest(digestMessages(env1.Request.Messages), 3)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Same messages, different run id.
+	env2 := envelopeFor("run-2", 5, nil)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	body, hdr := f.last()
+	if hdr.Get(DeltaHeader) != "" {
+		t.Fatal("a different run must send the whole request")
+	}
+	if _, has := body["messagesDelta"]; has {
+		t.Fatal("a different run must not claim a delta")
+	}
+}
+
+// A 409 is a refusal: the client resends the whole request.
+func TestDeltaRefusalFallsBackToWhole(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+
+	env1 := envelopeFor("run-1", 3, nil)
+	dig := digestMessages(env1.Request.Messages)
+	f.holdLen, f.holdDigest = 3, prefixDigest(dig, 3)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Second call claims a delta, server refuses with 409.
+	env2 := envelopeFor("run-1", 5, nil)
+	f.mu.Lock()
+	f.refuse = true
+	f.mu.Unlock()
+	res, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("a refused delta must fall back, not fail: %v", err)
+	}
+	if res.Text != "ok" {
+		t.Fatalf("text = %q", res.Text)
+	}
+	// The last request is the whole one.
+	body, hdr := f.last()
+	if hdr.Get(DeltaHeader) != "" {
+		t.Fatal("the fallback request must be whole")
+	}
+	req, _ := body["request"].(map[string]any)
+	msgs, _ := req["messages"].([]any)
+	if len(msgs) != 5 {
+		t.Fatalf("fallback must carry all messages, got %v", len(msgs))
+	}
+	// And the refused snapshot is forgotten.
+	if keys, snaps := c.DeltaStats(); keys != 0 || snaps != 0 {
+		t.Fatalf("a refused prefix must be dropped, cache = %d/%d", keys, snaps)
+	}
+}
+
+// A snapshot is only stored when the server confirms it.
+func TestDeltaUnconfirmedIsNotCached(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	env := envelopeFor("run-1", 3, nil)
+	// No confirmation headers at all.
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if keys, snaps := c.DeltaStats(); keys != 0 || snaps != 0 {
+		t.Fatalf("an unconfirmed prefix must not be cached, got %d/%d", keys, snaps)
+	}
+}
+
+// An unchanged tool list is omitted from the delta body.
+func TestDeltaOmitsUnchangedTools(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	tools := []Tool{{"type": "function", "function": map[string]any{"name": "f"}}}
+	env1 := envelopeFor("run-1", 2, tools)
+	td := digestTools(tools)
+	f.holdLen, f.holdDigest, f.holdTools = 2, prefixDigest(digestMessages(env1.Request.Messages), 2), td
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	env2 := envelopeFor("run-1", 3, tools)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 3, prefixDigest(digestMessages(env2.Request.Messages), 3)
+	f.mu.Unlock()
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	body, _ := f.last()
+	req, _ := body["request"].(map[string]any)
+	if _, has := req["tools"]; has {
+		t.Fatal("unchanged tools must be omitted from a delta")
+	}
+	if body["toolsDigest"] != td {
+		t.Fatalf("toolsDigest = %v, want %s", body["toolsDigest"], td)
+	}
+}
+
+// Snapshots expire after DeltaTTL.
+func TestDeltaExpires(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	env1 := envelopeFor("run-1", 3, nil)
+	dig := digestMessages(env1.Request.Messages)
+	f.holdLen, f.holdDigest = 3, prefixDigest(dig, 3)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	later := time.Now().Add(DeltaTTL + time.Minute)
+	c.Now = func() time.Time { return later }
+
+	env2 := envelopeFor("run-1", 5, nil)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	body, hdr := f.last()
+	if hdr.Get(DeltaHeader) != "" {
+		t.Fatal("an expired snapshot must not produce a delta")
+	}
+	if _, has := body["messagesDelta"]; has {
+		t.Fatal("no messagesDelta after expiry")
+	}
+}
+
+// A shrunken message list is never a delta.
+func TestDeltaShrunkPrefixIsWhole(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	env1 := envelopeFor("run-1", 5, nil)
+	dig := digestMessages(env1.Request.Messages)
+	f.holdLen, f.holdDigest = 5, prefixDigest(dig, 5)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	env2 := envelopeFor("run-1", 2, nil)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if _, hdr := f.last(); hdr.Get(DeltaHeader) != "" {
+		t.Fatal("a shorter request must be sent whole")
+	}
+}
+
+// digestMessages is stable and 64 hex chars.
+func TestDigestShape(t *testing.T) {
+	d := digestMessages([]Message{{Role: "user", Content: "hi"}})
+	if len(d) != 1 || len(d[0]) != 64 {
+		t.Fatalf("digest = %v", d)
+	}
+	sum := sha256.Sum256([]byte(`{"role":"user","content":"hi"}`))
+	if d[0] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("digest is not sha256 of the canonical message: %s", d[0])
+	}
+	if !isSHA256Hex(d[0]) || isSHA256Hex("zz") {
+		t.Fatal("isSHA256Hex is wrong")
+	}
+}
+
+var _ = strings.TrimSpace

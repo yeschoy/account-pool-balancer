@@ -81,7 +81,9 @@ type Envelope struct {
 
 // RequestEnvelope is the inner request.
 type RequestEnvelope struct {
-	Messages        []Message `json:"messages"`
+	// Messages is omitted entirely in a held-context delta, where the server
+	// already holds the prefix and only messagesDelta names the new tail.
+	Messages        []Message `json:"messages,omitempty"`
 	Tools           []Tool    `json:"tools,omitempty"`
 	ToolChoice      any       `json:"toolChoice,omitempty"`
 	MaxTokens       int       `json:"maxTokens,omitempty"`

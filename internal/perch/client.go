@@ -286,6 +286,9 @@ type Client struct {
 
 	// tickets holds one issued turn ticket per account (see ticket.go).
 	tickets ticketCache
+	// deltas holds the message prefixes the server confirmed it holds, per
+	// endpoint+run, so a turn can send only what is new (see delta.go).
+	deltas deltaCache
 }
 
 type proxyContextKey struct{}

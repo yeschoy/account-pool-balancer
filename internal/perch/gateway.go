@@ -319,14 +319,55 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 		}
 		url = base + WebChatPath
 	}
+	// Held-context delta: if the server already holds this run's message
+	// prefix, send only the new tail. body is what this attempt posts.
+	//
+	// plan is never nil, even when the request is whole: a whole request is
+	// what teaches the cache how much the server now holds, which is what makes
+	// the NEXT call of the run a delta.
+	body := call.Body
+	plan := &DeltaPlan{}
+	if !web {
+		var env Envelope
+		if json.Unmarshal(call.Body, &env) == nil && env.RunID != "" {
+			plan = c.PlanDelta(url, env.RunID, env)
+			if plan.IsDelta {
+				if deltaBody, derr := plan.Body(env); derr == nil {
+					body = deltaBody
+				} else {
+					plan.IsDelta = false
+				}
+			}
+		}
+	}
+
 	attempts := 0
 	sawEvent := false
 	for {
-		res, err := c.callOnce(ctx, url, call, timeout, onEvent, &sawEvent, web)
+		res, err := c.callOnce(ctx, url, call, body, timeout, onEvent, &sawEvent, web, plan)
 		if err == nil {
+			c.SettleDelta(plan, true)
 			return res, nil
 		}
 		var me *ModelError
+		if plan.IsDelta && plan.Refused() {
+			// The server does not hold the prefix we claimed. Forget it and
+			// resend the whole request once — the published client's whole().
+			c.deltas.dropPrefix(plan.key, plan.digests)
+			// The retry is a whole request, so it carries no delta state; a
+			// fresh plan is built from the same envelope below.
+			whole := c.PlanDelta(url, "", Envelope{})
+			_ = whole
+			plan.IsDelta = false
+			body = call.Body
+			res, err = c.callOnce(ctx, url, call, body, timeout, onEvent, &sawEvent, web, nil)
+			if err == nil {
+				return res, nil
+			}
+		} else {
+			c.SettleDelta(plan, false)
+			plan.IsDelta = false
+		}
 		retryable := errors.As(err, &me) && me.Retryable
 		if !retryable || sawEvent || attempts >= 2 || ctx.Err() != nil {
 			return res, err
@@ -340,10 +381,10 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 	}
 }
 
-func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, timeout time.Duration, onEvent func(Event) error, sawEvent *bool, web bool) (CallResult, error) {
+func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, body []byte, timeout time.Duration, onEvent func(Event) error, sawEvent *bool, web bool, plan *DeltaPlan) (CallResult, error) {
 	actx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(actx, http.MethodPost, url, bytes.NewReader(call.Body))
+	req, err := http.NewRequestWithContext(actx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return CallResult{}, &ModelError{Status: 502, Code: "transport_error", Err: err.Error()}
 	}
@@ -369,17 +410,21 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, timeo
 		// ticket, which this surface neither needs nor checks.
 		req.Header.Set("Origin", ChatURL)
 		req.Header.Set("Referer", ChatURL+"/perchai")
-	} else if call.Ticket != nil && call.Ticket.Token != "" {
-		// The CLI attaches the ticket to every model call of the turn
-		// (x-perch-turn-ticket). Note what is NOT set here: x-perch-call-delta.
-		// The published client only sends that header when it is in its
-		// held-context delta mode, where the body carries messagesDelta and the
-		// request is missing the messages the server already holds. This
-		// envelope is always complete, so claiming delta mode would put
-		// "incremental" on the wire next to a full request — a combination the
-		// real client never produces. See
-		// .analysis/perch-cli-fidelity-report.md §4B.
-		req.Header.Set(TicketHeader, call.Ticket.Token)
+	} else {
+		if call.Ticket != nil && call.Ticket.Token != "" {
+			// The CLI attaches the ticket to every model call of the turn.
+			req.Header.Set(TicketHeader, call.Ticket.Token)
+		}
+		if plan != nil && plan.IsDelta {
+			// x-perch-call-delta only ever accompanies a body that actually
+			// carries messagesDelta. Sending it with a whole request is a
+			// combination the published client never produces, and the server
+			// answers 400 without echoing the header — which is how a refusal
+			// is detected below.
+			for k, v := range plan.Headers {
+				req.Header.Set(k, v)
+			}
+		}
 	}
 
 	httpc, cerr := c.clientFor(call.ProxyURL)
@@ -394,6 +439,19 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, timeo
 		return CallResult{}, &ModelError{Status: 502, Code: "transport_error", Err: err.Error(), Retryable: true}
 	}
 	defer res.Body.Close()
+
+	// Record what the server says it holds, so a delta can be judged: a 409, or
+	// a 400 that does not echo x-perch-call-delta, means it did not accept the
+	// prefix and the caller must resend the whole request.
+	if plan != nil {
+		hdr := map[string]string{
+			DeltaHeader:     res.Header.Get(DeltaHeader),
+			HeldLengthHeader: res.Header.Get(HeldLengthHeader),
+			HeldDigestHeader: res.Header.Get(HeldDigestHeader),
+			HeldToolsHeader:  res.Header.Get(HeldToolsHeader),
+		}
+		plan.Observe(res.StatusCode, hdr)
+	}
 
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
