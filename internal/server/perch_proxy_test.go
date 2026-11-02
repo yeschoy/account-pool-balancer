@@ -40,12 +40,45 @@ type perchModelFake struct {
 	turns   []map[string]any
 	// turnStatus answers cli-turn with this status when set.
 	turnStatus int
+
+	// tickets counts turn-ticket requests, and modelCalls counts model-call
+	// requests. They are tracked apart from `calls` because a CLI turn now
+	// makes both, and a test that asserts "the request was sent upstream once"
+	// means the model call, not the ticket beside it.
+	tickets    atomic.Int32
+	modelCalls atomic.Int32
+	// ticketStatus / ticketBody answer the ticket request with a refusal when
+	// set (default: a usable ticket).
+	ticketStatus int
+	ticketBody   string
+	// lastTicket is the body of the last ticket request.
+	lastTicket atomic.Value
+	// lastTicketHdr is its headers.
+	lastTicketHdr atomic.Value
 }
 
 func newPerchModelFake(t *testing.T) *perchModelFake {
 	f := &perchModelFake{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.calls.Add(1)
+		if r.URL.Path == perch.TurnTicketPath {
+			f.tickets.Add(1)
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.lastTicket.Store(body)
+			f.lastTicketHdr.Store(r.Header.Clone())
+			w.Header().Set("Content-Type", "application/json")
+			if f.ticketStatus >= 300 {
+				w.WriteHeader(f.ticketStatus)
+				_, _ = io.WriteString(w, f.ticketBody)
+				return
+			}
+			// A usable ticket. runId is stable per fake so a test can assert the
+			// model call reused it.
+			_, _ = io.WriteString(w, `{"ok":true,"ticket":"tk_fixture","ticketId":"tt_1","runId":"cli-turn-1700000000000-abc123","expiresAt":"`+
+				time.Now().Add(10*time.Minute).UTC().Format(time.RFC3339)+`","profile":"standard","enforced":false}`)
+			return
+		}
 		if r.URL.Path == perch.WebThreadsPath {
 			// the web surface opens a thread before it posts a message
 			f.threads.Add(1)
@@ -70,6 +103,7 @@ func newPerchModelFake(t *testing.T) *perchModelFake {
 			http.NotFound(w, r)
 			return
 		}
+		f.modelCalls.Add(1)
 		f.lastHeaders.Store(r.Header.Clone())
 		var env map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&env)
@@ -664,7 +698,7 @@ func TestPerchCapacityReachedDoesNotPunishAccount(t *testing.T) {
 	resp.Body.Close()
 	// It must not be retried either: Perch is full for everyone, so a retry
 	// (here or on another account) only spends the pool on a doomed request.
-	if got := fake.calls.Load(); got != 1 {
+	if got := fake.modelCalls.Load(); got != 1 {
 		t.Fatalf("a capacity limit was sent upstream %d times, want 1", got)
 	}
 	// the pool's own view: the account itself is not in a cooldown
@@ -1012,8 +1046,19 @@ func TestPerchModelCallCarriesTheCLIIdentity(t *testing.T) {
 	if env2["threadId"] != thread {
 		t.Fatalf("threadId changed between calls: %q → %v", thread, env2["threadId"])
 	}
-	if env2["runId"] == env["runId"] {
-		t.Fatal("runId must be fresh per call")
+	// The runId is the turn ticket's, not a per-request random one. The
+	// published client takes its runId from the ticket response and reuses it,
+	// so a fresh id per call beside a ticket is a pairing it never makes. The
+	// fake hands out one stable ticket, so both calls name the same run.
+	if env2["runId"] != env["runId"] {
+		t.Fatalf("runId must come from the turn ticket, not be minted per call: %v → %v", env["runId"], env2["runId"])
+	}
+	if got := env["runId"]; got != "cli-turn-1700000000000-abc123" {
+		t.Fatalf("envelope runId = %v, want the ticket's runId", got)
+	}
+	// and the ticket is actually presented
+	if got := h.Get(perch.TicketHeader); got != "tk_fixture" {
+		t.Fatalf("%s = %q, want the issued ticket", perch.TicketHeader, got)
 	}
 }
 
@@ -1161,5 +1206,123 @@ func TestPerchFingerprintView(t *testing.T) {
 	// it reports the switch, so an operator knows nothing is being sent
 	if out.Settings["telemetryEgress"] != false {
 		t.Fatalf("egress should default to false: %+v", out.Settings)
+	}
+}
+
+// A CLI turn obtains a turn ticket before its model call, presents it, and uses
+// the ticket's own runId. This is the sequence perchai-cli's `perch run` makes;
+// a pool call without it posts a request shape the published client never
+// produces.
+func TestPerchTurnTicketIssuedThenPresented(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	if got := fake.tickets.Load(); got != 1 {
+		t.Fatalf("issued %d tickets, want 1", got)
+	}
+	tb, _ := fake.lastTicket.Load().(map[string]any)
+	if tb["surface"] != "cli" || tb["profile"] != "standard" {
+		t.Fatalf("ticket request body = %v", tb)
+	}
+	hdr, _ := fake.lastHeaders.Load().(http.Header)
+	if got := hdr.Get(perch.TicketHeader); got != "tk_fixture" {
+		t.Fatalf("%s = %q, want the issued ticket", perch.TicketHeader, got)
+	}
+	// The envelope names the ticket's run, not one minted per request.
+	env, _ := fake.lastEnvelope.Load().(map[string]any)
+	if got := env["runId"]; got != "cli-turn-1700000000000-abc123" {
+		t.Fatalf("envelope runId = %v, want the ticket's", got)
+	}
+	// A complete envelope must not claim the CLI's delta mode.
+	if got := hdr.Get("X-Perch-Call-Delta"); got != "" {
+		t.Fatalf("x-perch-call-delta = %q, want none", got)
+	}
+}
+
+// An enforced turn-rate limit ends the request: the pool must not cool the
+// account and try the same request elsewhere. Rotating after the quota gate is
+// the allowance circumvention this gate exists to stop, and it is what turns a
+// single refused turn into a fleet of them.
+func TestPerchTurnRateLimitDoesNotRotate(t *testing.T) {
+	fake := newPerchModelFake(t)
+	fake.ticketStatus = http.StatusTooManyRequests
+	fake.ticketBody = `{"ok":false,"enforced":true,"errorCode":"turn_rate_limited","error":"your plan's turn rate limit reached"}`
+	e := withPerchPool(t, fake)
+
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "turn_rate_limited") {
+		t.Fatalf("body = %s, want the turn_rate_limited code", body)
+	}
+	// The model was never called: the gate refused first.
+	if got := fake.modelCalls.Load(); got != 0 {
+		t.Fatalf("the model was called %d times, want 0", got)
+	}
+	if got := fake.tickets.Load(); got != 1 {
+		t.Fatalf("ticket requests = %d, want 1 (no rotation)", got)
+	}
+	// and the account was not punished with a cooldown
+	v := e.srv.pool.Views(e.srv.cfg.Get())["p1"]
+	if v.State != nil && !v.State.CooldownUntil.IsZero() {
+		t.Fatalf("account was cooled for a plan quota verdict: %+v", v.State)
+	}
+}
+
+// An unenforced ticket failure degrades: the model call still happens, without
+// a ticket. That is the published client's own behaviour.
+func TestPerchTicketFailureUnenforcedStillCallsModel(t *testing.T) {
+	fake := newPerchModelFake(t)
+	fake.ticketStatus = http.StatusBadGateway
+	fake.ticketBody = `{"ok":false,"error":"ticket service down"}`
+	e := withPerchPool(t, fake)
+
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := fake.modelCalls.Load(); got != 1 {
+		t.Fatalf("model calls = %d, want 1", got)
+	}
+	hdr, _ := fake.lastHeaders.Load().(http.Header)
+	if got := hdr.Get(perch.TicketHeader); got != "" {
+		t.Fatalf("%s = %q, want none", perch.TicketHeader, got)
+	}
+}
+
+// Attribution carries workspaceId, or is null. The published client never sends
+// a userId-only block.
+func TestPerchAttributionNeedsWorkspace(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+
+	// Without a quota snapshot there is no workspace id: the block must be
+	// dropped entirely, not sent half-filled.
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	resp.Body.Close()
+	env, _ := fake.lastEnvelope.Load().(map[string]any)
+	if attrib, ok := env["attribution"]; ok && attrib != nil {
+		t.Fatalf("attribution = %v, want null/absent without a workspace id", attrib)
 	}
 }

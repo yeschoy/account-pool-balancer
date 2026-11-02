@@ -93,7 +93,7 @@ func TestEgressConnectionAndProtocolRegression(t *testing.T) {
 		t.Fatalf("model call failed: %v", err)
 	}
 	m := <-seen
-	if m.remote != p1.remote || m.path != ModelCallPath || m.header.Get("Authorization") != "Bearer fixture-model-token" || m.header.Get("Content-Type") != "application/json" || m.header.Get("Accept") != "text/event-stream" || m.header.Get("X-Perch-Call-Delta") != "1" || m.header.Get("X-Perch-Locale") != "en" || m.header.Get("User-Agent") != UserAgent || m.header.Get("Cookie") != "" || m.body["fixture"] != "value" {
+	if m.remote != p1.remote || m.path != ModelCallPath || m.header.Get("Authorization") != "Bearer fixture-model-token" || m.header.Get("Content-Type") != "application/json" || m.header.Get("Accept") != "text/event-stream" || m.header.Get("X-Perch-Call-Delta") != "" || m.header.Get("X-Perch-Turn-Ticket") != "" || m.header.Get("X-Perch-Locale") != "en" || m.header.Get("User-Agent") != UserAgent || m.header.Get("Cookie") != "" || m.body["fixture"] != "value" {
 		t.Error("model protocol or shared proxy connection changed")
 	}
 }

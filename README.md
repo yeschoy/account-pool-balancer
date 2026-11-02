@@ -306,6 +306,30 @@ Perch 账号没有 API Key，但**下游要调本服务仍然需要一把 `sk-od
 | `gatePrefix` | 空 | **仅 `cli` 通道**的 surface gate 前缀；留空用本服务自带的 `DefaultGatePrefix`（652 字符），也可以填自己的 |
 | `lane` | `chat` | **仅 `cli` 通道**：`chat` 体验最稳；`code` 不注入 Perch 的 operator persona |
 
+### turn ticket（每次模型调用前的准入票）
+
+依据 `.analysis/perch-cli-fidelity-report.md` §4A 与 `.analysis/perch-turn-ticket-flow.md`。官方 `perch run` **不是**直接发模型请求：它先向 `/api/perch-terminal/turn-ticket` 领一张限次票，之后该 turn 的每次 `model-call` 都带 `x-perch-turn-ticket`。此前本服务从不领票，这是“长得像 CLI 但不是 CLI”最硬的一条。
+
+| 环节 | 官方 CLI | 本服务 |
+|---|---|---|
+| 领票 | `POST /api/perch-terminal/turn-ticket`，body `{surface:"cli", profile:"standard"}`，8 秒超时 | 同路径同 body 同超时；每账号一份 |
+| 带票 | `x-perch-turn-ticket: <ticket>` | 同 header |
+| runId | 取票返回的 `runId`，整个 turn 复用 | 同（`BuildEnvelope` 由票的 runId 覆盖） |
+| 续期 | 距 `expiresAt` < 30 秒时 `{renew:true, ticketId}` | 同 |
+| 配额 | `standard=40` / `flock=250` 次，客户端**只计数不拦截** | 同：计数供诊断，拦截交给服务端 |
+| 失败 | 仅 `enforced` 才让 turn 失败，否则降级为“无票继续” | 同 |
+
+**`turn_rate_limited` 必须终止请求，不得换号重放。** 规则 `perch-turn-rate-limited` 已改为 `ActionIgnore`：这是套餐配额，换号重放同一请求正是配额规避，也正是此前“用十分钟就封号”最可能的放大机制。
+
+新增设置：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `turnTicket` | `true` | 是否领票。关掉发出的就是不领票的报文形状，仅在排查时用 |
+| `ticketProfile` | `standard` | 票的配额档；本服务只申请 `standard`（没有 CLI 的重提示词语法，不该申请更大的额度） |
+
+诊断接口 `perch/fingerprint` 现在额外返回每个账号的 `hasTicket` / `ticketRunId` / `ticketUses` / `ticketRemaining` / `ticketExpiresAt`，这些是本地缓存的观察，不代表服务端判定。
+
 ### 设备标识、指纹与遥测
 
 依据 `perchai-cli@2.4.121` 的静态分析（`.analysis/perchai-cli-2.4.121/analysis.md` §设备、指纹及遥测），官方 CLI 的身份面很小且基本确定，这里逐项对齐，但**一律按账号隔离**：
@@ -324,7 +348,7 @@ Perch 账号没有 API Key，但**下游要调本服务仍然需要一把 `sk-od
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `cliVersion` | `2.4.116` | User-Agent 声称的版本。**改了版本号不等于协议对上了**，见下方提醒 |
+| `cliVersion` | `2.4.120` | User-Agent 声称的版本，与已实现的协议面对齐（含 turn ticket）。**改了版本号不等于协议对上了**：只在实现该版本的协议行为后才应调高 |
 | `locale` | `en` | `x-perch-locale` |
 | `deviceFingerprint` | `true` | 每账号稳定的机器标识；关掉则每次请求都像一台新机器（本身也是信号） |
 | `cwdThreadId` | `true` | 没有会话 ID 时用 `cli-cwd-<sha16>`，而不是每次随机 |

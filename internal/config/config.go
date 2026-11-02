@@ -593,6 +593,26 @@ type Perch struct {
 	// The pool reproduces that per account; see internal/perch/device.go and
 	// .analysis/perchai-cli-2.4.121/analysis.md §设备、指纹及遥测.
 
+	// TurnTicket makes a CLI-surface turn obtain a turn ticket from
+	// /api/perch-terminal/turn-ticket before its model call, exactly as
+	// perchai-cli's `perch run` does, and attach it as x-perch-turn-ticket.
+	// The model call then uses the ticket's runId.
+	//
+	// This is a protocol-fidelity switch, not a capability switch: with it off
+	// the pool posts model calls that never obtained a ticket, which is a
+	// request shape the published client does not produce.
+	//
+	// It is a pointer so "absent from the file" and "explicitly false" stay
+	// distinguishable: a plain bool would make an existing config that never
+	// mentions the field silently mean false, which is the opposite of the
+	// default. Use TurnTicketOn to read it.
+	TurnTicket *bool `json:"turnTicket,omitempty"`
+	// TicketProfile is the budget profile the ticket asks for ("standard" 40
+	// calls or "flock" 250). The pool asks for standard: it has no equivalent
+	// of the CLI's heavyweight-prompt grammar and must not claim a budget it
+	// does not need.
+	TicketProfile string `json:"ticketProfile"`
+
 	// CLIVersion is what the User-Agent claims ("perchai-cli/<version>").
 	CLIVersion string `json:"cliVersion"`
 	// Locale is the x-perch-locale header the CLI surface sends.
@@ -624,6 +644,19 @@ type Perch struct {
 	// DO_NOT_TRACK). It only governs PostHog, as it does in the CLI; the
 	// pool's own switch is TelemetryEgress.
 	TelemetryOptOut bool `json:"telemetryOptOut"`
+}
+
+// boolPtr is how an optional boolean is stored, so absent and false differ.
+func boolPtr(v bool) *bool { return &v }
+
+// TurnTicketOn reports whether a CLI turn should obtain a turn ticket. An unset
+// value means the default, which is on: a model call that never asked for a
+// ticket is the request shape the published client does not produce.
+func (p Perch) TurnTicketOn() bool {
+	if p.TurnTicket == nil {
+		return true
+	}
+	return *p.TurnTicket
 }
 
 // DefaultPerch is the stock Perch settings.
@@ -663,8 +696,12 @@ func DefaultPerch() Perch {
 		// version in step with the CLI's protocol, not just its number: a UA
 		// that claims a newer client than the pool actually speaks is a signal
 		// in itself, which is why the pool spells that out in the README.
-		CLIVersion: perch.CLIVersion,
-		Locale:     perch.DefaultLocale,
+		// Tickets default ON: a model call without one is the shape this layer
+		// exists to stop producing.
+		TurnTicket:    boolPtr(true),
+		TicketProfile: perch.TicketProfileStandard,
+		CLIVersion:    perch.CLIVersion,
+		Locale:        perch.DefaultLocale,
 		// Both identity features default ON: they make a call look like the
 		// CLI's, which is the point of this layer.
 		DeviceFingerprint: true,
@@ -856,6 +893,14 @@ func (p *Perch) normalize() error {
 	}
 
 	// ---- device identity and telemetry ----------------------------------
+	// An absent turnTicket means the default (on). Only an explicit false
+	// turns ticketing off, which is what a pointer buys over a plain bool.
+	if p.TurnTicket == nil {
+		p.TurnTicket = boolPtr(d.TurnTicketOn())
+	}
+	if p.TicketProfile == "" {
+		p.TicketProfile = d.TicketProfile
+	}
 	if p.CLIVersion == "" {
 		p.CLIVersion = d.CLIVersion
 	}

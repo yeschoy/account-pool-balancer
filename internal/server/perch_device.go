@@ -249,6 +249,18 @@ type perchFingerprintAccount struct {
 	FirstPromptAt time.Time `json:"firstPromptAt,omitzero"`
 	ThreadID      string    `json:"threadId"`
 	ProxySource   string    `json:"proxySource"`
+
+	// Turn-ticket state. A ticket is per account and per turn; these fields say
+	// whether one is held, how much of its budget is gone, and when it lapses.
+	// They are observations of the client's cache, not of the server.
+	HasTicket        bool      `json:"hasTicket"`
+	TicketRunID      string    `json:"ticketRunId,omitempty"`
+	TicketProfile    string    `json:"ticketProfile,omitempty"`
+	TicketUses       int       `json:"ticketUses,omitempty"`
+	TicketRemaining  int       `json:"ticketRemaining,omitempty"`
+	TicketExpiresAt  time.Time `json:"ticketExpiresAt,omitzero"`
+	TicketTicketID   string    `json:"ticketId,omitempty"`
+	TicketFrozenNote string    `json:"ticketNote,omitempty"`
 }
 
 // apiPerchFingerprint reports what the pool presents on each account's behalf,
@@ -275,6 +287,8 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		"cliVersion":        cfg.Perch.CLIVersion,
 		"userAgent":         perch.UserAgentFor(cfg.Perch.CLIVersion),
 		"locale":            perch.Locale(cfg.Perch.Locale),
+		"turnTicket":        cfg.Perch.TurnTicketOn(),
+		"ticketProfile":     cfg.Perch.TicketProfile,
 		"cliTurnReport":     cfg.Perch.CLITurnReport,
 		"telemetryEgress":   tel.Egress,
 		"posthogConfigured": tel.PostHogKey != "",
@@ -288,11 +302,23 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		}
 		id := s.perchIdentity(a.ID)
 		seen[id.MachineID]++
-		out.Accounts = append(out.Accounts, perchFingerprintAccount{
+		row := perchFingerprintAccount{
 			ID: a.ID, Name: a.Name, MachineID: id.MachineID,
 			CreatedAt: id.CreatedAt, FirstPromptAt: id.FirstPromptAt,
 			ThreadID: s.perchThreadID(cfg, ""), ProxySource: perchFingerprintProxySource(a.ProxyURL),
-		})
+		}
+		if tk, ok := s.perchClient().TicketStatus(a.ID); ok {
+			row.HasTicket = true
+			row.TicketRunID = tk.RunID
+			row.TicketTicketID = tk.TicketID
+			row.TicketProfile = tk.Profile
+			row.TicketUses = tk.Uses()
+			row.TicketRemaining = tk.Remaining()
+			row.TicketExpiresAt = tk.ExpiresAt
+		} else if cfg.Perch.TurnTicketOn() {
+			row.TicketFrozenNote = "no ticket held yet (issued before the account's next turn)"
+		}
+		out.Accounts = append(out.Accounts, row)
 	}
 	for i := range out.Accounts {
 		if out.Accounts[i].MachineID != "" && seen[out.Accounts[i].MachineID] > 1 {

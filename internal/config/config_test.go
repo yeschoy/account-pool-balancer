@@ -432,3 +432,35 @@ func TestModalTokenIncomplete(t *testing.T) {
 		t.Fatal("a bare token id must still be accepted as a runtime key")
 	}
 }
+
+// An existing config file that never mentioned turnTicket must mean "on", not
+// "off". A plain bool would have made every deployed instance silently stop
+// asking for tickets after an upgrade — the opposite of the stated default.
+func TestTurnTicketDefaultsOnWhenAbsent(t *testing.T) {
+	var p Perch // zero value: the field is absent, as in an old config.json
+	if !p.TurnTicketOn() {
+		t.Fatal("an absent turnTicket must mean the default (on)")
+	}
+
+	c := Default()
+	c.Perch.TurnTicket = nil
+	if err := c.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if !c.Perch.TurnTicketOn() {
+		t.Fatal("Normalize must fill an absent turnTicket with the default (on)")
+	}
+	if c.Perch.TicketProfile != "standard" {
+		t.Fatalf("ticketProfile = %q, want standard", c.Perch.TicketProfile)
+	}
+
+	// An explicit false survives normalization: an operator can turn it off.
+	off := Default()
+	off.Perch.TurnTicket = boolPtr(false)
+	if err := off.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if off.Perch.TurnTicketOn() {
+		t.Fatal("an explicit false must survive Normalize")
+	}
+}

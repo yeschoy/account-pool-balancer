@@ -130,6 +130,11 @@ type EnvelopeOptions struct {
 	ThreadID string
 	// ChatMode is reported in cli-turn ("code"|"chat"). Empty leaves it "".
 	ChatMode string
+	// RunID overrides the envelope's run id. A ticketed turn must use the run
+	// id the ticket was issued for: the published client takes its runId from
+	// the ticket response and reuses it, so a fresh random id beside a ticket
+	// is a pairing it never makes. Empty mints one (NewRunID).
+	RunID string
 }
 
 // BuildEnvelope turns an OpenAI chat body into Perch's envelope.
@@ -138,7 +143,7 @@ func BuildEnvelope(body map[string]any, opt EnvelopeOptions) Envelope {
 	messages := NormalizeMessages(raw, opt)
 
 	env := Envelope{
-		RunID:    NewRunID(),
+		RunID:    firstNonEmptyStr(opt.RunID, NewRunID()),
 		ThreadID: opt.ThreadID,
 		ChatMode: opt.ChatMode,
 		Lane:     firstNonEmptyStr(opt.Lane, "code"),

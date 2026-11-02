@@ -50,6 +50,10 @@ const (
 	// DefaultLocale is what the pool has always sent, and what the CLI sends
 	// with the default settings.
 	DefaultLocale = "en"
+
+	// TicketHeader carries the turn ticket the CLI obtained before its first
+	// model call (the CLI's `hqr`).
+	TicketHeader = "x-perch-turn-ticket"
 )
 
 // DeviceIdentity is one account's stable, pseudonymous device state. Every

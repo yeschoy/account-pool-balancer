@@ -238,6 +238,11 @@ type ModelCall struct {
 	// because the web lane should not claim to be the CLI at all.
 	UserAgent string
 	Locale    string
+	// Ticket is the turn ticket this call presents, obtained from TicketFor.
+	// Nil means the turn proceeds unticketed — which is what the published
+	// client does when a ticket request fails without `enforced`. The web
+	// lane never carries one.
+	Ticket *Ticket
 }
 
 // UAFor resolves the User-Agent a call presents.
@@ -343,7 +348,14 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, timeo
 		return CallResult{}, &ModelError{Status: 502, Code: "transport_error", Err: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	if web {
+		// The web app posts JSON and reads JSON back; only the CLI surface
+		// streams. Promising an event stream on a request that does not stream
+		// is a shape the browser app never sends.
+		req.Header.Set("Accept", "application/json")
+	} else {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	req.Header.Set("Authorization", "Bearer "+call.Token)
 	req.Header.Set("User-Agent", call.UAFor())
 	if !web {
@@ -357,10 +369,17 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, timeo
 		// ticket, which this surface neither needs nor checks.
 		req.Header.Set("Origin", ChatURL)
 		req.Header.Set("Referer", ChatURL+"/perchai")
-	} else {
-		// held-context delta mode: the CLI sets it, and it is what makes
-		// reasoning/answer deltas incremental instead of replayed.
-		req.Header.Set("x-perch-call-delta", "1")
+	} else if call.Ticket != nil && call.Ticket.Token != "" {
+		// The CLI attaches the ticket to every model call of the turn
+		// (x-perch-turn-ticket). Note what is NOT set here: x-perch-call-delta.
+		// The published client only sends that header when it is in its
+		// held-context delta mode, where the body carries messagesDelta and the
+		// request is missing the messages the server already holds. This
+		// envelope is always complete, so claiming delta mode would put
+		// "incremental" on the wire next to a full request — a combination the
+		// real client never produces. See
+		// .analysis/perch-cli-fidelity-report.md §4B.
+		req.Header.Set(TicketHeader, call.Ticket.Token)
 	}
 
 	httpc, cerr := c.clientFor(call.ProxyURL)
@@ -527,6 +546,12 @@ func refusal(status int, body []byte) *ModelError {
 	switch {
 	case status == http.StatusUnauthorized:
 		e.Auth = true
+	case isTurnLimitCode(e.Code):
+		// The turn ticket's own budget was exhausted. Perch states this about
+		// the account's plan, not about a flake, and the published client
+		// fails the turn here rather than retrying (its $ke). Retrying — here
+		// or on another account — is exactly the rotation this code avoids.
+		e.Retryable = false
 	case status == http.StatusForbidden || status == http.StatusTooManyRequests:
 		// plan limits and turn limits are the account's plan talking
 	case isCapacityCode(e.Code):
@@ -580,6 +605,18 @@ func (c *Client) clientFor(proxyURL string) (*http.Client, error) {
 // account's fault and not something a retry can fix.
 func isCapacityCode(code string) bool {
 	return strings.EqualFold(strings.TrimSpace(code), "capacity_reached")
+}
+
+// isTurnLimitCode reports the codes that mean "this account's turn allowance is
+// spent": the ticket gate's own answer, and the pool's older spelling of it.
+// They are a statement about the plan, so the turn ends instead of retrying.
+func isTurnLimitCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case TicketCodeRateLimited, "usage_limit_reached":
+		// TicketCodeRateLimited is "turn_rate_limited" (the CLI's $ke).
+		return true
+	}
+	return false
 }
 
 func firstNonEmptyStr(vals ...string) string {

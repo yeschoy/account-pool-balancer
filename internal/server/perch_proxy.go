@@ -30,6 +30,34 @@ import (
 // under this account's lease, and a failure is recorded against this account
 // only.
 
+// perchAttribution builds Perch's own attribution block for one account.
+//
+// The published client (o0) sends this block only when BOTH userId and
+// workspaceId are present; with either missing it sends `null`. That matters
+// for more than tidiness: {userId} alone is a shape the real client never
+// produces, so a pool that sends it is identifiable by that alone. The
+// workspace id comes from the account's last quota snapshot, which is where the
+// quota poller records what `/api/v1/workspaces/current` answered.
+func (s *Server) perchAttribution(a config.Account) map[string]any {
+	userID := strings.TrimSpace(a.PerchUserID)
+	if userID == "" {
+		return nil
+	}
+	var workspaceID string
+	if q := s.quota.All()[a.ID]; q != nil {
+		workspaceID = strings.TrimSpace(q.WorkspaceID)
+	}
+	if workspaceID == "" {
+		// o0 returns null rather than a partial block.
+		return nil
+	}
+	return map[string]any{
+		"userId":      userID,
+		"workspaceId": workspaceID,
+		"source":      "cli",
+	}
+}
+
 // perchRequestOpts reads the console's Perch settings into what the envelope
 // builder needs.
 func (s *Server) perchRequestOpts(cfg *config.Config, a config.Account) perch.EnvelopeOptions {
@@ -53,7 +81,7 @@ func (s *Server) perchRequestOpts(cfg *config.Config, a config.Account) perch.En
 	if opt.NeutralSystem == "" {
 		opt.NeutralSystem = config.DefaultPerch().NeutralSystem
 	}
-	opt.Attribution = map[string]any{"userId": a.PerchUserID, "source": "cli"}
+	opt.Attribution = s.perchAttribution(a)
 	return opt
 }
 
@@ -116,29 +144,12 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 			res.body = []byte("cannot build the Perch request")
 			return res
 		}
-	} else {
-		opt := s.perchRequestOpts(cfg, acct)
-		opt.Model = rec.Model
-		// The CLI names a thread on its own envelope, and the pool fills the
-		// caller's conversation when it has one, else the CLI's cwd thread.
-		opt.ThreadID = s.perchThreadID(cfg, "")
-		opt.ChatMode = cfg.Perch.Lane
-		var err error
-		if payload, err = json.Marshal(perch.BuildEnvelope(obj, opt)); err != nil {
-			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
-			res.body = []byte("cannot build the Perch request")
-			return res
-		}
 	}
+	// The CLI envelope is built after the ticket is known: a ticketed turn must
+	// carry the ticket's own runId (the published client takes its runId from
+	// the ticket response), and a fresh random one would be a pairing the real
+	// client never makes.
 
-	// What this turn is, for the cli-turn record: the reporter reads it after
-	// the attempt settles (prompt and answer are added there, then redacted).
-	res.turn = perchTurn{
-		Thread: s.perchThreadID(cfg, ""),
-		Mode:   cfg.Perch.Lane,
-		RunID:  perch.NewRunID(),
-		Prompt: perch.PromptOf(obj),
-	}
 	// An account whose refresh token was refused last time has no usable
 	// credential: serving it would spend a request to learn the same thing.
 	// It comes back into service when an operator pastes a fresh session or a
@@ -193,8 +204,67 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		webBase = perch.ChatURL
 	}
 	ua, locale := s.perchCallIdentity(cfg)
+
+	// The turn ticket, before the model call — the order the published CLI
+	// uses (issue, then call with x-perch-turn-ticket). Only the CLI surface
+	// uses one; the web lane neither needs nor sends it.
+	var ticket *perch.Ticket
+	if perch.SurfaceFor(surface) != perch.SurfaceWeb {
+		if cfg.Perch.TurnTicketOn() {
+			tk, terr := s.perchClient().TicketFor(ctx, perch.TicketRequest{
+				Key:       acct.ID,
+				Base:      base,
+				Token:     tok.AccessToken,
+				Profile:   cfg.Perch.TicketProfile,
+				ProxyURL:  acct.ProxyURL,
+				UserAgent: ua,
+				Locale:    locale,
+			})
+			if terr != nil {
+				// An enforced ticket failure stops the turn before any model
+				// call, which is what the CLI does. It is never a reason to
+				// switch accounts and replay: that is precisely the allowance
+				// circumvention this gate exists to stop.
+				return s.perchTicketFailure(res, acct, terr)
+			}
+			ticket = tk
+		}
+	}
+
+	if perch.SurfaceFor(surface) != perch.SurfaceWeb {
+		opt := s.perchRequestOpts(cfg, acct)
+		opt.Model = rec.Model
+		// The CLI names a thread on its own envelope, and the pool fills the
+		// caller's conversation when it has one, else the CLI's cwd thread.
+		opt.ThreadID = s.perchThreadID(cfg, "")
+		opt.ChatMode = cfg.Perch.Lane
+		if ticket != nil && ticket.RunID != "" {
+			opt.RunID = ticket.RunID
+		}
+		var err error
+		if payload, err = json.Marshal(perch.BuildEnvelope(obj, opt)); err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
+			res.body = []byte("cannot build the Perch request")
+			return res
+		}
+	}
+
+	// What this turn is, for the cli-turn record: the reporter reads it after
+	// the attempt settles (prompt and answer are added there, then redacted).
+	// It names the ticket's run id, because the model calls of this turn did.
+	turnRunID := perch.NewRunID()
+	if ticket != nil && ticket.RunID != "" {
+		turnRunID = ticket.RunID
+	}
+	res.turn = perchTurn{
+		Thread: s.perchThreadID(cfg, ""),
+		Mode:   cfg.Perch.Lane,
+		RunID:  turnRunID,
+		Prompt: perch.PromptOf(obj),
+	}
+
 	call := perch.ModelCall{Base: base, WebBase: webBase, Token: tok.AccessToken, Body: payload,
-		Surface: surface, ProxyURL: acct.ProxyURL, UserAgent: ua, Locale: locale}
+		Surface: surface, ProxyURL: acct.ProxyURL, UserAgent: ua, Locale: locale, Ticket: ticket}
 	diagnosticTarget := base
 	if perch.SurfaceFor(surface) == perch.SurfaceWeb {
 		diagnosticTarget = webBase
@@ -489,5 +559,41 @@ func (s *Server) perchFailure(res *attemptResult, acct config.Account, err error
 	}
 	res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "network", "network"
 	res.body = []byte(err.Error())
+	return res
+}
+
+// perchTicketFailure answers a refused turn ticket.
+//
+// Both verdicts are terminal for the turn. A turn-rate limit is the account's
+// plan talking, and an unavailable enforced ticket means Perch will not start a
+// turn at all; neither gets better by replaying the same request somewhere
+// else, which is what the surrounding retry loop would otherwise do. The body
+// is Perch's own JSON shape so the console and the error rules see a real
+// errorCode rather than a Gateway-specific one.
+func (s *Server) perchTicketFailure(res *attemptResult, acct config.Account, err error) *attemptResult {
+	var te *perch.TicketError
+	if !errors.As(err, &te) {
+		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "perch_ticket", "upstream"
+		res.body = []byte(err.Error())
+		return res
+	}
+	status := te.Status
+	if status <= 0 {
+		status = http.StatusBadGateway
+	}
+	if te.IsRateLimited() {
+		status = http.StatusTooManyRequests
+	}
+	payload := map[string]any{"ok": false, "error": te.Error(), "errorCode": te.Code}
+	raw, _ := json.Marshal(payload)
+	res.kind, res.status, res.terminal, res.category = outFailed, status, "upstream_http", "upstream"
+	res.body = raw
+	res.contentType = "application/json"
+	if te.RetryAfter > 0 {
+		res.retryAfter = te.RetryAfter
+	}
+	// A rate-limit verdict is about the account's allowance, so it is recorded
+	// against that account only. It must not be treated as a reason to rotate.
+	res.accountScoped = te.IsRateLimited()
 	return res
 }

@@ -40,7 +40,13 @@ const (
 	// and Analytics.SupabaseAnonKey overrides it.
 	DefaultSupabaseKey = "sb_publishable_w4R_pNkUpygBFIljZCoOlA_67ACg0FO"
 	// CLIVersion is what our User-Agent claims.
-	CLIVersion = "2.4.116"
+	//
+	// It follows the installed client, not the other way round: the UA has to
+	// name the version whose protocol this package actually reproduces (turn
+	// ticket, the model-call envelope, cli-turn). Claiming a version whose
+	// behaviour is not implemented is itself a distinguishing signal — see
+	// .analysis/perch-cli-fidelity-report.md §4D.
+	CLIVersion = "2.4.120"
 	// UserAgent is the CLI's own.
 	UserAgent = "perchai-cli/" + CLIVersion
 	// FreshMargin is the CLI's own idea of a session that is still good: 90 s.
@@ -266,7 +272,10 @@ func num(v any) float64 {
 	return 0
 }
 
-// Client performs Perch's HTTP calls. It holds no per-account state.
+// Client performs Perch's HTTP calls. Apart from the turn-ticket cache it holds
+// no per-account state: a ticket is the one thing the published CLI also keeps
+// across calls, and it lives here because a ticket is only good for the
+// transport that obtained it.
 type Client struct {
 	HTTP *http.Client
 	// Now is the clock (tests set it).
@@ -274,6 +283,9 @@ type Client struct {
 
 	mu      sync.Mutex
 	proxies map[string]*http.Client // per proxy URL
+
+	// tickets holds one issued turn ticket per account (see ticket.go).
+	tickets ticketCache
 }
 
 type proxyContextKey struct{}

@@ -96,10 +96,16 @@ func TestCallModelStreamsEvents(t *testing.T) {
 	if got[1] != "answer_delta:Hel" {
 		t.Fatalf("events = %v", got)
 	}
-	// the CLI headers the gate and the delta mode depend on
+	// The CLI headers the surface depends on. x-perch-call-delta is NOT one of
+	// them: that header belongs to the client's held-context delta mode, where
+	// the body carries messagesDelta and omits messages the server already
+	// holds. This envelope is always complete, so claiming delta mode would put
+	// "incremental" on the wire next to a full request — a combination the
+	// published client never produces. See
+	// .analysis/perch-cli-fidelity-report.md §4B.
 	hdr := f.lastHdr.Load().(map[string]string)
-	if hdr["X-Perch-Call-Delta"] != "1" {
-		t.Fatal("x-perch-call-delta must be sent")
+	if hdr["X-Perch-Call-Delta"] != "" {
+		t.Fatal("x-perch-call-delta must not be sent with a complete envelope")
 	}
 	if hdr["Accept"] != "text/event-stream" {
 		t.Fatal("Accept must be text/event-stream")
