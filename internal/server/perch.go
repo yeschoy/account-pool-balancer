@@ -12,8 +12,10 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/perch"
+	"account-pool-balancer/internal/perchdevice"
 	"account-pool-balancer/internal/perchimport"
 	"account-pool-balancer/internal/perchstore"
+	"account-pool-balancer/internal/perchtelemetry"
 	"account-pool-balancer/internal/quota"
 )
 
@@ -24,8 +26,19 @@ import (
 
 // perchRuntime owns the keeper and its scheduler.
 type perchRuntime struct {
-	keeper *perchstore.Keeper
-	sched  *perchstore.Scheduler
+	keeper         *perchstore.Keeper
+	sched          *perchstore.Scheduler
+	importMu       sync.Mutex
+	pendingMu      sync.Mutex
+	pendingImports map[string]bool
+
+	// devices holds each account's sealed device identity (machine id, first
+	// run / first prompt stamps). It is what makes one account's requests
+	// look like one CLI install instead of a new machine every call.
+	devices *perchdevice.Store
+	// telemetry builds and (only when switched on) sends the two reports the
+	// CLI emits. With egress off it audits them, redacted.
+	telemetry *perchtelemetry.Reporter
 
 	mu sync.Mutex
 	// results caches the last health check per account, so the dashboard can
@@ -41,6 +54,7 @@ type perchCheck struct {
 	Detail string    `json:"detail,omitempty"`
 	// Reachable: Perch answered at all (a network failure is neither).
 	Reachable bool `json:"reachable"`
+	banStatus int
 }
 
 type perchTrend struct {
@@ -57,10 +71,20 @@ func (s *Server) initPerch() error {
 		return err
 	}
 	s.perch = &perchRuntime{keeper: k, checks: map[string]perchCheck{}}
+	// The device store is a second sealed file, under the same routing secret.
+	// A failure here is not fatal for the pool: an account without stored
+	// identity still works, it just looks new on every call.
+	if dev, derr := perchdevice.Open(s.dataDir+"/perch-device.json", s.secret, s.logf); derr == nil {
+		s.perch.devices = dev
+	} else {
+		s.logf("perch: device identity store unavailable: %v", derr)
+	}
+	s.perch.telemetry = perchtelemetry.New(s.telemetrySettings(s.cfg.Get()), auditSink{s}, s.logf)
 	s.perch.sched = perchstore.NewScheduler(k)
 	s.perch.sched.Concurrency = s.cfg.Get().Perch.RefreshConcurrency
 	s.perch.sched.OnResult = s.onPerchRefresh
 	s.quota.PerchFetch = s.fetchPerchMeter
+	s.quota.PerchModels = s.fetchPerchModels
 	s.rebindPerch(s.cfg.Get())
 	return nil
 }
@@ -75,6 +99,12 @@ func (s *Server) perchSettings() perchstore.Config {
 		RefreshMargin: time.Duration(p.RefreshMarginMin) * time.Minute,
 		Retries:       p.Retries,
 		RetryBackoff:  time.Duration(p.RetryBackoffMs) * time.Millisecond,
+		ProxyURL: func(accountID string) string {
+			if a, ok := s.cfg.Get().Account(accountID); ok && a.Provider == config.ProviderPerch {
+				return a.ProxyURL
+			}
+			return ""
+		},
 	}
 	if out.SupabaseKey == "" {
 		out.SupabaseKey = def.SupabaseKey
@@ -102,6 +132,10 @@ func (s *Server) rebindPerch(cfg *config.Config) {
 		}
 	}
 	s.perch.keeper.Rebind(live)
+	// Telemetry settings are read per report, but the reporter caches the
+	// opt-out and egress switch, so a save has to reach it before the next
+	// request rather than at the next restart.
+	s.refreshTelemetrySettings(cfg)
 	// a session on disk with no account: the account was deleted while the
 	// session stayed. Forget it so a stale credential cannot linger.
 	for _, uid := range s.perch.keeper.Users() {
@@ -116,7 +150,11 @@ func (s *Server) rebindPerch(cfg *config.Config) {
 			}
 		}
 		if !bound {
-			s.perch.keeper.DropUser(uid)
+			s.perch.pendingMu.Lock()
+			if !s.perch.pendingImports[uid] {
+				s.perch.keeper.DropUser(uid)
+			}
+			s.perch.pendingMu.Unlock()
 		}
 	}
 }
@@ -136,6 +174,9 @@ func perchAccounts(cfg *config.Config) []config.Account {
 // the only verdict that marks an account as needing a fresh sign-in, and
 // turning that into a hard quarantine is what takes it out of service.
 func (s *Server) onPerchRefresh(accountID string, res perchstore.RefreshResult) {
+	if s.perch != nil && res.Revision != 0 && !s.perch.keeper.IsCurrentRefresh(accountID, res) {
+		return
+	}
 	switch {
 	case res.NeedLogin:
 		s.markPerchNeedLogin(accountID, res.Err)
@@ -208,7 +249,7 @@ func (s *Server) markPerchHealthy(accountID string) {
 		s.logf("perch: clearing %s's error failed: %v", accountID, err)
 		return
 	}
-	s.pool.Recover(accountID)
+	s.pool.RecoverQuarantine(accountID, "perch-session-invalid")
 	s.logPerch(accountID, "refresh-ok", "")
 }
 
@@ -217,7 +258,7 @@ var errNotPerchAccount = errors.New("not a perch account")
 // fetchPerchMeter is the quota poller's hook: it renews the session first when
 // it is due (so a stale token cannot be mistaken for an exhausted meter) and
 // then reads the allowance. It never spends model allowance.
-func (s *Server) fetchPerchMeter(ctx context.Context, a config.Account) (*quota.PerchMeter, error) {
+func (s *Server) fetchPerchMeter(ctx context.Context, a config.Account) (meter *quota.PerchMeter, resultErr error) {
 	if s.perch == nil {
 		return nil, errors.New("the perch pool is not running")
 	}
@@ -225,10 +266,15 @@ func (s *Server) fetchPerchMeter(ctx context.Context, a config.Account) (*quota.
 		// no session yet: nothing to read, and no error worth alarming over
 		return nil, nil
 	}
+	started := time.Now()
+	defer func() {
+		s.logPerchDiagnostic(a.ID, "quota", perchFingerprintProxySource(a.ProxyURL), "", started, resultErr)
+	}()
 	// renew on the way in, exactly as the CLI does
 	if res := s.perch.keeper.Refresh(ctx, a.ID, false); res.NeedLogin {
 		return nil, fmt.Errorf("会话需要重新登录：%v", res.Err)
 	}
+	ctx = perch.WithProxy(ctx, a.ProxyURL)
 	read := func() (*quota.PerchMeter, error) {
 		sec, ok := s.perch.keeper.Get(a.ID)
 		if !ok || sec.AccessToken == "" {
@@ -246,6 +292,43 @@ func (s *Server) fetchPerchMeter(ctx context.Context, a config.Account) (*quota.
 	}
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// fetchPerchModels reads one account's hosted-model catalogue. Perch only
+// publishes it at /api/perchai/models (the web app's own picker source); the
+// pool has no OpenAI-compatible /models to forward, so this is what gives the
+// Perch pool something to answer GET /v1/models with.
+//
+// Every id is marked servable. Perch's `locked` flag is the app's paywall
+// hint — it marks what the plan does not include in its picker — but the
+// model-call proxy serves those ids anyway (an account whose entitlements say
+// limits.allowed_models = ["*"] may name any of them), so hiding them would
+// publish a fraction of what the pool actually answers.
+func (s *Server) fetchPerchModels(ctx context.Context, a config.Account) (catalog *quota.Catalog, resultErr error) {
+	if s.perch == nil {
+		return nil, errors.New("the perch pool is not running")
+	}
+	sec, ok := s.perch.keeper.Get(a.ID)
+	if !ok || sec.AccessToken == "" {
+		return nil, errors.New("账号没有可用的 Access Token")
+	}
+	cfg := s.cfg.Get()
+	started := time.Now()
+	defer func() {
+		s.logPerchDiagnostic(a.ID, "models", perchFingerprintProxySource(a.ProxyURL), cfg.Perch.AppURL, started, resultErr)
+	}()
+	cat, err := s.perchClient().Models(perch.WithProxy(ctx, a.ProxyURL), cfg.Perch.AppURL, sec.AccessToken, cfg.Perch.Lane)
+	if err != nil {
+		return nil, err
+	}
+	out := &quota.Catalog{Models: make(map[string]quota.CatalogModel, len(cat.Models))}
+	for _, m := range cat.Models {
+		if m.ID == "" {
+			continue
+		}
+		out.Models[m.ID] = quota.CatalogModel{Enabled: true, Name: m.Name}
 	}
 	return out, nil
 }
@@ -271,15 +354,26 @@ func (s *Server) readPerchMeter(ctx context.Context, sec perchstore.Secrets, cfg
 		if rpcErr == nil {
 			acct.Meter = mergeMeters(acct.Meter, met)
 		}
+		// Perch's own free-tier figure, used only when the account states no
+		// cap of its own. A failure here is not worth reporting: it changes
+		// which estimate the console shows, nothing else.
+		if acct.StarterCapPT == 0 && !acct.Unlimited && acct.MonthlyLimitPT == 0 {
+			if usd, err := s.perchClient().StarterMonthlyUSD(ctx, appURL, sec.AccessToken); err == nil {
+				acct.StarterMonthlyLimits(usd)
+			}
+		}
 		return accountToQuota(acct), nil
 	case rpcErr == nil:
 		// only the RPC answered: spend without a cap, which the console shows
 		// as "unknown" rather than guessing
 		return meterToQuota(met), nil
 	default:
-		// an auth failure on either means the session is gone
-		if perch.KindOf(accErr) == perch.KindAuth || perch.KindOf(rpcErr) == perch.KindAuth {
+		// Preserve an auth failure so the caller can attempt one refresh.
+		if perch.KindOf(accErr) == perch.KindAuth {
 			return nil, accErr
+		}
+		if perch.KindOf(rpcErr) == perch.KindAuth {
+			return nil, rpcErr
 		}
 		return nil, accErr
 	}
@@ -332,6 +426,7 @@ func accountToQuota(a perch.Account) *quota.PerchMeter {
 	out.PlanCode = a.PlanCode
 	out.AllowancePT = a.MonthlyLimitPT
 	out.AllowanceSource = string(a.MonthlySource)
+	out.TierSelectionRequired = a.TierSelectionRequired
 	out.ManualLimitPT = a.ManualLimitPT
 	out.ManualLimitSource = string(a.ManualSource)
 	out.CreditBalancePT = a.CreditBalancePT
@@ -457,8 +552,24 @@ type perchImportPlan struct {
 	Source  string
 	Account *config.Account // existing account this binds to, if any
 	// Action: "create" | "session" | "duplicate"
-	Action string
-	Reason string
+	Action   string
+	Reason   string
+	ProxyURL string
+}
+
+// importPerch serializes planning and application across all import entry points.
+// Config callbacks must not acquire importMu: cfg.Update calls them while
+// holding its lock, and they access the keeper synchronously.
+func (s *Server) importPerch(res perchimport.Result, group string, prepare func([]perchImportPlan) error) (perchimport.Summary, error) {
+	s.perch.importMu.Lock()
+	defer s.perch.importMu.Unlock()
+	plans := s.planPerchImport(s.cfg.Get(), res)
+	if prepare != nil {
+		if err := prepare(plans); err != nil {
+			return perchimport.Summary{}, err
+		}
+	}
+	return s.applyPerchImport(plans, group), nil
 }
 
 // planPerchImport matches parsed documents against the live config.
@@ -479,6 +590,12 @@ func (s *Server) planPerchImport(cfg *config.Config, res perchimport.Result) []p
 	out := make([]perchImportPlan, 0, len(res.ParsedDocs))
 	for i, doc := range res.ParsedDocs {
 		plan := perchImportPlan{Doc: doc, Source: res.Sources[i]}
+		claims := perch.TokensOf(doc.AccessToken)
+		if sub, ok := claims["sub"].(string); ok && strings.TrimSpace(sub) != "" && sub != doc.UserID {
+			plan.Action, plan.Reason = "invalid", "Session 身份与账号不一致"
+			out = append(out, plan)
+			continue
+		}
 		if first, dup := seen[doc.UserID]; dup {
 			plan.Action = "duplicate"
 			plan.Reason = "同一次导入中与 " + first + " 是同一个账号（Supabase User ID 相同）"
@@ -529,6 +646,8 @@ func (s *Server) applyPerchImport(plans []perchImportPlan, group string) perchim
 	for i, plan := range plans {
 		outs[i] = perchimport.Outcome{File: plan.Source, UserID: plan.Doc.UserID, Email: plan.Doc.Email}
 		switch plan.Action {
+		case "invalid":
+			outs[i].Status, outs[i].Reason = "failed", plan.Reason
 		case "duplicate":
 			outs[i].Status, outs[i].Reason = "duplicate", plan.Reason
 			if plan.Account != nil {
@@ -552,6 +671,27 @@ func (s *Server) applyPerchImport(plans []perchImportPlan, group string) perchim
 			batch = append(batch, w)
 		}
 	}
+
+	// Protect sessions awaiting their config account from unrelated config callbacks.
+	s.perch.pendingMu.Lock()
+	if s.perch.pendingImports == nil {
+		s.perch.pendingImports = make(map[string]bool)
+	}
+	for i := range plans {
+		if newID[i] != "" {
+			s.perch.pendingImports[plans[i].Doc.UserID] = true
+		}
+	}
+	s.perch.pendingMu.Unlock()
+	defer func() {
+		s.perch.pendingMu.Lock()
+		for i := range plans {
+			if newID[i] != "" {
+				delete(s.perch.pendingImports, plans[i].Doc.UserID)
+			}
+		}
+		s.perch.pendingMu.Unlock()
+	}()
 
 	// 1) seal every session once
 	var stored []perchstore.PutResult
@@ -609,7 +749,7 @@ func (s *Server) applyPerchImport(plans []perchImportPlan, group string) perchim
 				c.Accounts = append(c.Accounts, config.Account{
 					ID: newID[i], Provider: config.ProviderPerch, Name: accountName(doc), Email: doc.Email,
 					UserID: doc.UserID, PerchUserID: doc.UserID,
-					Group: group, Enabled: true, RuntimeKey: config.PerchRuntimeKey(doc.UserID),
+					Group: group, Enabled: true, RuntimeKey: config.PerchRuntimeKey(doc.UserID), ProxyURL: plans[i].ProxyURL,
 					CreatedAt: time.Now(),
 				})
 			}
@@ -659,7 +799,7 @@ func (s *Server) afterPerchSession(accountID string) {
 	if a.PerchRefreshFailed {
 		s.markPerchHealthy(accountID)
 	}
-	s.quota.Refresh(accountID)
+	s.quota.RefreshSession(accountID)
 	s.perch.sched.Wake()
 }
 
@@ -684,8 +824,13 @@ func (s *Server) checkPerchAccount(ctx context.Context, a config.Account) perchC
 		res.Status, res.Detail = "need-login", "Session 中没有 Access Token"
 		return res
 	}
+	ctx = perch.WithProxy(ctx, a.ProxyURL)
 	u, err := s.perchClient().User(ctx, sec.Creds(cfg.SupabaseKey, cfg.AppURL), sec.AccessToken)
 	if err != nil {
+		if status := perchUserBannedStatus(err); status != 0 {
+			res.Status, res.Detail, res.Reachable, res.banStatus = "banned", err.Error(), true, status
+			return res
+		}
 		switch perch.KindOf(err) {
 		case perch.KindAuth:
 			// the token is gone but the refresh may still work
@@ -693,6 +838,9 @@ func (s *Server) checkPerchAccount(ctx context.Context, a config.Account) perchC
 				if sec2, ok := s.perch.keeper.Get(a.ID); ok {
 					if u2, err2 := s.perchClient().User(ctx, sec2.Creds(cfg.SupabaseKey, cfg.AppURL), sec2.AccessToken); err2 == nil {
 						u, err = u2, nil
+					} else if status := perchUserBannedStatus(err2); status != 0 {
+						res.Status, res.Detail, res.Reachable, res.banStatus = "banned", err2.Error(), true, status
+						return res
 					}
 				}
 			}
@@ -723,6 +871,14 @@ func (s *Server) checkPerchAccount(ctx context.Context, a config.Account) perchC
 		})
 	}
 	return res
+}
+
+func perchUserBannedStatus(err error) int {
+	var pe *perch.Error
+	if errors.As(err, &pe) && (pe.Status == http.StatusUnauthorized || pe.Status == http.StatusForbidden) && strings.EqualFold(pe.JSONCode, "banned") {
+		return pe.Status
+	}
+	return 0
 }
 
 // recordCheck caches a verdict and folds it into the day's trend.
@@ -781,6 +937,11 @@ func (s *Server) checkPerchBatch(ctx context.Context, accounts []config.Account,
 // recovers a quarantined account, and a network failure changes nothing.
 func (s *Server) applyCheck(a config.Account, c perchCheck) {
 	switch c.Status {
+	case "banned":
+		s.pool.Quarantine(a.ID, c.banStatus, "perch-banned", "perch-banned")
+		if err := s.saveMetadata(true); err != nil {
+			s.logf("failed to persist banned quarantine for %s: %v", a.ID, err)
+		}
 	case "need-login":
 		s.markPerchNeedLogin(a.ID, errors.New(c.Detail))
 	case "ok":

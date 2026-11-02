@@ -232,8 +232,7 @@ func (s *Server) apiPerchOpenImport(w http.ResponseWriter, r *http.Request) {
 	if group == "" || group == config.DefaultGroup {
 		group = config.GroupForProvider(config.ProviderPerch)
 	}
-	plans := s.planPerchImport(s.cfg.Get(), parsed)
-	sum := s.applyPerchImport(plans, group)
+	sum, _ := s.importPerch(parsed, group, nil)
 	// tags and a name override are per-call conveniences the manual import
 	// does not need, so they are applied afterwards
 	if len(in.Tags) > 0 || strings.TrimSpace(in.Name) != "" {

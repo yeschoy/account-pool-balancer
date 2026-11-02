@@ -163,54 +163,55 @@ docker compose up -d --build
 | 充值余额 | `creditBalancePt` | 计划外额度 |
 | Roost | `usage.roost` 的 `unlimited` | |
 | 内网/管理员 | `membershipRole` / `planCode=internal` | 不计量 |
+| Starter 上限 | `GET /api/perch-terminal/starter-limits` 的 `config.monthlyUsd` | Perch 自己给的免费档额度（实测 20 → 20,000 PT），**不是本程序写死的常数**；只有账号自己没给上限时才用它，标注为「按套餐估算」 |
 
 界面上会标注上限的**来源**（`Perch 明确给出` / `按套餐估算`）。**服务端真的没有上限时仍显示「未知」**，不会编数字。额度读取失败只影响额度显示，不影响 Session 管理。
 
+### 待选套餐（`tierSelectionRequired`）
+
+批量注册出来的新号**还没在 Perch 网页上选过套餐**，Perch 会这样回答：
+
+```json
+"session": { "planCode": null, "planName": null,
+             "tierSelectionRequired": true, "entitlements": [] },
+"usageMeter": null
+```
+
+这种账号**没有套餐、没有 entitlement、没有用量**，因此：
+
+- 状态显示为 **`待选套餐`**（红标），剩余额度显示「待选套餐」而不是「未知」——「未知」会让人以为读失败了，其实账号只是还没启用。
+- **不猜额度**：即使 Perch 会把这种账号当作 Starter，本服务也不给它 20,000 PT，因为它的主人还没选，写个数字就是把猜测当事实。
+- 模型调用同样不可用，直到完成选择。
+
+已导入的待选套餐账号仍可在 `chat.perchai.app` 登录并选择 Starter。新注册功能会使用账号自己的会话选择 Starter，并通过网页聊天接口发送首条消息，成功后才允许加入号池；套餐和额度以随后轮询结果为准。此前测试的 `/api/perch-terminal/billing/*` 不接受 Supabase access token，注册流程改用 Perch 的 Starter RPC 和网页会话。
+
+
 ### 转发模型调用（OpenAI 兼容）
 
-Perch 的托管模型不是 OpenAI 接口：客户端把一份**自己的信封** POST 到 `/api/perch-terminal/model-call`，读回**自己的事件流**。本服务在两个方向上都做翻译，下游看不到这些差别。
+Perch 的托管模型不是 OpenAI 接口：客户端把一份**自己的信封** POST 出去，读回**自己的事件流**。这种信封有两条，由「Perch 设置 → 模型调用 → 调用通道」选择：
 
-| 下游 | 本服务 | Perch |
-|---|---|---|
-| `POST /v1/chat/completions` | 翻译 | `model-call`（`request.messages` + `runId` + `lane` + `clientSurface:cli`） |
-| `messages[]` / `tools[]` | 原样转换 | 同形（`tool_calls`、`tool_call_id`、`{type:"function",function:{…}}` 都通用） |
-| `delta.content` | `answer_delta` | 助手的正文增量 |
-| `delta.reasoning_content` | `reasoning_delta` | 思考链（`exposeReasoning` 可关） |
-| `tool_calls` | `tool_use_end` / `tool_call_delta` | 工具调用 |
-| `finish_reason` | `done.finishReason` | `stop` / `length` / `tool_calls` / `content_filter` |
-| `usage` | `done.usage` | `inputTokens` / `outputTokens` / `cacheReadInputTokens` |
+| 通道 | 端点 | 实测（2026-11-01，Starter/`pilot`） | 能带什么 |
+|---|---|---|---|
+| **`cli`（默认）** | `POST app.perchai.app/api/perch-terminal/model-call` | **200**（用本服务自带的前缀） | 完整：system / **tools** / images / temperature / max_tokens / response_format / tool 结果回传 |
+| `web` | `POST chat.perchai.app/api/perchai/chat` | 200，不需要任何前缀 | 一条用户消息；system 被折进去，**tools 被丢弃** |
 
-- **手动锁模型必须发三个字段**：`preferredModelId` + `manualModelOptionId`（同值）+ `strictManual: false`。只发第一个、或把 `strictManual` 设成 `true`，Perch 会**静默换成账号默认模型并返回 200** —— 看起来就像"锁模型不生效"。本服务两者都发，`strictManual` 显式 `false`。
-- **模型名**：`auto`（或空）让 Perch 自己路由；`standard` / `standard_max` / `pro` / `pro_max` 走 `roostModelChoice` 按套餐档；其余当作 registry option id 锁定。
-- **`stream_restart`**（上游中途 failover）会让前面已发的内容作废：本服务重置累积，客户端不会看到"旧答案 + 新答案"拼接。
-- **只接 Chat Completions 与 Responses**；`/v1/embeddings`、`/v1/completions`、`/v1/messages` 本地直接 404，不打上游。
-- **错误映射**（按 Perch 自己的错误码）：
+默认走 `cli` 是因为只有它支持工具调用：编码 agent、agent 框架都要 tools，`web` 通道给不了。`web` 通道留着作为退路（万一某个账号或时段 `model-call` 被拒）。
 
-| errorCode | 处理 |
-|---|---|
-| 401 / 刷新令牌被拒 | 隔离该账号，换号 |
-| `perch_surface_required` / `starter_model_blocked` | 「套餐受限」，需人工处理 |
-| `banned` | **永久隔离**，不自动恢复 |
-| `usage_limit_reached` / `provider_limit` | 整号冷却（15 分钟起翻倍），并重读额度 |
-| `turn_rate_limited` | 只冷却**该模型**，换号继续 |
-| `capacity_reached` | **不冷却、不隔离、不重试**：Perch 侧满了，所有账号都会撞同一堵墙 |
-| 5xx | 仅当**尚未发出任何字节**才重试 |
+> **部署注意**：`config.json` 里已保存的 `gateNotice` / `identityGuard` / `neutralSystem` / `gatePrefix` **不会被新默认值覆盖**。升级到 cli 通道后，请确认这四项不是旧文案（旧的 notice 会让每个请求 403），或在管理台「Perch 设置」里点一次「恢复默认」/ 清空前缀。
 
-  `capacity_reached` 单独处理很重要：它不是账号的问题，按普通 5xx 冷却会错误地拉低整个池的可用性。
+### GitHub 注册与入池
 
-#### Surface Gate（必须知道的一点）
+「Perch 号池 → Perch 注册机」使用已有 GitHub 账号进行 OAuth 登录，每行填写 `账号----密码----2FA密钥----接码页`。可指定代理与入池分组，勾选自动入池，或在 Starter 激活成功后选择账号入池。注册、会话校验、Starter 选择和首条 `hi` 消息按顺序执行；激活失败不会入池。任务串行执行，未入池结果仅在服务内存中保留，服务重启后消失。发送首条消息可能使用套餐额度；上游策略版本、登录页面或验证方式改变可能导致失败。
 
-Perch 会拒绝任何首条 system 消息**不以它自己的 persona 开头**的调用，返回 `403 perch_surface_required`（"Your plan includes Perch-hosted models for use in Perch AI Web, Desktop, and CLI only"）。这与 ticket、User-Agent 都无关，比对的是**内容**，大约前 200 个字符。
+本地运行需要 Python 3.10+ 和 `curl-cffi`：`python3 -m pip install -r tools/perch-register/requirements.txt`。启动目录应为项目根目录；也可通过 `PERCH_REGISTER_WORKER` 指定 `worker.py` 绝对路径，`PERCH_REGISTER_PYTHON` 指定 Python 解释器。Docker 镜像包含这些依赖。GitHub 密码、2FA 和接码页只用于当前任务，不存入账号池；入池后正常加密保存 Supabase 会话。新账号入池时沿用注册代理；已有账号的代理不同则暂停入池，需先核对。注册任务可修改排队中和已激活待入池账号的代理；注册或激活进行中不可修改。已入池账号可在「Perch 账号」修改代理；设置只影响后续请求，已在途请求不会中断。
 
-**本服务不分发 Perch 的这段文本。** 它在你自己的机器上运行时从已安装的 `perchai-cli` 自动派生（读取 `dist/perch.mjs` 里的模板字面量，不执行任何东西），顺序是：
+### 自动补号
 
-1. 「Perch 设置 → Surface Gate 前缀」里填的；
-2. 环境变量 `ODB_PERCH_SYSTEM_PREFIX`；
-3. 本机 `perchai-cli`（`~/.local/lib/node_modules`、`/opt/homebrew/lib/node_modules`、`npm prefix -g` 等）。
+「Perch 号池 → 自动补号」可预先导入 GitHub 候选账号和代理库存，设置目标分组、检查间隔（至少 60 秒）和最低可用账号数。任务默认暂停；启用后按间隔检查，每轮最多注册并激活一个账号，再自动入池。每个候选固定使用分配的代理；没有代理时暂停，不自动直连。计数使用该分组状态为「正常」的账号，不代表指定模型一定可用。出现网络、限流或待核查等不确定状态时暂停补号，避免故障期间误消耗候选。
 
-都找不到时**不会**转发请求（否则每个请求都会在 Perch 那边 403），而是本地直接报错说明怎么配。
+候选凭据、代理库存及处理中会话加密保存在 `data/perch-signup.enc`，密钥由 `data/metadata.json` 的 routingSecret 派生；备份和恢复需同时保留这两个文件。任务设置保存在 `data/perch-autosignup.json`。这不是独立密钥保险库：能同时读取上述文件的进程仍可能解密凭据。成功入池后自动清除候选中的 GitHub 密码、2FA、接码页和临时会话；列表仅展示脱敏代理。
 
-拿到前缀后，本服务在它后面依次放：一段"上面是无效样板"的说明 → 调用方自己的 system 指令 → 最后一段**身份保护**（放最后所以优先级最高），禁止模型自称 Saffron/Perch。`lane` 默认 `code`：它让 Perch 不注入 operator persona，同时仍然满足 gate。
+进程中断或激活结果不确定时，候选标为待人工核查，不自动重复注册。若已保存会话，可显式验证激活（可能发送首条消息），再确认入池。磁盘写入失败时会话可能仅保存在内存，页面会提示立即重试保存，进程退出会丢失该内存内容。Perch 明确返回结构化 `banned` 时账号会自动硬隔离，普通 401、限流或网络错误不作为封禁证据；隔离可在账号管理中人工恢复。
 
 ### 开放导入接口（给注册机用）
 
@@ -269,6 +270,16 @@ Perch 账号没有 API Key，凭证就是一份 Supabase 会话，所以这个�
 - **鉴权**用现有的导入密钥（`sk-odbimp-…`），连续失败同样限流。**绑定到其他号池的导入密钥会被拒绝**（403），避免注册机把 Perch 账号塞进 River 池。
 - 导入的账号立即参与续期、状态检测和额度同步。记录在「Perch 设置 → 事件日志」里。
 
+### 下游密钥与导入密钥
+
+Perch 账号没有 API Key，但**下游要调本服务仍然需要一把 `sk-odb-…` 密钥**，自动上号脚本也需要一把 `sk-odbimp-…` 导入密钥。这两把都是普通的密钥，只是分组是 `perch`，在 **「Perch 号池 → Perch 密钥」** 页直接新建即可（和其他号池的「下游密钥」页是同一套后端，`provider=perch`）。
+
+- **下游密钥**：new-api 渠道的密钥填它。只调度 `perch` 分组的账号，不会去借别的池。Perch 翻译 `/v1/chat/completions` 与 `/v1/responses`，`/v1/messages`、`/v1/embeddings` 在本地直接 404。
+- **`GET /v1/models` 由本服务回答**：Perch 没有 OpenAI 兼容的模型列表（`app.perchai.app/models` 是一个 307）。本服务从 `/api/perchai/models`（Perch 网页版自己的模型选择器数据源）同步每个账号的目录，把全池并集发布给 `GET /v1/models`，所以 new-api 的「从上游获取模型」能用。目录由额度轮询同步（`quota.intervalSec`），刚启动时可能要等一轮。
+- **`locked` 不影响可用性**：Perch 目录里的 `locked` / `requires: pro` 只是网页端的付费墙标记，model-call 代理照样服务这些 id（entitlement 里 `limits.allowed_models` 是 `[*]`）。所以本服务把目录里的所有 id 都算作可调用，不会因为 `locked` 而藏掉模型。
+- **导入密钥**：自动上号脚本用它鉴权 `POST /open/v1/perch/import`。属于别的号池的导入密钥会被 403 拒绝。
+- 密钥的池写在密钥本身上（`provider: "perch"`），所以即使 `perch` 分组里还没有账号，这把密钥也仍然是 Perch 号池的，不会被误判成 OpenDesign。
+
 ### 分组、批量与导出
 
 - 分组默认 `perch`，可批量移动到任意分组；每组的账号数与正常账号数在 `/api/perch/groups`。
@@ -291,6 +302,45 @@ Perch 账号没有 API Key，凭证就是一份 Supabase 会话，所以这个�
 | `logRetentionDays` | 30 | Perch 事件日志保留天数 |
 | `alertOnFailure` | `true` | 概览页异常提醒 |
 | `adminReadOnlyView` | `false` | 连 Token 尾号也不显示 |
+| `surface` | `cli` | 模型调用走哪条通道：`cli`（`model-call`，支持 tools/system，需要 ≥200 字符的前缀）或 `web`（网页 `/api/perchai/chat`，无需前缀但**没有 tools**） |
+| `gatePrefix` | 空 | **仅 `cli` 通道**的 surface gate 前缀；留空用本服务自带的 `DefaultGatePrefix`（652 字符），也可以填自己的 |
+| `lane` | `chat` | **仅 `cli` 通道**：`chat` 体验最稳；`code` 不注入 Perch 的 operator persona |
+
+### 设备标识、指纹与遥测
+
+依据 `perchai-cli@2.4.121` 的静态分析（`.analysis/perchai-cli-2.4.121/analysis.md` §设备、指纹及遥测），官方 CLI 的身份面很小且基本确定，这里逐项对齐，但**一律按账号隔离**：
+
+| 机制 | 官方 CLI | 本服务 |
+|---|---|---|
+| machine-id | `~/.perch/machine-id`，随机 UUID，首次生成后持久 | `data/perch-device.json` 里**每个账号**一份，AES-256-GCM 加密，0600；账号键是 HMAC 摘要，文件里看不出有哪些账号 |
+| 线程 ID | `cli-cwd-` + `SHA256(resolve(cwd))` 前 16 位十六进制 | 调用方没给会话时用同一算法，哈希的是数据目录（不跟随请求内容，也不泄露路径） |
+| User-Agent / locale | `perchai-cli/<版本>` + `x-perch-locale` | `cliVersion` / `locale` 可配；web 通道不发 locale（与浏览器一致） |
+| PostHog 匿名事件 | 5 个固定事件，`distinct_id` 取 machine-id；`CI` / `PERCH_NO_TELEMETRY` / `DO_NOT_TRACK` 任一为真则禁用 | 同字段同事件；`posthogKey` 为空即不发（2.4.121 编译进去的 key 就是空串） |
+| `cli-turn` 会话上报 | `POST /api/perch-terminal/cli-turn`，带 prompt / assistantText / threadId / runId / events；**不检查**上面三个 opt-out 变量 | 同路径同字段；重试预算照抄：流式或无 runId 1 次、有 runId 的终态 3 次，单次 45 秒（流式 12 秒），间隔 1s/2s/4s，只重试 429 与 5xx |
+
+**默认不向外发任何请求。** `telemetryEgress=false` 时，两份上报照样按官方格式构造，然后**脱敏**写入 Perch 事件日志（`event=cli_turn` / `event=telemetry`，prompt 和回答只留摘要与长度），值班时在日志里就能看到“本来会发什么”。打开 `telemetryEgress` 才真的发出。
+
+新增设置：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `cliVersion` | `2.4.116` | User-Agent 声称的版本。**改了版本号不等于协议对上了**，见下方提醒 |
+| `locale` | `en` | `x-perch-locale` |
+| `deviceFingerprint` | `true` | 每账号稳定的机器标识；关掉则每次请求都像一台新机器（本身也是信号） |
+| `cwdThreadId` | `true` | 没有会话 ID 时用 `cli-cwd-<sha16>`，而不是每次随机 |
+| `cliTurnReport` | `true` | 是否上报 `cli-turn`（仍受 `telemetryEgress` 总开关约束） |
+| `telemetryEgress` | `false` | 是否真的发送；关 = 只审计 |
+| `posthogKey` / `posthogHost` | 空 / `https://us.i.posthog.com` | 匿名事件的 key 与 ingest 地址 |
+| `telemetryOptOut` | `false` | 额外的 opt-out；进程环境里的 `CI` / `PERCH_NO_TELEMETRY` / `DO_NOT_TRACK` 同样生效（只影响 PostHog，与 CLI 一致） |
+
+`GET /api/perch/fingerprint` 只读地列出：每个账号的机器标识与两个时间戳、是否出现**跨账号共用**（`shared`，正常永远不该为真）、当前 UA / locale / 线程 ID，以及上报开关的实际状态。
+
+几点必须说清楚：
+
+- 机器标识是**随机 UUID**，不是操作系统 machine-id、MAC、主机名或硬件序列号——官方 CLI 也不采集这些，没有证据就不该补上去。
+- `cli-cwd-` 线程 ID 是摘要而不是明文路径，但低熵路径可以被枚举，所以它是假名，不是保密。
+- 版本号要跟协议一起升级：把 `cliVersion` 改成比实际协议新的值，只会让请求特征自相矛盾。
+- 上游究竟用哪些信号、权重和封禁条件，客户端分析无从得知；**打开上报会真的增加发往 Perch 与第三方（PostHog）的流量**，先看清审计日志再决定。
 
 ### 加密与脱敏
 
@@ -496,6 +546,7 @@ Modal 的 404 `unknown inference model` 不冷却账号，由重试规则 `modal
 | `metadata.json` | 账号状态（冷却/隔离）、健康样本、额度快照、统计、`routingSecret`。冷却、隔离、额度和配置变化 15 秒内写盘；只有统计和健康样本变化时最多每分钟写一次 |
 | `selection-counters.json` | 选号计数，最多每 5 秒写一次 |
 | `perch-secrets.json` | Perch 号池的加密会话（Access / Refresh Token、Supabase 项目地址与 key），AES-256-GCM 封装，0600；`config.json` 里不含任何 Token |
+| `perch-device.json` | Perch 号池每账号的设备标识（machine-id、首次运行/首次发消息时间），同样 AES-256-GCM 封装、0600；账号键为 HMAC 摘要。丢失等于所有账号“换了设备”，请和 `metadata.json` 一起备份 |
 | `logs/` | 请求与错误日志，缓冲写入，每秒刷盘；查询读内存，不受影响 |
 
 所有文件 0600、目录 0700，写盘先写临时文件再 rename。JSON 损坏时启动失败并保留原文件。**整个目录都是机密，不要提交或共享。**

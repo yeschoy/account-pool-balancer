@@ -45,10 +45,18 @@ func TestRenewClassifiesRealErrorShapes(t *testing.T) {
 			want: KindRejected,
 		},
 		{
-			name: "unauthorized", status: 401,
+			name: "invalid api key", status: 401,
 			body: `{"msg":"Invalid API key"}`,
-			want: KindAuth, needLgn: true,
+			want: KindUnknown,
 		},
+		{name: "bare unauthorized", status: 401, want: KindUnknown},
+		{name: "proxy forbidden html", status: 403, body: `<html>proxy denied: invalid refresh token</html>`, want: KindUnknown},
+		{name: "waf forbidden", status: 403, body: `{"error":"access_denied","message":"Forbidden"}`, want: KindUnknown},
+		{name: "explicit used 401", status: 401, body: `{"error_code":"refresh_token_already_used"}`, want: KindAuth, needLgn: true},
+		{name: "explicit missing 403", status: 403, body: `{"error_code":"refresh_token_not_found"}`, want: KindAuth, needLgn: true},
+		{name: "unrelated already used", status: 400, body: `{"error_code":"coupon_already_used"}`, want: KindRejected},
+		{name: "rate limit takes precedence", status: 429, body: `{"error":"invalid_grant"}`, want: KindRateLimited},
+		{name: "server error takes precedence", status: 503, body: `{"error":"invalid_grant"}`, want: KindTransient},
 		{name: "rate limited", status: 429, body: `{"msg":"slow down"}`, want: KindRateLimited},
 		{name: "server error", status: 503, body: `{"msg":"down"}`, want: KindTransient},
 		{name: "gateway timeout", status: 504, body: ``, want: KindTransient},
@@ -78,8 +86,8 @@ func TestRenewClassifiesRealErrorShapes(t *testing.T) {
 			if tc.needLgn && !pe.Authy() {
 				t.Fatal("a refused credential must report Authy")
 			}
-			if tc.want == KindTransient && pe.Authy() {
-				t.Fatal("a transient failure must never look like a refused credential")
+			if !tc.needLgn && pe.Authy() {
+				t.Fatal("an ambiguous failure must never look like a refused credential")
 			}
 		})
 	}

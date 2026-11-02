@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,17 @@ var ErrNoSession = errors.New("the account has no session")
 // ErrNeedLogin is the definite answer: the refresh token was refused, so the
 // account has to be signed in again. Only perch's KindAuth sets it.
 var ErrNeedLogin = errors.New("the refresh token was refused; the account needs signing in again")
+
+// ErrSessionIdentity reports an observable mismatch, not JWT authentication failure.
+var ErrSessionIdentity = errors.New("perchstore: session identity does not match user id")
+
+func validateIdentity(uid, access string) error {
+	claims := perch.TokensOf(access)
+	if sub, ok := claims["sub"].(string); ok && strings.TrimSpace(sub) != "" && sub != uid {
+		return ErrSessionIdentity
+	}
+	return nil
+}
 
 // Secrets is one account's stored credential material. Everything but the
 // timestamps is secret and is only ever read through the keeper.
@@ -152,6 +164,8 @@ type Keeper struct {
 	// call instead of starting a second one that would spend the same
 	// single-use refresh token twice.
 	inflight map[string]*call
+	versions map[string]uint64
+	epochs   map[string]uint64
 
 	client *perch.Client
 	// Defaults read from settings on each use.
@@ -171,6 +185,8 @@ type Config struct {
 	Retries int
 	// RetryBackoff is the first backoff, doubled each retry.
 	RetryBackoff time.Duration
+	// ProxyURL returns the current proxy for a bound account.
+	ProxyURL func(accountID string) string
 }
 
 // DefaultConfig is used when no settings were configured.
@@ -183,8 +199,11 @@ type call struct {
 	done chan struct{}
 	// err is settled by the goroutine that ran the work; every joiner reads
 	// it after <-done.
-	err    error
-	joined bool
+	err       error
+	version   uint64
+	targetURL string
+	targetKey string
+	discarded bool
 }
 
 // Open loads (or starts) the sealed store at path with key as the sealing
@@ -200,7 +219,7 @@ func Open(path string, key []byte, cfg func() Config, logf func(string, ...any))
 		logf = func(string, ...any) {}
 	}
 	k := &Keeper{path: path, key: deriveKey(key), cfg: cfg, logf: logf,
-		recs: map[string]Secrets{}, byAcc: map[string]string{}, inflight: map[string]*call{},
+		recs: map[string]Secrets{}, byAcc: map[string]string{}, inflight: map[string]*call{}, versions: map[string]uint64{}, epochs: map[string]uint64{},
 		client: perch.NewClient(nil)}
 	if err := k.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -252,6 +271,7 @@ func (k *Keeper) load() error {
 			sec.FetchedAt = now
 		}
 		k.recs[key] = sec
+		k.versions[key]++
 	}
 	k.dirty = false
 	return nil
@@ -385,6 +405,8 @@ func (k *Keeper) Forget(accountID string) {
 		}
 	}
 	delete(k.recs, uid)
+	k.versions[uid]++
+	k.epochs[uid]++
 	k.dirty = true
 }
 
@@ -397,6 +419,8 @@ func (k *Keeper) DropUser(uid string) {
 		return
 	}
 	delete(k.recs, uid)
+	k.versions[uid]++
+	k.epochs[uid]++
 	k.dirty = true
 	_ = k.flushLocked()
 }
@@ -524,7 +548,17 @@ func (k *Keeper) putLocked(sec Secrets, opt PutOptions) (PutResult, error) {
 	if sec.UserID == "" {
 		return PutResult{}, errors.New("perchstore: a session needs a Supabase user id")
 	}
+	if err := validateIdentity(sec.UserID, sec.AccessToken); err != nil {
+		return PutResult{}, err
+	}
 	prev, exists := k.recs[sec.UserID]
+	if exists && !opt.Force && prev.AccessToken != "" && prev.RefreshToken != "" &&
+		(strings.TrimSpace(sec.AccessToken) == "" || strings.TrimSpace(sec.RefreshToken) == "") {
+		if opt.BindAs != "" {
+			k.byAcc[opt.BindAs] = sec.UserID
+		}
+		return PutResult{Skipped: true, Reason: "incomplete session cannot replace a complete session", Secrets: prev}, nil
+	}
 	if exists && !opt.AllowCreate && !opt.Force && prev.RefreshToken == sec.RefreshToken && prev.AccessToken == sec.AccessToken {
 		if opt.BindAs != "" {
 			k.byAcc[opt.BindAs] = sec.UserID
@@ -579,6 +613,7 @@ func (k *Keeper) putLocked(sec Secrets, opt PutOptions) (PutResult, error) {
 		next.AppURL = prev.AppURL
 	}
 	k.recs[sec.UserID] = next
+	k.versions[sec.UserID]++
 	if opt.BindAs != "" {
 		k.byAcc[opt.BindAs] = sec.UserID
 	}
@@ -591,6 +626,14 @@ func (k *Keeper) putLocked(sec Secrets, opt PutOptions) (PutResult, error) {
 func (k *Keeper) PutMany(secs []Secrets, opts []PutOptions) ([]PutResult, error) {
 	if len(secs) != len(opts) {
 		return nil, errors.New("perchstore: PutMany needs one option per session")
+	}
+	for _, sec := range secs {
+		if sec.UserID == "" {
+			return nil, errors.New("perchstore: a session needs a Supabase user id")
+		}
+		if err := validateIdentity(sec.UserID, sec.AccessToken); err != nil {
+			return nil, err
+		}
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -630,6 +673,8 @@ func (k *Keeper) Put(sec Secrets, opt PutOptions) (PutResult, error) {
 // RefreshResult is what a renewal attempt settled on.
 type RefreshResult struct {
 	Secrets Secrets
+	// Revision identifies the in-process session version used by the result.
+	Revision uint64
 	// Renewed: the tokens changed.
 	Renewed bool
 	// Skipped: nothing was due.
@@ -641,10 +686,11 @@ type RefreshResult struct {
 
 // Refresh renews accountID's session if it is due (or when force is set).
 //
-// Concurrent calls for the same account collapse: the first runs, the others
-// wait for it and return the same error, so a single-use refresh token is
-// never spent twice. Different accounts never wait for each other.
+// Calls for the same user serialize. Waiters observe the completed call when
+// it still describes their session, otherwise they recheck the current state.
+// Calls for different users do not wait for one another.
 func (k *Keeper) Refresh(ctx context.Context, accountID string, force bool) RefreshResult {
+retry:
 	k.mu.Lock()
 	uid, ok := k.byAcc[accountID]
 	if !ok {
@@ -657,62 +703,103 @@ func (k *Keeper) Refresh(ctx context.Context, accountID string, force bool) Refr
 		return RefreshResult{Err: ErrNoSession}
 	}
 	cfg := k.cfg()
-	if !force && !sec.session().Due(time.Now(), cfg.RefreshMargin) {
-		k.mu.Unlock()
-		return RefreshResult{Secrets: sec, Skipped: true}
-	}
+	version := k.versions[uid]
 	if c := k.inflight[uid]; c != nil {
 		joined := c
 		k.mu.Unlock()
-		<-joined.done
+		select {
+		case <-joined.done:
+		case <-ctx.Done():
+			return RefreshResult{Err: ctx.Err()}
+		}
 		out := k.resultFor(accountID)
-		out.Err = joined.err
-		out.NeedLogin = joined.err == ErrNeedLogin
-		return out
+		if out.Err != nil {
+			return out
+		}
+		currentURL, currentKey := refreshTarget(out.Secrets, k.cfg())
+		if !joined.discarded && out.Secrets.UserID == uid && out.Revision == joined.version &&
+			currentURL == joined.targetURL && currentKey == joined.targetKey {
+			out.Err = joined.err
+			out.NeedLogin = errors.Is(joined.err, ErrNeedLogin)
+			out.Skipped = joined.err == nil
+			return out
+		}
+		if err := ctx.Err(); err != nil {
+			out.Err = err
+			return out
+		}
+		goto retry
 	}
-	c := &call{done: make(chan struct{})}
+	if !force && !sec.session().Due(time.Now(), cfg.RefreshMargin) {
+		k.mu.Unlock()
+		return RefreshResult{Secrets: sec, Revision: version, Skipped: true}
+	}
+	targetURL, targetKey := refreshTarget(sec, cfg)
+	c := &call{done: make(chan struct{}), version: version, targetURL: targetURL, targetKey: targetKey}
 	k.inflight[uid] = c
+	epoch := k.epochs[uid]
 	k.mu.Unlock()
 
+	if cfg.ProxyURL != nil {
+		ctx = perch.WithProxy(ctx, cfg.ProxyURL(accountID))
+	}
 	next, err := k.renewWithRetry(ctx, cfg, sec)
 
 	k.mu.Lock()
-	if err != nil {
-		if errors.Is(err, ErrNeedLogin) {
-			c.err = ErrNeedLogin
+	finish := func() {
+		if k.inflight[uid] == c {
 			delete(k.inflight, uid)
-			k.mu.Unlock()
-			close(c.done)
-			return RefreshResult{Secrets: sec, NeedLogin: true, Err: err}
 		}
-		c.err = err
-		delete(k.inflight, uid)
 		k.mu.Unlock()
 		close(c.done)
-		return RefreshResult{Secrets: sec, Err: err}
 	}
-	// A renewal only ever advances the account's own record, under the same
-	// mutex every write takes, so it cannot interleave with an import.
 	cur, stillThere := k.recs[uid]
-	if stillThere && cur.AccessToken != "" && cur.FetchedAt.After(sec.FetchedAt) &&
-		cur.AccessToken != sec.AccessToken && cur.RefreshToken != sec.RefreshToken {
-		// Someone (an admin paste, or another process) stored a strictly
-		// newer session while we were refreshing: theirs wins.
-		c.err = nil
-		delete(k.inflight, uid)
-		k.mu.Unlock()
-		close(c.done)
-		return RefreshResult{Secrets: cur, Skipped: true}
+	bound := false
+	for _, candidate := range k.byAcc {
+		if candidate == uid {
+			bound = true
+			break
+		}
 	}
-	if !stillThere {
-		// The account was removed mid-refresh: keep nothing.
-		c.err = ErrNoSession
-		delete(k.inflight, uid)
-		k.mu.Unlock()
-		close(c.done)
-		return RefreshResult{Err: ErrNoSession}
+	currentURL, currentKey := refreshTarget(cur, k.cfg())
+	if !stillThere || !bound || k.epochs[uid] != epoch ||
+		cur.RefreshToken != sec.RefreshToken || currentURL != targetURL ||
+		(err != nil && (currentKey != targetKey || k.versions[uid] != version)) {
+		c.discarded = true
+		finish()
+		out := k.resultFor(accountID)
+		if out.Err == nil {
+			if err != nil && out.Secrets.UserID == uid && out.Secrets.RefreshToken == sec.RefreshToken {
+				out.Err = errors.New("refresh result superseded; retry with the current session")
+			} else {
+				out.Skipped = true
+			}
+		}
+		return out
+	}
+	if err != nil {
+		c.err = err
+		stillBound := k.byAcc[accountID] == uid
+		finish()
+		if !stillBound {
+			return k.resultFor(accountID)
+		}
+		return RefreshResult{Secrets: sec, Revision: version, NeedLogin: errors.Is(err, ErrNeedLogin), Err: err}
+	}
+	if (next.UserID != "" && next.UserID != uid) || validateIdentity(uid, next.AccessToken) != nil {
+		c.err = ErrSessionIdentity
+		stillBound := k.byAcc[accountID] == uid
+		finish()
+		if !stillBound {
+			return k.resultFor(accountID)
+		}
+		return RefreshResult{Secrets: cur, Revision: version, Err: ErrSessionIdentity}
 	}
 	merged := cur.session().Merge(next)
+	if k.versions[uid] != version {
+		// Preserve metadata edited while the network request was in flight.
+		merged.Email, merged.Provider = cur.Email, cur.Provider
+	}
 	rec := cur
 	rec.fromSession(merged)
 	rec.FetchedAt = time.Now().UTC()
@@ -720,16 +807,38 @@ func (k *Keeper) Refresh(ctx context.Context, accountID string, force bool) Refr
 	// The old refresh token is spent the moment Perch answers: this write has
 	// to land, so a failure here is reported rather than ignored.
 	k.recs[uid] = rec
+	k.versions[uid]++
+	c.version = k.versions[uid]
 	k.dirty = true
 	ferr := k.flushLocked()
 	c.err = ferr
-	delete(k.inflight, uid)
-	k.mu.Unlock()
-	close(c.done)
-	if ferr != nil {
-		return RefreshResult{Secrets: rec, Renewed: true, Err: fmt.Errorf("the renewed session could not be saved: %w", ferr)}
+	stillBound := k.byAcc[accountID] == uid
+	finish()
+	if !stillBound {
+		out := k.resultFor(accountID)
+		if out.Err == nil {
+			out.Skipped = true
+		}
+		return out
 	}
-	return RefreshResult{Secrets: rec, Renewed: true}
+	if ferr != nil {
+		return RefreshResult{Secrets: rec, Revision: c.version, Renewed: true, Err: fmt.Errorf("the renewed session could not be saved: %w", ferr)}
+	}
+	return RefreshResult{Secrets: rec, Revision: c.version, Renewed: true}
+}
+
+// refreshTarget matches the effective URL and key used by perch.Client.Renew.
+func refreshTarget(sec Secrets, cfg Config) (string, string) {
+	creds := sec.Creds(cfg.SupabaseKey, cfg.AppURL)
+	u := perch.TrimBase(creds.SupabaseURL)
+	if u == "" {
+		u = perch.DefaultSupabaseURL
+	}
+	key := strings.TrimSpace(creds.SupabaseKey)
+	if key == "" {
+		key = perch.DefaultSupabaseKey
+	}
+	return u, key
 }
 
 // resultFor is the current stored state for an account.
@@ -744,7 +853,16 @@ func (k *Keeper) resultFor(accountID string) RefreshResult {
 	if !ok {
 		return RefreshResult{Err: ErrNoSession}
 	}
-	return RefreshResult{Secrets: sec}
+	return RefreshResult{Secrets: sec, Revision: k.versions[uid]}
+}
+
+// IsCurrentRefresh is a snapshot check, not an atomic guard for side effects.
+func (k *Keeper) IsCurrentRefresh(accountID string, result RefreshResult) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	uid := k.byAcc[accountID]
+	_, exists := k.recs[uid]
+	return exists && uid != "" && uid == result.Secrets.UserID && k.versions[uid] == result.Revision
 }
 
 // renewWithRetry renews once, then retries transient failures with the

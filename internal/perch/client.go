@@ -55,8 +55,8 @@ const (
 type ErrorKind string
 
 const (
-	// KindAuth: Perch refused the credentials (401/403). A refresh answering
-	// this means the refresh token is gone for good.
+	// KindAuth: credentials were refused. On refresh, this is reserved for
+	// an explicitly invalid or missing refresh token.
 	KindAuth ErrorKind = "auth"
 	// KindRateLimited: 429, worth retrying later.
 	KindRateLimited ErrorKind = "rate_limited"
@@ -74,12 +74,15 @@ const (
 
 // Error is what every call in this package returns.
 type Error struct {
-	Kind       ErrorKind
-	Status     int
-	Code       string // GoTrue's error_code, or Perch's errorCode
-	Message    string
-	RetryAfter time.Duration
-	Err        error
+	Kind           ErrorKind
+	Status         int
+	Code           string // GoTrue's error_code, or Perch's errorCode
+	JSONCode       string // explicit JSON error_code, errorCode, or code, not error text or headers
+	Message        string
+	RetryAfter     time.Duration
+	Err            error
+	refreshCode    string
+	refreshMessage string
 }
 
 func (e *Error) Error() string {
@@ -122,8 +125,11 @@ func KindOf(err error) ErrorKind {
 func classify(status int, body []byte, header http.Header) *Error {
 	e := &Error{Status: status}
 	var js map[string]any
-	if json.Unmarshal(body, &js) == nil {
-		e.Code = first(str(js["error_code"]), str(js["errorCode"]), str(js["code"]))
+	if json.Unmarshal(body, &js) == nil && js != nil {
+		e.JSONCode = first(str(js["error_code"]), str(js["errorCode"]), str(js["code"]))
+		e.refreshCode = first(e.JSONCode, str(js["error"]))
+		e.refreshMessage = first(str(js["msg"]), str(js["error_description"]), str(js["error"]), str(js["message"]), str(js["errorMsg"]))
+		e.Code = e.JSONCode
 		// GoTrue names the failure in `error` ("invalid_grant") and explains
 		// it in `error_description`; Perch uses `errorCode`/`error`. Every
 		// spelling is kept in Raw so the refusal test can look at all of it.
@@ -165,6 +171,37 @@ func classify(status int, body []byte, header http.Header) *Error {
 	}
 	e.RetryAfter = retryAfter(header)
 	return e
+}
+
+// classifyRefreshError narrows the general HTTP classification for a refresh
+// request. A proxy, WAF, or wrong project key can also return 401/403.
+func classifyRefreshError(err error) error {
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Status < 400 || pe.Status >= 500 || pe.Status == http.StatusTooManyRequests || pe.Status == http.StatusRequestTimeout || pe.Status == http.StatusTooEarly {
+		return err
+	}
+	if explicitRefreshRefusal(pe.refreshCode, pe.refreshMessage) {
+		pe.Kind = KindAuth
+	} else if pe.Kind == KindAuth {
+		if pe.Status == http.StatusBadRequest || pe.Status == http.StatusUnprocessableEntity {
+			pe.Kind = KindRejected
+		} else {
+			pe.Kind = KindUnknown
+		}
+	}
+	return err
+}
+
+func explicitRefreshRefusal(code, message string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "invalid_grant", "refresh_token_not_found", "refresh_token_already_used":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "refresh token is not valid", "refresh token not valid", "invalid refresh token", "invalid refresh token: already used", "refresh token not found":
+		return true
+	}
+	return false
 }
 
 // isGrantRefusal reports a GoTrue answer that says the refresh token itself
@@ -236,7 +273,15 @@ type Client struct {
 	Now func() time.Time
 
 	mu      sync.Mutex
-	proxies map[string]*http.Client // per proxy URL, model calls only
+	proxies map[string]*http.Client // per proxy URL
+}
+
+type proxyContextKey struct{}
+
+// WithProxy routes account-scoped JSON requests through proxyURL. An empty
+// URL keeps the client's existing HTTP transport, including test injection.
+func WithProxy(ctx context.Context, proxyURL string) context.Context {
+	return context.WithValue(ctx, proxyContextKey{}, proxyURL)
 }
 
 // NewClient returns a client with a transport sized for a pool of accounts
@@ -270,7 +315,12 @@ func (c *Client) now() time.Time {
 // do sends one request and decodes a JSON answer into out (which may be nil).
 // limit caps the answer's size so a captive portal page can't flood memory.
 func (c *Client) do(ctx context.Context, req *http.Request, out any) error {
-	res, err := c.HTTP.Do(req)
+	proxyURL, _ := ctx.Value(proxyContextKey{}).(string)
+	hc, err := c.clientFor(proxyURL)
+	if err != nil {
+		return &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	res, err := hc.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return &Error{Kind: KindTransient, Message: "request cancelled: " + ctx.Err().Error(), Err: err}

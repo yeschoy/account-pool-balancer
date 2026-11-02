@@ -302,6 +302,45 @@ func TestRefusedRefreshMeansNeedLogin(t *testing.T) {
 	}
 }
 
+func TestAmbiguousRefreshRefusalsDoNotNeedLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"invalid api key", 401, `{"msg":"Invalid API key"}`},
+		{"proxy forbidden", 403, `<html>Forbidden</html>`},
+		{"waf forbidden", 403, `{"error":"access_denied"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			cfg := fastConfig()
+			k, err := Open(filepath.Join(t.TempDir(), "perch-secrets.json"), []byte("0123456789abcdef0123456789abcdef"), func() Config { return cfg }, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			k.SetClient(perch.NewClient(srv.Client()))
+			sec := expiredSession("u1", time.Now())
+			sec.SupabaseURL = srv.URL
+			if _, err := k.Put(sec, PutOptions{BindAs: "acc1", AllowCreate: true}); err != nil {
+				t.Fatal(err)
+			}
+			res := k.Refresh(context.Background(), "acc1", true)
+			if res.Err == nil || res.NeedLogin || errors.Is(res.Err, ErrNeedLogin) || perch.KindOf(res.Err) != perch.KindUnknown {
+				t.Fatalf("ambiguous refusal: %+v", res)
+			}
+			after, ok := k.Get("acc1")
+			if !ok || after.AccessToken != sec.AccessToken || after.RefreshToken != sec.RefreshToken {
+				t.Fatal("ambiguous refusal changed the stored session")
+			}
+		})
+	}
+}
+
 // A network blip must never be read as a dead account: it is retried, and
 // when the network stays down it is still not NeedLogin.
 func TestTransientFailureIsRetriedAndNotFatal(t *testing.T) {

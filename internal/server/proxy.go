@@ -179,6 +179,7 @@ type attemptResult struct {
 	sent           bool
 	wrapped        bool
 	accountScoped  bool
+	evaluated      bool
 	retryAfter     time.Duration
 	// downstreamStatus / ruleID come from the matched error rule
 	downstreamStatus int
@@ -186,6 +187,15 @@ type attemptResult struct {
 	ttft             *int64
 	usage            usage
 	ms               int64
+	// turn is what this attempt asked and answered, for the Perch pool's
+	// cli-turn record. It is filled by the Perch path only and never logged
+	// as text: the reporter redacts it to digests before writing.
+	turn perchTurn
+	// turnToken / turnAccount identify the per-account credential the
+	// cli-turn record is posted with (Perch pool only).
+	turnToken   string
+	turnAccount config.Account
+	turnStarted bool
 }
 
 // setUpstreamRequestID exposes the upstream's own request id so downstream gateways can quote it to the provider.
@@ -265,9 +275,10 @@ func modalPath(p string) bool {
 }
 
 // perchPath: what the Perch relay can translate. Chat Completions and
-// Responses only; everything else has no Perch counterpart.
+// Responses are translated; /v1/models is answered by this service from the
+// catalogue it synced (Perch itself has no OpenAI-compatible listing).
 func perchPath(p string) bool {
-	for _, base := range []string{"/v1/chat/completions", "/v1/responses"} {
+	for _, base := range []string{"/v1/chat/completions", "/v1/responses", "/v1/models"} {
 		if p == base || strings.HasPrefix(p, base+"/") {
 			return true
 		}
@@ -341,6 +352,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec := &requestLog{TS: start.UTC(), RequestID: rid, Path: r.URL.Path, InboundProtocol: proto, Protocol: protocolOf(r.URL.Path), Selector: cfg.Routing.Strategy,
 		SessionSource: "none", AffinityKeyType: "none", AffinityConfidence: "none", BindingResult: "not-applicable", Attempts: []attemptLog{}}
 	var res *attemptResult
+	// turnReported makes the cli-turn record fire at most once per request: a
+	// request that switched accounts left several attempts, and only the
+	// attempt whose outcome was delivered describes the turn the caller saw.
+	var turnReported bool
 	finish := func(status int, result string) {
 		rec.Status, rec.Result = status, result
 		rec.DurationMs = time.Since(start).Milliseconds()
@@ -355,6 +370,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				us := res.upstreamStatus
 				rec.UpstreamStatus = &us
 			}
+		}
+		// The Perch pool reports its turn to the same places the CLI does.
+		// It runs after the log line is written so the record can cite the
+		// request id, and it is synchronous by design: the reporter's budget
+		// is short (12 s streaming, 3×45 s final) and with egress off it only
+		// writes a log line.
+		if !turnReported && rec.Provider == config.ProviderPerch && res != nil {
+			turnReported = true
+			s.reportPerchTurn(cfg, res.turnAccount, rec, res, start)
 		}
 		anthropic := proto == "anthropic"
 		rec.CacheRate = cacheRate(rec.InputTokens, rec.CachedTokens, anthropic)
@@ -511,7 +535,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				s.pool.Sample(acct.ID, true)
 				s.pool.Succeeded(cfg, acct.ID, rec.Model)
 			} else {
-				s.pool.Sample(acct.ID, false)
+				if !res.evaluated {
+					s.pool.Sample(acct.ID, false)
+				}
 				rec.ErrorCategory = res.category
 			}
 			var tok int64
@@ -658,6 +684,9 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 			}
 		}
 		errRules, retRules := cfg.RulesFor(acct.Provider)
+		if acct.Provider == config.ProviderPerch {
+			errRules = rules.PerchErrorRules(errRules)
+		}
 		retry := rules.MatchRetry(retRules, st, matchText, res.header)
 		if retry != nil {
 			el.RetryRuleID, el.RetryDecision = retry.ID, retry.Decision
@@ -728,6 +757,11 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 				ev.switchAccount = true
 			case rules.ActionHardQuarantine:
 				s.pool.Quarantine(acct.ID, st, rule.ID, rule.ID)
+				if acct.Provider == config.ProviderPerch && rule.ID == "perch-banned" {
+					if err := s.saveMetadata(true); err != nil {
+						s.logf("failed to persist banned quarantine for %s: %v", acct.ID, err)
+					}
+				}
 				res.accountScoped = true
 				ev.switchAccount = true
 			}
@@ -880,6 +914,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
+	// the caller names a model by the pool's public name (a base model when
+	// several accounts serve it under their own ids); this account may only
+	// know it by one of its own, so translate before sending
+	body = s.upstreamBody(cfg, acct.ID, rec.Model, body)
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(actx, trace), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "network", "network"
@@ -1399,7 +1437,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			if a.Group != ck.Group || !a.Enabled {
 				continue
 			}
-			if ms := s.quota.View(a.ID).Models(now); ms != nil {
+			// PublicModels, not Models: an id that is an alias of another
+			// (a Modal Shared Endpoint hostname) is published under the base
+			// model, so accounts running the same model share one name
+			if ms := s.quota.View(a.ID).PublicModels(now); ms != nil {
 				known = true
 				for _, m := range ms {
 					allowed[m] = true
@@ -1490,11 +1531,41 @@ func (s *Server) upstreamModels(ctx context.Context, cfg *config.Config, group s
 	return c.body
 }
 
+// fetchModels is the pool's model list: the union of what every enabled
+// account of group can serve. Accounts differ (each Modal proxy token
+// reaches its own set of Endpoints, each OpenDesign key its own plan), so
+// asking a single account would publish a fraction of the pool and hide
+// models another account can take — a relay such as new-api never offers
+// what it can't see. Which account actually serves a model is decided per
+// request by the pool's own per-account catalogue, not here.
 func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group string) []byte {
-	order, _ := s.pool.Preview(cfg, group, "")
-	for _, id := range order {
-		a, ok := cfg.Account(id)
-		if !ok {
+	seen := map[string]bool{}
+	var data []any
+	var object any = "list"
+	failed, read := false, 0
+	// every enabled account, servable this second or not: a cooling-down
+	// account's models are still models this pool offers once it is back
+	for _, a := range cfg.Accounts {
+		if a.Group != group || !a.Enabled {
+			continue
+		}
+		// Perch has no OpenAI-compatible /models: RuntimeBase is the app host,
+		// where /models is a 307 to the web app. Its models come from the
+		// catalogue the quota poller already read (/api/perchai/models), so
+		// publish those instead of asking the host.
+		if a.Provider == config.ProviderPerch {
+			if ms := s.quota.View(a.ID).PublicModels(time.Now()); ms != nil {
+				read++
+				for _, id := range ms {
+					if id == "" || seen[id] {
+						continue
+					}
+					seen[id] = true
+					data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "perch"})
+				}
+			} else {
+				failed = true
+			}
 			continue
 		}
 		c, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1504,17 +1575,79 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 		resp, err := s.httpClient(a.ProxyURL).Do(req)
 		if err != nil {
 			cancel()
+			failed = true
 			continue
 		}
 		b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
 		cancel()
-		if err != nil || resp.StatusCode != http.StatusOK || !json.Valid(b) {
+		if err != nil || resp.StatusCode != http.StatusOK {
+			failed = true
 			continue
 		}
-		return b
+		var doc struct {
+			Object string `json:"object"`
+			Data   []any  `json:"data"`
+		}
+		if json.Unmarshal(b, &doc) != nil {
+			failed = true
+			continue
+		}
+		read++
+		if doc.Object != "" {
+			object = doc.Object
+		}
+		for _, it := range doc.Data {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			mid, _ := m["id"].(string)
+			if mid == "" {
+				continue
+			}
+			// an id this account disables still counts if another enables it
+			if enabled, ok := m["enabled"].(bool); ok && !enabled {
+				continue
+			}
+			// publish the base model an alias stands for: each Modal proxy
+			// token has its own hostname for the same model, so without this
+			// three accounts running DeepSeek offer three different names
+			id, base := mid, ""
+			if b, _ := m["base_model_id"].(string); b != "" && b != mid {
+				id, base = b, b
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			entry := map[string]any{"id": id, "object": "model"}
+			for _, k := range []string{"created", "owned_by", "context_length", "input_modalities",
+				"max_output_length", "output_modalities", "supported_features", "supported_sampling_parameters"} {
+				if v, ok := m[k]; ok {
+					entry[k] = v
+				}
+			}
+			if name, _ := m["name"].(string); name != "" {
+				entry["name"] = name
+			}
+			// keep the upstream id visible without making it a second model:
+			// a caller can still name it to target one account
+			if base != "" {
+				entry["upstream_ids"] = appendUpstream(entry["upstream_ids"], mid)
+			}
+			data = append(data, entry)
+		}
 	}
-	return nil
+	if read == 0 || (failed && len(data) == 0) {
+		// nobody could be read: fail, don't answer an empty catalogue
+		return nil
+	}
+	out, err := json.Marshal(map[string]any{"object": object, "data": data})
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 var (
@@ -1547,4 +1680,38 @@ func egressLabel(proxyURL string) string {
 		return u.Host
 	}
 	return "proxy"
+}
+
+// appendUpstream adds an upstream id to a model entry's upstream_ids list.
+func appendUpstream(v any, id string) []string {
+	cur, _ := v.([]string)
+	for _, x := range cur {
+		if x == id {
+			return cur
+		}
+	}
+	return append(cur, id)
+}
+
+// upstreamBody rewrites a request's "model" to the id this account serves it
+// by, leaving the bytes untouched when no translation is needed (the
+// account's own catalogue already names the model).
+func (s *Server) upstreamBody(cfg *config.Config, accountID, model string, body []byte) []byte {
+	if model == "" || len(body) == 0 {
+		return body
+	}
+	up := s.quota.View(accountID).UpstreamModel(model)
+	if up == model {
+		return body
+	}
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return body
+	}
+	obj["model"] = up
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
 }

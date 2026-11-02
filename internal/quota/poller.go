@@ -47,6 +47,16 @@ type Snapshot struct {
 	CatalogAt    time.Time       `json:"catalogAt,omitzero"`
 	CatalogError string          `json:"catalogError,omitempty"`
 
+	// Aliases maps a model id this account was asked for that it serves by
+	// another name, asked id → the id to send upstream. Modal's Shared
+	// Endpoints are hostnames unique per proxy token, so three tokens that
+	// all run DeepSeek each publish a different id for it; a request naming
+	// the base model is sent as this account's own hostname.
+	Aliases map[string]string `json:"aliases,omitempty"`
+	// Bases maps this account's own catalogue ids to the base model they
+	// serve, so several accounts' ids collapse onto one name downstream.
+	Bases map[string]string `json:"bases,omitempty"`
+
 	// Ollama is the last GET /api/balance of an Ollama account: its API key
 	// reads its own balance, there being no control key. Only a read younger
 	// than the stale window is trusted.
@@ -89,6 +99,10 @@ type PerchMeter struct {
 	// "none" (genuinely unknown).
 	AllowancePT     int64  `json:"allowancePt,omitempty"`
 	AllowanceSource string `json:"allowanceSource,omitempty"`
+	// TierSelectionRequired: Perch says this account has not picked a plan
+	// yet. It has no plan code and no entitlements, so there is no allowance
+	// and no model access until its owner chooses one on the website.
+	TierSelectionRequired bool `json:"tierSelectionRequired,omitempty"`
 	// ManualLimitPT caps manual (non-plan) model calls, same provenance.
 	ManualLimitPT     int64  `json:"manualLimitPt,omitempty"`
 	ManualLimitSource string `json:"manualLimitSource,omitempty"`
@@ -151,6 +165,39 @@ const (
 	catalogStale = 24 * time.Hour
 )
 
+// catalogDue reports whether an account's catalogue should be read again:
+// it is older than catalogTTL, or it was stored before alias tables existed
+// (a snapshot from a build that didn't record base_model_id), so an upgraded
+// instance would otherwise keep answering from alias-less data until the
+// TTL ran out and publish raw endpoint hostnames. mayAlias says whether the
+// account's upstream can publish base_model_id at all, so a pool that never
+// does is not re-read on every tick.
+func catalogDue(s *Snapshot, now time.Time, hasKey, mayAlias bool) bool {
+	if !hasKey {
+		return false
+	}
+	if now.Sub(s.CatalogAt) >= catalogTTL {
+		return true
+	}
+	return mayAlias && len(s.Catalog) > 0 && len(s.Bases) == 0
+}
+
+// nextPoll is when to look at an account again. A catalogue that wasn't due
+// this tick would otherwise wait a whole catalogTTL from now, so it would be
+// read every other tick and be older than catalogTTL for most of that time —
+// which the console reports as a stale catalogue. Landing the next poll on
+// the moment it does fall due keeps it read once per TTL, in time.
+func nextPoll(s *Snapshot, cfg *config.Config, now time.Time, hasKey bool) time.Time {
+	next := now.Add(max(time.Duration(cfg.Quota.IntervalSec)*time.Second, catalogTTL))
+	if !hasKey || s.CatalogAt.IsZero() {
+		return next
+	}
+	if due := s.CatalogAt.Add(catalogTTL); due.After(now) && due.Before(next) {
+		return due
+	}
+	return next
+}
+
 // DefaultDesignPlanModels are the Design Plan models as of 2026-10-23: the
 // pricing page's list, and exactly what a Go-tier key's /v1/models returns.
 // They classify a model only while no account with a control key has asked
@@ -172,7 +219,15 @@ func (s *Snapshot) NotEntitled(model string, now time.Time) bool {
 		return false
 	}
 	if len(s.Catalog) > 0 && now.Sub(s.CatalogAt) < catalogStale {
-		if enabled, ok := s.Catalog[model]; !ok || !enabled {
+		// a base model this account serves through one of its aliases counts
+		// as served: the request is translated back to that id when sent
+		id := model
+		if !s.Catalog[id] {
+			if alias := s.Aliases[model]; alias != "" {
+				id = alias
+			}
+		}
+		if enabled, ok := s.Catalog[id]; !ok || !enabled {
 			return true
 		}
 	}
@@ -197,6 +252,49 @@ func (s *Snapshot) Models(now time.Time) []string {
 	return out
 }
 
+// PublicModels are the names this account answers to: its own catalogue ids
+// with every alias replaced by the base model it stands for. Several
+// accounts serving one base model therefore publish one name between them,
+// and the request is translated back per account by UpstreamModel.
+// Nil while unknown or stale, like Models.
+func (s *Snapshot) PublicModels(now time.Time) []string {
+	ids := s.Models(now)
+	if ids == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name := id
+		if b := s.Bases[id]; b != "" {
+			name = b
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// UpstreamModel is the id to send this account when a caller asks for
+// model: the account's own id when it has one, else the alias standing for
+// that base model, else model unchanged (so a pool that knows nothing about
+// aliases is unaffected).
+func (s *Snapshot) UpstreamModel(model string) string {
+	if s == nil || model == "" {
+		return model
+	}
+	if s.Catalog[model] {
+		return model
+	}
+	if id := s.Aliases[model]; id != "" {
+		return id
+	}
+	return model
+}
+
 func (s *Snapshot) clone() *Snapshot {
 	if s == nil {
 		return nil
@@ -207,6 +305,18 @@ func (s *Snapshot) clone() *Snapshot {
 		c.Catalog = make(map[string]bool, len(s.Catalog))
 		for m, v := range s.Catalog {
 			c.Catalog[m] = v
+		}
+	}
+	if s.Aliases != nil {
+		c.Aliases = make(map[string]string, len(s.Aliases))
+		for m, v := range s.Aliases {
+			c.Aliases[m] = v
+		}
+	}
+	if s.Bases != nil {
+		c.Bases = make(map[string]string, len(s.Bases))
+		for m, v := range s.Bases {
+			c.Bases[m] = v
 		}
 	}
 	if s.Coverage != nil {
@@ -462,16 +572,23 @@ type Poller struct {
 	// internal/perchstore): given an account it returns the meter, or an
 	// error whose text the console shows.
 	PerchFetch func(ctx context.Context, a config.Account) (*PerchMeter, error)
+	// PerchModels reads a Perch account's hosted-model catalogue. Perch has no
+	// OpenAI-compatible /models, so this is the only way its accounts ever get
+	// a catalog; without it every Perch account reads as "no models", and a
+	// pool-wide /v1/models has nothing to publish.
+	PerchModels func(ctx context.Context, a config.Account) (*Catalog, error)
 
 	mu      sync.Mutex
 	snaps   map[string]*Snapshot
-	running map[string]bool
+	running map[string]chan struct{}
+	pending map[string]bool
+	urgent  map[string]bool
 	models  map[string]time.Time // models requested lately → last seen
 	wake    chan struct{}
 }
 
 func NewPoller(cfg func() *config.Config, httpFor func(string) *http.Client) *Poller {
-	return &Poller{Cfg: cfg, HTTPFor: httpFor, snaps: map[string]*Snapshot{}, running: map[string]bool{},
+	return &Poller{Cfg: cfg, HTTPFor: httpFor, snaps: map[string]*Snapshot{}, running: map[string]chan struct{}{}, pending: map[string]bool{}, urgent: map[string]bool{},
 		models: map[string]time.Time{}, wake: make(chan struct{}, 1)}
 }
 
@@ -581,20 +698,39 @@ func (p *Poller) All() map[string]*Snapshot {
 func (p *Poller) Forget(id string) {
 	p.mu.Lock()
 	delete(p.snaps, id)
+	delete(p.pending, id)
+	delete(p.urgent, id)
 	p.mu.Unlock()
 }
 
 // Refresh asks for id to be read at the next tick, unless it was read in
 // the last 10 seconds.
 func (p *Poller) Refresh(id string) {
+	p.refresh(id, false)
+}
+
+// RefreshSession schedules a read after credentials have been installed, even
+// when periodic polling is disabled.
+func (p *Poller) RefreshSession(id string) {
+	p.refresh(id, true)
+}
+
+func (p *Poller) refresh(id string, force bool) {
 	p.mu.Lock()
 	s := p.snaps[id]
 	if s == nil {
 		s = &Snapshot{}
 		p.snaps[id] = s
 	}
-	if time.Since(s.LastOKAt) > 10*time.Second {
-		p.rescheduleLocked(id, s)
+	if force || time.Since(s.LastOKAt) > 10*time.Second {
+		if force {
+			p.urgent[id] = true
+		}
+		if p.running[id] != nil {
+			p.pending[id] = true
+		} else {
+			p.rescheduleLocked(id, s)
+		}
 	}
 	p.mu.Unlock()
 	select {
@@ -619,40 +755,33 @@ func (p *Poller) Run(ctx context.Context) {
 
 func (p *Poller) dispatch(ctx context.Context) {
 	cfg := p.Cfg()
-	if !cfg.Quota.Enabled {
-		return
-	}
 	now := time.Now()
 	p.mu.Lock()
-	inFlight := 0
-	for _, r := range p.running {
-		if r {
-			inFlight++
-		}
-	}
-	var due []config.Account
+	inFlight := len(p.running)
+	var urgent, due []config.Account
 	for _, a := range cfg.Accounts {
-		if a.RuntimeKey == "" || p.running[a.ID] {
+		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && !p.urgent[a.ID]) {
 			continue
 		}
 		s := p.snaps[a.ID]
-		if s == nil || !now.Before(s.NextAt) {
+		if p.urgent[a.ID] {
+			urgent = append(urgent, a)
+		} else if s == nil || !now.Before(s.NextAt) {
 			due = append(due, a)
 		}
 	}
-	for _, a := range due {
+	for _, a := range append(urgent, due...) {
 		if inFlight >= cfg.Quota.Concurrency {
 			break
 		}
 		inFlight++
-		p.running[a.ID] = true
+		p.running[a.ID] = make(chan struct{})
+		delete(p.urgent, a.ID)
 		go func(a config.Account) {
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			_ = p.fetch(c, cfg, a)
-			p.mu.Lock()
-			delete(p.running, a.ID)
-			p.mu.Unlock()
+			p.finish(a.ID)
 		}(a)
 	}
 	p.mu.Unlock()
@@ -660,6 +789,22 @@ func (p *Poller) dispatch(ctx context.Context) {
 
 // RefreshNow reads one account synchronously (admin button).
 func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
+	for {
+		p.mu.Lock()
+		if done := p.running[a.ID]; done != nil {
+			p.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		p.running[a.ID] = make(chan struct{})
+		p.mu.Unlock()
+		break
+	}
+	defer p.finish(a.ID)
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
 		p.mu.Lock()
@@ -675,12 +820,72 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 	return p.fetch(ctx, p.Cfg(), a)
 }
 
+func (p *Poller) finish(id string) {
+	p.mu.Lock()
+	if p.pending[id] {
+		if s := p.snaps[id]; s != nil {
+			p.rescheduleLocked(id, s)
+		}
+		delete(p.pending, id)
+	}
+	close(p.running[id])
+	delete(p.running, id)
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
 func backoff(failures int) time.Duration {
 	d := time.Minute
 	for i := 1; i < failures && d < 15*time.Minute; i++ {
 		d *= 2
 	}
 	return min(d, 15*time.Minute)
+}
+
+// applyCatalog stores a fresh catalogue and the alias tables it implies:
+// Bases collapses the account's ids onto the base model each stands for, so
+// the pool can publish one name for several accounts' endpoints, and
+// Aliases resolves that name back to this account's own id.
+func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
+	s.Catalog, s.CatalogAt, s.CatalogError = make(map[string]bool, len(c.Models)), now, ""
+	s.Bases = nil
+	for id, m := range c.Models {
+		s.Catalog[id] = m.Enabled
+		if m.Base == "" {
+			continue
+		}
+		if s.Bases == nil {
+			s.Bases = map[string]string{}
+		}
+		// the base model is itself a usable id unless another entry claims
+		// the name; when several ids on one account share it, the first in
+		// catalogue order wins so the choice is stable across reads
+		if _, dup := s.Bases[m.Base]; !dup || id < s.Bases[m.Base] {
+			s.Bases[id] = m.Base
+			s.Bases[m.Base] = m.Base
+		}
+	}
+	s.Aliases = nil
+	for id, base := range s.Bases {
+		if id == base {
+			continue
+		}
+		if s.Aliases == nil {
+			s.Aliases = map[string]string{}
+		}
+		if _, dup := s.Aliases[base]; !dup || id < s.Aliases[base] {
+			s.Aliases[base] = id
+		}
+	}
+	// an alias that the account also serves under its own name stays as is
+	for base := range s.Aliases {
+		if s.Catalog[base] {
+			delete(s.Aliases, base)
+		}
+	}
 }
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
@@ -710,15 +915,15 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return err
 	}
 
-	if a.RuntimeKey != "" && now.Sub(s.CatalogAt) >= catalogTTL {
-		if cat, err := FetchCatalog(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
-			s.Catalog, s.CatalogAt, s.CatalogError = cat, now, ""
+	if catalogDue(s, now, a.RuntimeKey != "", false) {
+		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
+			applyCatalog(s, cat, now)
 		} else {
 			s.CatalogError = err.Error() // the last good catalogue stays
 		}
 	}
 	if a.ControlKey == "" {
-		s.NextAt = now.Add(max(time.Duration(cfg.Quota.IntervalSec)*time.Second, catalogTTL))
+		s.NextAt = nextPoll(s, cfg, now, a.RuntimeKey != "")
 		p.store(a.ID, s)
 		return nil
 	}
@@ -815,6 +1020,18 @@ func (p *Poller) fetchPerch(ctx context.Context, cfg *config.Config, a config.Ac
 	s.Perch, s.PerchAt, s.PerchError = met, now, ""
 	s.LastOKAt, s.Failures = now, 0
 	s.LastError = ""
+	// The catalogue is read on its own schedule and failure: not having a
+	// model list must not mark a healthy session as failing.
+	if p.PerchModels != nil && catalogDue(s, now, true, false) {
+		cc, cancel := context.WithTimeout(ctx, 30*time.Second)
+		cat, cerr := p.PerchModels(cc, a)
+		cancel()
+		if cerr == nil && cat != nil && len(cat.Models) > 0 {
+			applyCatalog(s, cat, now)
+		} else if cerr != nil {
+			s.CatalogError = cerr.Error() // the last good catalogue stays
+		}
+	}
 	interval := max(time.Duration(cfg.Perch.QuotaIntervalSec)*time.Second, time.Minute)
 	s.NextAt = now.Add(interval)
 	p.store(a.ID, s)
@@ -849,9 +1066,9 @@ func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.A
 		return err
 	}
 
-	if a.RuntimeKey != "" && now.Sub(s.CatalogAt) >= catalogTTL {
-		if cat, err := FetchCatalog(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
-			s.Catalog, s.CatalogAt, s.CatalogError = cat, now, ""
+	if catalogDue(s, now, a.RuntimeKey != "", false) {
+		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
+			applyCatalog(s, cat, now)
 		} else {
 			s.CatalogError = err.Error() // the last good catalogue stays
 		}
@@ -892,11 +1109,12 @@ func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a con
 	// credentials") while its request paths answer "unknown inference model"
 	// to a bad token as well, so a request can't tell a dead token from a
 	// wrong model name.
-	if a.RuntimeKey != "" && now.Sub(s.CatalogAt) >= catalogTTL {
-		cat, err := FetchCatalog(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey)
+	if catalogDue(s, now, a.RuntimeKey != "", true) {
+		cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey)
 		switch {
 		case err == nil:
-			s.Catalog, s.CatalogAt, s.CatalogError, s.AuthFailed = cat, now, "", false
+			applyCatalog(s, cat, now)
+			s.AuthFailed = false
 		case IsAuth(err):
 			s.AuthFailed, s.CatalogError = true, err.Error()
 			s.LastError, s.LastErrorAt = err.Error(), now
@@ -912,7 +1130,7 @@ func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a con
 	if !s.AuthFailed {
 		s.LastError = ""
 	}
-	s.NextAt = now.Add(max(time.Duration(cfg.Quota.IntervalSec)*time.Second, catalogTTL))
+	s.NextAt = nextPoll(s, cfg, now, a.RuntimeKey != "")
 	p.store(a.ID, s)
 	return nil
 }

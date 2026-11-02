@@ -958,6 +958,9 @@ func (p *Pool) Cooldown(id, model string, until time.Time, status int, reason, r
 		p.states[id] = st
 	}
 	if model == "" {
+		if st.HardQuarantined {
+			return
+		}
 		if until.After(st.CooldownUntil) {
 			st.CooldownUntil = until
 		}
@@ -982,9 +985,26 @@ func (p *Pool) Quarantine(id string, status int, reason, ruleID string) {
 		st = &AccountState{}
 		p.states[id] = st
 	}
+	if st.HardQuarantined && st.RuleID == "perch-banned" && ruleID != "perch-banned" {
+		return
+	}
 	st.HardQuarantined = true
 	st.StatusCode, st.Reason, st.RuleID, st.UpdatedAt = status, reason, ruleID, p.now()
 	p.dirty = true
+}
+
+// RecoverQuarantine clears a quarantine only if its current reason matches.
+func (p *Pool) RecoverQuarantine(id, ruleID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.states[id]
+	if st == nil || !st.HardQuarantined || st.RuleID != ruleID {
+		return false
+	}
+	delete(p.states, id)
+	p.dirty = true
+	p.broadcastLocked()
+	return true
 }
 
 // Recover clears cooldowns and quarantine.

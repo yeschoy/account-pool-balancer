@@ -511,7 +511,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	declared := strings.TrimSpace(in.Provider)
 	if declared != "" && !config.KnownProvider(declared) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama or modal"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
 		return
 	}
 	rec := importRecord{Source: "console", Group: strings.TrimSpace(in.Group)}
@@ -969,7 +969,7 @@ func (s *Server) apiCreateClientKey(w http.ResponseWriter, r *http.Request) {
 		provider = providerParam(r)
 	}
 	if provider != "" && !config.KnownProvider(provider) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama or modal"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
 		return
 	}
 	key := "sk-odb-" + randHex(24)
@@ -995,7 +995,7 @@ func (s *Server) apiUpdateClientKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Provider != nil && !config.KnownProvider(strings.TrimSpace(*in.Provider)) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama or modal"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
 		return
 	}
 	_, err := s.cfg.Update(-1, func(c *config.Config) error {

@@ -227,12 +227,12 @@ func (c Creds) key() string {
 // refresh token: the answer carries the only copy of the new one, so the
 // caller has to persist it immediately or the account is locked out.
 //
-// A refused refresh is reported as KindAuth — that is the one answer that
-// legitimately means "this account needs signing in again". A transport
-// failure, a 5xx or a 429 is explicitly not that: it is returned as
-// KindTransient/KindRateLimited so a flaky network can never mark an account
-// dead.
+// An explicitly invalid refresh token is reported as KindAuth. A bare HTTP
+// refusal does not establish that the token is invalid.
 func (c *Client) Renew(ctx context.Context, creds Creds, refreshToken string) (Session, error) {
+	if creds.ProxyURL != "" {
+		ctx = WithProxy(ctx, creds.ProxyURL)
+	}
 	rt := strings.TrimSpace(refreshToken)
 	if rt == "" {
 		return Session{}, &Error{Kind: KindAuth, Code: "no_refresh_token", Message: "the account has no refresh token; sign in again"}
@@ -249,7 +249,7 @@ func (c *Client) Renew(ctx context.Context, creds Creds, refreshToken string) (S
 	req.Header.Set("Authorization", "Bearer "+creds.key())
 	var in SignIn
 	if err := c.do(ctx, req, &in); err != nil {
-		return Session{}, err
+		return Session{}, classifyRefreshError(err)
 	}
 	if strings.TrimSpace(in.AccessToken) == "" {
 		return Session{}, &Error{Kind: KindUnknown, Message: "the refresh answered without an access token"}
@@ -266,6 +266,9 @@ func (c *Client) Renew(ctx context.Context, creds Creds, refreshToken string) (S
 // User reads the signed-in user's profile. It is the cheap check that says
 // whether an access token still works without spending any allowance.
 func (c *Client) User(ctx context.Context, creds Creds, accessToken string) (Session, error) {
+	if creds.ProxyURL != "" {
+		ctx = WithProxy(ctx, creds.ProxyURL)
+	}
 	if strings.TrimSpace(accessToken) == "" {
 		return Session{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
 	}
@@ -352,6 +355,9 @@ func (m Meter) ResetAt() time.Time {
 // The user's own token is what answers; the app's REST route refuses the
 // CLI surface, which is why the RPC is what this calls.
 func (c *Client) Usage(ctx context.Context, creds Creds, accessToken string) (Meter, error) {
+	if creds.ProxyURL != "" {
+		ctx = WithProxy(ctx, creds.ProxyURL)
+	}
 	if strings.TrimSpace(accessToken) == "" {
 		return Meter{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
 	}
@@ -445,8 +451,50 @@ func (c *Client) SignInConfig(ctx context.Context, appURL string) (Config, error
 
 // ---- hosted models -----------------------------------------------------------
 
+// StarterMonthlyUSD reads /api/perch-terminal/starter-limits: the monthly
+// allowance Perch's own client shows for the free plan, in dollars.
+//
+// This is the only route that states that figure, and it answers the account's
+// own access token (unlike the billing routes, which take a browser cookie
+// only). It is what keeps the Starter cap Perch's number rather than a
+// constant in this program: when Perch changes the free plan, the console
+// follows.
+func (c *Client) StarterMonthlyUSD(ctx context.Context, appURL, accessToken string) (float64, error) {
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/perch-terminal/starter-limits", nil)
+	if err != nil {
+		return 0, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	var raw struct {
+		OK     bool `json:"ok"`
+		Config struct {
+			MonthlyUSD float64 `json:"monthlyUsd"`
+		} `json:"config"`
+	}
+	if err := c.do(ctx, req, &raw); err != nil {
+		return 0, err
+	}
+	if !raw.OK {
+		return 0, &Error{Kind: KindUnknown, Message: "starter-limits answered ok=false"}
+	}
+	return raw.Config.MonthlyUSD, nil
+}
+
 // modelDefault is /api/perch-terminal/public-model-default: the model Perch
 // would pick for an account with no preference.
+//
+// The answer nests the ids under `selection` (one field per worker role, all
+// the same model unless the account tuned them), so the model is read from
+// there and not from the top level: a flat read finds nothing and hands back
+// an empty name that looks like success.
 func (c *Client) DefaultModel(ctx context.Context, appURL, accessToken string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
 	if base == "" {
@@ -465,7 +513,72 @@ func (c *Client) DefaultModel(ctx context.Context, appURL, accessToken string) (
 	if err := c.do(ctx, req, &raw); err != nil {
 		return "", err
 	}
-	return first(str(raw["name"]), str(raw["model"]), str(raw["id"])), nil
+	sel, _ := raw["selection"].(map[string]any)
+	return first(
+		str(sel["chatModelId"]), str(sel["supervisorModelId"]), str(sel["thinkingModelId"]),
+		str(sel["fastWorkerModelId"]), str(sel["codeWorkerModelId"]),
+		// older or flat answers still name it at the top level
+		str(raw["name"]), str(raw["model"]), str(raw["id"]),
+	), nil
+}
+
+// Model is one entry of Perch's hosted-model catalogue.
+type Model struct {
+	ID   string `json:"id"`
+	Name string `json:"label"`
+	// ContextTokens is the window Perch states for the model, 0 when unknown.
+	ContextTokens int `json:"contextTokens"`
+	// Locked / Requires mark a model the account's plan does not include in
+	// the app UI. The model-call proxy still serves it: an account with
+	// limits.allowed_models = ["*"] may call any id, which is what this pool
+	// schedules on. Kept so the console can show the difference.
+	Locked   bool   `json:"locked"`
+	Requires string `json:"requires"`
+}
+
+// Catalog is Perch's hosted-model catalogue.
+type Catalog struct {
+	Tiers  []string `json:"tiers"`
+	Models []Model  `json:"models"`
+}
+
+// Models reads /api/perchai/models: the catalogue the web app builds its
+// model picker from, as this account sees it (tier locks included). This is
+// the only endpoint that lists Perch's models — the pool has no
+// OpenAI-compatible /models to forward.
+func (c *Client) Models(ctx context.Context, appURL, accessToken, tier string) (*Catalog, error) {
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	u := base + "/api/perchai/models"
+	if tier != "" {
+		u += "?tier=" + url.QueryEscape(tier)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	var raw struct {
+		OK    bool `json:"ok"`
+		Tiers []struct {
+			ID string `json:"id"`
+		} `json:"tiers"`
+		Models []Model `json:"models"`
+	}
+	if err := c.do(ctx, req, &raw); err != nil {
+		return nil, err
+	}
+	out := &Catalog{Models: raw.Models}
+	for _, t := range raw.Tiers {
+		out.Tiers = append(out.Tiers, t.ID)
+	}
+	return out, nil
 }
 
 // QueryEscape is exposed for callers building a Perch URL.
@@ -514,6 +627,13 @@ type Account struct {
 	PlanCode  string
 	PlanName  string
 	PlanLabel string
+	// TierSelectionRequired: a new account that has not picked a plan yet.
+	// Perch then states no plan code and NO entitlements, so there is no
+	// allowance to read at all — the console says so instead of showing a
+	// cap, and the account cannot be used for model calls until its owner
+	// picks a plan on the website (the billing routes that would do it take a
+	// browser cookie, not this access token, so this program cannot).
+	TierSelectionRequired bool
 	// MembershipRole is "admin"/"internal" for staff accounts, which are
 	// unlimited.
 	MembershipRole string
@@ -525,6 +645,10 @@ type Account struct {
 	// else Perch's plan-code fallback, else 0 with Source "none".
 	MonthlyLimitPT int64
 	MonthlySource  AllowanceSource
+	// StarterCapPT is /api/perch-terminal/starter-limits converted to PT, when
+	// the caller read it. It outranks the published constant so the free
+	// tier's figure is always Perch's own.
+	StarterCapPT int64
 	// ManualLimitPT is the cap on manual (non-plan) model calls.
 	ManualLimitPT int64
 	ManualSource  AllowanceSource
@@ -576,21 +700,47 @@ func manualPlanFallback(code string) (int64, bool) {
 	return 0, false
 }
 
-// StarterMonthlyPT is the cap Perch's client assumes for a Starter account that
-// states none. It is used only under the same condition Perch uses it.
+// StarterMonthlyPT is the fallback cap used only when Perch could not be asked
+// for the real one (StarterMonthlyLimits failed). It is Perch's published
+// free-tier figure, kept so the console has something to say rather than
+// nothing, and it is labelled as an estimate wherever it is shown.
 const StarterMonthlyPT = 20_000
 
+// StarterMonthlyLimits is the cap Perch itself states for the free plan,
+// filled in by the caller that read /api/perch-terminal/starter-limits. Zero
+// means "not read".
+//
+// It is a field rather than a constant because Perch owns that number: the
+// route reports it per install, and hardcoding it here would go stale the day
+// Perch changes its free tier.
+func (a *Account) StarterMonthlyLimits(monthlyUSD float64) {
+	if monthlyUSD > 0 {
+		a.StarterCapPT = PtOf(monthlyUSD)
+	}
+}
+
 // ResolveAllowances fills the caps from the entitlement list, applying Perch's
-// own fallback chain. It is deliberately the same precedence the client uses:
-// an entitlement that states a limit wins; otherwise a Starter plan gets
-// 20,000 PT, and a manual cap follows the plan code. A plan that states
-// nothing gets no cap — the console then says the headroom is unknown rather
-// than inventing one.
+// own fallback chain: an entitlement that states a limit wins; otherwise the
+// free plan's allowance (Perch's own figure when it was read, else the
+// published constant); a plan that states nothing gets no cap — the console
+// then says the headroom is unknown rather than inventing one.
+//
+// An account that has not picked a plan yet (TierSelectionRequired) gets NO
+// cap even though Perch would call it Starter: its owner has not chosen, so
+// claiming an allowance for it would be a guess dressed as a fact. The console
+// shows it as "awaiting plan selection" instead.
 func (a *Account) ResolveAllowances() {
 	if lim, present := a.entitlementLimit("usage.monthly_pt"); present && lim > 0 {
 		a.MonthlyLimitPT, a.MonthlySource = lim, AllowanceEntitlement
+	} else if a.TierSelectionRequired {
+		a.MonthlyLimitPT, a.MonthlySource = 0, AllowanceNone
 	} else if planIsStarter(a.PlanCode) || strings.EqualFold(strings.TrimSpace(a.PlanName), "Starter") {
-		a.MonthlyLimitPT, a.MonthlySource = StarterMonthlyPT, AllowancePlanFallback
+		switch {
+		case a.StarterCapPT > 0:
+			a.MonthlyLimitPT, a.MonthlySource = a.StarterCapPT, AllowancePlanFallback
+		default:
+			a.MonthlyLimitPT, a.MonthlySource = StarterMonthlyPT, AllowancePlanFallback
+		}
 	} else {
 		a.MonthlyLimitPT, a.MonthlySource = 0, AllowanceNone
 	}
@@ -621,6 +771,11 @@ func (a *Account) ResolveAllowances() {
 }
 
 // planLabelOf names the plan the way Perch's client does.
+//
+// An account that states neither a plan name nor a code has not picked one
+// (tierSelectionRequired), so this returns "" rather than "Starter": naming a
+// plan the account has not chosen would label an open state as settled, and
+// the console shows "awaiting plan selection" instead.
 func planLabelOf(planName, planCode string) string {
 	if s := strings.TrimSpace(planName); s != "" {
 		if strings.EqualFold(s, "pilot") {
@@ -634,7 +789,7 @@ func planLabelOf(planName, planCode string) string {
 	if s := strings.TrimSpace(planCode); s != "" {
 		return strings.ToUpper(s[:1]) + s[1:]
 	}
-	return "Starter"
+	return ""
 }
 
 // numOK reads a JSON number that may also arrive as a string.
@@ -692,6 +847,9 @@ func (c *Client) Account(ctx context.Context, appURL, accessToken string) (Accou
 		PlanCode:       strings.TrimSpace(str(raw.Session["planCode"])),
 		PlanName:       strings.TrimSpace(str(raw.Session["planName"])),
 		MembershipRole: strings.TrimSpace(str(raw.Session["membershipRole"])),
+	}
+	if v, ok := raw.Session["tierSelectionRequired"].(bool); ok {
+		out.TierSelectionRequired = v
 	}
 	out.PlanLabel = planLabelOf(out.PlanName, out.PlanCode)
 	if list, ok := raw.Session["entitlements"].([]any); ok {

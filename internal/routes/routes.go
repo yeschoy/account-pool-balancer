@@ -120,10 +120,39 @@ func orderGroup(strategy, pool string, seats []Seat, p Params) []int {
 		}
 		return false, false
 	}
+	// tie is the strict order of two seats a strategy called equal. Without
+	// one a stable sort keeps the input order, so the same account heads the
+	// list on every request: strategies that can't tell the accounts apart
+	// (every pool without a quota snapshot, Modal above all) would never
+	// reach past that first one.
+	n := int64(len(seats))
+	rotate := func(i int) int64 {
+		v := (int64(i) - p.Cursor) % n
+		if v < 0 {
+			v += n
+		}
+		return v
+	}
+	tie := func(i, j int) bool {
+		a, b := seats[i], seats[j]
+		if a.Count != b.Count {
+			return a.Count < b.Count
+		}
+		if a.Active != b.Active {
+			return a.Active < b.Active
+		}
+		if ri, rj := rotate(i), rotate(j); ri != rj {
+			return ri < rj
+		}
+		return a.ID < b.ID
+	}
 	sortBy := func(less func(a, b Seat) (bool, bool)) {
 		sort.SliceStable(idx, func(i, j int) bool {
 			r, decided := less(seats[idx[i]], seats[idx[j]])
-			return decided && r
+			if decided {
+				return r
+			}
+			return tie(idx[i], idx[j])
 		})
 	}
 	switch strategy {
@@ -178,9 +207,9 @@ func orderGroup(strategy, pool string, seats []Seat, p Params) []int {
 			idx = append(append([]int{best}, idx[:best]...), idx[best+1:]...)
 		}
 	case "pace":
-		return pace(seats, p, spread)
+		return pace(seats, p, spread, tie)
 	default: // smart
-		return smart(seats, p, spread)
+		return smart(seats, p, spread, tie)
 	}
 	return idx
 }
@@ -189,7 +218,8 @@ func orderGroup(strategy, pool string, seats []Seat, p Params) []int {
 // first, because what it has left is lost at the reset. The longest window
 // decides, the next only when the longest renew in the same hour. Unknown
 // accounts follow the known ones; low and spent ones follow by share used.
-func smart(seats []Seat, p Params, spread func(a, b Seat) (bool, bool)) []int {
+// Two seats the strategy can't separate fall to tie, which rotates them.
+func smart(seats []Seat, p Params, spread func(a, b Seat) (bool, bool), tie func(i, j int) bool) []int {
 	idx := identity(len(seats))
 	sort.SliceStable(idx, func(i, j int) bool {
 		a, b := seats[idx[i]], seats[idx[j]]
@@ -201,8 +231,10 @@ func smart(seats []Seat, p Params, spread func(a, b Seat) (bool, bool)) []int {
 			if a.Used != b.Used {
 				return a.Used < b.Used
 			}
-			r, ok := spread(a, b)
-			return ok && r
+			if r, ok := spread(a, b); ok {
+				return r
+			}
+			return tie(idx[i], idx[j])
 		}
 		// with room, or on subscription credits: what renews soonest goes first
 		for k := 0; k < len(a.Soon) || k < len(b.Soon); k++ {
@@ -221,15 +253,19 @@ func smart(seats []Seat, p Params, spread func(a, b Seat) (bool, bool)) []int {
 			}
 			return x.Before(y)
 		}
-		r, ok := spread(a, b)
-		return ok && r
+		if r, ok := spread(a, b); ok {
+			return r
+		}
+		// no Soon on either side: accounts without a quota snapshot (Modal
+		// has no quota endpoint at all) are all equal here, so take turns
+		return tie(idx[i], idx[j])
 	})
 	return idx
 }
 
 // pace: the most week left per hour until it renews goes first; paces within
 // a tenth of a band's top count alike and are spread by recent tokens.
-func pace(seats []Seat, p Params, spread func(a, b Seat) (bool, bool)) []int {
+func pace(seats []Seat, p Params, spread func(a, b Seat) (bool, bool), tie func(i, j int) bool) []int {
 	var byPace []int
 	for i, s := range seats {
 		if p.tier(s) == 0 {
@@ -267,8 +303,10 @@ func pace(seats []Seat, p Params, spread func(a, b Seat) (bool, bool)) []int {
 		if a.Tokens != b.Tokens {
 			return a.Tokens < b.Tokens
 		}
-		r, ok := spread(a, b)
-		return ok && r
+		if r, ok := spread(a, b); ok {
+			return r
+		}
+		return tie(idx[i], idx[j])
 	})
 	return idx
 }

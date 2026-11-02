@@ -43,6 +43,55 @@ func TestDefaultsValidateAndMatch(t *testing.T) {
 	}
 }
 
+func TestPerchBannedRuleOrderAndSignals(t *testing.T) {
+	rs := DefaultPerchErrorRules()
+	if err := ValidateErrorRules(rs); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		status     int
+		body, want string
+	}{
+		{401, `{"errorCode":"banned"}`, "perch-banned"},
+		{403, `{"errorCode":"BANNED","error":"starter_model_blocked"}`, "perch-banned"},
+		{401, `{"error":"session expired"}`, "perch-session-invalid"},
+		{403, `{"error":"not banned"}`, ""},
+		{403, `{"errorCode":"unbanned"}`, ""},
+		{429, `{"errorCode":"banned"}`, ""},
+		{503, `{"errorCode":"banned"}`, "perch-unavailable"},
+	} {
+		r := MatchError(rs, tc.status, tc.body, nil)
+		got := ""
+		if r != nil {
+			got = r.ID
+		}
+		if got != tc.want {
+			t.Errorf("%d %s: got %q want %q", tc.status, tc.body, got, tc.want)
+		}
+	}
+}
+
+func TestLegacyPerchBannedRuleUpgrade(t *testing.T) {
+	legacy := DefaultPerchErrorRules()
+	legacy[0].When.BodyCodes = nil
+	legacy[0].When.BodyContains = []string{"banned"}
+	legacy[0], legacy[1] = legacy[1], legacy[0]
+	upgraded := PerchErrorRules(legacy)
+	if r := MatchError(upgraded, 401, `{"errorCode":"banned"}`, nil); r == nil || r.ID != "perch-banned" {
+		t.Fatalf("legacy 401: %+v", r)
+	}
+	if r := MatchError(upgraded, 403, `{"error":"not banned"}`, nil); r != nil {
+		t.Fatalf("legacy substring matched: %+v", r)
+	}
+	if len(legacy[1].When.BodyCodes) != 0 || len(legacy[1].When.BodyContains) != 1 {
+		t.Fatal("modified stored rules")
+	}
+	legacy[1].When.BodyContains = []string{"custom"}
+	if got := PerchErrorRules(legacy); got[1].When.BodyContains[0] != "custom" {
+		t.Fatal("modified custom rule")
+	}
+}
+
 func TestCooldownHeaderAndCap(t *testing.T) {
 	r := &ErrorRule{ID: "x", Scope: ScopeAccount, Action: ActionCooldown, When: Match{Statuses: []int{429}},
 		Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "30s", Max: "5m"}}

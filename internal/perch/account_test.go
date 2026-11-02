@@ -196,3 +196,101 @@ func TestAccountExactPTFigures(t *testing.T) {
 		t.Fatalf("monthlyUsd = %v", a.Meter.MonthlyUSD)
 	}
 }
+
+// A brand-new account has not picked a plan: Perch states no plan code and an
+// EMPTY entitlement list, and planName is null — which the label logic renders
+// as "Starter". Claiming the free-tier allowance for it would dress a guess as
+// a fact, so it must stay uncapped and be flagged instead.
+func TestAccountAwaitingTierSelectionHasNoCap(t *testing.T) {
+	srv := accountServer(t, map[string]any{
+		"ok": true,
+		"session": map[string]any{
+			"planCode": nil, "planName": nil, "membershipRole": nil,
+			"tierSelectionRequired": true,
+			"entitlements":          []any{},
+		},
+		"usageMeter": nil,
+	})
+	c := NewClient(srv.Client())
+	a, err := c.Account(context.Background(), srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.TierSelectionRequired {
+		t.Fatal("tierSelectionRequired was not read")
+	}
+	if a.MonthlyLimitPT != 0 || a.MonthlySource != AllowanceNone {
+		t.Fatalf("an account with no plan must have no cap, got %d from %s", a.MonthlyLimitPT, a.MonthlySource)
+	}
+}
+
+// Once the owner picks Starter, Perch states the cap and the flag clears.
+func TestAccountTierSelectedUsesStatedCap(t *testing.T) {
+	srv := accountServer(t, map[string]any{
+		"ok": true,
+		"session": map[string]any{
+			"planCode": "pilot", "planName": "Pilot",
+			"tierSelectionRequired": false,
+			"entitlements":          []any{entitlement("usage.monthly_pt", map[string]any{"limit": 20000})},
+		},
+		"usageMeter": map[string]any{"monthlyUsd": 3},
+	})
+	c := NewClient(srv.Client())
+	a, err := c.Account(context.Background(), srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.TierSelectionRequired {
+		t.Fatal("a selected plan must not stay flagged")
+	}
+	if a.MonthlyLimitPT != 20000 || a.MonthlySource != AllowanceEntitlement {
+		t.Fatalf("cap = %d from %s, want Perch's stated 20000", a.MonthlyLimitPT, a.MonthlySource)
+	}
+}
+
+// Perch's own free-tier figure outranks the compiled-in constant, so the
+// console follows Perch when the free plan changes.
+func TestStarterCapPrefersPerchFigure(t *testing.T) {
+	a := Account{PlanCode: "pilot", PlanName: "Pilot"}
+	a.StarterMonthlyLimits(25)
+	a.ResolveAllowances()
+	if a.MonthlyLimitPT != 25_000 || a.MonthlySource != AllowancePlanFallback {
+		t.Fatalf("cap = %d from %s, want 25000 (Perch's $25), not the constant", a.MonthlyLimitPT, a.MonthlySource)
+	}
+
+	// with nothing read, the published constant is still better than nothing
+	b := Account{PlanCode: "pilot", PlanName: "Pilot"}
+	b.ResolveAllowances()
+	if b.MonthlyLimitPT != StarterMonthlyPT {
+		t.Fatalf("cap = %d, want the %d constant", b.MonthlyLimitPT, StarterMonthlyPT)
+	}
+}
+
+// starter-limits is read with the account's access token (the billing routes
+// take a browser cookie instead), and it is what supplies the real figure.
+func TestStarterMonthlyUSD(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/perch-terminal/starter-limits" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"ok":false}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"view":"public","config":{"monthlyUsd":20}}`))
+	}))
+	defer srv.Close()
+
+	usd, err := NewClient(srv.Client()).StarterMonthlyUSD(context.Background(), srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usd != 20 {
+		t.Fatalf("monthlyUsd = %v, want 20", usd)
+	}
+	if _, err := NewClient(srv.Client()).StarterMonthlyUSD(context.Background(), srv.URL, "wrong"); err == nil {
+		t.Fatal("a refused token must be an error, not a silent zero")
+	}
+}

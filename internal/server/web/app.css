@@ -194,3 +194,30 @@ tr[data-id]:hover { background: var(--line2); }
 /* Perch gate settings are multi-line prompts */
 #form-perch-gate { grid-template-columns: 150px 1fr; }
 #form-perch-gate textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
+
+.pc-registration-layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.pc-registration-layout > .panel { min-width: 0; }
+.pc-registration-form form { display: grid; gap: 8px; }
+.pc-registration-form form label { font-weight: 600; }
+.pc-registration-form textarea { width: 100%; resize: vertical; }
+.pc-registration-form .hint { color: var(--muted); font-size: 12px; }
+.pc-registration-form .btn { justify-self: start; margin-top: 4px; }
+.pc-secret-input { color: transparent; caret-color: var(--text); -webkit-text-security: disc; }
+.pc-secret-input::placeholder { color: var(--muted); -webkit-text-security: none; }
+#pc-auto-rows td:nth-child(4) { min-width: 180px; overflow-wrap: anywhere; }
+.pc-register-jobs { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin-top: 12px; }
+.pc-register-job { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); text-align: left; font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.pc-register-job.active { border-color: var(--accent); background: var(--accent-soft); }
+.pc-register-detail-head { margin-top: 20px; }
+.pc-register-detail-head h2 { overflow-wrap: anywhere; }
+.pc-register-import { margin-top: 14px; }
+.pc-register-import input { max-width: 200px; }
+#pc-register-rows td:last-child { min-width: 180px; overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .pc-registration-layout { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  .pool-tabs { overflow-x: auto; }
+  .pool-tab { white-space: nowrap; }
+  .pc-log-filters { width: 100%; }
+  .pc-log-filters input, .pc-log-filters select { min-width: 0; max-width: 100%; }
+  #pc-stats-cards { grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); }
+}

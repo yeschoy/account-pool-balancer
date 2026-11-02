@@ -71,12 +71,34 @@ func TestCheckGatePrefix(t *testing.T) {
 	if err := CheckGatePrefix("too short " + GatePrefixAnchor); err == nil {
 		t.Fatal("a prefix under the gate length must be refused")
 	}
-	if err := CheckGatePrefix(strings.Repeat("x", GatePrefixMin)); err == nil {
-		t.Fatal("a prefix without the anchor must be refused")
+	// Measured on a live account (2026-11-01): the gate reads the length and
+	// the head of the first system message, not Perch's exact wording — 200
+	// runes of any preamble pass, 195 are refused. So a prefix that is long
+	// enough is usable even without Perch's own persona text.
+	if err := CheckGatePrefix(strings.Repeat("x", GatePrefixMin)); err != nil {
+		t.Fatalf("a long enough preamble must be accepted: %v", err)
 	}
 	ok := GatePrefixAnchor + " — " + strings.Repeat("y", GatePrefixMin)
 	if err := CheckGatePrefix(ok); err != nil {
 		t.Fatalf("a good prefix was refused: %v", err)
+	}
+	if err := CheckGatePrefix(strings.Repeat("x", GatePrefixMin-1)); err == nil {
+		t.Fatal("195 runes is below the measured threshold")
+	}
+}
+
+// The shipped default must satisfy the same check, or a fresh install could
+// not serve the CLI surface at all.
+func TestDefaultGatePrefixIsUsable(t *testing.T) {
+	if err := CheckGatePrefix(DefaultGatePrefix); err != nil {
+		t.Fatalf("the shipped default is unusable: %v", err)
+	}
+	text, src := ResolveGatePrefix("")
+	if text == "" || src == "" {
+		t.Fatalf("ResolveGatePrefix(empty) returned nothing")
+	}
+	if text, src = ResolveGatePrefix("configured preamble " + strings.Repeat("z", GatePrefixMin)); !strings.HasPrefix(text, "configured preamble") || src != "settings" {
+		t.Fatalf("a configured prefix must win, got %q from %q", text[:20], src)
 	}
 }
 

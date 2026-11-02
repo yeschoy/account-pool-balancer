@@ -8,17 +8,21 @@ import (
 )
 
 type Bucket struct {
-	Minute    int64   `json:"m"`
-	Requests  int64   `json:"r"`
-	Success   int64   `json:"s"`
-	Failed    int64   `json:"f"`
-	Cancelled int64   `json:"c"`
-	Input     int64   `json:"i"`
-	Output    int64   `json:"o"`
-	Cached    int64   `json:"k"`
-	Prompt    int64   `json:"p,omitempty"` // total prompt tokens (cache hits included), for the hit rate
-	CostCNY   float64 `json:"cc,omitempty"`
-	CostUSD   float64 `json:"cu,omitempty"`
+	Minute    int64 `json:"m"`
+	Requests  int64 `json:"r"`
+	Success   int64 `json:"s"`
+	Failed    int64 `json:"f"`
+	Cancelled int64 `json:"c"`
+	Input     int64 `json:"i"`
+	Output    int64 `json:"o"`
+	Cached    int64 `json:"k"`
+	Prompt    int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
+	// CachePrompt and CacheCached cover only requests with both input and cache usage.
+	CachePrompt        int64   `json:"cp,omitempty"`
+	CacheCached        int64   `json:"ck,omitempty"`
+	CacheKnownRequests int64   `json:"ckr,omitempty"`
+	CostCNY            float64 `json:"cc,omitempty"`
+	CostUSD            float64 `json:"cu,omitempty"`
 }
 
 func (b *Bucket) add(o Bucket) {
@@ -30,6 +34,9 @@ func (b *Bucket) add(o Bucket) {
 	b.Output += o.Output
 	b.Cached += o.Cached
 	b.Prompt += o.Prompt
+	b.CachePrompt += o.CachePrompt
+	b.CacheCached += o.CacheCached
+	b.CacheKnownRequests += o.CacheKnownRequests
 	b.CostCNY += o.CostCNY
 	b.CostUSD += o.CostUSD
 }
@@ -139,6 +146,11 @@ func (s *Stats) Record(x Sample) {
 		if y.p != nil {
 			*y.dst = *y.p
 		}
+	}
+	if x.Input != nil && x.Cached != nil {
+		d.CachePrompt = x.Prompt
+		d.CacheCached = *x.Cached
+		d.CacheKnownRequests = 1
 	}
 	s.all.record(m, d, x)
 	if x.Provider != "" {

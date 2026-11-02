@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,28 @@ func acquire(t *testing.T, p *Pool, cfg *config.Config, req Request) *Lease {
 		t.Fatalf("acquire: %v", err)
 	}
 	return l
+}
+
+func TestRecoverQuarantineOnlyMatchingReason(t *testing.T) {
+	p := New(nil)
+	p.Quarantine("a", 401, "expired", "perch-session-invalid")
+	if !p.RecoverQuarantine("a", "perch-session-invalid") {
+		t.Fatal("session quarantine was not recovered")
+	}
+	p.Quarantine("a", 403, "banned", "perch-banned")
+	p.Cooldown("a", "", time.Now().Add(time.Minute), 503, "unavailable", "perch-unavailable")
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); p.RecoverQuarantine("a", "perch-session-invalid") }()
+		go func() { defer wg.Done(); p.Quarantine("a", 401, "expired", "perch-session-invalid") }()
+	}
+	wg.Wait()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st := p.states["a"]; st == nil || !st.HardQuarantined || st.RuleID != "perch-banned" {
+		t.Fatalf("banned state lost: %+v", st)
+	}
 }
 
 func TestReleaseIsIdempotent(t *testing.T) {
@@ -422,5 +445,95 @@ func TestOllamaExhaustedByBalance(t *testing.T) {
 		l.Release()
 	} else {
 		t.Fatalf("stale balance excluded the account: %v", err)
+	}
+}
+
+// Modal accounts have no quota snapshot at all, so every one of them looks
+// identical to the strategies' quota terms. They must still take turns: a
+// stable sort over "both equal" kept the first account of the list first
+// forever, which is what piled a whole pool onto one account.
+func TestModalLikeAccountsRotate(t *testing.T) {
+	cfg := config.Default()
+	cfg.Accounts = []config.Account{
+		{ID: "m1", Provider: config.ProviderModal, RuntimeKey: "wk-1.ws-a", Group: "modal", Enabled: true},
+		{ID: "m2", Provider: config.ProviderModal, RuntimeKey: "wk-2.ws-b", Group: "modal", Enabled: true},
+		{ID: "m3", Provider: config.ProviderModal, RuntimeKey: "wk-3.ws-c", Group: "modal", Enabled: true},
+		{ID: "m4", Provider: config.ProviderModal, RuntimeKey: "wk-4.ws-d", Group: "modal", Enabled: true},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	// no snapshot for anyone: the Modal case (there is no quota endpoint)
+	p := New(func(string) *quota.Snapshot { return nil })
+	seen := map[string]int{}
+	for i := 0; i < 8; i++ {
+		l, err := p.Acquire(context.Background(), cfg, Request{Group: "modal", RequestID: "r"})
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		seen[l.Account.ID]++
+		l.Release()
+	}
+	for _, id := range []string{"m1", "m2", "m3", "m4"} {
+		if seen[id] != 2 {
+			t.Fatalf("8 requests over 4 equal accounts = %v, want 2 each", seen)
+		}
+	}
+}
+
+// A model only some accounts can serve must go to those accounts, never to
+// one whose catalogue lacks it: the pool's /v1/models publishes the union,
+// but routing stays per account.
+func TestModelRoutesOnlyToAccountsServingIt(t *testing.T) {
+	cfg := config.Default()
+	cfg.Accounts = []config.Account{
+		{ID: "kimi", Provider: config.ProviderModal, RuntimeKey: "wk-1.ws-a", Group: "modal", Enabled: true},
+		{ID: "glm", Provider: config.ProviderModal, RuntimeKey: "wk-2.ws-b", Group: "modal", Enabled: true},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	catalogs := map[string]*quota.Snapshot{
+		"kimi": {CatalogAt: now, Catalog: map[string]bool{"kimi-k3": true, "deepseek-v4-1-flash-1017": true}},
+		"glm":  {CatalogAt: now, Catalog: map[string]bool{"glm-5-3-flash": true, "deepseek-v4-1-flash-1017": true}},
+	}
+	p := New(func(id string) *quota.Snapshot { return catalogs[id] })
+
+	for i := 0; i < 4; i++ {
+		l, err := p.Acquire(context.Background(), cfg, Request{Group: "modal", Model: "kimi-k3", RequestID: "r"})
+		if err != nil {
+			t.Fatalf("kimi-k3: %v", err)
+		}
+		if l.Account.ID != "kimi" {
+			t.Fatalf("kimi-k3 went to %s", l.Account.ID)
+		}
+		l.Release()
+	}
+	for i := 0; i < 4; i++ {
+		l, err := p.Acquire(context.Background(), cfg, Request{Group: "modal", Model: "glm-5-3-flash", RequestID: "r"})
+		if err != nil {
+			t.Fatalf("glm-5-3-flash: %v", err)
+		}
+		if l.Account.ID != "glm" {
+			t.Fatalf("glm-5-3-flash went to %s", l.Account.ID)
+		}
+		l.Release()
+	}
+	// both serve it: either may take it, both must be schedulable
+	got := map[string]bool{}
+	for i := 0; i < 8; i++ {
+		l, err := p.Acquire(context.Background(), cfg, Request{Group: "modal", Model: "deepseek-v4-1-flash-1017", RequestID: "r"})
+		if err != nil {
+			t.Fatalf("shared model: %v", err)
+		}
+		got[l.Account.ID] = true
+		l.Release()
+	}
+	if len(got) != 2 {
+		t.Fatalf("a model both accounts serve must reach both, got %v", got)
+	}
+	if _, ex := p.Preview(cfg, "modal", "kimi-k3"); ex["glm"] != "not-entitled" {
+		t.Fatalf("glm must be excluded for kimi-k3: %v", ex)
 	}
 }

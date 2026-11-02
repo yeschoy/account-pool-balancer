@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -56,14 +57,19 @@ type Tool map[string]any
 
 // Envelope is the body of /api/perch-terminal/model-call.
 type Envelope struct {
-	Request  RequestEnvelope `json:"request"`
-	RunID    string          `json:"runId"`
-	Lane     string          `json:"lane"`
-	Surface  string          `json:"clientSurface"`
-	Strict   bool            `json:"strictManual"`
-	Attrib   map[string]any  `json:"attribution,omitempty"`
-	AvoidIDs []string        `json:"avoidModelIds"`
-	Resend   bool            `json:"resendAfterOutput"`
+	Request RequestEnvelope `json:"request"`
+	RunID   string          `json:"runId"`
+	// ThreadID / ChatMode are carried because the CLI's own cli-turn record
+	// reports them; on model-call they are informational. omitempty keeps the
+	// envelope byte-identical for callers that name no thread.
+	ThreadID string         `json:"threadId,omitempty"`
+	ChatMode string         `json:"chatMode,omitempty"`
+	Lane     string         `json:"lane"`
+	Surface  string         `json:"clientSurface"`
+	Strict   bool           `json:"strictManual"`
+	Attrib   map[string]any `json:"attribution,omitempty"`
+	AvoidIDs []string       `json:"avoidModelIds"`
+	Resend   bool           `json:"resendAfterOutput"`
 
 	// Model selection: exactly one of these shapes is set.
 	PreferredModelID    string `json:"preferredModelId,omitempty"`
@@ -115,6 +121,15 @@ type EnvelopeOptions struct {
 	// Attribution is Perch's own attribution block; the pool fills it with the
 	// account identity so a turn is billed to the right user.
 	Attribution map[string]any
+	// ThreadID is the conversation this turn belongs to. When the caller has
+	// none, the pool derives the CLI's own cwd thread (perch.CwdThreadID):
+	// the real client's thread is "cli-cwd-<sha16 of the working dir>" and it
+	// sends it on cli-turn, so a pool call that names a fresh random thread
+	// every time is the odd one out. Empty keeps the field at its zero value,
+	// which is what every caller did before this was added.
+	ThreadID string
+	// ChatMode is reported in cli-turn ("code"|"chat"). Empty leaves it "".
+	ChatMode string
 }
 
 // BuildEnvelope turns an OpenAI chat body into Perch's envelope.
@@ -124,6 +139,8 @@ func BuildEnvelope(body map[string]any, opt EnvelopeOptions) Envelope {
 
 	env := Envelope{
 		RunID:    NewRunID(),
+		ThreadID: opt.ThreadID,
+		ChatMode: opt.ChatMode,
 		Lane:     firstNonEmptyStr(opt.Lane, "code"),
 		Surface:  "cli",
 		Strict:   false,
@@ -540,4 +557,176 @@ func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// ---- the web surface envelope ---------------------------------------------------
+
+// WebMessage is the body of POST /api/perchai/chat: the message the web app
+// itself sends when the user types in a thread.
+//
+// It is far thinner than the CLI envelope, and that is the point: no system
+// turn, no tools, no persona preamble. What the web lane cannot express (system
+// prompts, tool calls, images, sampling parameters) is folded or dropped by
+// BuildWebMessage rather than silently forwarded in a field the endpoint
+// ignores.
+type WebMessage struct {
+	Message         string `json:"message"`
+	ClientMessageID string `json:"clientMessageId"`
+	ThreadID        string `json:"threadId"`
+	WebSearch       bool   `json:"webSearch"`
+	// ManualModelOptionID is a registry option id (openrouter-qwen-…). It is
+	// always sent: on a plan whose pool serves one model Perch substitutes it
+	// silently, and an option id derived from the OpenAI model name is the
+	// only chance of a real pin.
+	ManualModelOptionID *string `json:"manualModelOptionId"`
+	PromoOverflow       bool    `json:"promoOverflowAccepted"`
+}
+
+// webHistoryPrefix / webHistoryTurn frame earlier turns inside the one message
+// the endpoint accepts. A thread is reused per thread id, so the upstream's
+// own history is what the model already saw; this only carries the turns of a
+// request that the thread does not know (a client re-sending a conversation,
+// or a tool loop).
+const (
+	webHistoryPrefix = "[earlier turns of this conversation]\n"
+	webHistoryTurn   = "%s: %s\n"
+)
+
+// BuildWebMessage turns an OpenAI chat body into the web lane's message.
+//
+// The rules, in order:
+//   - every system/developer turn goes first, as plain text: the web lane has
+//     no system channel, so this is the only way a caller's instructions reach
+//     the model at all;
+//   - earlier user/assistant/tool turns follow, labelled, so a stateless
+//     caller's conversation survives;
+//   - an assistant turn that called tools is rendered as its call (there is no
+//     tool channel either), and a tool result as its output;
+//   - the last user turn is the message itself — that is what Perch treats as
+//     the prompt and what it titles the thread from.
+func BuildWebMessage(body map[string]any, threadID string) (WebMessage, bool) {
+	raw, _ := body["messages"].([]any)
+	var systems, turns []string
+	prompt := ""
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(TextOf(m["content"]))
+		switch strings.TrimSpace(str(m["role"])) {
+		case "system", "developer":
+			if text != "" {
+				systems = append(systems, text)
+			}
+		case "assistant":
+			if text != "" {
+				turns = append(turns, fmt.Sprintf(webHistoryTurn, "assistant", text))
+			}
+			for _, c := range assistantToolCalls(m["tool_calls"]) {
+				turns = append(turns, fmt.Sprintf(webHistoryTurn, "assistant (called "+c.Function.Name+")", c.Function.Arguments))
+			}
+		case "tool", "function":
+			if text != "" {
+				turns = append(turns, fmt.Sprintf(webHistoryTurn, "tool result", text))
+			}
+		default:
+			if text == "" {
+				continue
+			}
+			if prompt != "" {
+				turns = append(turns, fmt.Sprintf(webHistoryTurn, "user", prompt))
+			}
+			prompt = text
+		}
+	}
+	if prompt == "" {
+		return WebMessage{}, false
+	}
+	var b strings.Builder
+	for _, s := range systems {
+		b.WriteString(s)
+		b.WriteString("\n\n")
+	}
+	if len(turns) > 0 {
+		b.WriteString(webHistoryPrefix)
+		for _, t := range turns {
+			b.WriteString(t)
+		}
+		b.WriteString("[end of earlier turns]\n\n")
+	}
+	b.WriteString(prompt)
+
+	return WebMessage{
+		Message:         b.String(),
+		ClientMessageID: "odb-" + randHex(8),
+		ThreadID:        threadID,
+	}, true
+}
+
+// WebOptionID maps an OpenAI model name onto a Perch registry option id for
+// the web lane's manualModelOptionId.
+//
+// Two facts decide what this can honestly do:
+//
+//   - Option ids are `provider-modelid` (wandb-kimi-k2-6,
+//     openrouter-qwen-qwen3-8-max-0902). Perch has no route that lists them
+//     for an account, so this only passes through an id the caller already
+//     names in that shape.
+//   - A plan whose pool serves a single model substitutes any pin silently
+//     and answers 200. Measured on a Starter account: the pin is accepted and
+//     MiniMax M3 answers anyway. So the pin is a hint, and the served model is
+//     whatever the done frame's modelLabel says — which the log carries.
+//
+// A bare model name ("gpt-4o") therefore sends no pin at all rather than a
+// guess that would be substituted without a trace.
+func WebOptionID(model string) string {
+	name := strings.TrimSpace(model)
+	if name == "" || name == "auto" || IsRoostChoice(name) {
+		return ""
+	}
+	// an explicit option id already: a known provider prefix and no spaces
+	if i := strings.IndexByte(name, '-'); i > 0 && !strings.ContainsAny(name, " /:") {
+		switch name[:i] {
+		case "wandb", "openrouter", "azure", "bedrock", "anthropic", "dashscope", "cerebras", "nim", "mantle", "google", "vertex":
+			return name
+		}
+	}
+	return ""
+}
+
+// WithModelOption fills the pin a caller asked for.
+func (w WebMessage) WithModelOption(option string) WebMessage {
+	option = strings.TrimSpace(option)
+	if option == "" {
+		return w
+	}
+	w.ManualModelOptionID = &option
+	return w
+}
+
+// ---- what the CLI records about a turn ------------------------------------------
+
+// PromptOf is the whole conversation the caller sent, flattened the way the
+// CLI's `prompt` field reads: the system turn first, then each speaker.
+func PromptOf(body map[string]any) string {
+	raw, _ := body["messages"].([]any)
+	var b strings.Builder
+	for _, it := range raw {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		t := strings.TrimSpace(TextOf(m["content"]))
+		if t == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(str(m["role"]))
+		b.WriteString(": ")
+		b.WriteString(t)
+	}
+	return b.String()
 }

@@ -6,6 +6,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -36,6 +37,8 @@ const (
 type Match struct {
 	Statuses     []int    `json:"statuses,omitempty"`
 	BodyContains []string `json:"bodyContains,omitempty"`
+	// BodyCodes matches an exact top-level JSON errorCode or code value.
+	BodyCodes []string `json:"bodyCodes,omitempty"`
 	// Headers maps a response header name to a case-insensitive substring
 	// its value must contain; "" only requires the header to be present.
 	Headers map[string]string `json:"headers,omitempty"`
@@ -254,15 +257,15 @@ func DefaultModalRetryRules() []RetryRule {
 // account that needs signing in again rather than a key to replace.
 func DefaultPerchErrorRules() []ErrorRule {
 	return []ErrorRule{
+		{ID: "perch-banned", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 403,
+			When: Match{Statuses: []int{403, 401}, BodyCodes: []string{"banned"}},
+			Note: "账号被 Perch 封禁：不可自动恢复，需人工处理"},
 		{ID: "perch-session-invalid", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 401,
 			When: Match{Statuses: []int{401}},
 			Note: "Perch 会话已失效（Access Token 不被接受且刷新失败）：需重新登录该账号并粘贴新的 Session，然后点“恢复”"},
 		{ID: "perch-surface-required", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 403,
 			When: Match{Statuses: []int{403}, BodyContains: []string{"perch_surface_required", "starter_model_blocked"}},
 			Note: "Perch 套餐限制：该模型不在当前套餐的可用范围内（starter_model_blocked / perch_surface_required），需人工处理"},
-		{ID: "perch-banned", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 403,
-			When: Match{Statuses: []int{403, 401}, BodyContains: []string{"banned"}},
-			Note: "账号被 Perch 封禁：不可自动恢复，需人工处理"},
 		{ID: "perch-allowance-spent", Scope: ScopeAccount, Action: ActionCooldown, RefreshQuota: true, DownstreamStatus: 429,
 			When:  Match{Statuses: []int{429}, BodyContains: []string{"usage_limit_reached", "allowance", "rate_limit_error"}},
 			Reset: &Reset{Fallback: "15m", Max: "6h", Escalate: true},
@@ -291,6 +294,31 @@ func DefaultPerchErrorRules() []ErrorRule {
 	}
 }
 
+// PerchErrorRules upgrades the historical built-in banned rule at runtime.
+// Other rules, including deliberately customized banned rules, retain their order.
+func PerchErrorRules(rs []ErrorRule) []ErrorRule {
+	for i, r := range rs {
+		if r.ID != "perch-banned" || r.Disabled || r.Scope != ScopeAccount || r.Action != ActionHardQuarantine ||
+			len(r.When.Statuses) != 2 || r.When.Statuses[0] != 403 || r.When.Statuses[1] != 401 ||
+			len(r.When.BodyContains) != 1 || r.When.BodyContains[0] != "banned" || len(r.When.BodyCodes) != 0 || len(r.When.Headers) != 0 {
+			continue
+		}
+		out := append([]ErrorRule(nil), rs...)
+		out[i].When.BodyContains = nil
+		out[i].When.BodyCodes = []string{"banned"}
+		for j := 0; j < i; j++ {
+			if out[j].ID == "perch-session-invalid" || out[j].ID == "perch-surface-required" {
+				banned := out[i]
+				copy(out[j+1:i+1], out[j:i])
+				out[j] = banned
+				break
+			}
+		}
+		return out
+	}
+	return rs
+}
+
 // DefaultPerchRetryRules retry nothing on a bad request: Perch's envelope is
 // this program's to build, so a 400 means our bug, not the account's.
 // DefaultPerchRetryRules stop a request when switching accounts cannot help.
@@ -314,7 +342,7 @@ func retryRulesFor(id, note string, statuses ...int) []RetryRule {
 }
 
 func validateMatch(m Match) error {
-	if len(m.Statuses) == 0 && len(m.BodyContains) == 0 && len(m.Headers) == 0 {
+	if len(m.Statuses) == 0 && len(m.BodyContains) == 0 && len(m.BodyCodes) == 0 && len(m.Headers) == 0 {
 		return fmt.Errorf("when must have at least one condition")
 	}
 	for _, s := range m.Statuses {
@@ -325,6 +353,11 @@ func validateMatch(m Match) error {
 	for _, b := range m.BodyContains {
 		if strings.TrimSpace(b) == "" || len(b) > 512 {
 			return fmt.Errorf("bodyContains entries must be 1-512 chars")
+		}
+	}
+	for _, code := range m.BodyCodes {
+		if strings.TrimSpace(code) == "" || len(code) > 512 {
+			return fmt.Errorf("bodyCodes entries must be 1-512 chars")
 		}
 	}
 	for h := range m.Headers {
@@ -415,7 +448,7 @@ func ValidateRetryRules(rs []RetryRule) error {
 }
 
 func (m Match) matches(status int, lowerBody string, h http.Header) bool {
-	if len(m.Statuses) == 0 && len(m.BodyContains) == 0 && len(m.Headers) == 0 {
+	if len(m.Statuses) == 0 && len(m.BodyContains) == 0 && len(m.BodyCodes) == 0 && len(m.Headers) == 0 {
 		return false
 	}
 	if len(m.Statuses) > 0 {
@@ -439,6 +472,25 @@ func (m Match) matches(status int, lowerBody string, h http.Header) bool {
 			}
 		}
 		if !ok {
+			return false
+		}
+	}
+	if len(m.BodyCodes) > 0 {
+		var body struct {
+			ErrorCode string `json:"errorCode"`
+			Code      string `json:"code"`
+		}
+		if json.Unmarshal([]byte(lowerBody), &body) != nil {
+			return false
+		}
+		found := false
+		for _, code := range m.BodyCodes {
+			if strings.EqualFold(code, body.ErrorCode) || strings.EqualFold(code, body.Code) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}

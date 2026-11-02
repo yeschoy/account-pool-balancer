@@ -34,6 +34,10 @@
       <div class="nav-sep" data-pool-nav="perch" hidden>Perch</div>
       <a data-page="perch" data-pool-nav="perch" hidden>Perch 概览</a>
       <a data-page="paccounts" data-pool-nav="perch" hidden>Perch 账号</a>
+      <a data-page="prequests" data-pool-nav="perch" hidden>请求日志</a>
+      <a data-page="pregister" data-pool-nav="perch" hidden>Perch 注册机</a>
+      <a data-page="pautosignup" data-pool-nav="perch" hidden>自动补号</a>
+      <a data-page="pkeys" data-pool-nav="perch" hidden>Perch 密钥</a>
       <a data-page="psettings" data-pool-nav="perch" hidden>Perch 设置</a>
     </nav>
     <div class="side-foot">
@@ -66,11 +70,17 @@
       <header class="page-head"><h1>Perch 账号池</h1>
         <div class="actions">
           <button class="btn" id="btn-pc-refresh">刷新</button>
+          <button class="btn" id="btn-pc-register-overview">注册账号</button>
           <button class="btn primary" id="btn-pc-import">导入账号 JSON</button>
         </div>
       </header>
       <div id="pc-alert" class="panel hidden"></div>
       <div id="pc-cards" class="cards"></div>
+      <div class="head-row mt"><h2>最近 24 小时请求统计</h2><span class="muted small" id="pc-stats-updated"></span></div>
+      <div id="pc-stats-cards" class="cards"></div>
+      <div class="panel mt"><h2>最近 24 小时请求</h2><div id="pc-requests-chart" class="chart"></div><div class="legend"><span class="sw ok"></span>成功 <span class="sw bad"></span>失败 <span class="sw cancel"></span>取消</div></div>
+      <div class="panel mt"><h2>各模型 24 小时概况</h2><div class="table-wrap"><table class="table" id="pc-models"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入</th><th>输出</th><th>缓存率</th><th>费用</th></tr></thead><tbody></tbody></table></div></div>
+      <div class="panel"><h2>各出口 24 小时概况</h2><div class="table-wrap"><table class="table" id="pc-proxies"><thead><tr><th>出口</th><th>请求</th><th>成功率</th><th>成功</th><th>失败</th><th>取消</th></tr></thead><tbody></tbody></table></div></div>
       <div class="panel">
         <div class="head-row"><h2>状态趋势（按天）</h2><span class="muted small">每次自动/手动检测记一次，保留最近 90 天</span></div>
         <div id="pc-trend" class="chips"></div>
@@ -91,6 +101,7 @@
             <option value="quota-exhausted">额度耗尽</option>
             <option value="rate-limited">请求限流</option>
             <option value="service-down">服务不可用</option>
+            <option value="tier-pending">待选套餐</option>
             <option value="disabled">已禁用</option>
           </select>
           <select id="pc-group"><option value="">全部分组</option></select>
@@ -113,6 +124,7 @@
           </select>
           <select id="pc-dir"><option value="asc">升序</option><option value="desc">降序</option></select>
           <button class="btn" id="btn-pc-search">查询</button>
+          <button class="btn" id="btn-pc-register">注册账号</button>
           <button class="btn primary" id="btn-pc-import2">导入</button>
         </div>
       </header>
@@ -148,7 +160,7 @@
           <thead><tr>
             <th class="pick"><input type="checkbox" id="pc-all"></th>
             <th>账号</th><th>状态</th><th>套餐</th><th>剩余额度</th><th>Access Token 到期</th>
-            <th>最近刷新</th><th>最近检测</th><th>分组 / 标签</th><th></th>
+            <th>最近刷新</th><th>最近检测</th><th>分组 / 标签</th><th title="近 24 小时按请求最终归属账号统计；不含切换前的其他账号尝试，成功率不含客户端取消">24h 调用 / 成功率</th><th></th>
           </tr></thead><tbody></tbody></table></div>
         <div class="more pc-pager">
           <button class="btn ghost small" id="pc-prev">上一页</button>
@@ -160,6 +172,146 @@
       <div class="panel" id="pc-detail-panel">
         <h2 class="panel-title">账号详情与事件</h2>
         <div id="pc-detail" class="muted small">在表格里点一个账号查看。</div>
+      </div>
+    </section>
+
+    <section id="page-prequests" class="page hidden">
+      <header class="page-head"><h1>Perch 请求日志</h1><div class="actions pc-log-filters">
+        <input id="pr-account" placeholder="账号 ID" aria-label="账号 ID">
+        <input id="pr-model" placeholder="模型" aria-label="模型">
+        <input id="pr-status" placeholder="状态码" size="6" aria-label="状态码">
+        <select id="pr-result" aria-label="结果"><option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option><option value="client_cancelled">取消</option></select>
+        <select id="pr-protocol" aria-label="协议"><option value="">全部协议</option><option value="openai-chat">openai-chat</option><option value="openai-responses">openai-responses</option></select>
+        <button class="btn" id="pr-search">查询</button><button class="btn" id="pr-refresh">刷新</button>
+      </div></header>
+      <div class="panel flush"><div class="table-wrap"><table class="table click" id="pr-table"><thead><tr><th>时间</th><th>协议</th><th>模型</th><th>下游密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th></tr></thead><tbody></tbody></table></div>
+        <div class="more pc-pager"><button class="btn small" id="pr-prev">上一页</button><span id="pr-page" class="muted small"></span><button class="btn small" id="pr-next">下一页</button></div>
+      </div>
+    </section>
+
+    <section id="page-pregister" class="page hidden">
+      <header class="page-head"><h1>Perch 注册机</h1><button type="button" class="btn" id="pc-reg-refresh">刷新任务</button></header>
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>新建注册任务</h2>
+          <form id="pc-registration-form" autocomplete="off">
+            <label for="pc-register-accounts">GitHub 账号</label>
+            <textarea id="pc-register-accounts" rows="7" autocomplete="off" spellcheck="false" placeholder="账号----密码----2FA密钥----接码页"></textarea>
+            <span class="hint">每行一个账号，最多 100 个。</span>
+            <label for="pc-register-proxies">代理池（可选）</label>
+            <textarea id="pc-register-proxies" rows="4" autocomplete="off" spellcheck="false" placeholder="每行一个代理 URL，或 名称----URL"></textarea>
+            <span class="hint">按账号顺序循环分配；留空直连。</span>
+            <label for="pc-register-group">入池分组</label>
+            <input id="pc-register-group" value="perch" autocomplete="off">
+            <label class="check"><input type="checkbox" id="pc-register-auto"> 激活后自动入池</label>
+            <button type="submit" class="btn primary" id="pc-register-submit">启动注册</button>
+            <p id="pc-register-error" class="error" role="alert"></p>
+          </form>
+        </section>
+        <section class="panel pc-registration-tasks">
+          <div class="head-row"><h2>注册任务</h2><span id="pc-register-poll-error" class="error" role="status"></span></div>
+          <div id="pc-register-jobs" class="pc-register-jobs"><p class="muted">暂无任务。</p></div>
+          <div id="pc-register-detail" class="hidden">
+            <div class="head-row pc-register-detail-head"><h2 id="pc-register-job-title">任务详情</h2><span id="pc-register-job-status" class="muted"></span></div>
+            <div class="table-wrap"><table class="table"><thead><tr><th>选择</th><th>GitHub 账号</th><th>邮箱</th><th>状态</th><th>代理</th><th>详情</th></tr></thead><tbody id="pc-register-rows"></tbody></table></div>
+            <div class="actions pc-register-import"><label for="pc-register-import-group">入池分组</label><input id="pc-register-import-group" value="perch"><button type="button" class="btn primary" id="pc-register-import">选中账号入池</button></div>
+            <p id="pc-register-import-error" class="error" role="alert"></p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-pautosignup" class="page hidden">
+      <header class="page-head"><h1>自动补号</h1><div class="actions"><button type="button" class="btn" id="pc-auto-refresh">刷新</button><button type="button" class="btn primary" id="pc-auto-run" disabled>立即检查一次</button></div></header>
+      <p id="pc-auto-error" class="error" role="alert"></p>
+      <div id="pc-auto-cards" class="cards mt"></div>
+      <p id="pc-auto-last-error" class="error" role="status"></p>
+      <div class="pc-registration-layout mt">
+        <section class="panel pc-registration-form">
+          <h2>任务设置</h2>
+          <form id="pc-auto-settings" autocomplete="off">
+            <label class="check"><input type="checkbox" id="pc-auto-enabled" disabled> 启用自动补号</label>
+            <label for="pc-auto-interval">检查间隔（秒）</label><input id="pc-auto-interval" type="number" min="60" step="1" required disabled>
+            <label for="pc-auto-min">最低可用账号数</label><input id="pc-auto-min" type="number" min="1" step="1" required disabled>
+            <label for="pc-auto-group">入池分组</label><input id="pc-auto-group" required autocomplete="off" disabled>
+            <button type="submit" class="btn primary" id="pc-auto-save" disabled>保存设置</button>
+            <p id="pc-auto-settings-message" class="muted small" role="status"></p>
+          </form>
+          <h2 class="mt">添加候选账号</h2>
+          <form id="pc-auto-candidates" autocomplete="off">
+            <label for="pc-auto-accounts">GitHub 账号</label>
+            <textarea id="pc-auto-accounts" class="pc-secret-input" rows="6" autocomplete="off" spellcheck="false" placeholder="账号----密码----2FA密钥----接码页"></textarea>
+            <span class="hint">每行一个账号，最多 100 个；输入内容不显示。重复账号不会覆盖已有候选。</span>
+            <label for="pc-auto-proxies">本次临时代理（可选）</label>
+            <textarea id="pc-auto-proxies" class="pc-secret-input" rows="3" autocomplete="off" spellcheck="false" placeholder="每行一个代理 URL，或 名称----URL"></textarea>
+            <span class="hint">仅分配给本次候选，不保存到代理库存；留空时领取任务才按序绑定库存代理。库存为空时暂停，不会自动直连。</span>
+            <button type="submit" class="btn primary" id="pc-auto-add">提交候选</button>
+            <p id="pc-auto-submit-message" class="muted small" role="status"></p>
+            <p id="pc-auto-submit-error" class="error" role="alert"></p>
+          </form>
+          <h2 class="mt">添加代理库存</h2>
+          <form id="pc-auto-proxy-form" autocomplete="off">
+            <label for="pc-auto-proxy-input">代理地址</label>
+            <textarea id="pc-auto-proxy-input" class="pc-secret-input" rows="4" autocomplete="off" spellcheck="false" placeholder="每行一个代理 URL，或 名称----URL"></textarea>
+            <span class="hint">保存后可由后台分配给未指定临时代理的候选。</span>
+            <button type="submit" class="btn primary" id="pc-auto-proxy-add">保存代理</button>
+            <p id="pc-auto-proxy-message" class="muted small" role="status"></p>
+            <p id="pc-auto-proxy-error" class="error" role="alert"></p>
+          </form>
+        </section>
+        <section class="panel pc-registration-tasks">
+          <h2>代理库存</h2>
+          <div class="table-wrap"><table class="table"><thead><tr><th>代理</th><th>操作</th></tr></thead><tbody id="pc-auto-proxy-rows"></tbody></table></div>
+          <h2 class="mt">候选账号</h2>
+          <div class="table-wrap"><table class="table"><thead><tr><th>GitHub 账号</th><th>状态</th><th>代理</th><th>详情</th><th>操作</th></tr></thead><tbody id="pc-auto-rows"></tbody></table></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-pkeys" class="page hidden">
+      <header class="page-head"><h1>Perch 密钥</h1>
+        <div class="actions"><button class="btn primary" id="btn-new-pkey">新建下游密钥</button></div>
+      </header>
+      <div class="panel">
+        <p class="muted">Perch 号池和别的池一样需要一把 <code>sk-odb-…</code> 下游密钥：new-api 的渠道密钥就填它，本服务只会调度
+          <code>perch</code> 分组的账号。模型名按 Perch 的模型目录填（<code>/v1/models</code> 返回的就是），只接受
+          <code>/v1/chat/completions</code> 与 <code>/v1/responses</code>。</p>
+      </div>
+      <div class="panel flush"><div class="table-wrap"><table class="table" id="pk-table">
+        <thead><tr><th>名称</th><th>分组</th><th>密钥</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody></tbody></table></div>
+        <p id="pk-empty" class="empty hidden">还没有 Perch 下游密钥。点「新建下游密钥」即可。</p>
+      </div>
+
+      <header class="page-head mt"><h1>Perch 导入密钥</h1>
+        <div class="actions"><button class="btn primary" id="btn-new-pik">新建导入密钥</button></div>
+      </header>
+      <div class="panel">
+        <p class="muted">Perch 账号没有 API Key，凭证是一份 Supabase 会话，所以自动上号不吃「运行密钥」，而是把<b>账号导出 JSON</b> 直接 POST 到
+          <code>POST /open/v1/perch/import</code>。鉴权用这里新建的 <code>sk-odbimp-…</code>；属于别的号池的导入密钥会被 403 拒绝。</p>
+      </div>
+      <div class="panel flush"><div class="table-wrap"><table class="table" id="pik-table">
+        <thead><tr><th>名称</th><th>默认分组</th><th>密钥</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody></tbody></table></div>
+        <p id="pik-empty" class="empty hidden">还没有 Perch 导入密钥。</p>
+      </div>
+
+      <div class="panel">
+        <h2>开放导入接口（自动上号）</h2>
+        <ol class="howto">
+          <li><code>POST <span id="pik-url"></span></code>，请求头 <code>Authorization: Bearer sk-odbimp-…</code>。导入密钥只能导入账号，不能调用模型。</li>
+          <li>单条：把 CLI 导出的账号 JSON 原样放顶层。批量：<code>{"accounts":[…],"tags":["batch-1"],"group":"perch"}</code>，每次最多 200 条。</li>
+          <li>也接受扁平字段 <code>supabaseUserId</code> / <code>email</code> / <code>accessToken</code> / <code>refreshToken</code> / <code>expiresAt</code> / <code>supabaseUrl</code>，或把导出 JSON 原文塞进 <code>sessionJson</code>。</li>
+          <li>唯一身份是 <code>account.supabase_user_id</code>：重复提交返回 <code>unchanged</code>；比已存会话旧的导出文件不会覆盖已续期的会话，注册机可以放心重试。</li>
+        </ol>
+        <pre class="code" id="pik-curl"></pre>
+      </div>
+      <div class="panel">
+        <h2>在 new-api 中接入</h2>
+        <ol class="howto">
+          <li>渠道类型选 <b>OpenAI</b>。Perch 只翻译 <code>/v1/chat/completions</code> 与 <code>/v1/responses</code>，<code>/v1/messages</code>、<code>/v1/embeddings</code> 会在本地直接 404。</li>
+          <li>Base URL 填 <code class="pkey-base"></code>，密钥填上面新建的 <code>sk-odb-…</code>。</li>
+          <li>模型名填 Perch 模型目录里的 id（和「Perch 设置 → 模型调用」所选通道能服务的模型一致）。</li>
+          <li>工具调用（tools / system 消息）只有 <code>cli</code> 通道支持，见「Perch 设置」。</li>
+        </ol>
       </div>
     </section>
 

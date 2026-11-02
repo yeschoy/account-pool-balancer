@@ -615,7 +615,7 @@ func (s *Server) apiCreateImportKey(w http.ResponseWriter, r *http.Request) {
 		provider = providerParam(r)
 	}
 	if provider != "" && !config.KnownProvider(provider) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama or modal"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
 		return
 	}
 	key := importKeyPrefix + randHex(24)
@@ -641,7 +641,7 @@ func (s *Server) apiUpdateImportKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Provider != nil && !config.KnownProvider(strings.TrimSpace(*in.Provider)) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama or modal"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
 		return
 	}
 	_, err := s.cfg.Update(-1, func(c *config.Config) error {

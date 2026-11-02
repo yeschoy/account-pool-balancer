@@ -66,12 +66,7 @@ func (s *Server) perchGatePrefix() string {
 	if s.perchPrefixKnown {
 		return s.perchPrefix
 	}
-	cfg := s.cfg.Get()
-	if p := strings.TrimSpace(cfg.Perch.GatePrefix); p != "" {
-		s.perchPrefix, s.perchPrefixSource, s.perchPrefixKnown = p, "settings", true
-		return p
-	}
-	p, src := perch.DeriveGatePrefix()
+	p, src := perch.ResolveGatePrefix(s.cfg.Get().Perch.GatePrefix)
 	s.perchPrefix, s.perchPrefixSource, s.perchPrefixKnown = p, src, true
 	return p
 }
@@ -79,13 +74,17 @@ func (s *Server) perchGatePrefix() string {
 // attemptPerch serves one attempt for a Perch account.
 func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, body []byte, proto string, rec *requestLog, ctx context.Context, res *attemptResult, timedOut *atomic.Bool) *attemptResult {
 	acct := lease.Account
-	prefix := s.perchGatePrefix()
-	if err := perch.CheckGatePrefix(prefix); err != nil {
-		// Without the preamble Perch refuses every call, so failing here with a
-		// clear message beats forwarding and reporting Perch's 403 forever.
-		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusServiceUnavailable, "perch_gate", "config"
-		res.body = []byte(err.Error())
-		return res
+	surface := perch.SurfaceFor(cfg.Perch.Surface)
+	if surface != perch.SurfaceWeb {
+		// The CLI surface is refused unless the first system turn opens with
+		// Perch's own preamble. Without it every call is a 403, so failing
+		// here with a clear message beats forwarding and reporting that
+		// forever.
+		if err := perch.CheckGatePrefix(s.perchGatePrefix()); err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusServiceUnavailable, "perch_gate", "config"
+			res.body = []byte(err.Error())
+			return res
+		}
 	}
 
 	var obj map[string]any
@@ -94,16 +93,52 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		res.body = []byte("request body must be a JSON object")
 		return res
 	}
-	opt := s.perchRequestOpts(cfg, acct)
-	opt.Model = rec.Model
-	env := perch.BuildEnvelope(obj, opt)
-	payload, err := json.Marshal(env)
-	if err != nil {
-		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
-		res.body = []byte("cannot build the Perch request")
-		return res
+	var payload []byte
+	if surface == perch.SurfaceWeb {
+		// The web lane accepts one user message: no system channel, no tools.
+		// The caller's system turns and history are folded into that message
+		// (see perch.BuildWebMessage), and a request that cannot be expressed
+		// there is reported to the caller rather than silently degraded.
+		msg, ok := perch.BuildWebMessage(obj, "")
+		if !ok {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadRequest, "request", "request"
+			res.body = []byte(`{"ok":false,"error":"the request has no user message; Perch's web lane needs one","errorCode":"request"}`)
+			res.contentType = "application/json"
+			return res
+		}
+		msg = msg.WithModelOption(perch.WebOptionID(rec.Model))
+		// The web lane has no tool channel: a declaration is dropped rather
+		// than sent to a field the endpoint ignores, and the caller's request
+		// is answered as a plain turn.
+		var err error
+		if payload, err = json.Marshal(msg); err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
+			res.body = []byte("cannot build the Perch request")
+			return res
+		}
+	} else {
+		opt := s.perchRequestOpts(cfg, acct)
+		opt.Model = rec.Model
+		// The CLI names a thread on its own envelope, and the pool fills the
+		// caller's conversation when it has one, else the CLI's cwd thread.
+		opt.ThreadID = s.perchThreadID(cfg, "")
+		opt.ChatMode = cfg.Perch.Lane
+		var err error
+		if payload, err = json.Marshal(perch.BuildEnvelope(obj, opt)); err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
+			res.body = []byte("cannot build the Perch request")
+			return res
+		}
 	}
 
+	// What this turn is, for the cli-turn record: the reporter reads it after
+	// the attempt settles (prompt and answer are added there, then redacted).
+	res.turn = perchTurn{
+		Thread: s.perchThreadID(cfg, ""),
+		Mode:   cfg.Perch.Lane,
+		RunID:  perch.NewRunID(),
+		Prompt: perch.PromptOf(obj),
+	}
 	// An account whose refresh token was refused last time has no usable
 	// credential: serving it would spend a request to learn the same thing.
 	// It comes back into service when an operator pastes a fresh session or a
@@ -120,7 +155,7 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 	// here is the account's problem and is recorded as such.
 	rr := s.perch.keeper.Refresh(ctx, acct.ID, false)
 	if rr.NeedLogin {
-		s.markPerchNeedLogin(acct.ID, rr.Err)
+		s.onPerchRefresh(acct.ID, rr)
 		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusUnauthorized, "upstream_http", "upstream"
 		res.body = []byte(`{"ok":false,"error":"this account's Perch session has expired and needs signing in again","errorCode":"perch_session_invalid"}`)
 		res.contentType = "application/json"
@@ -128,6 +163,7 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		return res
 	}
 	tok, ok := s.perch.keeper.Get(acct.ID)
+	res.turnToken, res.turnAccount = tok.AccessToken, acct
 	if !ok || tok.AccessToken == "" {
 		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusUnauthorized, "upstream_http", "upstream"
 		res.body = []byte("this account has no Perch session")
@@ -141,14 +177,32 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 	}
 	stream := rec.Stream
 	var firstEvent atomic.Bool
+	var terminalBanned bool
 	onEvent := func(ev perch.Event) error {
+		if ev.Type == "done" && ev.OK != nil && !*ev.OK && strings.EqualFold(ev.ErrorCode, "banned") {
+			terminalBanned = true
+		}
 		if timedOut.Load() {
 			return errors.New("the request timed out")
 		}
 		return nil
 	}
 
-	call := perch.ModelCall{Base: base, Token: tok.AccessToken, Body: payload, ProxyURL: acct.ProxyURL}
+	webBase := cfg.Upstream.PerchWebBase
+	if webBase == "" {
+		webBase = perch.ChatURL
+	}
+	ua, locale := s.perchCallIdentity(cfg)
+	call := perch.ModelCall{Base: base, WebBase: webBase, Token: tok.AccessToken, Body: payload,
+		Surface: surface, ProxyURL: acct.ProxyURL, UserAgent: ua, Locale: locale}
+	diagnosticTarget := base
+	if perch.SurfaceFor(surface) == perch.SurfaceWeb {
+		diagnosticTarget = webBase
+	}
+	diagnosticProxy := "unconfigured_unknown"
+	if acct.ProxyURL != "" {
+		diagnosticProxy = "account_proxy"
+	}
 	var timeout time.Duration
 	if stream {
 		timeout = time.Duration(cfg.Routing.RequestSec) * time.Second
@@ -156,13 +210,19 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		timeout = time.Duration(cfg.Routing.RequestSec) * time.Second
 	}
 
+	res.turnStarted = true
 	if !stream {
 		// A non-streaming request is assembled from the same events.
-		result, err := s.perchClient().CallModel(ctx, call, timeout, func(perch.Event) error {
+		started := time.Now()
+		result, err := s.perchClient().CallModel(ctx, call, timeout, func(ev perch.Event) error {
 			firstEvent.Store(true)
-			return onEvent(perch.Event{})
+			return onEvent(ev)
 		})
+		s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err)
 		if err != nil {
+			if terminalBanned {
+				err = &perch.ModelError{Status: http.StatusForbidden, Code: "banned", Err: err.Error()}
+			}
 			return s.perchFailure(res, acct, err, rec)
 		}
 		lease.MarkSent()
@@ -185,14 +245,27 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
 		res.kind, res.status, res.result, res.terminal, res.category = outDelivered, http.StatusOK, "success", "success", ""
+		res.turn.Answer = result.Text
 		res.trackUsage(result.Usage)
 		return res
 	}
 
-	// Streaming: headers go out on the first frame so the client sees bytes as
-	// soon as Perch produces them.
+	// Streaming. Nothing is written downstream until either
+	//   - Perch has produced an event worth relaying (a non-empty answer or
+	//     reasoning delta), so an upstream 401/429/5xx before that point can
+	//     still be answered with its real HTTP status and switched to another
+	//     account by the surrounding retry loop; or
+	//   - the call finished, in which case the whole answer is written at once.
+	// The role frame is held back with it: writing it eagerly used to commit a
+	// 200 for a turn that had not received a single usable frame.
 	var wrote atomic.Bool
 	writeChunk := func(v any) {
+		// A streamFrame may carry the empty assistant frame plus the first real
+		// frame; unwrap it here so it is never marshalled as a bare object.
+		role, isRole := v.(streamFrame)
+		if isRole {
+			v = role.payload
+		}
 		if !wrote.Swap(true) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
@@ -201,15 +274,9 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 			w.WriteHeader(http.StatusOK)
 			lease.MarkSent()
 		}
-		raw, err := json.Marshal(v)
-		if err != nil {
-			return
-		}
-		_, _ = w.Write([]byte("data: "))
-		_, _ = w.Write(raw)
-		_, _ = w.Write([]byte("\n\n"))
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+		writeFrame(w, v)
+		if isRole && role.open && role.next != nil {
+			writeFrame(w, role.next)
 		}
 		firstEvent.Store(true)
 	}
@@ -224,22 +291,35 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 	}
 
 	var textLen atomic.Int64
-	writeChunk(chunk(map[string]any{"role": "assistant", "content": ""}, nil))
+	var answer strings.Builder
 
 	var lastCalls []perch.RawToolCall
 	onStreamEvent := func(ev perch.Event) error {
+		if err := onEvent(ev); err != nil {
+			return err
+		}
+		if res.ttft == nil && ((ev.Type == "answer_delta" || ev.Type == "reasoning_delta") && ev.Text != "" ||
+			(ev.Type == "tool_call_delta" || ev.Type == "tool_use_end") && len(ev.ToolCalls) > 0) {
+			ttft := time.Since(rec.TS).Milliseconds()
+			res.ttft = &ttft
+		}
 		switch ev.Type {
 		case "answer_delta":
 			if ev.Text == "" {
 				return nil
 			}
 			textLen.Add(int64(len(ev.Text)))
-			writeChunk(chunk(map[string]any{"content": ev.Text}, nil))
+			if answer.Len() < turnAnswerCap {
+				answer.WriteString(ev.Text)
+			}
+			writeChunk(streamFrame{open: true, payload: chunk(map[string]any{"role": "assistant", "content": ""}, nil),
+				next: chunk(map[string]any{"content": ev.Text}, nil)})
 		case "reasoning_delta":
 			if ev.Text == "" || !cfg.Perch.ExposeReasoning {
 				return nil
 			}
-			writeChunk(chunk(map[string]any{"reasoning_content": ev.Text}, nil))
+			writeChunk(streamFrame{open: true, payload: chunk(map[string]any{"role": "assistant", "content": ""}, nil),
+				next: chunk(map[string]any{"reasoning_content": ev.Text}, nil)})
 		case "tool_call_delta", "tool_use_end":
 			if len(ev.ToolCalls) > 0 {
 				lastCalls = ev.ToolCalls
@@ -248,22 +328,35 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 			// the upstream failed over mid-turn: everything sent so far is
 			// void, so the accumulation restarts (no fake deltas go out)
 			textLen.Store(0)
+			answer.Reset()
 			lastCalls = nil
 		}
 		return nil
 	}
 
+	started := time.Now()
 	result, err := s.perchClient().CallModel(ctx, call, timeout, onStreamEvent)
+	s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err)
 	if err != nil {
+		if terminalBanned {
+			err = &perch.ModelError{Status: http.StatusForbidden, Code: "banned", Err: err.Error()}
+		}
 		if wrote.Load() {
-			// bytes already went downstream: report the failure in-band and end
-			writeChunk(map[string]any{"error": map[string]any{
+			// A real frame already went downstream: the status line is spent,
+			// so the failure has to be reported in-band and the stream closed.
+			failure := s.perchFailure(&attemptResult{}, acct, err, rec)
+			if failure.terminal == "upstream_http" || failure.terminal == "upstream_envelope" {
+				s.evaluate(cfg, acct, rec.Model, failure, rec.RequestID, len(rec.Attempts), rec.ClientKeyID, rec.ClientKeyName)
+				res.evaluated = true
+			}
+			writeFrame(w, map[string]any{"error": map[string]any{
 				"type": "api_error", "message": err.Error(), "code": perch.CodeOf(err),
 			}})
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			res.kind, res.status, res.result, res.terminal, res.category = outDelivered, http.StatusOK, "failed", "upstream", "upstream"
 			return res
 		}
+		// Nothing went downstream: a real HTTP status still applies.
 		return s.perchFailure(res, acct, err, rec)
 	}
 
@@ -272,8 +365,12 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 	} else {
 		lastCalls = calls
 	}
+	role := streamFrame{open: true, payload: chunk(map[string]any{"role": "assistant", "content": ""}, nil)}
 	if oc := perch.OpenAIToolCalls(lastCalls); len(oc) > 0 {
-		writeChunk(chunk(map[string]any{"tool_calls": oc}, nil))
+		role.next = chunk(map[string]any{"tool_calls": oc}, nil)
+		writeChunk(role)
+	} else {
+		writeChunk(role)
 	}
 	writeChunk(chunk(map[string]any{}, perch.FinishReason(result.Done.FinishReason, len(lastCalls) > 0)))
 	if u := perch.OpenAIUsage(result.Usage); u != nil {
@@ -287,9 +384,37 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		f.Flush()
 	}
 	res.kind, res.status, res.result, res.terminal, res.category = outDelivered, http.StatusOK, "success", "success", ""
+	res.turn.Answer = answer.String()
 	res.trackUsage(result.Usage)
 	return res
 }
+
+// streamFrame carries the empty assistant frame that opens an OpenAI stream
+// together with the first real frame, so the two are written as one commit.
+type streamFrame struct {
+	open    bool
+	payload map[string]any
+	next    map[string]any
+}
+
+// writeFrame writes one `data:` SSE frame and flushes it.
+func writeFrame(w http.ResponseWriter, v any) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write([]byte("data: "))
+	_, _ = w.Write(raw)
+	_, _ = w.Write([]byte("\n\n"))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// turnAnswerCap bounds how much of a streamed answer the cli-turn record keeps.
+// The record carries a digest and a length, never the text, so this only needs
+// to be long enough for the digest to describe the same answer twice.
+const turnAnswerCap = 64 << 10
 
 // perchMessage builds the non-streaming assistant message.
 func perchMessage(r perch.CallResult) map[string]any {
@@ -313,8 +438,18 @@ func (r *attemptResult) trackUsage(u *perch.Usage) {
 	if u == nil {
 		return
 	}
-	in, out := u.InputTokens, u.OutputTokens
-	r.usage.in, r.usage.out = &in, &out
+	if !u.DecodedFromJSON || u.InputTokensPresent {
+		in := u.InputTokens
+		r.usage.in = &in
+	}
+	if !u.DecodedFromJSON || u.OutputTokensPresent {
+		out := u.OutputTokens
+		r.usage.out = &out
+	}
+	if u.CacheReadInputTokensPresent || u.CacheReadInputTokens != 0 {
+		cached := u.CacheReadInputTokens
+		r.usage.cached = &cached
+	}
 }
 
 // perchFailure classifies a Perch error for the pool: an expired session is an
@@ -324,11 +459,11 @@ func (r *attemptResult) trackUsage(u *perch.Usage) {
 func (s *Server) perchFailure(res *attemptResult, acct config.Account, err error, rec *requestLog) *attemptResult {
 	var me *perch.ModelError
 	if errors.As(err, &me) {
-		if me.Auth {
+		if me.Auth && !strings.EqualFold(me.Code, "banned") {
 			// the access token was refused: renew once and let the retry loop
 			// try again — a rotated refresh token is the only lasting failure
 			if rr := s.perch.keeper.Refresh(context.Background(), acct.ID, true); rr.NeedLogin {
-				s.markPerchNeedLogin(acct.ID, rr.Err)
+				s.onPerchRefresh(acct.ID, rr)
 			}
 			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusUnauthorized, "upstream_http", "upstream"
 			res.body = []byte(me.Error())

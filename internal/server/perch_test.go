@@ -19,6 +19,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/perch"
+	"account-pool-balancer/internal/perchstore"
 )
 
 // perchFake is a Perch identity + usage server: GoTrue's refresh and user
@@ -37,6 +38,28 @@ type perchFake struct {
 	refuse atomic.Bool
 	// usageCalls counts meter reads.
 	usageCalls atomic.Int64
+	// models is the body /api/perchai/models answers with, and modelCalls
+	// records the query each read used (to prove the tier is passed).
+	models     string
+	modelCalls atomic.Int64
+	modelQuery string
+	// account is the body /api/perchai/account answers with ("" = the
+	// un-selected-plan default), and starterUSD the free-tier figure
+	// /api/perch-terminal/starter-limits reports.
+	account      string
+	accountCalls atomic.Int64
+	starterUSD   float64
+	starterCalls atomic.Int64
+}
+
+// modelsHits describes the catalogue reads made so far.
+func (f *perchFake) modelsHits() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.modelQuery == "" {
+		return ""
+	}
+	return f.modelQuery
 }
 
 func newPerchFake(t *testing.T) *perchFake {
@@ -90,6 +113,51 @@ func (f *perchFake) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"msg":"invalid JWT"}`))
 	case r.URL.Path == "/auth/v1/token":
 		f.handleRefresh(w, r)
+	case r.URL.Path == "/api/perchai/models":
+		// Perch's hosted-model catalogue (the web app's picker source).
+		f.modelCalls.Add(1)
+		f.mu.Lock()
+		f.modelQuery = r.URL.RawQuery
+		body := f.models
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if body == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"tiers":[],"models":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	case r.URL.Path == "/models":
+		// the app host has no OpenAI listing: remember the relay asked
+		f.mu.Lock()
+		f.modelQuery = "host-models"
+		f.mu.Unlock()
+		w.WriteHeader(307)
+	case r.URL.Path == "/api/perchai/account":
+		// The plan/entitlements/usage route. A fake account starts out as an
+		// un-selected plan (what a fresh signup looks like), which is what
+		// makes the console say "awaiting plan selection".
+		f.accountCalls.Add(1)
+		f.mu.Lock()
+		body := f.account
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if body == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"session":{"planCode":null,"planName":null,` +
+				`"membershipRole":null,"tierSelectionRequired":true,"entitlements":[]},` +
+				`"usageMeter":null,"creditBalancePt":0}`))
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	case r.URL.Path == "/api/perch-terminal/starter-limits":
+		f.starterCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		f.mu.Lock()
+		usd := f.starterUSD
+		f.mu.Unlock()
+		if usd == 0 {
+			usd = 20
+		}
+		_, _ = fmt.Fprintf(w, `{"ok":true,"view":"public","config":{"monthlyUsd":%g}}`, usd)
 	default:
 		http.NotFound(w, r)
 	}
@@ -242,6 +310,20 @@ func (e *perchEnv) importFiles(files map[string][]byte) map[string]any {
 	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	return out
+}
+
+// ownAccountID is the id of the only account the env imported.
+func (e *perchEnv) ownAccountID() string {
+	e.t.Helper()
+	_, rows := e.accounts("")
+	if len(rows) != 1 {
+		e.t.Fatalf("accounts = %d, want 1", len(rows))
+	}
+	id, _ := rows[0]["id"].(string)
+	if id == "" {
+		e.t.Fatal("account has no id")
+	}
+	return id
 }
 
 func (e *perchEnv) previewFiles(files map[string][]byte) map[string]any {
@@ -554,6 +636,30 @@ func TestPerchNeedLoginDetected(t *testing.T) {
 	}
 }
 
+func TestPerchStaleRefreshResultDoesNotQuarantineNewSession(t *testing.T) {
+	e := newPerchEnv(t)
+	e.fake.seed("u-stale")
+	e.importFiles(map[string][]byte{"a.json": []byte(exportDoc("u-stale", e.fake, time.Now().Add(-time.Minute).Unix(), 0))})
+	_, rows := e.accounts("")
+	id := rows[0]["id"].(string)
+	e.fake.refuse.Store(true)
+	res := e.srv.perch.keeper.Refresh(context.Background(), id, true)
+	if !res.NeedLogin || res.Revision == 0 {
+		t.Fatalf("expected current refusal, got %+v", res)
+	}
+	fresh := res.Secrets
+	fresh.AccessToken = "new-access"
+	fresh.RefreshToken = "new-refresh"
+	if _, err := e.srv.perch.keeper.Put(fresh, perchstore.PutOptions{BindAs: id, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.onPerchRefresh(id, res)
+	a, _ := e.srv.cfg.Get().Account(id)
+	if a.PerchRefreshFailed {
+		t.Fatal("stale refusal marked the newer session invalid")
+	}
+}
+
 // 11. The usage meter is shown, and a cap is never invented.
 func TestPerchUsageMeter(t *testing.T) {
 	e := newPerchEnv(t)
@@ -793,7 +899,9 @@ func TestPerchAPIsNeverLeakTokens(t *testing.T) {
 // Perch's envelope and back) and nothing else: embeddings, completions and the
 // Anthropic Messages shape have no Perch counterpart and are refused locally.
 func TestPerchPoolProxiesChatAndResponsesOnly(t *testing.T) {
-	for _, p := range []string{"/v1/chat/completions", "/v1/responses"} {
+	// /v1/models too: Perch has no OpenAI listing, but this service answers
+	// that path from the catalogue it synced, so it must not be refused here
+	for _, p := range []string{"/v1/chat/completions", "/v1/responses", "/v1/models"} {
 		if !poolPathOK(config.ProviderPerch, p) {
 			t.Fatalf("the perch relay must serve %s", p)
 		}
@@ -1005,3 +1113,231 @@ func (z *testZip) close(t *testing.T) {
 
 // perchClientFor wraps a test HTTP client in perch's client.
 func perchClientFor(hc *http.Client) *perch.Client { return &perch.Client{HTTP: hc} }
+
+// The console used to hide the key pages behind the proxy pools' tab, so a
+// Perch-only setup had no way to mint the sk-odb- the downstream needs, or the
+// sk-odbimp- the signup bot authenticates /open/v1/perch/import with. Both are
+// ordinary keys of the `perch` group: create them from the Perch pool and they
+// must come back listed under provider=perch, and nowhere else.
+func TestPerchPoolOwnsItsKeys(t *testing.T) {
+	e := newPerchEnv(t)
+
+	newKey := func(path string) string {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"name": "from-perch", "group": "perch", "provider": "perch"})
+		rec := httptest.NewRecorder()
+		if path == "/api/client-keys" {
+			e.srv.apiCreateClientKey(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw)))
+		} else {
+			e.srv.apiCreateImportKey(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw)))
+		}
+		if rec.Code != 200 {
+			t.Fatalf("create %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var out struct{ Key string }
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		if out.Key == "" {
+			t.Fatalf("%s: no key returned", path)
+		}
+		return out.Key
+	}
+	newKey("/api/client-keys")
+	newKey("/api/import-keys")
+
+	// the keys carry the pool, not just the group: config settles it on save
+	cfg := e.srv.cfg.Get()
+	if len(cfg.ClientKeys) != 1 || cfg.ClientKeys[0].Provider != config.ProviderPerch {
+		t.Fatalf("client keys = %+v", cfg.ClientKeys)
+	}
+	if len(cfg.ImportKeys) != 1 || cfg.ImportKeys[0].Provider != config.ProviderPerch {
+		t.Fatalf("import keys = %+v", cfg.ImportKeys)
+	}
+
+	list := func(path string) []any {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, path+"?provider=perch", nil)
+		rec := httptest.NewRecorder()
+		if path == "/api/client-keys" {
+			e.srv.apiClientKeys(rec, r)
+		} else {
+			e.srv.apiImportKeys(rec, r)
+		}
+		var out struct{ Keys []any }
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out.Keys
+	}
+	if n := len(list("/api/client-keys")); n != 1 {
+		t.Fatalf("provider=perch listed %d client keys, want 1", n)
+	}
+	if n := len(list("/api/import-keys")); n != 1 {
+		t.Fatalf("provider=perch listed %d import keys, want 1", n)
+	}
+	// and they stay out of the proxy pools' lists
+	for _, p := range []string{"opendesign", "river", "ollama", "modal"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/client-keys?provider="+p, nil)
+		rec := httptest.NewRecorder()
+		e.srv.apiClientKeys(rec, r)
+		var out struct{ Keys []any }
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		if len(out.Keys) != 0 {
+			t.Fatalf("a perch key showed up in the %s pool", p)
+		}
+	}
+}
+
+// GET /v1/models on the Perch pool used to answer 502: the relay had no
+// /v1/models path (so a local 404) and fetchModels asked the Perch app host
+// for /models, which is a 307 to the web app. Perch's catalogue lives at
+// /api/perchai/models, read by the quota poller; the endpoint must publish
+// that instead of reading the host.
+func TestPerchModelsPathServesSyncedCatalog(t *testing.T) {
+	e := newPerchEnv(t)
+	const uid = "u-model"
+	e.fake.seed(uid)
+	// the catalogue the fake Perch answers for /api/perchai/models
+	e.fake.models = `{"ok":true,"tiers":[{"id":"standard","locked":false}],
+		"models":[{"id":"minimax-m3","label":"MiniMax M3","contextTokens":262000,"locked":true,"requires":"pro"},
+		          {"id":"kimi-3","label":"Kimi K3","contextTokens":1000000,"locked":true,"requires":"pro"}]}`
+
+	e.importFiles(map[string][]byte{"a.json": []byte(exportDoc(uid, e.fake, time.Now().Add(time.Hour).Unix(), 0))})
+	_, rows := e.accounts("")
+	if len(rows) != 1 {
+		t.Fatalf("accounts = %v", rows)
+	}
+	id := rows[0]["id"].(string)
+	a, _ := e.srv.cfg.Get().Account(id)
+
+	// a poll fills the account's catalogue from /api/perchai/models
+	if err := e.srv.quota.RefreshNow(context.Background(), a); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if got := e.srv.quota.View(id).PublicModels(time.Now()); len(got) != 2 {
+		t.Fatalf("synced catalogue = %v, want 2 models", got)
+	}
+	if !strings.Contains(e.fake.modelsHits(), "tier=") {
+		t.Fatalf("tier was not passed to /api/perchai/models: %q", e.fake.modelsHits())
+	}
+
+	// and GET /v1/models publishes it rather than failing
+	body := e.srv.fetchModels(context.Background(), e.srv.cfg.Get(), "perch")
+	if body == nil {
+		t.Fatal("the perch pool published no catalogue (the 502 this guards against)")
+	}
+	var doc struct {
+		Object string `json:"object"`
+		Data   []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("catalogue is not JSON: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range doc.Data {
+		got[m.ID] = true
+	}
+	for _, want := range []string{"minimax-m3", "kimi-3"} {
+		if !got[want] {
+			t.Fatalf("catalogue %v is missing %s", got, want)
+		}
+	}
+	// the app host's /models must never be asked
+	if strings.Contains(e.fake.modelsHits(), "host-models") {
+		t.Fatal("the relay asked the Perch app host for /models")
+	}
+}
+
+// A freshly signed-up account has picked no plan: Perch states no plan code
+// and NO entitlements, so there is nothing to measure. The console must say so
+// in every place a cap or a plan name would otherwise appear — "未知" there
+// reads like a failed read, when the account simply has not been taken into
+// use yet. This is the state every batch-registered account starts in.
+func TestPerchTierPendingIsNamedNotUnknown(t *testing.T) {
+	e := newPerchEnv(t)
+	e.fake.seed("u-tier")
+	e.importFiles(map[string][]byte{"a.json": []byte(exportDoc("u-tier", e.fake, time.Now().Add(time.Hour).Unix(), 0))})
+	id := e.ownAccountID()
+
+	a, _ := e.srv.cfg.Get().Account(id)
+	if err := e.srv.quota.RefreshNow(context.Background(), a); err != nil {
+		t.Fatalf("meter poll: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/perch/accounts/"+id, nil)
+	r.SetPathValue("id", id)
+	e.srv.apiPerchAccount(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("account view: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Account map[string]any `json:"account"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	acc := out.Account
+	if acc["tierSelectionRequired"] != true {
+		t.Fatalf("tierSelectionRequired = %v, want true for an un-selected plan", acc["tierSelectionRequired"])
+	}
+	if acc["status"] != "tier-pending" {
+		t.Fatalf("status = %v, want tier-pending", acc["status"])
+	}
+	// no cap is invented: Perch stated none, so the view must not carry one
+	if v, _ := acc["remainingKnown"].(bool); v {
+		t.Fatal("an un-selected plan must not report a known remaining allowance")
+	}
+	if acc["allowanceSource"] != string(perch.AllowanceNone) && acc["allowanceSource"] != "" {
+		t.Fatalf("allowanceSource = %v, want none", acc["allowanceSource"])
+	}
+	// Perch's own free-tier figure was read (so the console can label an
+	// estimate for accounts that DID pick Starter) — but it is not applied as
+	// this account's cap
+	if e.fake.starterCalls.Load() == 0 {
+		t.Fatal("starter-limits was never read")
+	}
+	if acc["plan"] != nil && acc["plan"] != "" {
+		t.Fatalf("plan = %v, want empty for an un-selected plan", acc["plan"])
+	}
+}
+
+// Once the owner picks Starter, the same route reports the stated cap and the
+// flag clears.
+func TestPerchTierSelectedReportsCap(t *testing.T) {
+	e := newPerchEnv(t)
+	e.fake.seed("u-picked")
+	e.fake.account = `{"ok":true,"session":{"planCode":"pilot","planName":"Pilot",` +
+		`"membershipRole":"member","tierSelectionRequired":false,` +
+		`"entitlements":[{"key":"usage.monthly_pt","value_json":{"limit":20000}}]},` +
+		`"usageMeter":{"monthlyUsd":3,"dailyUsd":1,"monthlyCalls":7},"creditBalancePt":0}`
+	e.importFiles(map[string][]byte{"a.json": []byte(exportDoc("u-picked", e.fake, time.Now().Add(time.Hour).Unix(), 0))})
+	id := e.ownAccountID()
+
+	a, _ := e.srv.cfg.Get().Account(id)
+	if err := e.srv.quota.RefreshNow(context.Background(), a); err != nil {
+		t.Fatalf("meter poll: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/perch/accounts/"+id, nil)
+	r.SetPathValue("id", id)
+	e.srv.apiPerchAccount(rec, r)
+	var out struct {
+		Account map[string]any `json:"account"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	acc := out.Account
+	if acc["tierSelectionRequired"] == true {
+		t.Fatal("a selected plan must not stay flagged as pending")
+	}
+	if acc["status"] == "tier-pending" {
+		t.Fatal("status stayed tier-pending after the plan was chosen")
+	}
+	if !acc["remainingKnown"].(bool) {
+		t.Fatal("a stated cap must produce a known remaining allowance")
+	}
+	if acc["allowanceSource"] != string(perch.AllowanceEntitlement) {
+		t.Fatalf("allowanceSource = %v, want entitlement", acc["allowanceSource"])
+	}
+}

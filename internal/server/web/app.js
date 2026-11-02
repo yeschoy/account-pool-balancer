@@ -183,16 +183,18 @@ function showApp() {
 }
 
 // ---- navigation ----
-// The Perch pool has no downstream keys, routing rules or proxied requests:
-// it is a session pool, so its pages are its own (perch.js) and the others
-// stay open to the four proxy pools.
+// The Perch pool runs on sessions, not API keys, and has no routing rules of
+// its own; its pages live in perch.js. It still needs both console keys —
+// a downstream key for new-api and an import key for the signup bot — so
+// `pkeys` is Perch's own page for them rather than the proxy pools' `keys`.
 const PROXY_PAGES = ['overview', 'accounts', 'keys', 'routing', 'requests', 'errors', 'details'];
-const PERCH_PAGES = ['perch', 'paccounts', 'psettings'];
+const PERCH_PAGES = ['perch', 'paccounts', 'prequests', 'pregister', 'pautosignup', 'pkeys', 'psettings'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
-  perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), psettings: () => loadPerchSettings() };
+  perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings() };
 function go(page) {
   if (!pages[page]) page = 'overview';
+  if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));

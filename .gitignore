@@ -4,7 +4,10 @@
 /bin/
 *.tmp
 # 账号审计工具与账号数据（50MB，含明文账号/邮箱），不进仓库
-/tools/
+/tools/*
+!/tools/perch-register/
+/tools/perch-register/__pycache__/
+/tools/perch-register/.venv/
 # 临时产物记录
 /_tmp_artifacts.md
 # node / pnpm
@@ -16,3 +19,13 @@ pnpm-lock.yaml
 
 # 压测产物
 /artifacts/
+
+# Go 构建缓存（在仓库内构建时使用）
+/.gocache/
+/.gotmp/
+
+# 分析产物（gocache、反编译/逆向中间产物）
+/.analysis/
+# 临时素材图（飞行海报）
+/*.png
+/*.svg

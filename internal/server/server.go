@@ -62,7 +62,9 @@ type Server struct {
 	imports *importLog
 	// perch is the Perch pool's session keeper and scheduler (nil until
 	// initPerch ran).
-	perch *perchRuntime
+	perch              *perchRuntime
+	perchRegistrations registrationManager
+	perchAuto          *perchAutoManager
 	// The surface-gate preamble is derived once and cached: it comes from a
 	// Perch client installed on this machine, or from settings.
 	perchPrefixMu     sync.Mutex
@@ -72,9 +74,10 @@ type Server struct {
 	// metaDirty: quota, config or the routing secret changed (saved on the next
 	// tick). statsDirty: only the rolling counters changed (saved every
 	// sampleSaveEvery at most).
+	metaMu      sync.Mutex
 	metaDirty   atomic.Bool
 	statsDirty  atomic.Bool
-	metaSavedAt time.Time // Run's goroutine only
+	metaSavedAt time.Time // protected by metaMu
 	started     time.Time
 }
 
@@ -174,6 +177,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if err := s.initPerch(); err != nil {
 		return nil, fmt.Errorf("perch: %w", err)
 	}
+	if err := s.initPerchAuto(); err != nil {
+		return nil, fmt.Errorf("perch autosignup: %w", err)
+	}
 	return s, s.saveMetadata(true)
 }
 
@@ -213,6 +219,8 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 // counters every request touches (stats, health samples) wait for
 // sampleSaveEvery, so steady traffic doesn't rewrite the file on every tick.
 func (s *Server) saveMetadata(force bool) error {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
 	states, samples := s.pool.Dirty()
 	samples = samples || s.statsDirty.Load()
 	if !force && !states && !s.metaDirty.Load() && !(samples && time.Since(s.metaSavedAt) >= sampleSaveEvery) {
@@ -222,8 +230,12 @@ func (s *Server) saveMetadata(force bool) error {
 	s.statsDirty.Store(false)
 	exp, _ := s.pool.ExportState()
 	md := metadata{Version: 1, RoutingSecret: hex.EncodeToString(s.secret), Pool: exp, Quota: s.quota.All(), Stats: s.stats.Export()}
+	if err := fsutil.WriteJSONCompactAtomic(filepath.Join(s.dataDir, "metadata.json"), md); err != nil {
+		s.metaDirty.Store(true)
+		return err
+	}
 	s.metaSavedAt = time.Now()
-	return fsutil.WriteJSONCompactAtomic(filepath.Join(s.dataDir, "metadata.json"), md)
+	return nil
 }
 
 func (s *Server) saveCounters(force bool) error {
@@ -238,6 +250,8 @@ func (s *Server) saveCounters(force bool) error {
 func (s *Server) Run(ctx context.Context) {
 	go s.quota.Run(ctx)
 	s.RunPerch(ctx)
+	autoDone := make(chan struct{})
+	go func() { defer close(autoDone); s.runPerchAuto(ctx) }()
 	counters := time.NewTicker(countersSaveEvery)
 	meta := time.NewTicker(metaCheckEvery)
 	defer counters.Stop()
@@ -245,6 +259,7 @@ func (s *Server) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			<-autoDone
 			if err := s.saveCounters(true); err != nil {
 				log.Printf("save counters: %v", err)
 			}

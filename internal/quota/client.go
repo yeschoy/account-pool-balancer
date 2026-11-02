@@ -417,6 +417,32 @@ func (c *Client) Balance(ctx context.Context, apiRoot, key string) (OllamaBalanc
 // key's plan is absent or `enabled: false`), which is what the official
 // client gates its model picker on. It costs nothing.
 func FetchCatalog(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey string) (map[string]bool, error) {
+	c, err := FetchCatalogFull(ctx, hc, runtimeBase, runtimeKey)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(c.Models))
+	for id, m := range c.Models {
+		out[id] = m.Enabled
+	}
+	return out, nil
+}
+
+// CatalogModel is one entry of a /v1/models listing.
+type CatalogModel struct {
+	Enabled bool
+	// Base is the real model this id stands for when the id is an alias of
+	// it, empty when the id is the model itself. Modal's Shared Endpoints
+	// are hostnames, each carrying the base model it serves.
+	Base string
+	// Name is the display name the upstream gave it, empty when unset.
+	Name string
+}
+
+// FetchCatalogFull is FetchCatalog with the alias information kept: ids
+// that are aliases of another model and the display names, which is what a
+// pool publishing one name for several accounts' endpoints needs.
+func FetchCatalogFull(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey string) (*Catalog, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, runtimeBase+"/models", nil)
 	if err != nil {
 		return nil, err
@@ -433,21 +459,37 @@ func FetchCatalog(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey 
 	}
 	var body struct {
 		Data []struct {
-			ID      string `json:"id"`
-			Enabled *bool  `json:"enabled"`
+			ID           string `json:"id"`
+			Enabled      *bool  `json:"enabled"`
+			BaseModelID  string `json:"base_model_id"`
+			Name         string `json:"name"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&body); err != nil {
 		return nil, fmt.Errorf("invalid models JSON")
 	}
-	out := make(map[string]bool, len(body.Data))
+	out := &Catalog{Models: make(map[string]CatalogModel, len(body.Data))}
 	for _, m := range body.Data {
-		if m.ID != "" {
-			out[m.ID] = m.Enabled == nil || *m.Enabled
+		if m.ID == "" {
+			continue
+		}
+		base := strings.TrimSpace(m.BaseModelID)
+		if base == m.ID {
+			base = "" // the id is the model, not an alias of it
+		}
+		out.Models[m.ID] = CatalogModel{
+			Enabled: m.Enabled == nil || *m.Enabled,
+			Base:    base,
+			Name:    strings.TrimSpace(m.Name),
 		}
 	}
-	if len(out) == 0 {
+	if len(out.Models) == 0 {
 		return nil, fmt.Errorf("empty model catalogue")
 	}
 	return out, nil
+}
+
+// Catalog is one account's /v1/models listing.
+type Catalog struct {
+	Models map[string]CatalogModel
 }

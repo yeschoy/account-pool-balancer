@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,21 +26,51 @@ import (
 type perchModelFake struct {
 	srv          *httptest.Server
 	calls        atomic.Int32
+	threads      atomic.Int32
 	lastEnvelope atomic.Value
 	// script is the stream it answers with (default: a short answer).
 	script string
+	delay  time.Duration
 	status int
 	body   string
+	// lastHeaders are the headers of the last model-call request.
+	lastHeaders atomic.Value
+	// turns collects the cli-turn records the pool reported.
+	turnsMu sync.Mutex
+	turns   []map[string]any
+	// turnStatus answers cli-turn with this status when set.
+	turnStatus int
 }
 
 func newPerchModelFake(t *testing.T) *perchModelFake {
 	f := &perchModelFake{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.calls.Add(1)
-		if r.URL.Path != perch.ModelCallPath {
+		if r.URL.Path == perch.WebThreadsPath {
+			// the web surface opens a thread before it posts a message
+			f.threads.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"thread":{"id":"thread-1","title":"New chat"}}`)
+			return
+		}
+		if r.URL.Path == perch.CLITurnPath {
+			var turn map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&turn)
+			f.turnsMu.Lock()
+			f.turns = append(f.turns, turn)
+			f.turnsMu.Unlock()
+			if f.turnStatus >= 300 {
+				w.WriteHeader(f.turnStatus)
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true}`)
+			return
+		}
+		if r.URL.Path != perch.ModelCallPath && r.URL.Path != perch.WebChatPath {
 			http.NotFound(w, r)
 			return
 		}
+		f.lastHeaders.Store(r.Header.Clone())
 		var env map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&env)
 		f.lastEnvelope.Store(env)
@@ -47,6 +81,7 @@ func newPerchModelFake(t *testing.T) *perchModelFake {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		time.Sleep(f.delay)
 		script := f.script
 		if script == "" {
 			script = `data: {"type":"answer_delta","text":"hi from perch"}` + "\n\n" +
@@ -69,6 +104,9 @@ func withPerchPool(t *testing.T, fake *perchModelFake) *env {
 		RuntimeKey: config.PerchRuntimeKey("supa-p1"),
 	}}, func(c *config.Config) {
 		c.Upstream.PerchBase = fake.srv.URL
+		c.Upstream.PerchWebBase = fake.srv.URL
+		// the fake speaks the CLI envelope; the web surface has its own tests
+		c.Perch.Surface = "cli"
 		// a prefix short enough to keep the test body small but still valid
 		c.Perch.GatePrefix = perch.GatePrefixAnchor + " — " + strings.Repeat("gate ", 60)
 		c.Perch.GateNotice = "GATEWAY NOTICE: inert."
@@ -449,6 +487,169 @@ func TestPerchBannedQuarantines(t *testing.T) {
 	}
 }
 
+func TestPerchBannedPathsAndRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		body, script string
+		stream       bool
+		banned       bool
+	}{
+		{"401 banned", 401, `{"errorCode":"banned","error":"blocked"}`, "", false, true},
+		{"403 banned", 403, `{"errorCode":"banned","error":"blocked"}`, "", false, true},
+		{"stream banned", 0, "", "data: {\"type\":\"done\",\"ok\":false,\"errorCode\":\"banned\",\"error\":\"blocked\"}\n\n", true, true},
+		{"401 expired", 401, `{"error":"session expired"}`, "", false, false},
+		{"429", 429, `{"errorCode":"turn_rate_limited"}`, "", false, false},
+		{"503", 503, `{"errorCode":"banned"}`, "", false, false},
+		{"403 text", 403, `{"error":"not banned"}`, "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newPerchModelFake(t)
+			fake.status, fake.body, fake.script = tc.status, tc.body, tc.script
+			e := withPerchPool(t, fake)
+			hc := fake.srv.Client()
+			hc.Transport = &rewriteTransport{target: fake.srv.Listener.Addr().String()}
+			e.srv.perch.keeper.SetClient(perchClientFor(hc))
+			resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+				"model": "auto", "stream": tc.stream, "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+			})
+			_, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			v := e.srv.pool.Views(e.srv.cfg.Get())["p1"]
+			got := v.State != nil && v.State.HardQuarantined && v.State.RuleID == "perch-banned"
+			if got != tc.banned {
+				t.Fatalf("banned=%v, state=%+v", got, v.State)
+			}
+			if tc.banned {
+				e.srv.markPerchHealthy("p1")
+				v = e.srv.pool.Views(e.srv.cfg.Get())["p1"]
+				if v.State == nil || !v.State.HardQuarantined || v.State.RuleID != "perch-banned" {
+					t.Fatalf("refresh recovered banned account: %+v", v.State)
+				}
+			}
+		})
+	}
+}
+
+func TestPerchBannedPersistsSynchronouslyAndRetriesFailure(t *testing.T) {
+	for _, failWrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("write-fails-%v", failWrite), func(t *testing.T) {
+			fake := newPerchModelFake(t)
+			fake.status, fake.body = 403, `{"errorCode":"banned","error":"blocked"}`
+			e := withPerchPool(t, fake)
+			dir := e.srv.dataDir
+			if failWrite {
+				bad := filepath.Join(t.TempDir(), "not-a-directory")
+				if err := os.WriteFile(bad, []byte("x"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				e.srv.dataDir = bad
+			}
+			resp := postPerch(t, e, "/v1/chat/completions", map[string]any{"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+			_, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			v := e.srv.pool.Views(e.srv.cfg.Get())["p1"]
+			if v.State == nil || !v.State.HardQuarantined || v.State.RuleID != "perch-banned" {
+				t.Fatalf("quarantine lost: %+v", v.State)
+			}
+			if failWrite {
+				if !e.srv.metaDirty.Load() {
+					t.Fatal("failed write not marked for retry")
+				}
+				e.srv.dataDir = dir
+				if err := e.srv.saveMetadata(false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var md metadata
+			data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &md); err != nil {
+				t.Fatal(err)
+			}
+			if st := md.Pool.States["p1"]; st == nil || !st.HardQuarantined || st.RuleID != "perch-banned" {
+				t.Fatalf("not persisted: %+v", st)
+			}
+			var wg sync.WaitGroup
+			for i := 0; i < 10; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := e.srv.saveMetadata(true); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			wg.Wait()
+		})
+	}
+}
+
+func TestPerchBannedRefreshPersistenceAndManualRecovery(t *testing.T) {
+	fake := newPerchModelFake(t)
+	fake.status, fake.body = 403, `{"errorCode":"banned","error":"blocked"}`
+	e := withPerchPool(t, fake)
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	e.srv.onPerchRefresh("p1", perchstore.RefreshResult{NeedLogin: true})
+	check := func(s *Server) {
+		t.Helper()
+		v := s.pool.Views(s.cfg.Get())["p1"]
+		if v.State == nil || !v.State.HardQuarantined || v.State.RuleID != "perch-banned" {
+			t.Fatalf("banned quarantine lost: %+v", v.State)
+		}
+	}
+	check(e.srv)
+	e.srv.onPerchRefresh("p1", perchstore.RefreshResult{Renewed: true})
+	check(e.srv)
+	if err := e.srv.saveMetadata(true); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(e.srv.dataDir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(restarted)
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts/p1/recover", nil)
+	req.SetPathValue("id", "p1")
+	w := httptest.NewRecorder()
+	restarted.apiAccountAction(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("recover status %d", w.Code)
+	}
+	v := restarted.pool.Views(restarted.cfg.Get())["p1"]
+	if v.State != nil && v.State.HardQuarantined {
+		t.Fatalf("manual recovery failed: %+v", v.State)
+	}
+}
+
+func TestPerchLegacyBannedRulePath(t *testing.T) {
+	fake := newPerchModelFake(t)
+	fake.status, fake.body = 401, `{"errorCode":"banned","error":"blocked"}`
+	e := withPerchPool(t, fake)
+	_, err := e.srv.cfg.Update(-1, func(c *config.Config) error {
+		rs := c.PerchErrorRules
+		rs[0].When.BodyCodes = nil
+		rs[0].When.BodyContains = []string{"banned"}
+		rs[0], rs[1] = rs[1], rs[0]
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	v := e.srv.pool.Views(e.srv.cfg.Get())["p1"]
+	if v.State == nil || v.State.RuleID != "perch-banned" || !v.State.HardQuarantined {
+		t.Fatalf("state = %+v", v.State)
+	}
+}
+
 // Perch being full is not this account's fault: the account must not be
 // cooled, and the request stops rather than spending the pool's other
 // accounts on the same wall.
@@ -477,3 +678,488 @@ func TestPerchCapacityReachedDoesNotPunishAccount(t *testing.T) {
 
 // timeZero is a zero time for log queries.
 func timeZero() time.Time { return time.Time{} }
+
+// withPerchWebPool is withPerchPool for the web surface: the default. The fake
+// answers both the thread endpoint and the chat endpoint, so the pool must open
+// a thread and then post the message there.
+func withPerchWebPool(t *testing.T, fake *perchModelFake) *env {
+	t.Helper()
+	e := withPerchPool(t, fake)
+	_, err := e.srv.cfg.Update(-1, func(c *config.Config) error {
+		c.Perch.Surface = "web"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// The web surface is what the pool serves by default: no persona preamble goes
+// upstream, a thread is opened first, and the caller's system turn is folded
+// into the one message the lane accepts.
+func TestPerchProxyWebSurface(t *testing.T) {
+	fake := newPerchModelFake(t)
+	fake.script = `data: {"type":"answer_delta","text":"pong"}` + "\n\n" +
+		`data: {"type":"done","ok":true,"text":"pong","modelLabel":"MiniMax M3","tier":"standard","durationMs":900}` + "\n\n"
+	e := withPerchWebPool(t, fake)
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "gpt-6-sol",
+		"messages": []any{
+			map[string]any{"role": "system", "content": "answer in one word"},
+			map[string]any{"role": "user", "content": "ping"},
+		},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Choices) != 1 || out.Choices[0].Message.Content != "pong" {
+		t.Fatalf("choices = %+v", out.Choices)
+	}
+	if fake.threads.Load() != 1 {
+		t.Fatalf("threads opened = %d, want 1", fake.threads.Load())
+	}
+	sent, _ := fake.lastEnvelope.Load().(map[string]any)
+	msg, _ := sent["message"].(string)
+	if !strings.HasPrefix(msg, "answer in one word\n\n") || !strings.HasSuffix(msg, "ping") {
+		t.Fatalf("message = %q", msg)
+	}
+	if sent["threadId"] != "thread-1" {
+		t.Fatalf("threadId = %v", sent["threadId"])
+	}
+	if _, has := sent["prompt"]; has {
+		t.Fatal("the web lane takes `message`, not `prompt`")
+	}
+}
+
+// A request the web lane cannot express (no user turn) is refused locally with
+// a readable reason instead of being posted upstream to fail there.
+func TestPerchProxyWebSurfaceRefusesSystemOnly(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchWebPool(t, fake)
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model":    "gpt-6-sol",
+		"messages": []any{map[string]any{"role": "system", "content": "only a system turn"}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if fake.calls.Load() != 0 {
+		t.Fatalf("a request with no message must not reach Perch (%d calls)", fake.calls.Load())
+	}
+}
+
+// withPerchCLIPool serves the CLI surface: the caller's system prompt and its
+// tools go upstream in Perch's envelope, and nothing is folded or dropped.
+func withPerchCLIPool(t *testing.T, fake *perchModelFake) *env {
+	t.Helper()
+	e := withPerchPool(t, fake)
+	_, err := e.srv.cfg.Update(-1, func(c *config.Config) error {
+		c.Perch.Surface = "cli"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// The CLI surface is the one that carries tools: a request declaring one must
+// reach Perch with the tool definition and the caller's system turn intact.
+func TestPerchTrackUsagePresence(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw     string
+		input, output *int64
+	}{
+		{"missing", `{}`, nil, nil},
+		{"null", `{"inputTokens":null,"outputTokens":null}`, nil, nil},
+		{"zero", `{"inputTokens":0,"outputTokens":0}`, new(int64), new(int64)},
+		{"positive", `{"inputTokens":10,"outputTokens":2}`, int64Ptr(10), int64Ptr(2)},
+		{"partial", `{"outputTokens":2}`, nil, int64Ptr(2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var u perch.Usage
+			if err := json.Unmarshal([]byte(tc.raw), &u); err != nil {
+				t.Fatal(err)
+			}
+			var result attemptResult
+			result.trackUsage(&u)
+			for _, pair := range []struct{ got, want *int64 }{{result.usage.in, tc.input}, {result.usage.out, tc.output}} {
+				if (pair.got == nil) != (pair.want == nil) || pair.got != nil && *pair.got != *pair.want {
+					t.Fatalf("got %v, want %v", pair.got, pair.want)
+				}
+			}
+		})
+	}
+	var result attemptResult
+	result.trackUsage(&perch.Usage{})
+	if result.usage.in == nil || result.usage.out == nil || *result.usage.in != 0 || *result.usage.out != 0 {
+		t.Fatalf("constructed usage = %+v", result.usage)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
+func TestPerchStreamTTFT(t *testing.T) {
+	for _, tc := range []struct {
+		name, script string
+		wantTTFT     bool
+	}{
+		{"answer", `data: {"type":"answer_delta","text":"ok"}` + "\n\n", true},
+		{"reasoning", `data: {"type":"reasoning_delta","text":"think"}` + "\n\n", true},
+		{"tool", `data: {"type":"tool_call_delta","toolCalls":[{"id":"a","name":"run"}]}` + "\n\n", true},
+		{"empty", `data: {"type":"answer_delta","text":""}` + "\n\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newPerchModelFake(t)
+			fake.delay = 80 * time.Millisecond
+			fake.script = tc.script + `data: {"type":"done","ok":true}` + "\n\n"
+			e := withPerchPool(t, fake)
+			resp := postPerch(t, e, "/v1/chat/completions", map[string]any{"model": "auto", "stream": true, "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+			_, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs []map[string]any
+			for i := 0; i < 100; i++ {
+				logs = e.requestLogs()
+				if len(logs) > 0 {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if len(logs) != 1 {
+				t.Fatalf("logs = %v", logs)
+			}
+			ttft := logs[0]["ttftMs"]
+			if tc.wantTTFT {
+				if n, ok := ttft.(float64); !ok || n < 70 {
+					t.Fatalf("ttft = %v, want >= 70ms", ttft)
+				}
+			} else if ttft != nil {
+				t.Fatalf("ttft = %v, want nil", ttft)
+			}
+		})
+	}
+}
+
+func TestPerchUsageLogging(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, field       string
+			cached, hit, rate any
+		}{
+			{"missing", "", nil, nil, nil},
+			{"null", `,"cacheReadInputTokens":null`, nil, nil, nil},
+			{"zero", `,"cacheReadInputTokens":0`, float64(0), false, float64(0)},
+			{"positive", `,"cacheReadInputTokens":4`, float64(4), true, float64(0.4)},
+		} {
+			t.Run(fmt.Sprintf("stream=%t/%s", stream, tc.name), func(t *testing.T) {
+				fake := newPerchModelFake(t)
+				fake.script = `data: {"type":"answer_delta","text":"ok"}` + "\n\n" +
+					`data: {"type":"done","ok":true,"usage":{"inputTokens":10,"outputTokens":2` + tc.field + `}}` + "\n\n"
+				e := withPerchPool(t, fake)
+				resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+					"model": "auto", "stream": stream, "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+				})
+				body, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil || resp.StatusCode != http.StatusOK {
+					t.Fatalf("status=%d error=%v body=%s", resp.StatusCode, err, body)
+				}
+				var usage map[string]any
+				if stream {
+					for _, line := range strings.Split(string(body), "\n") {
+						var frame map[string]any
+						if strings.HasPrefix(line, "data: ") && json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame) == nil {
+							if u, ok := frame["usage"].(map[string]any); ok {
+								usage = u
+							}
+						}
+					}
+				} else {
+					var frame map[string]any
+					if err := json.Unmarshal(body, &frame); err != nil {
+						t.Fatal(err)
+					}
+					usage, _ = frame["usage"].(map[string]any)
+				}
+				if usage["prompt_tokens"] != float64(10) || usage["completion_tokens"] != float64(2) || usage["total_tokens"] != float64(12) {
+					t.Fatalf("OpenAI usage = %v", usage)
+				}
+				if tc.name == "positive" {
+					if details, ok := usage["prompt_tokens_details"].(map[string]any); !ok || details["cached_tokens"] != float64(4) {
+						t.Fatalf("OpenAI usage = %v", usage)
+					}
+				} else if _, ok := usage["prompt_tokens_details"]; ok {
+					t.Fatalf("unexpected OpenAI cache details: %v", usage)
+				}
+				var logs []map[string]any
+				for i := 0; i < 100; i++ {
+					logs = e.requestLogs()
+					if len(logs) > 0 {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if len(logs) != 1 {
+					t.Fatalf("logs = %v", logs)
+				}
+				log := logs[0]
+				if log["cachedTokens"] != tc.cached || log["cacheHit"] != tc.hit || log["cacheRate"] != tc.rate {
+					t.Fatalf("cache log = %v", log)
+				}
+			})
+		}
+	}
+}
+
+func TestPerchProxyCLISurfaceKeepsToolsAndSystem(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchCLIPool(t, fake)
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model":  "gpt-6-sol",
+		"stream": false,
+		"messages": []any{
+			map[string]any{"role": "system", "content": "always answer with a tool call"},
+			map[string]any{"role": "user", "content": "weather in Oslo?"},
+		},
+		"tools": []any{map[string]any{"type": "function", "function": map[string]any{
+			"name": "get_weather", "description": "weather",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			}},
+		}}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	env, _ := fake.lastEnvelope.Load().(map[string]any)
+	req, _ := env["request"].(map[string]any)
+	msgs, _ := req["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+	sys, _ := msgs[0].(map[string]any)["content"].(string)
+	if !strings.Contains(sys, "always answer with a tool call") {
+		t.Fatalf("the caller's system turn was lost: %.120q", sys)
+	}
+	tools, _ := req["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %d, want the declared tool to reach Perch", len(tools))
+	}
+	if env["clientSurface"] != "cli" {
+		t.Fatalf("clientSurface = %v", env["clientSurface"])
+	}
+	if env["lane"] != "chat" {
+		t.Fatalf("lane = %v", env["lane"])
+	}
+}
+
+// ---- device identity, fingerprint and telemetry --------------------------------
+
+// The pool's model call presents the CLI's identity: the UA names the configured
+// version, and the locale header follows the setting.
+func TestPerchModelCallCarriesTheCLIIdentity(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+	e.srv.cfg.Update(-1, func(c *config.Config) error {
+		c.Perch.CLIVersion = "2.4.121"
+		c.Perch.Locale = "zh-CN"
+		return nil
+	})
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model":    "gpt-6-sol",
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	resp.Body.Close()
+	h, _ := fake.lastHeaders.Load().(http.Header)
+	if got := h.Get("User-Agent"); got != "perchai-cli/2.4.121" {
+		t.Fatalf("User-Agent = %q", got)
+	}
+	if got := h.Get("x-perch-locale"); got != "zh-CN" {
+		t.Fatalf("x-perch-locale = %q", got)
+	}
+	// the envelope names the CLI's cwd-derived thread, not a random one
+	env := fake.lastEnvelope.Load().(map[string]any)
+	thread, _ := env["threadId"].(string)
+	if !strings.HasPrefix(thread, perch.ThreadIDPrefix) {
+		t.Fatalf("envelope threadId = %q, want a %q id", thread, perch.ThreadIDPrefix)
+	}
+	// and it is the same on the next call: an identity, not a request id
+	postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model":    "gpt-6-sol",
+		"messages": []any{map[string]any{"role": "user", "content": "again"}},
+	}).Body.Close()
+	env2 := fake.lastEnvelope.Load().(map[string]any)
+	if env2["threadId"] != thread {
+		t.Fatalf("threadId changed between calls: %q → %v", thread, env2["threadId"])
+	}
+	if env2["runId"] == env["runId"] {
+		t.Fatal("runId must be fresh per call")
+	}
+}
+
+// With telemetry egress off (the default) the pool reports nothing to Perch's
+// cli-turn endpoint, but still records what it would have sent.
+func TestPerchTurnIsAuditedNotSentByDefault(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+	postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "gpt-6-sol",
+		"messages": []any{
+			map[string]any{"role": "system", "content": "be brief"},
+			map[string]any{"role": "user", "content": "a secret question"},
+		},
+	}).Body.Close()
+
+	fake.turnsMu.Lock()
+	n := len(fake.turns)
+	fake.turnsMu.Unlock()
+	if n != 0 {
+		t.Fatalf("audit-only mode posted %d cli-turn records", n)
+	}
+
+	var audited string
+	page, err := e.srv.logs.Query("perch", map[string]string{"event": "cli_turn"}, time.Time{}, time.Time{}, 50, 0)
+	if err != nil {
+		t.Fatalf("query perch log: %v", err)
+	}
+	for _, r := range page.Items {
+		audited += string(r)
+	}
+	if audited == "" {
+		t.Fatal("no cli-turn audit record was written")
+	}
+	if !strings.Contains(audited, "未发送") {
+		t.Fatalf("audit record should say it was not sent: %s", audited)
+	}
+	// the conversation itself must not reach the log
+	if strings.Contains(audited, "a secret question") || strings.Contains(audited, "hi from perch") {
+		t.Fatalf("audit record leaks the conversation: %s", audited)
+	}
+}
+
+// With egress on, the record is posted with the account's own token and the
+// CLI's field set, and the prompt and answer are exactly what was exchanged.
+func TestPerchTurnPostsWhenEgressIsOn(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+	e.srv.cfg.Update(-1, func(c *config.Config) error {
+		c.Perch.TelemetryEgress = true
+		c.Perch.CLITurnReport = true
+		c.Upstream.PerchBase = fake.srv.URL
+		c.Perch.AppURL = fake.srv.URL
+		return nil
+	})
+	postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model":    "gpt-6-sol",
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	}).Body.Close()
+
+	fake.turnsMu.Lock()
+	defer fake.turnsMu.Unlock()
+	if len(fake.turns) != 1 {
+		t.Fatalf("posted %d cli-turn records, want 1", len(fake.turns))
+	}
+	turn := fake.turns[0]
+	if turn["status"] != perch.TurnStatusComplete {
+		t.Fatalf("status = %v", turn["status"])
+	}
+	if !strings.Contains(turn["prompt"].(string), "hello") {
+		t.Fatalf("prompt = %v", turn["prompt"])
+	}
+	if turn["assistantText"] != "hi from perch" {
+		t.Fatalf("assistantText = %v", turn["assistantText"])
+	}
+	if !strings.HasPrefix(turn["threadId"].(string), perch.ThreadIDPrefix) {
+		t.Fatalf("threadId = %v", turn["threadId"])
+	}
+	// the CLI's full field set, so the record is not obviously thinner
+	for _, field := range []string{"runId", "chatMode", "personaId", "durationMs", "error", "events", "contextSnapshot", "systemInitiated", "attachments"} {
+		if _, ok := turn[field]; !ok {
+			t.Errorf("cli-turn record lacks %q", field)
+		}
+	}
+}
+
+// Two accounts must never present the same device. The pool keys identity on
+// the Perch user id, so a second account gets its own.
+func TestPerchDeviceIdentityIsPerAccount(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+	a := e.srv.perchIdentity("p1")
+	if a.MachineID == "" {
+		t.Fatal("the account has no machine id")
+	}
+	b := e.srv.perchIdentity("p2")
+	if b.MachineID == a.MachineID {
+		t.Fatal("two accounts share a machine id")
+	}
+	if again := e.srv.perchIdentity("p1"); again.MachineID != a.MachineID {
+		t.Fatal("the machine id is not stable across calls")
+	}
+}
+
+// The console can see what the pool presents: stable per-account ids, no
+// sharing, and the exact identity headers.
+func TestPerchFingerprintView(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+	rec := httptest.NewRecorder()
+	e.srv.apiPerchFingerprint(rec, httptest.NewRequest(http.MethodGet, "/api/perch/fingerprint", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var out struct {
+		StoreAvailable bool `json:"storeAvailable"`
+		Settings       map[string]any
+		Accounts       []struct {
+			ID        string `json:"id"`
+			MachineID string `json:"machineId"`
+			ThreadID  string `json:"threadId"`
+			CreatedAt string `json:"createdAt"`
+			Shared    bool   `json:"shared"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.StoreAvailable {
+		t.Fatal("the device store should be available")
+	}
+	if len(out.Accounts) != 1 {
+		t.Fatalf("accounts = %+v", out.Accounts)
+	}
+	a := out.Accounts[0]
+	if a.MachineID == "" || a.ThreadID == "" || a.CreatedAt == "" {
+		t.Fatalf("identity incomplete: %+v", a)
+	}
+	if a.Shared {
+		t.Fatal("a single account cannot share its id")
+	}
+	if out.Settings["userAgent"] != "perchai-cli/2.4.121" && out.Settings["userAgent"] == "" {
+		t.Fatalf("settings = %+v", out.Settings)
+	}
+	// it reports the switch, so an operator knows nothing is being sent
+	if out.Settings["telemetryEgress"] != false {
+		t.Fatalf("egress should default to false: %+v", out.Settings)
+	}
+}

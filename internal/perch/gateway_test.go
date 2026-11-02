@@ -80,7 +80,7 @@ func TestCallModelStreamsEvents(t *testing.T) {
 		`data: {"type":"done","ok":true,"text":"Hello","finishReason":"stop","usage":{"inputTokens":5,"outputTokens":2}}` + "\n\n"
 	c := NewClient(f.srv.Client())
 	var got []string
-	res, err := c.CallModel(context.Background(), ModelCall{Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, func(ev Event) error {
+	res, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, func(ev Event) error {
 		got = append(got, ev.Type+":"+ev.Text)
 		return nil
 	})
@@ -118,7 +118,7 @@ func TestCallModelAuthIsNotRetried(t *testing.T) {
 	f := newFakeModelCall(t)
 	f.status, f.body = 401, `{"ok":false,"error":"Unauthorized"}`
 	c := NewClient(f.srv.Client())
-	_, err := c.CallModel(context.Background(), ModelCall{Base: f.srv.URL, Token: "bad", Body: []byte(`{}`)}, 5*time.Second, nil)
+	_, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: f.srv.URL, Token: "bad", Body: []byte(`{}`)}, 5*time.Second, nil)
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -138,7 +138,7 @@ func TestCallModelPlanRefusalCarriesCode(t *testing.T) {
 	f.status = 403
 	f.body = `{"ok":false,"error":"Your plan includes Perch-hosted models for Web, Desktop and CLI only.","errorCode":"perch_surface_required","limit":{"plan":"starter"}}`
 	c := NewClient(f.srv.Client())
-	_, err := c.CallModel(context.Background(), ModelCall{Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
+	_, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
 	me, ok := err.(*ModelError)
 	if !ok || me.Code != "perch_surface_required" || me.Status != 403 {
 		t.Fatalf("err = %#v", err)
@@ -165,7 +165,7 @@ func TestCallModelRetriesTransientBeforeFirstEvent(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.Client())
-	res, err := c.CallModel(context.Background(), ModelCall{Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
+	res, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
 	if err != nil {
 		t.Fatalf("should have retried and succeeded: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestCallModelDoesNotRetryAfterEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.Client())
-	_, err := c.CallModel(context.Background(), ModelCall{Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, func(Event) error { return nil })
+	_, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, func(Event) error { return nil })
 	if err == nil {
 		t.Fatal("a stream without done must fail")
 	}
@@ -207,7 +207,7 @@ func TestCallModelAcceptsJSONAnswer(t *testing.T) {
 	f.contentType = "application/json"
 	f.script = `{"type":"done","ok":true,"text":"single shot","finishReason":"stop","usage":{"inputTokens":3,"outputTokens":1}}`
 	c := NewClient(f.srv.Client())
-	res, err := c.CallModel(context.Background(), ModelCall{Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
+	res, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestCallModelDoneNotOK(t *testing.T) {
 	f := newFakeModelCall(t)
 	f.script = `data: {"type":"done","ok":false,"error":"provider failed","errorCode":"model_call_failed"}` + "\n\n"
 	c := NewClient(f.srv.Client())
-	_, err := c.CallModel(context.Background(), ModelCall{Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
+	_, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: f.srv.URL, Token: "tok", Body: []byte(`{}`)}, 5*time.Second, nil)
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -239,7 +239,7 @@ func TestCallModelTimeout(t *testing.T) {
 	defer srv.Close()
 	c := NewClient(srv.Client())
 	start := time.Now()
-	_, err := c.CallModel(context.Background(), ModelCall{Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 150*time.Millisecond, nil)
+	_, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: srv.URL, Token: "tok", Body: []byte(`{}`)}, 150*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("want a timeout")
 	}
@@ -269,7 +269,7 @@ func TestCallModelKeepsTokensApart(t *testing.T) {
 	done := make(chan string, 2)
 	for _, tok := range []string{"tok-A", "tok-B"} {
 		go func(tok string) {
-			res, err := c.CallModel(context.Background(), ModelCall{Base: srv.URL, Token: tok, Body: []byte(`{}`)}, 5*time.Second, nil)
+			res, err := c.CallModel(context.Background(), ModelCall{Surface: SurfaceCLI, Base: srv.URL, Token: tok, Body: []byte(`{}`)}, 5*time.Second, nil)
 			if err != nil {
 				done <- "ERR " + err.Error()
 				return

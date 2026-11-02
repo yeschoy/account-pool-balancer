@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,21 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 
 	a("POST /api/perch/import/preview", s.apiPerchImportPreview)
 	a("POST /api/perch/import", s.apiPerchImport)
+	a("POST /api/perch/registrations", s.apiPerchRegister)
+	a("GET /api/perch/registrations", s.apiPerchRegistrations)
+	a("GET /api/perch/registrations/{id}", s.apiPerchRegistration)
+	a("PUT /api/perch/registrations/{id}/proxy", s.apiPerchRegistrationProxy)
+	a("POST /api/perch/registrations/{id}/import", s.apiPerchRegistrationImport)
+	a("GET /api/perch/autosignup", s.apiPerchAuto)
+	a("PUT /api/perch/autosignup/settings", s.apiPerchAutoSettings)
+	a("POST /api/perch/autosignup/candidates", s.apiPerchAutoCandidates)
+	a("POST /api/perch/autosignup/proxies", s.apiPerchAutoProxies)
+	a("DELETE /api/perch/autosignup/proxies/{id}", s.apiPerchAutoDeleteProxy)
+	a("DELETE /api/perch/autosignup/candidates/{id}", s.apiPerchAutoDeleteCandidate)
+	a("POST /api/perch/autosignup/candidates/{id}/import", s.apiPerchAutoImportCandidate)
+	a("POST /api/perch/autosignup/candidates/{id}/retry-save", s.apiPerchAutoRetrySave)
+	a("POST /api/perch/autosignup/candidates/{id}/activate", s.apiPerchAutoActivateCandidate)
+	a("POST /api/perch/autosignup/run", s.apiPerchAutoRun)
 
 	a("POST /api/perch/batch", s.apiPerchBatch)
 
@@ -42,6 +58,7 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 
 	a("GET /api/perch/settings", s.apiPerchSettings)
 	a("PUT /api/perch/settings", s.apiPerchSaveSettings)
+	a("GET /api/perch/fingerprint", s.apiPerchFingerprint)
 
 	a("GET /api/perch/export", s.apiPerchExport)
 	a("POST /api/perch/backup", s.apiPerchBackup)
@@ -67,6 +84,8 @@ type perchAccountView struct {
 	MaxConc   int       `json:"maxConcurrent"`
 	MaxRPM    int       `json:"maxRpm"`
 	CreatedAt time.Time `json:"createdAt"`
+	HasProxy  bool      `json:"hasProxy"`
+	ProxyURL  string    `json:"proxyUrl"`
 
 	// Session is the redacted credential summary.
 	Session *perchstore.Summary `json:"session,omitempty"`
@@ -97,6 +116,9 @@ type perchAccountView struct {
 	CreditBalancePT int64  `json:"creditBalancePt,omitempty"`
 	RoostUnlimited  bool   `json:"roostUnlimited,omitempty"`
 	Unlimited       bool   `json:"unlimited,omitempty"`
+	// TierSelectionRequired: the account has not picked a plan, so Perch
+	// states no allowance and serves no models. The console prompts for it.
+	TierSelectionRequired bool `json:"tierSelectionRequired,omitempty"`
 
 	Runtime runtimeStatus `json:"runtime"`
 }
@@ -107,6 +129,22 @@ type runtimeStatus struct {
 	RPM    int    `json:"rpm"`
 	// Health is the 24 h success rate (nil until there are samples).
 	Health *float64 `json:"health"`
+}
+
+// perchProxyLabel exposes only the endpoint, not credentials or URL data.
+func perchProxyLabel(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "[代理已配置]"
+	}
+	label := u.Scheme + "://"
+	if u.User != nil {
+		label += "***@"
+	}
+	return label + u.Host
 }
 
 // perchStatusOf names an account's state in the one vocabulary the whole page
@@ -153,6 +191,11 @@ func perchStatusOf(a config.Account, sess *perchstore.Summary, met *quota.PerchM
 	}
 	if metFresh && met != nil && met.Exhausted(now) {
 		return "quota-exhausted", "本月额度已用尽"
+	}
+	// Perch can report tier selection required even when the independent usage
+	// RPC has recorded calls; do not infer the account's actual usability.
+	if metFresh && met != nil && met.TierSelectionRequired {
+		return "tier-pending", "Perch 返回待选套餐且未提供额度；请在 chat.perchai.app 检查该账号的套餐状态"
 	}
 	if sess.ExpiresAt.IsZero() {
 		return "pending", "Access Token 到期时间未知，等待续期"
@@ -360,6 +403,7 @@ func (s *Server) perchAccountViews(cfg *config.Config) []perchAccountView {
 			ID: a.ID, Name: a.Name, Email: a.Email, UserID: a.PerchUserID, Group: a.Group,
 			Enabled: a.Enabled, Note: a.Note, Weight: a.Weight, Priority: a.Priority,
 			MaxConc: a.MaxConc, MaxRPM: a.MaxRPM, CreatedAt: a.CreatedAt,
+			HasProxy: a.ProxyURL != "", ProxyURL: perchProxyLabel(a.ProxyURL),
 			Tags:          append([]string(nil), a.PerchTags...),
 			RefreshFailed: a.PerchRefreshFailed, LastError: a.PerchLastError, LastErrorAt: a.PerchLastErrorAt,
 		}
@@ -385,6 +429,7 @@ func (s *Server) perchAccountViews(cfg *config.Config) []perchAccountView {
 				v.Plan = met.Plan
 				v.PlanCode, v.AllowanceSource = met.PlanCode, met.AllowanceSource
 				v.CreditBalancePT, v.RoostUnlimited, v.Unlimited = met.CreditBalancePT, met.RoostUnlimited, met.Unlimited
+				v.TierSelectionRequired = met.TierSelectionRequired
 				if rem, known := met.RemainingPT(); known {
 					v.RemainingPT, v.RemainingKnown = rem, true
 				}
@@ -466,10 +511,20 @@ func (s *Server) apiPerchUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		Note     *string   `json:"note"`
 		Weight   *int      `json:"weight"`
 		Priority *int      `json:"priority"`
+		ProxyURL *string   `json:"proxyUrl"`
 	}
 	if err := readBody(r, &in); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return
+	}
+	// Omitted or null keeps the current proxy; an empty string selects direct.
+	if in.ProxyURL != nil {
+		proxy := strings.TrimSpace(*in.ProxyURL)
+		if err := config.ValidateProxyURL(proxy); err != nil {
+			apiError(w, http.StatusBadRequest, err)
+			return
+		}
+		in.ProxyURL = &proxy
 	}
 	cfg, err := s.cfg.Update(-1, func(c *config.Config) error {
 		for i := range c.Accounts {
@@ -501,6 +556,9 @@ func (s *Server) apiPerchUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			if in.Priority != nil {
 				a.Priority = *in.Priority
+			}
+			if in.ProxyURL != nil {
+				a.ProxyURL = *in.ProxyURL
 			}
 			return nil
 		}
@@ -610,7 +668,7 @@ func (s *Server) apiPerchUpdateSession(w http.ResponseWriter, r *http.Request) {
 		sec.RefreshToken = strings.TrimSpace(in.RefreshToken)
 		sec.ExpiresAt = in.ExpiresAt
 	}
-	if sec.AccessToken == "" && sec.RefreshToken == "" {
+	if strings.TrimSpace(sec.AccessToken) == "" || strings.TrimSpace(sec.RefreshToken) == "" {
 		apiError(w, http.StatusBadRequest, errors.New("需要 accessToken + refreshToken，或一份完整的 JSON"))
 		return
 	}
@@ -618,7 +676,11 @@ func (s *Server) apiPerchUpdateSession(w http.ResponseWriter, r *http.Request) {
 		BindAs: id, FetchedAt: time.Now().UTC(), Force: true,
 	})
 	if err != nil {
-		apiError(w, http.StatusInternalServerError, err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, perchstore.ErrSessionIdentity) {
+			status = http.StatusBadRequest
+		}
+		apiError(w, status, err)
 		return
 	}
 	s.afterPerchSession(id)
@@ -661,7 +723,12 @@ func outcomeOf(err error) string {
 	return "ok"
 }
 
-func scrubbedErr(err error) string { return scrub(err.Error()) }
+func scrubbedErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return scrub(err.Error())
+}
 
 // ---- import ------------------------------------------------------------------------
 
@@ -769,8 +836,7 @@ func (s *Server) apiPerchImport(w http.ResponseWriter, r *http.Request) {
 		group = config.GroupForProvider(config.ProviderPerch)
 	}
 	res := perchimport.ReadFiles(files)
-	plans := s.planPerchImport(s.cfg.Get(), res)
-	sum := s.applyPerchImport(plans, group)
+	sum, _ := s.importPerch(res, group, nil)
 	batch := config.NewID("imp_")
 	s.logPerchBatch(batch, sum, fmt.Sprintf("%d 个文件，创建 %d、更新 %d、重复 %d、跳过 %d、失败 %d",
 		res.Files, sum.Created, sum.Updated, sum.Duplicate, sum.Skipped, sum.Failed))
@@ -1123,9 +1189,19 @@ func (s *Server) batchSetSession(ids []string, sess *struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 }, out *[]perchBatchResult) {
-	if sess == nil || (sess.AccessToken == "" && sess.RefreshToken == "") {
+	if sess == nil || strings.TrimSpace(sess.AccessToken) == "" || strings.TrimSpace(sess.RefreshToken) == "" {
 		for _, id := range ids {
-			*out = append(*out, perchBatchResult{ID: id, Detail: "session is required"})
+			*out = append(*out, perchBatchResult{ID: id, Detail: "accessToken and refreshToken are required"})
+		}
+		return
+	}
+	unique := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		unique[id] = struct{}{}
+	}
+	if len(unique) > 1 {
+		for _, id := range ids {
+			*out = append(*out, perchBatchResult{ID: id, Detail: "session update requires a single account"})
 		}
 		return
 	}
