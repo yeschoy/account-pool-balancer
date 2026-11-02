@@ -60,6 +60,7 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 	a("GET /api/perch/settings", s.apiPerchSettings)
 	a("PUT /api/perch/settings", s.apiPerchSaveSettings)
 	a("GET /api/perch/fingerprint", s.apiPerchFingerprint)
+	a("POST /api/perch/delta/reset", s.apiPerchDeltaReset)
 
 	a("GET /api/perch/export", s.apiPerchExport)
 	a("POST /api/perch/backup", s.apiPerchBackup)

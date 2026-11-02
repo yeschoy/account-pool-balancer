@@ -142,3 +142,88 @@ func TestDeltaHitsAcrossSeparateRequestsOfOneConversation(t *testing.T) {
 		t.Fatalf("delta body still carries messages: %s", body)
 	}
 }
+
+// The counters split every call into delta or whole, and a confirmed prefix is
+// what turns the next one into a delta — the numbers the console shows.
+func TestDeltaCountersReport(t *testing.T) {
+	c := NewClient(nil)
+	conv := "conv-stats"
+
+	// First request: whole, and the server confirms 3 messages.
+	run1 := c.RunFor(conv)
+	env1 := envelopeFor(run1, 3, nil)
+	dig := digestMessages(env1.Request.Messages)
+	plan1 := c.PlanDelta("ep", run1, env1)
+	c.RecordSending(plan1, env1)
+	plan1.Observe(200, map[string]string{
+		DeltaHeader:      "1",
+		HeldLengthHeader: "3",
+		HeldDigestHeader: prefixDigest(dig, 3),
+	})
+	c.SettleDelta(plan1, true)
+
+	// Second request: delta over 3 held messages, 2 new.
+	run2 := c.RunFor(conv)
+	env2 := envelopeFor(run2, 5, nil)
+	plan2 := c.PlanDelta("ep", run2, env2)
+	if !plan2.IsDelta {
+		t.Fatal("expected a delta on the second request")
+	}
+	c.RecordSending(plan2, env2)
+	plan2.Observe(200, map[string]string{
+		DeltaHeader:      "1",
+		HeldLengthHeader: "5",
+		HeldDigestHeader: prefixDigest(digestMessages(env2.Request.Messages), 5),
+	})
+	c.SettleDelta(plan2, true)
+
+	r := c.DeltaReport()
+	if r.Whole != 1 || r.Delta != 1 {
+		t.Fatalf("whole/delta = %d/%d, want 1/1", r.Whole, r.Delta)
+	}
+	if r.HitRate != 0.5 {
+		t.Fatalf("hitRate = %v, want 0.5", r.HitRate)
+	}
+	if r.MessagesOmitted != 3 || r.MessagesSent != 2 {
+		t.Fatalf("omitted/sent = %d/%d, want 3/2", r.MessagesOmitted, r.MessagesSent)
+	}
+	if r.BytesOmitted <= 0 || r.Confirmed != 2 {
+		t.Fatalf("bytesOmitted=%d confirmed=%d", r.BytesOmitted, r.Confirmed)
+	}
+	if r.CachedKeys != 1 {
+		t.Fatalf("cachedKeys = %d", r.CachedKeys)
+	}
+
+	// A refusal is counted and the cache entry dropped.
+	env3 := envelopeFor(run2, 6, nil)
+	plan3 := c.PlanDelta("ep", run2, env3)
+	if plan3.IsDelta {
+		// The 5-message prefix was confirmed, so this is a delta; force the
+		// refusal path the way the server would.
+		plan3.Observe(409, map[string]string{})
+		c.RecordRefused()
+		c.SettleDelta(plan3, false)
+	}
+	if got := c.DeltaReport().Refused; got != 1 {
+		t.Fatalf("refused = %d, want 1", got)
+	}
+
+	// Rebuild a snapshot so the reset can be shown to keep the cache.
+	env4 := envelopeFor(run2, 7, nil)
+	plan4 := c.PlanDelta("ep", run2, env4)
+	plan4.Observe(200, map[string]string{
+		DeltaHeader:      "1",
+		HeldLengthHeader: "7",
+		HeldDigestHeader: prefixDigest(digestMessages(env4.Request.Messages), 7),
+	})
+	c.SettleDelta(plan4, true)
+	keysBefore, _ := c.DeltaStats()
+
+	c.ResetDeltaCounters()
+	if r2 := c.DeltaReport(); r2.Delta != 0 || r2.Whole != 0 || r2.HitRate != 0 {
+		t.Fatalf("counters not reset: %+v", r2)
+	}
+	if k, _ := c.DeltaStats(); k != keysBefore || k == 0 {
+		t.Fatalf("ResetDeltaCounters must keep the cache: %d -> %d", keysBefore, k)
+	}
+}

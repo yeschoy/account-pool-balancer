@@ -341,6 +341,14 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 		}
 	}
 
+	// Count what this attempt actually sends, before it goes out.
+	if !web {
+		var env Envelope
+		if json.Unmarshal(call.Body, &env) == nil {
+			c.RecordSending(plan, env)
+		}
+	}
+
 	attempts := 0
 	sawEvent := false
 	for {
@@ -353,6 +361,7 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 		if plan.IsDelta && plan.Refused() {
 			// The server does not hold the prefix we claimed. Forget it and
 			// resend the whole request once — the published client's whole().
+			c.RecordRefused()
 			c.deltas.dropPrefix(plan.key, plan.digests)
 			// The retry is a whole request, so it carries no delta state; a
 			// fresh plan is built from the same envelope below.

@@ -18,6 +18,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -275,11 +276,20 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		Settings       map[string]any            `json:"settings"`
 		ProcessDevice  string                    `json:"processDeviceId,omitempty"`
 		Accounts       []perchFingerprintAccount `json:"accounts"`
+		// Delta is the held-context delta report (see delta.go / runid.go).
+		Delta *perch.DeltaReport `json:"delta,omitempty"`
 	}{
 		StoreAvailable: s.perch != nil && s.perch.devices != nil,
 		ProcessDevice:  s.perchProcessDeviceID(),
 		Accounts:       []perchFingerprintAccount{},
 	}
+	// Held-context delta: is the pool actually sending only what is new. These
+	// are process-wide counters, so they answer "is it working" rather than
+	// "what did the last request do".
+	delta := s.perchClient().DeltaReport()
+	delta.TrackedConversations = s.perchClient().RunStats()
+	out.Delta = &delta
+
 	tel := s.telemetrySettings(cfg)
 	out.Settings = map[string]any{
 		"deviceFingerprint": cfg.Perch.DeviceFingerprint,
@@ -334,4 +344,19 @@ func perchFingerprintProxySource(proxyURL string) string {
 		return "account_proxy"
 	}
 	return "unconfigured_unknown"
+}
+
+// apiPerchDeltaReset zeroes the held-context delta counters, keeping the cache.
+//
+// An operator uses it after a change (a new client, a different lane) to see
+// the new behaviour on its own rather than averaged with everything before it.
+func (s *Server) apiPerchDeltaReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		apiError(w, http.StatusMethodNotAllowed, errors.New("POST required"))
+		return
+	}
+	s.perchClient().ResetDeltaCounters()
+	rep := s.perchClient().DeltaReport()
+	rep.TrackedConversations = s.perchClient().RunStats()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "delta": rep})
 }

@@ -105,8 +105,28 @@ func TestPerchStickyHeadersEndToEnd(t *testing.T) {
 					if len(tokens) != 3 || (sticky && tokens[1] != tokens[2]) {
 						t.Fatalf("sticky=%t, account sequence = %v", sticky, tokens)
 					}
-					if len(ids) != 3 || ids[0] == "" || ids[1] == "" || ids[2] == "" || ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
-						t.Fatalf("expected independent upstream run/thread IDs, got %v", ids)
+					// The upstream run id follows the CONVERSATION, not the
+					// request: the last two calls share session-b and therefore
+					// share a run id, which is what lets the second one send only
+					// the new messages (held-context delta). A different
+					// conversation still gets its own.
+					if len(ids) != 3 || ids[0] == "" || ids[1] == "" || ids[2] == "" {
+						t.Fatalf("expected an upstream run id per request, got %v", ids)
+					}
+					if ids[0] == ids[1] {
+						t.Fatalf("different conversations shared an upstream id: %v", ids)
+					}
+					if surface == "web" {
+						// The web lane is thread-bound: each post opens its own
+						// thread, so its ids are expected to differ. It carries
+						// no held-context delta at all.
+						if ids[1] == ids[2] {
+							t.Fatalf("web posts must open separate threads, got %v", ids)
+						}
+					} else if ids[1] != ids[2] {
+						// The CLI lane's run id follows the conversation, which
+						// is what lets the second post of session-b be a delta.
+						t.Fatalf("one conversation must keep one run id on the cli lane, got %v", ids)
 					}
 					if surface == "web" && threads != 3 {
 						t.Fatalf("web thread creations = %d, want 3", threads)

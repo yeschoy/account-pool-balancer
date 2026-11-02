@@ -50,6 +50,17 @@ func (s *Server) perchConversationFingerprint(cfg *config.Config, acct config.Ac
 	if id.Fingerprint == "" {
 		return ""
 	}
+	// Only an EXPLICIT conversation may own a run id.
+	//
+	// identity() falls back to an HMAC of the first messages when no header or
+	// body field names the conversation. That is the right default for
+	// account affinity, but it is wrong for a run id: two unrelated chats that
+	// happen to open with the same greeting would share one run, and the delta
+	// layer would then claim a prefix the server holds for the other chat.
+	// Without an explicit conversation the caller keeps the ticket's run id.
+	if id.Confidence != "explicit" {
+		return ""
+	}
 	return id.Fingerprint
 }
 

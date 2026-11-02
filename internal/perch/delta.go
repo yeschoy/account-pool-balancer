@@ -94,11 +94,25 @@ type DeltaPlan struct {
 	acked  bool
 }
 
-// deltaCache holds confirmed prefixes per endpoint+run.
+// deltaCache holds confirmed prefixes per endpoint+run, plus the counters the
+// diagnostics endpoint reports.
 type deltaCache struct {
 	mu   sync.Mutex
 	byK  map[string][]*deltaEntry
 	seen time.Time
+
+	// Counters. Every model call lands in exactly one of whole/delta; a delta
+	// that the server refused is counted separately so a persistently failing
+	// prefix is visible instead of just looking like traffic.
+	statDelta       int64 // requests sent as a held-context delta
+	statWhole       int64 // requests sent with the full message list
+	statRefused     int64 // deltas the server refused (409, or 400 without ack)
+	statConfirmed   int64 // snapshots the server confirmed and were cached
+	statUnconfirmed int64 // deltas whose confirmation did not check out
+	statBytesSaved  int64 // message bytes not sent, summed over deltas
+	statBytesDelta  int64 // message bytes actually sent in deltas
+	statMessagesCut int64 // messages not sent, summed over deltas
+	statMsgSent     int64 // messages actually sent in deltas
 }
 
 // Body renders the request for this plan.
@@ -213,6 +227,9 @@ func (c *Client) SettleDelta(p *DeltaPlan, ok bool) {
 		p.held.length == len(p.digests) &&
 		p.held.toolsDigest == p.toolsDigest &&
 		p.held.digest == prefixDigest(p.digests, len(p.digests)) {
+		c.deltas.mu.Lock()
+		c.deltas.statConfirmed++
+		c.deltas.mu.Unlock()
 		c.deltas.put(p.key, &deltaEntry{
 			digests:     p.digests,
 			toolsDigest: p.toolsDigest,
@@ -223,6 +240,9 @@ func (c *Client) SettleDelta(p *DeltaPlan, ok bool) {
 	}
 	// The server does not hold this prefix: drop any older snapshot that
 	// claims it, so the next call starts from the whole request.
+	c.deltas.mu.Lock()
+	c.deltas.statUnconfirmed++
+	c.deltas.mu.Unlock()
 	c.deltas.dropPrefix(p.key, p.digests)
 }
 
@@ -411,6 +431,122 @@ func (c *Client) DeltaStats() (keys, snapshots int) {
 		snapshots += len(es)
 	}
 	return len(c.deltas.byK), snapshots
+}
+
+// DeltaReport is what the diagnostics endpoint shows about held-context deltas.
+//
+// The counts are process-wide and cumulative since start (or since the last
+// ResetDeltaCounters): the question they answer is "is the pool actually
+// sending only what is new", which a single sample cannot show.
+type DeltaReport struct {
+	// CachedKeys / CachedSnapshots are the live cache size.
+	CachedKeys      int `json:"cachedKeys"`
+	CachedSnapshots int `json:"cachedSnapshots"`
+	// TrackedConversations is how many conversations hold a stable run id.
+	TrackedConversations int `json:"trackedConversations"`
+
+	// Delta / Whole split every model call the pool made.
+	Delta int64 `json:"deltaRequests"`
+	Whole int64 `json:"wholeRequests"`
+	// Refused counts deltas the server rejected and that were resent whole.
+	Refused int64 `json:"refusedDeltas"`
+	// HitRate is Delta / (Delta + Whole), 0 when nothing has been sent.
+	HitRate float64 `json:"hitRate"`
+
+	// Confirmed / Unconfirmed count cache settlements that did and did not
+	// verify against the server's x-perch-call-held-* headers.
+	Confirmed   int64 `json:"confirmedPrefixes"`
+	Unconfirmed int64 `json:"unconfirmedPrefixes"`
+
+	// MessagesOmitted / MessagesSent measure the saving the delta bought.
+	MessagesOmitted int64 `json:"messagesOmitted"`
+	MessagesSent    int64 `json:"messagesSent"`
+	// BytesOmitted / BytesSent are the same in JSON message bytes.
+	BytesOmitted int64 `json:"bytesOmitted"`
+	BytesSent    int64 `json:"bytesSent"`
+}
+
+// DeltaReport returns the counters. It never contacts the server.
+func (c *Client) DeltaReport() DeltaReport {
+	keys, snaps := c.DeltaStats()
+	c.deltas.mu.Lock()
+	defer c.deltas.mu.Unlock()
+	rep := DeltaReport{
+		CachedKeys:      keys,
+		CachedSnapshots: snaps,
+		Delta:           c.deltas.statDelta,
+		Whole:           c.deltas.statWhole,
+		Refused:         c.deltas.statRefused,
+		Confirmed:       c.deltas.statConfirmed,
+		Unconfirmed:     c.deltas.statUnconfirmed,
+		MessagesOmitted: c.deltas.statMessagesCut,
+		MessagesSent:    c.deltas.statMsgSent,
+		BytesOmitted:    c.deltas.statBytesSaved,
+		BytesSent:       c.deltas.statBytesDelta,
+	}
+	if total := rep.Delta + rep.Whole; total > 0 {
+		rep.HitRate = float64(rep.Delta) / float64(total)
+	}
+	return rep
+}
+
+// RecordSending counts one request as delta or whole, with the byte/message
+// saving it represents. Called by CallModel right before the request goes out.
+func (c *Client) RecordSending(plan *DeltaPlan, env Envelope) {
+	c.deltas.mu.Lock()
+	defer c.deltas.mu.Unlock()
+	if plan != nil && plan.IsDelta && plan.base != nil {
+		held := len(plan.base.digests)
+		total := len(env.Request.Messages)
+		if held <= total {
+			sent := total - held
+			c.deltas.statDelta++
+			c.deltas.statMessagesCut += int64(held)
+			c.deltas.statMsgSent += int64(sent)
+			c.deltas.statBytesSaved += messageBytes(env.Request.Messages[:held])
+			c.deltas.statBytesDelta += messageBytes(env.Request.Messages[held:])
+			return
+		}
+	}
+	c.deltas.statWhole++
+	if b := messageBytes(env.Request.Messages); b > 0 {
+		c.deltas.statBytesDelta += b
+	}
+}
+
+// RecordRefused counts a delta the server rejected.
+func (c *Client) RecordRefused() {
+	c.deltas.mu.Lock()
+	c.deltas.statRefused++
+	c.deltas.mu.Unlock()
+}
+
+// messageBytes is the JSON size of a message list, used only for the report.
+func messageBytes(msgs []Message) int64 {
+	if len(msgs) == 0 {
+		return 0
+	}
+	b, err := json.Marshal(msgs)
+	if err != nil {
+		return 0
+	}
+	return int64(len(b))
+}
+
+// ResetDeltaCounters zeroes the cumulative counters, keeping the cache. An
+// operator uses this after a change to see the new behaviour on its own.
+func (c *Client) ResetDeltaCounters() {
+	c.deltas.mu.Lock()
+	c.deltas.statDelta = 0
+	c.deltas.statWhole = 0
+	c.deltas.statRefused = 0
+	c.deltas.statConfirmed = 0
+	c.deltas.statUnconfirmed = 0
+	c.deltas.statBytesSaved = 0
+	c.deltas.statBytesDelta = 0
+	c.deltas.statMessagesCut = 0
+	c.deltas.statMsgSent = 0
+	c.deltas.mu.Unlock()
 }
 
 // hasPrefix reports whether full starts with prefix.
