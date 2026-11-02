@@ -123,10 +123,17 @@ func TestPerchStickyHeadersEndToEnd(t *testing.T) {
 						if ids[1] == ids[2] {
 							t.Fatalf("web posts must open separate threads, got %v", ids)
 						}
-					} else if ids[1] != ids[2] {
-						// The CLI lane's run id follows the conversation, which
-						// is what lets the second post of session-b be a delta.
-						t.Fatalf("one conversation must keep one run id on the cli lane, got %v", ids)
+					} else if sticky && ids[1] != ids[2] {
+						// Sticky routing keeps session-b on one account, so the
+						// run id is reused and the second post can be a delta.
+						t.Fatalf("a sticky cli conversation must keep one run id, got %v", ids)
+					} else if !sticky && ids[1] == ids[2] {
+						// Run ids are scoped per account. When routing is not
+						// sticky the two posts may land on different accounts,
+						// and a run id must NOT cross accounts: the second
+						// account would be told the server holds a prefix it
+						// never saw.
+						t.Fatalf("a run id crossed accounts on the cli lane, got %v", ids)
 					}
 					if surface == "web" && threads != 3 {
 						t.Fatalf("web thread creations = %d, want 3", threads)

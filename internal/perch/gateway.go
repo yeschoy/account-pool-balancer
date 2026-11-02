@@ -238,6 +238,13 @@ type ModelCall struct {
 	// because the web lane should not claim to be the CLI at all.
 	UserAgent string
 	Locale    string
+	// AccountKey scopes the held-context delta to one account.
+	//
+	// A snapshot confirmed by account A says nothing about what account B
+	// holds, and a failover moves the same conversation between them. Without
+	// this scope the request would claim a prefix the new account never saw.
+	// Empty means "no account scope": such a call never reuses a snapshot.
+	AccountKey string
 	// Ticket is the turn ticket this call presents, obtained from TicketFor.
 	// Nil means the turn proceeds unticketed — which is what the published
 	// client does when a ticket request fails without `enforced`. The web
@@ -330,7 +337,7 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 	if !web {
 		var env Envelope
 		if json.Unmarshal(call.Body, &env) == nil && env.RunID != "" {
-			plan = c.PlanDelta(url, env.RunID, env)
+			plan = c.PlanDelta(url, call.AccountKey, env.RunID, env)
 			if plan.IsDelta {
 				if deltaBody, derr := plan.Body(env); derr == nil {
 					body = deltaBody
@@ -363,10 +370,7 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 			// resend the whole request once — the published client's whole().
 			c.RecordRefused()
 			c.deltas.dropPrefix(plan.key, plan.digests)
-			// The retry is a whole request, so it carries no delta state; a
-			// fresh plan is built from the same envelope below.
-			whole := c.PlanDelta(url, "", Envelope{})
-			_ = whole
+			// The retry is a whole request: same run, no delta claim.
 			plan.IsDelta = false
 			body = call.Body
 			res, err = c.callOnce(ctx, url, call, body, timeout, onEvent, &sawEvent, web, nil)

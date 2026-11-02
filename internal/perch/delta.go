@@ -51,10 +51,16 @@ const (
 const (
 	// DeltaTTL is how long a confirmed snapshot is trusted.
 	DeltaTTL = 9 * time.Minute
-	// DeltaMaxKeys caps the number of cached endpoints+runs.
-	DeltaMaxKeys = 32
+	// DeltaMaxKeys caps the number of cached endpoint+account+run entries.
+	//
+	// The published client keeps 32, but it serves one account from one
+	// process; this pool serves many, so the same cache has to hold a working
+	// set per account. Sized to comfortably exceed maxRunIds/8 while staying
+	// small enough that a stale entry is never held long.
+	DeltaMaxKeys = 4096
 	// DeltaMaxSnapshotsPerKey caps snapshots per key; the client keeps the
-	// most recent four.
+	// most recent four. Kept at four: it bounds the work find() does per key,
+	// and the longest prefix wins regardless.
 	DeltaMaxSnapshotsPerKey = 4
 	// DeltaMinPrefix is the shortest prefix worth sending as a delta. A delta
 	// of zero or one new message over a long held prefix is a win; a delta
@@ -305,15 +311,22 @@ func isSHA256Hex(s string) bool {
 // happens for a run with no confirmed prefix, an expired snapshot, or a request
 // whose messages do not extend a held prefix.
 //
-// key is the cache key: endpoint + "\n" + runId, exactly as the client builds
-// it. Empty runId never produces a delta.
-func (c *Client) PlanDelta(endpoint, runID string, env Envelope) *DeltaPlan {
+// key is the cache key: endpoint + "\n" + account + "\n" + runId.
+//
+// The published client keys by endpoint+runId because one process serves one
+// account. This pool does not: the same conversation can fail over to a
+// different account, and a snapshot confirmed by account A says nothing about
+// what account B holds. Including the account keeps the two apart, so a
+// failover sends the whole request instead of claiming a prefix B never saw.
+//
+// Empty runId never produces a delta.
+func (c *Client) PlanDelta(endpoint, scope, runID string, env Envelope) *DeltaPlan {
 	plan := &DeltaPlan{}
 	run := strings.TrimSpace(runID)
 	if run == "" {
 		return plan
 	}
-	key := strings.TrimSpace(endpoint) + "\n" + run
+	key := deltaKey(endpoint, scope, run)
 	plan.key = key
 	plan.digests = digestMessages(env.Request.Messages)
 	plan.toolsDigest = digestTools(env.Request.Tools)
@@ -330,6 +343,11 @@ func (c *Client) PlanDelta(endpoint, runID string, env Envelope) *DeltaPlan {
 	plan.base = base
 	plan.Headers = map[string]string{DeltaHeader: "1"}
 	return plan
+}
+
+// deltaKey names one account's run at one endpoint.
+func deltaKey(endpoint, scope, runID string) string {
+	return strings.TrimSpace(endpoint) + "\n" + strings.TrimSpace(scope) + "\n" + strings.TrimSpace(runID)
 }
 
 // find returns the newest confirmed snapshot whose digests are a prefix of

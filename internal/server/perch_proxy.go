@@ -281,7 +281,7 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		// the new tail. A per-ticket run id would make every request a new run,
 		// which is exactly the case where a delta can never fire.
 		if id := s.perchConversationFingerprint(cfg, acct, r, obj); id != "" {
-			opt.RunID = s.perchClient().RunFor(id)
+			opt.RunID = s.perchClient().RunFor(acct.ID, id)
 		} else if ticket != nil && ticket.RunID != "" {
 			// No conversation to continue: keep the ticket's run, as before.
 			opt.RunID = ticket.RunID
@@ -308,8 +308,19 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		Prompt: perch.PromptOf(obj),
 	}
 
+	// One use of the account's ticket, counted the way the published client
+	// counts it: per model-call, including a retry. The count is advisory — the
+	// server decides whether a call is admitted — but without it the console
+	// reports a ticket as untouched forever.
+	if ticket != nil {
+		if tk := s.perchClient().UseTicket(acct.ID); tk != "" {
+			ticket.Token = tk
+		}
+	}
+
 	call := perch.ModelCall{Base: base, WebBase: webBase, Token: tok.AccessToken, Body: payload,
-		Surface: surface, ProxyURL: acct.ProxyURL, UserAgent: ua, Locale: locale, Ticket: ticket}
+		Surface: surface, ProxyURL: acct.ProxyURL, UserAgent: ua, Locale: locale, Ticket: ticket,
+		AccountKey: acct.ID}
 	diagnosticTarget := base
 	if perch.SurfaceFor(surface) == perch.SurfaceWeb {
 		diagnosticTarget = webBase
@@ -574,6 +585,12 @@ func (r *attemptResult) trackUsage(u *perch.Usage) {
 func (s *Server) perchFailure(res *attemptResult, acct config.Account, err error, rec *requestLog) *attemptResult {
 	var me *perch.ModelError
 	if errors.As(err, &me) {
+		if me.Code == perch.TicketCodeUnavailable {
+			// The server refused the ticket itself, not the credential. Drop it
+			// so the next request issues a fresh one instead of re-presenting a
+			// ticket the upstream has already disowned.
+			s.perchClient().DropTicket(acct.ID)
+		}
 		if me.Auth && !strings.EqualFold(me.Code, "banned") {
 			// the access token was refused: renew once and let the retry loop
 			// try again — a rotated refresh token is the only lasting failure

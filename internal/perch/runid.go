@@ -62,15 +62,26 @@ type runRegistry struct {
 	byKey map[string]*runKey
 }
 
-// RunFor returns the run id to use for one conversation.
+// RunFor returns the run id to use for one conversation on ONE ACCOUNT.
+//
+// scope identifies the account: a run id belongs to the account whose
+// server-side context it refers to. The pool serves many accounts from one
+// process, and a failover moves the same conversation to a different account —
+// carrying the previous account's run id across would tell the new account the
+// server already holds a prefix it has never seen. Scoping the key by account
+// keeps each account's runs separate.
 //
 // fingerprint is the caller's stable conversation identity ("" when the request
 // names no conversation at all). An empty fingerprint mints a fresh run id on
 // every call: without a conversation there is nothing to continue, and reusing
 // a run id across unrelated requests would claim a prefix that is not shared.
-func (c *Client) RunFor(fingerprint string) string {
-	key := strings.TrimSpace(fingerprint)
+func (c *Client) RunFor(scope, fingerprint string) string {
+	key := runScopeKey(scope, fingerprint)
 	if key == "" {
+		return NewRunID()
+	}
+	// An empty fingerprint is not a conversation: no reuse, no tracking.
+	if strings.TrimSpace(fingerprint) == "" {
 		return NewRunID()
 	}
 	now := c.now()
@@ -93,16 +104,33 @@ func (c *Client) RunFor(fingerprint string) string {
 	return id
 }
 
-// ForgetRun drops a conversation's run id, used when the server rejects the
-// prefix so the next request starts a new run rather than re-claiming it.
-func (c *Client) ForgetRun(fingerprint string) {
-	key := strings.TrimSpace(fingerprint)
+// ForgetRun drops one conversation's run id on one account.
+//
+// Note what this is NOT for: a server that rejects a delta prefix (409) is
+// saying the PREFIX does not match, not that the run is invalid, and the
+// published client keeps the same run id there and simply resends the whole
+// request. Use this when a run id itself must be abandoned — for instance when
+// an operator wants the next request to look like a fresh turn.
+func (c *Client) ForgetRun(scope, fingerprint string) {
+	key := runScopeKey(scope, fingerprint)
 	if key == "" {
 		return
 	}
 	c.runs.mu.Lock()
 	delete(c.runs.byKey, key)
 	c.runs.mu.Unlock()
+}
+
+// runScopeKey joins an account scope and a conversation fingerprint. Either
+// being empty yields "" so callers mint a fresh id instead of indexing a
+// half-formed key.
+func runScopeKey(scope, fingerprint string) string {
+	acct := strings.TrimSpace(scope)
+	fp := strings.TrimSpace(fingerprint)
+	if acct == "" || fp == "" {
+		return ""
+	}
+	return acct + "\n" + fp
 }
 
 // RunStats reports tracked conversations and whether any run id is live.

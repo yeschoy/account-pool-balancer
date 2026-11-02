@@ -9,8 +9,8 @@ import (
 // Same conversation → same run id, across calls.
 func TestRunForIsStablePerConversation(t *testing.T) {
 	c := NewClient(nil)
-	a := c.RunFor("conv-A")
-	b := c.RunFor("conv-A")
+	a := c.RunFor("acc", "conv-A")
+	b := c.RunFor("acc", "conv-A")
 	if a != b {
 		t.Fatalf("the same conversation got two run ids: %s vs %s", a, b)
 	}
@@ -22,7 +22,7 @@ func TestRunForIsStablePerConversation(t *testing.T) {
 // Different conversations never share a run id.
 func TestRunForIsolatesConversations(t *testing.T) {
 	c := NewClient(nil)
-	if c.RunFor("conv-A") == c.RunFor("conv-B") {
+	if c.RunFor("acc", "conv-A") == c.RunFor("acc", "conv-B") {
 		t.Fatal("two conversations shared a run id")
 	}
 }
@@ -31,7 +31,7 @@ func TestRunForIsolatesConversations(t *testing.T) {
 // prefix two unrelated requests do not share.
 func TestRunForEmptyMintsFresh(t *testing.T) {
 	c := NewClient(nil)
-	a, b := c.RunFor(""), c.RunFor("")
+	a, b := c.RunFor("acc", ""), c.RunFor("acc", "")
 	if a == b {
 		t.Fatalf("an unnamed conversation must not reuse a run id: %s", a)
 	}
@@ -44,12 +44,12 @@ func TestRunForEmptyMintsFresh(t *testing.T) {
 // not inherit each other's prefix forever.
 func TestRunForExpires(t *testing.T) {
 	c := NewClient(nil)
-	first := c.RunFor("conv-A")
+	first := c.RunFor("acc", "conv-A")
 
 	later := time.Now().Add(RunIdTTL + time.Minute)
 	c.Now = func() time.Time { return later }
 
-	if got := c.RunFor("conv-A"); got == first {
+	if got := c.RunFor("acc", "conv-A"); got == first {
 		t.Fatal("an expired conversation must get a new run id")
 	}
 }
@@ -59,14 +59,14 @@ func TestRunForRefreshesRecency(t *testing.T) {
 	c := NewClient(nil)
 	start := time.Now()
 	c.Now = func() time.Time { return start }
-	first := c.RunFor("conv-A")
+	first := c.RunFor("acc", "conv-A")
 
 	// Use it repeatedly, each time just under the TTL apart.
 	cur := start
 	for i := 0; i < 5; i++ {
 		cur = cur.Add(RunIdTTL - time.Minute)
 		c.Now = func() time.Time { return cur }
-		if got := c.RunFor("conv-A"); got != first {
+		if got := c.RunFor("acc", "conv-A"); got != first {
 			t.Fatalf("step %d: run id changed while in active use", i)
 		}
 	}
@@ -75,9 +75,9 @@ func TestRunForRefreshesRecency(t *testing.T) {
 // ForgetRun drops the mapping.
 func TestForgetRun(t *testing.T) {
 	c := NewClient(nil)
-	first := c.RunFor("conv-A")
-	c.ForgetRun("conv-A")
-	if got := c.RunFor("conv-A"); got == first {
+	first := c.RunFor("acc", "conv-A")
+	c.ForgetRun("acc", "conv-A")
+	if got := c.RunFor("acc", "conv-A"); got == first {
 		t.Fatal("ForgetRun did not drop the mapping")
 	}
 }
@@ -103,10 +103,10 @@ func TestDeltaHitsAcrossSeparateRequestsOfOneConversation(t *testing.T) {
 	conv := "fingerprint-of-one-chat"
 
 	// Request 1: 3 messages, whole body.
-	run1 := c.RunFor(conv)
+	run1 := c.RunFor("acc", conv)
 	env1 := envelopeFor(run1, 3, nil)
 	dig := digestMessages(env1.Request.Messages)
-	plan1 := c.PlanDelta("https://app/api/perch-turn", run1, env1)
+	plan1 := c.PlanDelta("https://app/api/perch-turn", "acc", run1, env1)
 	if plan1.IsDelta {
 		t.Fatal("the first request must be whole")
 	}
@@ -119,12 +119,12 @@ func TestDeltaHitsAcrossSeparateRequestsOfOneConversation(t *testing.T) {
 	c.SettleDelta(plan1, true)
 
 	// Request 2: SAME conversation, now 5 messages, arriving as a new request.
-	run2 := c.RunFor(conv)
+	run2 := c.RunFor("acc", conv)
 	if run2 != run1 {
 		t.Fatal("the same conversation must reuse its run id")
 	}
 	env2 := envelopeFor(run2, 5, nil)
-	plan2 := c.PlanDelta("https://app/api/perch-turn", run2, env2)
+	plan2 := c.PlanDelta("https://app/api/perch-turn", "acc", run2, env2)
 	if !plan2.IsDelta {
 		t.Fatal("the second request of the same conversation must be a delta")
 	}
@@ -150,10 +150,10 @@ func TestDeltaCountersReport(t *testing.T) {
 	conv := "conv-stats"
 
 	// First request: whole, and the server confirms 3 messages.
-	run1 := c.RunFor(conv)
+	run1 := c.RunFor("acc", conv)
 	env1 := envelopeFor(run1, 3, nil)
 	dig := digestMessages(env1.Request.Messages)
-	plan1 := c.PlanDelta("ep", run1, env1)
+	plan1 := c.PlanDelta("ep", "acc", run1, env1)
 	c.RecordSending(plan1, env1)
 	plan1.Observe(200, map[string]string{
 		DeltaHeader:      "1",
@@ -163,9 +163,9 @@ func TestDeltaCountersReport(t *testing.T) {
 	c.SettleDelta(plan1, true)
 
 	// Second request: delta over 3 held messages, 2 new.
-	run2 := c.RunFor(conv)
+	run2 := c.RunFor("acc", conv)
 	env2 := envelopeFor(run2, 5, nil)
-	plan2 := c.PlanDelta("ep", run2, env2)
+	plan2 := c.PlanDelta("ep", "acc", run2, env2)
 	if !plan2.IsDelta {
 		t.Fatal("expected a delta on the second request")
 	}
@@ -196,7 +196,7 @@ func TestDeltaCountersReport(t *testing.T) {
 
 	// A refusal is counted and the cache entry dropped.
 	env3 := envelopeFor(run2, 6, nil)
-	plan3 := c.PlanDelta("ep", run2, env3)
+	plan3 := c.PlanDelta("ep", "acc", run2, env3)
 	if plan3.IsDelta {
 		// The 5-message prefix was confirmed, so this is a delta; force the
 		// refusal path the way the server would.
@@ -210,7 +210,7 @@ func TestDeltaCountersReport(t *testing.T) {
 
 	// Rebuild a snapshot so the reset can be shown to keep the cache.
 	env4 := envelopeFor(run2, 7, nil)
-	plan4 := c.PlanDelta("ep", run2, env4)
+	plan4 := c.PlanDelta("ep", "acc", run2, env4)
 	plan4.Observe(200, map[string]string{
 		DeltaHeader:      "1",
 		HeldLengthHeader: "7",
@@ -225,5 +225,81 @@ func TestDeltaCountersReport(t *testing.T) {
 	}
 	if k, _ := c.DeltaStats(); k != keysBefore || k == 0 {
 		t.Fatalf("ResetDeltaCounters must keep the cache: %d -> %d", keysBefore, k)
+	}
+}
+
+// A conversation has ONE run id per account, not one overall.
+//
+// The pool serves many accounts from one process and a failover moves the same
+// conversation between them. Sharing a run id across accounts would tell the
+// new account the server already holds a prefix it has never seen.
+func TestRunForIsScopedPerAccount(t *testing.T) {
+	c := NewClient(nil)
+	a := c.RunFor("acct-A", "conv-1")
+	b := c.RunFor("acct-B", "conv-1")
+	if a == b {
+		t.Fatalf("two accounts shared a run id for one conversation: %s", a)
+	}
+	if a != c.RunFor("acct-A", "conv-1") {
+		t.Fatal("account A lost its run id")
+	}
+	if b != c.RunFor("acct-B", "conv-1") {
+		t.Fatal("account B lost its run id")
+	}
+}
+
+// The delta cache is scoped by account too: a prefix confirmed by account A must
+// never be claimed against account B.
+func TestDeltaIsScopedPerAccount(t *testing.T) {
+	c := NewClient(nil)
+	conv := "conv-1"
+	ep := "https://app/api/perch-turn"
+
+	// Account A: whole request, server confirms 3 messages.
+	runA := c.RunFor("acct-A", conv)
+	env := envelopeFor(runA, 3, nil)
+	plan := c.PlanDelta(ep, "acct-A", runA, env)
+	if plan.IsDelta {
+		t.Fatal("first request must be whole")
+	}
+	plan.Observe(200, map[string]string{
+		DeltaHeader:      "1",
+		HeldLengthHeader: "3",
+		HeldDigestHeader: prefixDigest(digestMessages(env.Request.Messages), 3),
+	})
+	c.SettleDelta(plan, true)
+
+	// Account A: now a delta.
+	grown := envelopeFor(runA, 5, nil)
+	if p := c.PlanDelta(ep, "acct-A", runA, grown); !p.IsDelta {
+		t.Fatal("account A should have a delta")
+	}
+
+	// Account B: same conversation, same run id, but a different account. It
+	// must send the whole request — B holds nothing.
+	runB := c.RunFor("acct-B", conv)
+	same := envelopeFor(runB, 5, nil)
+	p := c.PlanDelta(ep, "acct-B", runB, same)
+	if p.IsDelta {
+		t.Fatal("account B must not inherit account A's confirmed prefix")
+	}
+}
+
+// An unscoped call never reuses a snapshot.
+func TestDeltaWithoutAccountScopeIsWhole(t *testing.T) {
+	c := NewClient(nil)
+	env := envelopeFor("run-x", 3, nil)
+	dig := digestMessages(env.Request.Messages)
+	p := c.PlanDelta("ep", "acct", "run-x", env)
+	p.Observe(200, map[string]string{
+		DeltaHeader:      "1",
+		HeldLengthHeader: "3",
+		HeldDigestHeader: prefixDigest(dig, 3),
+	})
+	c.SettleDelta(p, true)
+
+	grown := envelopeFor("run-x", 4, nil)
+	if q := c.PlanDelta("ep", "", "run-x", grown); q.IsDelta {
+		t.Fatal("a call with no account scope must send the whole request")
 	}
 }
