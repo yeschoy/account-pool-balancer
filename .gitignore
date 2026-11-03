@@ -23,6 +23,8 @@ pnpm-lock.yaml
 # Go 构建缓存（在仓库内构建时使用）
 /.gocache/
 /.gotmp/
+/.gomodcache/
+/.gopath/
 
 # 分析产物（gocache、反编译/逆向中间产物）
 /.analysis/

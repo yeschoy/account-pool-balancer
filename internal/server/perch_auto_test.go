@@ -571,3 +571,41 @@ func TestPerchAutoRefusedRenewalStaysActionable(t *testing.T) {
 		t.Fatal("refused renewal still imported the account")
 	}
 }
+
+// A cancelled or timed-out refresh must say so. Reporting every transient
+// failure as "Perch unavailable" sent one investigation after the proxy when
+// the browser had simply gone away.
+func TestAutoRefreshFailureReasonNamesTheCause(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"cancelled", &perch.Error{Kind: perch.KindTransient, Message: "request cancelled: context canceled", Err: context.Canceled}, "请求已取消"},
+		{"deadline", &perch.Error{Kind: perch.KindTransient, Message: "x", Err: context.DeadlineExceeded}, "请求超时"},
+		{"upstream status", &perch.Error{Kind: perch.KindTransient, Status: 502, Message: "bad gateway"}, "HTTP 502 bad gateway"},
+		{"status without message", &perch.Error{Kind: perch.KindTransient, Status: 504}, "HTTP 504"},
+		{"transport", &perch.Error{Kind: perch.KindTransient, Message: "connection refused"}, "连接失败"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := autoRefreshFailureReason(tc.err); got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The renewal rotates the refresh token before the import reads it, so a
+// cancelled request must not surface as a Perch outage.
+func TestAutoRefreshTransientMessageCarriesReason(t *testing.T) {
+	s := &Server{logs: nil}
+	s.perch = &perchRuntime{renew: func(context.Context, perch.Creds, string) (perch.Session, error) {
+		return perch.Session{}, &perch.Error{Kind: perch.KindTransient, Status: 503, Message: "service unavailable", Err: errors.New("503")}
+	}}
+	rec := perchsignupstore.Record{ID: "c1", Candidate: perchsignupstore.Candidate{ProxyURL: "socks5://user:pass@proxy.example:1080"}}
+	rec.Session = []byte(`{"account":{"supabase_user_id":"u"},"session":{"access_token":"a","refresh_token":"r","expires_at":1},"supabase_session":{"access_token":"a","refresh_token":"r","expires_at":1,"user":{"id":"u"}},"auth_context":{"supabase_url":"https://project.supabase.co","supabase_anon_key":"k"}}`)
+	_, err := s.renewAutoSession(context.Background(), rec)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("transient failure lost its reason: %v", err)
+	}
+}

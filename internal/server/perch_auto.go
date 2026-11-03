@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -412,13 +414,24 @@ func (s *Server) renewAutoSession(ctx context.Context, rec perchsignupstore.Reco
 	sess, err := s.perchRenew(ctx, creds, parsed.RefreshToken)
 	s.logPerchDiagnostic("", "refresh", autoPerchProxySource(rec.Candidate.ProxyURL), "", started, err)
 	if err != nil {
+		// KindTransient covers a transport error, a timeout, a cancelled
+		// request and a 5xx alike, and those need different answers: a 5xx is
+		// the upstream's problem, a cancelled request is usually the browser
+		// going away, and a transport error is the proxy. Reporting all three
+		// as "Perch unavailable" hides which one to look at, so the reason is
+		// carried through instead.
+		reason := autoRefreshFailureReason(err)
 		switch perch.KindOf(err) {
 		case perch.KindAuth:
 			return nil, errors.New("候选账号的会话已被拒绝，请重新注册该账号")
 		case perch.KindTransient:
-			return nil, errors.New("续期会话时网络或 Perch 服务暂时不可用，请稍后重试")
+			return nil, fmt.Errorf("续期会话时网络或 Perch 服务暂时不可用（%s），请稍后重试", reason)
+		case perch.KindRateLimited:
+			return nil, fmt.Errorf("续期会话被限流（%s），请稍后重试", reason)
+		case perch.KindNotFound:
+			return nil, errors.New("续期会话失败：Supabase 项目地址或接口不存在，请人工核查")
 		}
-		return nil, errors.New("续期会话失败，请人工核查")
+		return nil, fmt.Errorf("续期会话失败（%s），请人工核查", reason)
 	}
 	if sess.UserID != "" && sess.UserID != parsed.UserID {
 		return nil, errors.New("续期后的会话身份与候选账号不一致，请人工核查")
@@ -515,7 +528,15 @@ func (s *Server) apiPerchAutoImportCandidate(w http.ResponseWriter, r *http.Requ
 	defer func() { a.mu.Lock(); a.workingID = ""; a.mu.Unlock() }()
 	// An old candidate's access token has expired by now; renew it before the
 	// import validates the session, or every refill of an aged account fails.
-	fresh, err := s.readyCandidateForImport(r.Context(), rec)
+	//
+	// The renewal deliberately outlives the browser. It rotates the refresh
+	// token and persists the new one, so cancelling it midway can strand the
+	// account on a token the server has already spent. A page reload or a
+	// front-end timeout is not a reason to abandon that write, so the work
+	// detaches from the request and keeps its own deadline.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
+	fresh, err := s.readyCandidateForImport(ctx, rec)
 	if err != nil {
 		s.perchAutoError(err.Error())
 		apiError(w, 409, err)
@@ -900,6 +921,41 @@ func autoPerchProxySource(proxy string) string {
 		return "explicit_proxy"
 	}
 	return "direct"
+}
+
+// autoRefreshFailureReason names a failed refresh closely enough to act on.
+//
+// The three outcomes are operationally distinct: a cancelled request means the
+// caller went away and nothing is wrong upstream, a timeout means the route is
+// too slow, and a status means the upstream answered. Only the last one is
+// Perch's to fix, so the message must not flatten them into one.
+func autoRefreshFailureReason(err error) string {
+	if err == nil {
+		return "未知原因"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "请求已取消"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "请求超时"
+	}
+	var pe *perch.Error
+	if errors.As(err, &pe) && pe.Status > 0 {
+		// GoTrue carries the refusal reason in the body; trim it so an HTML
+		// challenge page cannot flood the status line.
+		if msg := strings.TrimSpace(pe.Message); msg != "" {
+			if len(msg) > 120 {
+				msg = msg[:120] + "…"
+			}
+			return fmt.Sprintf("HTTP %d %s", pe.Status, msg)
+		}
+		return fmt.Sprintf("HTTP %d", pe.Status)
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "请求超时"
+	}
+	return "连接失败"
 }
 
 func (s *Server) activateAutoSession(ctx context.Context, proxy string, doc []byte) (resultErr error) {
