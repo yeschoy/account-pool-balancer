@@ -63,12 +63,20 @@ function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(ok, legacy); else legacy();
 }
 
-function toast(msg) {
+// toast shows a short status line. An optional second argument makes a failure
+// stay readable: errors keep their text longer than an acknowledgement, so a
+// refused request is not missed the way a 2.6s flash would be.
+function toast(msg, kind) {
   const t = $('#toast');
+  const failed = kind === 'error';
   t.textContent = msg;
+  t.classList.toggle('toast-error', failed);
   t.classList.remove('hidden');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.add('hidden'), 2600);
+  toast.timer = setTimeout(() => {
+    t.classList.add('hidden');
+    t.classList.remove('toast-error');
+  }, failed ? 8000 : 2600);
 }
 function applyWidths(root) {
   $$('[data-w]', root).forEach((el) => { el.style.width = Math.max(0, Math.min(100, parseFloat(el.dataset.w))) + '%'; });

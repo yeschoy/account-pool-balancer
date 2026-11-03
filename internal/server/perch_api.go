@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/perch"
 	"account-pool-balancer/internal/perchimport"
 	"account-pool-balancer/internal/perchstore"
 	"account-pool-balancer/internal/quota"
@@ -1453,7 +1454,22 @@ func (s *Server) apiPerchSaveSettings(w http.ResponseWriter, r *http.Request) {
 		s.perch.sched.Tick = time.Duration(cfg.Perch.RefreshTickSec) * time.Second
 		s.perch.sched.Wake()
 	}
+	s.applyPerchDeltaLimits(cfg.Perch)
 	writeJSON(w, http.StatusOK, map[string]any{"revision": cfg.Revision, "perch": cfg.Perch})
+}
+
+// applyPerchDeltaLimits pushes the delta cache sizing onto the shared Perch
+// client.
+//
+// Called on every settings save rather than per request: the cache reads its
+// window and cap on the hot path under its own lock (see delta.go), and a
+// settings read there would nest one lock under another. Startup calls it too,
+// so a restart honours a value saved earlier.
+func (s *Server) applyPerchDeltaLimits(p config.Perch) {
+	s.perchClient().SetDeltaLimits(perch.DeltaLimits{
+		TTL:     time.Duration(p.DeltaTTLMin) * time.Minute,
+		MaxKeys: p.DeltaMaxKeys,
+	})
 }
 
 // ---- export / backup / restore ------------------------------------------------------------

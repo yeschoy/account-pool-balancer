@@ -47,17 +47,33 @@ const (
 	HeldToolsHeader  = "x-perch-call-held-tools"
 )
 
-// Delta cache limits (the client's Tqr / Iqr / Rqr).
+// Delta cache limits.
+//
+// The published client hard-codes these (its uYr / dYr / pYr): a 9-minute
+// trust window, 32 keys, 4 snapshots per key. The first two are fitting
+// parameters, not protocol facts — one process there serves one account — so
+// both are fields on the cache and an operator can raise them.
+//
+// What a stale TTL costs is worth stating plainly, because raising it is not
+// free: an EXPIRED snapshot never causes an error. find() skips it and
+// PlanDelta returns a whole-request plan, so the pool resends the full message
+// list — one request, no extra ticket, no extra spend. A TTL longer than the
+// server's own memory is the expensive direction: the pool claims a prefix the
+// server has since dropped, takes a 409, and resends the whole request anyway.
+// That is two round trips where the shorter window sent one.
 const (
-	// DeltaTTL is how long a confirmed snapshot is trusted.
-	DeltaTTL = 9 * time.Minute
-	// DeltaMaxKeys caps the number of cached endpoint+account+run entries.
+	// DefaultDeltaTTL is how long a confirmed snapshot is trusted out of the
+	// box. Nine minutes matches the published client, whose turns are seconds
+	// apart; a pool serving chat and agent sessions keeps a working set open
+	// longer, which is why the setting exists.
+	DefaultDeltaTTL = 9 * time.Minute
+	// DefaultDeltaMaxKeys caps cached endpoint+account+run entries.
 	//
-	// The published client keeps 32, but it serves one account from one
-	// process; this pool serves many, so the same cache has to hold a working
-	// set per account. Sized to comfortably exceed maxRunIds/8 while staying
-	// small enough that a stale entry is never held long.
-	DeltaMaxKeys = 4096
+	// The client keeps 32 because it serves one account from one process.
+	// This pool serves many, so the same cache has to hold a working set per
+	// account; 4096 also lines up with maxRunIds, so a conversation whose run
+	// id is still tracked is not pushed out of the prefix cache.
+	DefaultDeltaMaxKeys = 4096
 	// DeltaMaxSnapshotsPerKey caps snapshots per key; the client keeps the
 	// most recent four. Kept at four: it bounds the work find() does per key,
 	// and the longest prefix wins regardless.
@@ -67,6 +83,29 @@ const (
 	// that repeats most of the request is not, and the whole body is clearer.
 	DeltaMinHeldMessages = 1
 )
+
+// DeltaLimits is the operator's view of the cache sizing.
+//
+// It is resolved when the Perch setting is saved (SetDeltaLimits), not read per
+// request: the cache consults ttl/maxKeys on the hot path under its own lock,
+// and a settings lookup there would put a lock under a lock.
+type DeltaLimits struct {
+	// TTL is how long a confirmed snapshot is trusted.
+	TTL time.Duration
+	// MaxKeys caps cached keys.
+	MaxKeys int
+}
+
+// Resolved fills a missing or nonsensical value with the default.
+func (l DeltaLimits) Resolved() DeltaLimits {
+	if l.TTL <= 0 {
+		l.TTL = DefaultDeltaTTL
+	}
+	if l.MaxKeys <= 0 {
+		l.MaxKeys = DefaultDeltaMaxKeys
+	}
+	return l
+}
 
 // deltaEntry is one confirmed prefix the server is holding.
 type deltaEntry struct {
@@ -107,6 +146,11 @@ type deltaCache struct {
 	byK  map[string][]*deltaEntry
 	seen time.Time
 
+	// limits is the trust window and key cap in force. Zero means the
+	// defaults (see DeltaLimits.Resolved); SetDeltaLimits assigns it under mu,
+	// and find/put read it under the same lock.
+	limits DeltaLimits
+
 	// Counters. Every model call lands in exactly one of whole/delta; a delta
 	// that the server refused is counted separately so a persistently failing
 	// prefix is visible instead of just looking like traffic.
@@ -119,6 +163,10 @@ type deltaCache struct {
 	statBytesDelta  int64 // message bytes actually sent in deltas
 	statMessagesCut int64 // messages not sent, summed over deltas
 	statMsgSent     int64 // messages actually sent in deltas
+	// statUnscoped counts plans built with no account scope. Such a call can
+	// never hit the cache; a nonzero value means a caller is not passing the
+	// account and delta sending is silently disabled for it.
+	statUnscoped int64
 }
 
 // Body renders the request for this plan.
@@ -328,6 +376,16 @@ func (c *Client) PlanDelta(endpoint, scope, runID string, env Envelope) *DeltaPl
 	}
 	key := deltaKey(endpoint, scope, run)
 	plan.key = key
+	// A call with no account scope can never match a snapshot, so it always
+	// sends the whole request. That is the safe default, but it is also
+	// silent: a caller that forgot to pass the account would see delta
+	// hits quietly drop to zero with nothing to point at. Counting it makes
+	// the degradation visible in the delta report.
+	if strings.TrimSpace(scope) == "" {
+		c.deltas.mu.Lock()
+		c.deltas.statUnscoped++
+		c.deltas.mu.Unlock()
+	}
 	plan.digests = digestMessages(env.Request.Messages)
 	plan.toolsDigest = digestTools(env.Request.Tools)
 
@@ -351,7 +409,7 @@ func deltaKey(endpoint, scope, runID string) string {
 }
 
 // find returns the newest confirmed snapshot whose digests are a prefix of
-// digests, preferring the longest, and only within DeltaTTL.
+// digests, preferring the longest, and only within the trust window.
 func (c *deltaCache) find(key string, digests []string, now time.Time) *deltaEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -359,9 +417,10 @@ func (c *deltaCache) find(key string, digests []string, now time.Time) *deltaEnt
 	if len(entries) == 0 {
 		return nil
 	}
+	ttl := c.limits.Resolved().TTL
 	var best *deltaEntry
 	for _, e := range entries {
-		if now.Sub(e.confirmedAt) > DeltaTTL {
+		if now.Sub(e.confirmedAt) > ttl {
 			continue
 		}
 		if len(e.digests) > len(digests) || !hasPrefix(digests, e.digests) {
@@ -389,7 +448,8 @@ func (c *deltaCache) put(key string, e *deltaEntry) {
 	}
 	c.byK[key] = list
 	// Evict the oldest keys when the cap is exceeded.
-	for len(c.byK) > DeltaMaxKeys {
+	maxKeys := c.limits.Resolved().MaxKeys
+	for len(c.byK) > maxKeys {
 		var oldestKey string
 		var oldest time.Time
 		for k, es := range c.byK {
@@ -441,6 +501,28 @@ func (c *Client) ResetDeltaCache() {
 	c.deltas.mu.Unlock()
 }
 
+// SetDeltaLimits applies the console's cache sizing.
+//
+// It takes effect on the next find/put: an entry already stored under a longer
+// window is re-checked against the new one, so lowering the TTL expires it
+// immediately instead of leaving it trusted until the old window ran out.
+// Snapshots beyond a lowered key cap are *not* trimmed here; the next put
+// evicts down to the cap, which keeps this call free of O(n) work on a
+// settings save. A zero field keeps its default (see DeltaLimits.Resolved).
+func (c *Client) SetDeltaLimits(lim DeltaLimits) {
+	lim = lim.Resolved()
+	c.deltas.mu.Lock()
+	c.deltas.limits = lim
+	c.deltas.mu.Unlock()
+}
+
+// DeltaLimits reports the sizing in force, for the diagnostics endpoint.
+func (c *Client) DeltaLimits() DeltaLimits {
+	c.deltas.mu.Lock()
+	defer c.deltas.mu.Unlock()
+	return c.deltas.limits.Resolved()
+}
+
 // DeltaStats reports cached prefix counts, for the diagnostics endpoint.
 func (c *Client) DeltaStats() (keys, snapshots int) {
 	c.deltas.mu.Lock()
@@ -468,6 +550,10 @@ type DeltaReport struct {
 	Whole int64 `json:"wholeRequests"`
 	// Refused counts deltas the server rejected and that were resent whole.
 	Refused int64 `json:"refusedDeltas"`
+	// Unscoped counts calls planned with no account scope, which can never hit
+	// the cache. It should be 0; a nonzero value means a caller is omitting the
+	// account and that traffic is permanently sent whole.
+	Unscoped int64 `json:"unscopedCalls"`
 	// HitRate is Delta / (Delta + Whole), 0 when nothing has been sent.
 	HitRate float64 `json:"hitRate"`
 
@@ -482,6 +568,16 @@ type DeltaReport struct {
 	// BytesOmitted / BytesSent are the same in JSON message bytes.
 	BytesOmitted int64 `json:"bytesOmitted"`
 	BytesSent    int64 `json:"bytesSent"`
+
+	// Limits says what the cache is actually sized to, so an operator reading
+	// the report can tell a miss from a misconfiguration.
+	Limits DeltaLimitsView `json:"limits"`
+}
+
+// DeltaLimitsView is the report's rendering of the sizing in force.
+type DeltaLimitsView struct {
+	TTLMinutes int `json:"ttlMinutes"`
+	MaxKeys    int `json:"maxKeys"`
 }
 
 // DeltaReport returns the counters. It never contacts the server.
@@ -495,12 +591,17 @@ func (c *Client) DeltaReport() DeltaReport {
 		Delta:           c.deltas.statDelta,
 		Whole:           c.deltas.statWhole,
 		Refused:         c.deltas.statRefused,
+		Unscoped:        c.deltas.statUnscoped,
 		Confirmed:       c.deltas.statConfirmed,
 		Unconfirmed:     c.deltas.statUnconfirmed,
 		MessagesOmitted: c.deltas.statMessagesCut,
 		MessagesSent:    c.deltas.statMsgSent,
 		BytesOmitted:    c.deltas.statBytesSaved,
 		BytesSent:       c.deltas.statBytesDelta,
+		Limits: DeltaLimitsView{
+			TTLMinutes: int(c.deltas.limits.Resolved().TTL / time.Minute),
+			MaxKeys:    c.deltas.limits.Resolved().MaxKeys,
+		},
 	}
 	if total := rep.Delta + rep.Whole; total > 0 {
 		rep.HitRate = float64(rep.Delta) / float64(total)
@@ -564,6 +665,7 @@ func (c *Client) ResetDeltaCounters() {
 	c.deltas.statBytesDelta = 0
 	c.deltas.statMessagesCut = 0
 	c.deltas.statMsgSent = 0
+	c.deltas.statUnscoped = 0
 	c.deltas.mu.Unlock()
 }
 

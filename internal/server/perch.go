@@ -45,6 +45,10 @@ type perchRuntime struct {
 	// show "last checked" without re-checking.
 	checks  map[string]perchCheck
 	history []perchTrend
+
+	// renew exchanges a refresh token for a new session. It is a field so a
+	// test can observe the auto-signup path without reaching Supabase.
+	renew func(context.Context, perch.Creds, string) (perch.Session, error)
 }
 
 // perchCheck is the last health verdict for one account.
@@ -86,6 +90,9 @@ func (s *Server) initPerch() error {
 	s.quota.PerchFetch = s.fetchPerchMeter
 	s.quota.PerchModels = s.fetchPerchModels
 	s.rebindPerch(s.cfg.Get())
+	// Delta cache sizing comes from settings, so a restart honours a value the
+	// operator saved earlier instead of falling back to the package default.
+	s.applyPerchDeltaLimits(s.cfg.Get().Perch)
 	return nil
 }
 
@@ -347,6 +354,14 @@ func (s *Server) readPerchMeter(ctx context.Context, sec perchstore.Secrets, cfg
 	}
 	acct, accErr := s.perchClient().Account(ctx, appURL, sec.AccessToken)
 	met, rpcErr := s.perchClient().Usage(ctx, sec.Creds(cfg.SupabaseKey, cfg.AppURL), sec.AccessToken)
+	// The workspace identity comes from cli-context, the same route the CLI
+	// resolves it through. It is a separate, best-effort read: not having it
+	// costs the attribution block on a model call and nothing else, so a
+	// failure here must never fail the meter read it rides along with.
+	wsID := ""
+	if wc, werr := s.perchClient().CliContext(ctx, appURL, sec.AccessToken); werr == nil {
+		wsID = wc.WorkspaceID
+	}
 
 	switch {
 	case accErr == nil:
@@ -362,11 +377,15 @@ func (s *Server) readPerchMeter(ctx context.Context, sec perchstore.Secrets, cfg
 				acct.StarterMonthlyLimits(usd)
 			}
 		}
-		return accountToQuota(acct), nil
+		out := accountToQuota(acct)
+		out.WorkspaceID = wsID
+		return out, nil
 	case rpcErr == nil:
 		// only the RPC answered: spend without a cap, which the console shows
 		// as "unknown" rather than guessing
-		return meterToQuota(met), nil
+		out := meterToQuota(met)
+		out.WorkspaceID = wsID
+		return out, nil
 	default:
 		// Preserve an auth failure so the caller can attempt one refresh.
 		if perch.KindOf(accErr) == perch.KindAuth {
@@ -445,6 +464,14 @@ func (s *Server) perchClient() *perch.Client {
 		return s.perch.keeper.Client()
 	}
 	return perch.NewClient(nil)
+}
+
+// perchRenew renews one session, through the test hook when one is installed.
+func (s *Server) perchRenew(ctx context.Context, creds perch.Creds, refreshToken string) (perch.Session, error) {
+	if s.perch != nil && s.perch.renew != nil {
+		return s.perch.renew(ctx, creds, refreshToken)
+	}
+	return s.perchClient().Renew(ctx, creds, refreshToken)
 }
 
 // meterToQuota converts Perch's answer into the quota package's shape.

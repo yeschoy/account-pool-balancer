@@ -72,6 +72,14 @@ func (s *Server) perchConversationFingerprint(cfg *config.Config, acct config.Ac
 // produces, so a pool that sends it is identifiable by that alone. The
 // workspace id comes from the account's last quota snapshot, which is where the
 // quota poller records what `/api/v1/workspaces/current` answered.
+// perchAttribution builds the block the published client's ck() builds: it is
+// emitted only when BOTH ids are known, and dropped entirely otherwise. Sending
+// {userId} alone is a shape the real client never produces, so that case is
+// null, not a best effort.
+//
+// The workspace id comes from /api/perch-terminal/cli-context, read by the
+// quota poller into the account's snapshot (see readPerchMeter). It is not on
+// the account route, and there is no control key to ask another route with.
 func (s *Server) perchAttribution(a config.Account) map[string]any {
 	userID := strings.TrimSpace(a.PerchUserID)
 	if userID == "" {
@@ -82,7 +90,6 @@ func (s *Server) perchAttribution(a config.Account) map[string]any {
 		workspaceID = strings.TrimSpace(q.WorkspaceID)
 	}
 	if workspaceID == "" {
-		// o0 returns null rather than a partial block.
 		return nil
 	}
 	return map[string]any{
@@ -90,6 +97,28 @@ func (s *Server) perchAttribution(a config.Account) map[string]any {
 		"workspaceId": workspaceID,
 		"source":      "cli",
 	}
+}
+
+// attributionWithRun returns the attribution block stamped with the run id the
+// envelope ended up carrying.
+//
+// The published client fills attribution via ck({userId, workspaceId, runId,
+// lane, ...}), and its runId there is the same value it puts on the envelope.
+// The pool resolves the run id from the caller's conversation (see the RunID
+// comment further down), which happens after the options are built, so the
+// block is re-stamped here instead of being built once inside perchRequestOpts.
+// A nil block (no workspace id yet) stays nil: the client never sends a partial
+// one.
+func (s *Server) attributionWithRun(attrib map[string]any, runID string) map[string]any {
+	if attrib == nil || runID == "" {
+		return attrib
+	}
+	out := make(map[string]any, len(attrib)+1)
+	for k, v := range attrib {
+		out[k] = v
+	}
+	out["runId"] = runID
+	return out
 }
 
 // perchRequestOpts reads the console's Perch settings into what the envelope
@@ -265,12 +294,21 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		}
 	}
 
+	// The conversation fingerprint names this chat. It decides both the run id
+	// and which slot of the account's thread pool this turn reports, so it is
+	// resolved once and reused below (including by the cli-turn record, whose
+	// thread has to match the one the model call actually sent).
+	conversationID := s.perchConversationFingerprint(cfg, acct, r, obj)
+
 	if perch.SurfaceFor(surface) != perch.SurfaceWeb {
 		opt := s.perchRequestOpts(cfg, acct)
 		opt.Model = rec.Model
-		// The CLI names a thread on its own envelope, and the pool fills the
-		// caller's conversation when it has one, else the CLI's cwd thread.
-		opt.ThreadID = s.perchThreadID(cfg, "")
+		// The CLI names a thread on its own envelope. The pool sends the account's
+		// thread for this conversation: scoped by account (one shared value across
+		// the pool is a machine identity no real client has more than one of) and
+		// spread across a small pool (a developer works in several project
+		// directories, and the client derives one thread id per directory).
+		opt.ThreadID = s.perchThreadIDForConversation(cfg, conversationID, acct.ID)
 		opt.ChatMode = cfg.Perch.Lane
 		// The run id follows the CONVERSATION, not the ticket.
 		//
@@ -280,12 +318,14 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 		// lets two requests of one chat hit the same cache entry and send only
 		// the new tail. A per-ticket run id would make every request a new run,
 		// which is exactly the case where a delta can never fire.
-		if id := s.perchConversationFingerprint(cfg, acct, r, obj); id != "" {
-			opt.RunID = s.perchClient().RunFor(acct.ID, id)
+		if conversationID != "" {
+			opt.RunID = s.perchClient().RunFor(acct.ID, conversationID)
 		} else if ticket != nil && ticket.RunID != "" {
 			// No conversation to continue: keep the ticket's run, as before.
 			opt.RunID = ticket.RunID
 		}
+		// Attribution names the run, as the published client's block does.
+		opt.Attribution = s.attributionWithRun(opt.Attribution, opt.RunID)
 		var err error
 		if payload, err = json.Marshal(perch.BuildEnvelope(obj, opt)); err != nil {
 			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusInternalServerError, "request", "request"
@@ -295,14 +335,24 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 	}
 
 	// What this turn is, for the cli-turn record: the reporter reads it after
-	// the attempt settles (prompt and answer are added there, then redacted).
+	// the attempt settles. Prompt and answer are carried here in full because
+	// the real cli-turn record contains them, and where they go depends on the
+	// egress switch:
+	//
+	//   - with telemetryEgress on, the conversation is sent to Perch as the
+	//     CLI itself sends it (that is what cli-turn is);
+	//   - with egress off, the reporter never serialises the text into the
+	//     audit log: perch.RedactTurn drops everything but status and duration,
+	//     and the audit line records only sizes.
+	//
+	// So the text is in memory between here and the reporter and nowhere else.
 	// It names the ticket's run id, because the model calls of this turn did.
 	turnRunID := perch.NewRunID()
 	if ticket != nil && ticket.RunID != "" {
 		turnRunID = ticket.RunID
 	}
 	res.turn = perchTurn{
-		Thread: s.perchThreadID(cfg, ""),
+		Thread: s.perchThreadIDForConversation(cfg, conversationID, acct.ID),
 		Mode:   cfg.Perch.Lane,
 		RunID:  turnRunID,
 		Prompt: perch.PromptOf(obj),

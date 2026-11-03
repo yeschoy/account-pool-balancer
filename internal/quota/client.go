@@ -439,6 +439,30 @@ type CatalogModel struct {
 	Name string
 }
 
+// PublicModelID is the shared name published for an upstream catalogue id.
+// Modal's known base models use short names across all accounts; other
+// catalogues retain their own ids or base model names.
+func PublicModelID(id, base string) string {
+	if base == "" || base == id {
+		return id
+	}
+	if strings.HasSuffix(id, ".modal.direct") {
+		switch base {
+		case "zai-org/GLM-5.3":
+			return "glm-5-3"
+		case "deepseek-ai/DeepSeek-V4.1-Flash-1017":
+			return "deepseek-v4-1-flash-1017"
+		case "moonshotai/Kimi-K3":
+			return "kimi-k3"
+		case "zai-org/GLM-5.3-Flash":
+			return "glm-5-3-flash"
+		case "Qwen/Qwen3.8-Max-VL-Thinking":
+			return "qwen3-8-max"
+		}
+	}
+	return base
+}
+
 // FetchCatalogFull is FetchCatalog with the alias information kept: ids
 // that are aliases of another model and the display names, which is what a
 // pool publishing one name for several accounts' endpoints needs.
@@ -459,10 +483,10 @@ func FetchCatalogFull(ctx context.Context, hc *http.Client, runtimeBase, runtime
 	}
 	var body struct {
 		Data []struct {
-			ID           string `json:"id"`
-			Enabled      *bool  `json:"enabled"`
-			BaseModelID  string `json:"base_model_id"`
-			Name         string `json:"name"`
+			ID          string `json:"id"`
+			Enabled     *bool  `json:"enabled"`
+			BaseModelID string `json:"base_model_id"`
+			Name        string `json:"name"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&body); err != nil {

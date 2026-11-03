@@ -32,9 +32,11 @@ package perch
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -123,6 +125,48 @@ func (d DeviceIdentity) MarkFirstPrompt(now time.Time) (DeviceIdentity, bool) {
 // cwd yields "" and callers must then keep their own thread id rather than
 // sending a digest of nothing.
 func CwdThreadID(cwd string) string {
+	return CwdThreadIDFor(cwd, "")
+}
+
+// CwdThreadIDFor is CwdThreadID scoped to one account.
+//
+// The published CLI hashes the working directory, so every account served from
+// this process would present the SAME thread id: one "cli-cwd-<hex>" shared by
+// the whole pool. The real client never does that — a thread id belongs to one
+// machine, and one machine runs one account. Sending one thread id from
+// seventeen identities is a cross-account correlation signal that needs no
+// inference to read: group the traffic by thread id and the pool is visible.
+//
+// Scoping the digest by account gives each account a thread id of its own,
+// derived the same way and still stable across calls. An empty account keeps
+// the published value, which is what a single-account deployment should send.
+func CwdThreadIDFor(cwd, account string) string {
+	return CwdThreadIDForSlot(cwd, account, "")
+}
+
+// ThreadPoolSize is how many thread ids one account presents.
+//
+// A developer running the CLI works in several project directories at once, and
+// the published client derives one thread id per directory (Znt), so one
+// account legitimately presents a handful of them. The pool has no caller cwd
+// — that never travels over HTTP — so it can only synthesise the equivalent: a
+// fixed pool of directory-shaped thread ids that conversations are spread
+// across. Ten is the size that keeps the picture ordinary: enough that one
+// account is not pinned to a single "project" forever, few enough that it reads
+// as one developer rather than a fleet.
+const ThreadPoolSize = 10
+
+// CwdThreadIDForSlot derives the account's thread id for one pool slot.
+//
+// slot is the project-shaped discriminator: the pool maps each conversation to
+// one slot, so a conversation keeps its thread (like a project directory that
+// keeps being used) while a different conversation lands elsewhere. An empty
+// slot keeps the single-thread behaviour of CwdThreadIDFor.
+//
+// The digest is account + slot scoped, so two accounts never share a thread id
+// even when they occupy the same slot — the cross-account signal the plain
+// published formula would create.
+func CwdThreadIDForSlot(cwd, account, slot string) string {
 	p := strings.TrimSpace(cwd)
 	if p == "" {
 		return ""
@@ -131,13 +175,44 @@ func CwdThreadID(cwd string) string {
 	if err != nil {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(abs))
+	material := abs
+	if a := strings.TrimSpace(account); a != "" {
+		// NUL separates the two so no account name can shift the boundary and
+		// collide with another (cwd, account) pair.
+		material = abs + "\x00" + a
+	}
+	if sl := strings.TrimSpace(slot); sl != "" {
+		material += "\x00" + sl
+	}
+	sum := sha256.Sum256([]byte(material))
 	return ThreadIDPrefix + hex.EncodeToString(sum[:])[:threadDigestLen]
 }
 
 // MachineIDName is the CLI's file name for the machine id, kept so an operator
 // who exports a CLI home can find the same value.
 const MachineIDName = "machine-id"
+
+// ThreadSlot maps a conversation to one slot of the account's thread pool.
+//
+// The mapping is a stable hash rather than round-robin on purpose: a
+// conversation must keep the same thread id across requests, which is what makes
+// it look like "this project's directory" instead of a thread that changes
+// underfoot. Different conversations land on different slots, so the account
+// reads as one developer with several projects rather than one session.
+//
+// An empty fingerprint or a non-positive size returns "" — the caller then keeps
+// a single thread id, which is the behaviour before the pool existed.
+func ThreadSlot(fingerprint string, size int) string {
+	fp := strings.TrimSpace(fingerprint)
+	if fp == "" || size <= 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("perch-thread-slot\x00" + fp))
+	// A full 8-byte window keeps the distribution even for small pools; using
+	// the first byte would bias nothing either way but reads as arbitrary.
+	n := binary.BigEndian.Uint64(sum[:8]) % uint64(size)
+	return "p" + strconv.FormatUint(n, 10)
+}
 
 // Locale validates a locale header value. The CLI sends its own language code;
 // the pool accepts only what fits a header safely, and falls back to DefaultLocale.

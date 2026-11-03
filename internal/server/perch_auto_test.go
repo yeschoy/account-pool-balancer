@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/perch"
 	"account-pool-balancer/internal/perchsignupstore"
 )
 
@@ -275,7 +276,13 @@ func TestPerchAutoImportReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(exportDocAsMap("ready-user"))
+	doc := exportDocAsMap("ready-user")
+	// A real export carries the envelope; validAutoSession requires it to
+	// agree with session field for field.
+	session := doc["session"].(map[string]any)
+	session["user"] = map[string]any{"id": "ready-user"}
+	doc["supabase_session"] = session
+	raw, _ := json.Marshal(doc)
 	if err = s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -482,5 +489,85 @@ func TestPerchAutoBatchRegisterSelected(t *testing.T) {
 	// Registering ahead of time must not import: that happens on the next refill.
 	if e.count("batch-a") != 0 {
 		t.Fatal("batch register imported the account")
+	}
+}
+
+// A candidate registered weeks ago has an expired access token. Refilling it
+// must renew the stored session with its refresh token instead of failing
+// forever on the same expired document.
+func TestPerchAutoRenewsExpiredReadySessionBeforeImport(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	autoImportCandidate(t, s)
+	rec, err := s.perchAuto.store.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := exportDocAsMap("aged-user")
+	doc["session"].(map[string]any)["expires_at"] = time.Now().Add(-72 * time.Hour).Unix()
+	doc["supabase_session"] = doc["session"]
+	raw, _ := json.Marshal(doc)
+	if err = s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
+		t.Fatal(err)
+	}
+	renewed, usedProxy := false, "unset"
+	renew := func(_ context.Context, creds perch.Creds, token string) (perch.Session, error) {
+		renewed, usedProxy = true, creds.ProxyURL
+		if token != "refresh-aged-user" {
+			t.Errorf("renewed with %q, want the stored refresh token", token)
+		}
+		return perch.Session{AccessToken: "access-renewed", RefreshToken: "refresh-rotated", ExpiresAt: time.Now().Add(time.Hour).Unix(), UserID: "aged-user"}, nil
+	}
+	s.perch.renew = renew
+
+	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"group":"special"}`))
+	req.SetPathValue("id", rec.ID)
+	out := httptest.NewRecorder()
+	s.apiPerchAutoImportCandidate(out, req)
+	if out.Code != 200 {
+		t.Fatalf("import: %d %s", out.Code, out.Body.String())
+	}
+	if !renewed {
+		t.Fatal("expired session was not renewed")
+	}
+	if usedProxy != "http://proxy.example:8080" {
+		t.Fatalf("renewal used proxy %q, want the candidate's proxy", usedProxy)
+	}
+	if e.count("aged-user") != 1 {
+		t.Fatal("renewed candidate was not imported")
+	}
+}
+
+// A refused refresh token must not be retried forever: it falls back to the
+// uncertain state an operator can revalidate.
+func TestPerchAutoRefusedRenewalStaysActionable(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	autoImportCandidate(t, s)
+	rec, err := s.perchAuto.store.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := exportDocAsMap("refused-user")
+	doc["session"].(map[string]any)["expires_at"] = time.Now().Add(-time.Hour).Unix()
+	raw, _ := json.Marshal(doc)
+	if err = s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.perch.renew = func(context.Context, perch.Creds, string) (perch.Session, error) {
+		return perch.Session{}, &perch.Error{Kind: perch.KindAuth, Message: "refresh token revoked"}
+	}
+	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"group":"special"}`))
+	req.SetPathValue("id", rec.ID)
+	out := httptest.NewRecorder()
+	s.apiPerchAutoImportCandidate(out, req)
+	if out.Code != 409 || !strings.Contains(out.Body.String(), "重新注册") {
+		t.Fatalf("refused renewal: %d %s", out.Code, out.Body.String())
+	}
+	if got := s.perchAuto.store.List(); len(got) != 1 || got[0].Status != perchsignupstore.Ready {
+		t.Fatalf("candidate state changed on a refused renewal: %+v", got)
+	}
+	if e.count("refused-user") != 0 {
+		t.Fatal("refused renewal still imported the account")
 	}
 }

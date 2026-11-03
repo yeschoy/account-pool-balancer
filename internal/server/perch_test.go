@@ -50,6 +50,11 @@ type perchFake struct {
 	accountCalls atomic.Int64
 	starterUSD   float64
 	starterCalls atomic.Int64
+	// workspace is what /api/perch-terminal/cli-context reports as
+	// session.workspaceId. Empty means the route states none ("" ok=true,
+	// no workspaceId), which is the shape that drops attribution.
+	workspace   string
+	contextHits atomic.Int64
 }
 
 // modelsHits describes the catalogue reads made so far.
@@ -148,6 +153,18 @@ func (f *perchFake) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(body))
+	case r.URL.Path == "/api/perch-terminal/cli-context":
+		// Where the workspace identity comes from, as the CLI reads it.
+		f.contextHits.Add(1)
+		f.mu.Lock()
+		ws := f.workspace
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if ws == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"session":{"userId":null}}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"ok":true,"session":{"userId":"u","workspaceId":%q}}`, ws)
 	case r.URL.Path == "/api/perch-terminal/starter-limits":
 		f.starterCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
@@ -262,6 +279,10 @@ func newPerchEnv(t *testing.T) *perchEnv {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The keeper's client was replaced above, so the settings applied at
+	// startup (see initPerch) are no longer on the client this env uses.
+	// Re-apply them, exactly as the settings save handler does.
+	s.applyPerchDeltaLimits(s.cfg.Get().Perch)
 	for !s.logs.Ready() {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -1042,6 +1063,46 @@ func TestPerchSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// The delta cache sizing is a settings field like any other: it must survive
+// normalize (which zero-fills and clamps) and land on the shared client, or the
+// console would save a number nothing reads.
+func TestPerchDeltaLimitsFlowThroughSettings(t *testing.T) {
+	e := newPerchEnv(t)
+
+	// Shipped defaults are in force before anything is saved.
+	if got := e.srv.perchClient().DeltaLimits(); got.TTL != 30*time.Minute || got.MaxKeys != 8192 {
+		t.Fatalf("defaults = %+v, want 30m/8192", got)
+	}
+
+	p := config.DefaultPerch()
+	p.DeltaTTLMin = 12
+	p.DeltaMaxKeys = 2048
+	raw, _ := json.Marshal(map[string]any{"perch": p})
+	req := httptest.NewRequest(http.MethodPut, "/api/perch/settings", bytes.NewReader(raw))
+	rec := httptest.NewRecorder()
+	e.srv.apiPerchSaveSettings(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := e.srv.cfg.Get().Perch; got.DeltaTTLMin != 12 || got.DeltaMaxKeys != 2048 {
+		t.Fatalf("saved settings = %+v", got)
+	}
+	if got := e.srv.perchClient().DeltaLimits(); got.TTL != 12*time.Minute || got.MaxKeys != 2048 {
+		t.Fatalf("client limits = %+v, want 12m/2048", got)
+	}
+
+	// Out-of-range values are refused rather than silently clamped to a
+	// window the operator did not ask for.
+	p.DeltaTTLMin = 24 * 60
+	raw, _ = json.Marshal(map[string]any{"perch": p})
+	req = httptest.NewRequest(http.MethodPut, "/api/perch/settings", bytes.NewReader(raw))
+	rec = httptest.NewRecorder()
+	e.srv.apiPerchSaveSettings(rec, req)
+	if rec.Code == 200 {
+		t.Fatal("a 24-hour delta TTL was accepted")
+	}
+}
+
 // The dashboard totals what the pool holds.
 func TestPerchOverview(t *testing.T) {
 	e := newPerchEnv(t)
@@ -1339,5 +1400,61 @@ func TestPerchTierSelectedReportsCap(t *testing.T) {
 	}
 	if acc["allowanceSource"] != string(perch.AllowanceEntitlement) {
 		t.Fatalf("allowanceSource = %v, want entitlement", acc["allowanceSource"])
+	}
+}
+
+// End to end: the poller reads cli-context, the snapshot keeps the workspace,
+// and only then does a model call carry a complete attribution block. Before
+// this, workspaceId had no source at all in the Perch path and the block was
+// always null.
+func TestPerchWorkspaceFlowsIntoAttribution(t *testing.T) {
+	e := newPerchEnv(t)
+	e.fake.seed("wsp1")
+	e.fake.mu.Lock()
+	e.fake.workspace = "ws-live"
+	e.fake.mu.Unlock()
+	e.importFiles(map[string][]byte{
+		"wsp1.json": []byte(exportDoc("wsp1", e.fake, time.Now().Add(time.Hour).Unix(), 0)),
+	})
+
+	acct, ok := e.srv.cfg.Get().Account(e.ownAccountID())
+	if !ok {
+		t.Fatal("imported account not found")
+	}
+
+	// The poller is what stores the snapshot the attribution reads from.
+	if err := e.srv.quota.RefreshNow(context.Background(), acct); err != nil {
+		t.Fatalf("RefreshNow: %v", err)
+	}
+	if got := e.fake.contextHits.Load(); got == 0 {
+		t.Fatal("cli-context was never read")
+	}
+	snap := e.srv.quota.Get(acct.ID)
+	if snap == nil || snap.WorkspaceID != "ws-live" {
+		t.Fatalf("snapshot workspace = %v, want ws-live", snap)
+	}
+
+	// With a workspace the block is complete.
+	block := e.srv.perchAttribution(acct)
+	if block == nil {
+		t.Fatal("attribution dropped even though a workspace id is known")
+	}
+	if block["workspaceId"] != "ws-live" {
+		t.Fatalf("workspaceId = %v", block["workspaceId"])
+	}
+	if block["userId"] != acct.PerchUserID {
+		t.Fatalf("userId = %v, want %q", block["userId"], acct.PerchUserID)
+	}
+
+	// A route that states no workspace leaves the block null again, rather
+	// than sending a half-filled shape the real client never produces.
+	e.fake.mu.Lock()
+	e.fake.workspace = ""
+	e.fake.mu.Unlock()
+	if err := e.srv.quota.RefreshNow(context.Background(), acct); err != nil {
+		t.Fatalf("second RefreshNow: %v", err)
+	}
+	if got := e.srv.perchAttribution(acct); got != nil {
+		t.Fatalf("attribution = %v, want nil when Perch states no workspace", got)
 	}
 }

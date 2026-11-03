@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,8 +61,10 @@ func (s *Server) refreshTelemetrySettings(cfg *config.Config) {
 // auditSink adapts the server to perchtelemetry.Repo.
 type auditSink struct{ s *Server }
 
-// Audit writes one Perch log line per report. detail is already redacted by the
-// reporter: prompt and answer arrive as digests, never as text.
+// Audit writes one Perch log line per report. detail is built by the reporter
+// from perch.RedactTurn plus sizes and status, so it carries no prompt or
+// answer text: the conversation goes to Perch only when egress is on, and
+// never into this log.
 func (a auditSink) Audit(provider, accountID, kind, detail string) {
 	if a.s == nil || a.s.logs == nil {
 		return
@@ -111,7 +114,19 @@ func (s *Server) perchProcessDeviceID() string {
 // this machine, which is what the CLI hashes; it is not the caller's cwd (the
 // pool has no way to know it) and is not a path taken from a request, so no
 // client-supplied text can be steered into the digest.
-func (s *Server) perchThreadID(cfg *config.Config, conversation string) string {
+//
+// Two things keep the id ordinary:
+//
+//   - account scopes it, so two accounts never present the same thread id even
+//     when they occupy the same pool slot;
+//   - conversation selects a slot of the account's pool, so one account works in
+//     several "directories" at once the way a developer with several projects
+//     does, instead of being pinned to a single thread forever.
+//
+// An empty conversation falls back to the account's default thread (slot 0 is
+// not implied — it keeps the single unscoped id), which is what a request that
+// names no conversation deserves.
+func (s *Server) perchThreadID(cfg *config.Config, conversation, account string) string {
 	if v := strings.TrimSpace(conversation); v != "" {
 		return v
 	}
@@ -122,7 +137,45 @@ func (s *Server) perchThreadID(cfg *config.Config, conversation string) string {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	return perch.CwdThreadID(dir)
+	return perch.CwdThreadIDFor(dir, account)
+}
+
+// perchThreadIDForConversation is perchThreadID for a request that may name a
+// conversation: the conversation picks one slot of the account's thread pool.
+func (s *Server) perchThreadIDForConversation(cfg *config.Config, fingerprint, account string) string {
+	if !cfg.Perch.CwdThreadID {
+		return ""
+	}
+	dir := s.dataDir
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	slot := perch.ThreadSlot(fingerprint, perch.ThreadPoolSize)
+	if slot == "" {
+		// No conversation to spread across: the account keeps its single id.
+		return perch.CwdThreadIDFor(dir, account)
+	}
+	return perch.CwdThreadIDForSlot(dir, account, slot)
+}
+
+// perchThreadPool is every thread id one account can present, in slot order.
+// It is what the console shows so an operator can see the account's pool rather
+// than guessing from a single id.
+func (s *Server) perchThreadPool(cfg *config.Config, account string) []string {
+	if !cfg.Perch.CwdThreadID {
+		return nil
+	}
+	dir := s.dataDir
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	out := make([]string, 0, perch.ThreadPoolSize)
+	for n := 0; n < perch.ThreadPoolSize; n++ {
+		if id := perch.CwdThreadIDForSlot(dir, account, "p"+strconv.Itoa(n)); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // perchCallIdentity is the CLI identity a model call presents: the UA that
@@ -159,7 +212,7 @@ func (s *Server) reportPerchTurn(cfg *config.Config, acct config.Account, rec *r
 	}
 	t := res.turn
 	if t.Thread == "" {
-		t.Thread = s.perchThreadID(cfg, "")
+		t.Thread = s.perchThreadID(cfg, "", acct.ID)
 	}
 	if t.RunID == "" {
 		t.RunID = perch.NewRunID()
@@ -248,8 +301,13 @@ type perchFingerprintAccount struct {
 	Shared        bool      `json:"shared,omitempty"`
 	CreatedAt     time.Time `json:"createdAt,omitzero"`
 	FirstPromptAt time.Time `json:"firstPromptAt,omitzero"`
-	ThreadID      string    `json:"threadId"`
-	ProxySource   string    `json:"proxySource"`
+	// ThreadID is the account's default thread (no conversation named).
+	ThreadID string `json:"threadId"`
+	// ThreadPool is every thread id the account can present, one per pool slot.
+	// A conversation is mapped onto one of them, so the account works in several
+	// "directories" the way a developer with several projects does.
+	ThreadPool  []string `json:"threadPool,omitempty"`
+	ProxySource string   `json:"proxySource"`
 
 	// Turn-ticket state. A ticket is per account and per turn; these fields say
 	// whether one is held, how much of its budget is gone, and when it lapses.
@@ -278,10 +336,15 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		Accounts       []perchFingerprintAccount `json:"accounts"`
 		// Delta is the held-context delta report (see delta.go / runid.go).
 		Delta *perch.DeltaReport `json:"delta,omitempty"`
+		// Egress reports accounts that share an exit address. One address with
+		// two identities behind it is the pool's loudest correlation signal, so
+		// the console states it rather than leaving it to be noticed.
+		Egress perchEgressReport `json:"egress"`
 	}{
 		StoreAvailable: s.perch != nil && s.perch.devices != nil,
 		ProcessDevice:  s.perchProcessDeviceID(),
 		Accounts:       []perchFingerprintAccount{},
+		Egress:         buildPerchEgressReport(cfg),
 	}
 	// Held-context delta: is the pool actually sending only what is new. These
 	// are process-wide counters, so they answer "is it working" rather than
@@ -315,7 +378,8 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		row := perchFingerprintAccount{
 			ID: a.ID, Name: a.Name, MachineID: id.MachineID,
 			CreatedAt: id.CreatedAt, FirstPromptAt: id.FirstPromptAt,
-			ThreadID: s.perchThreadID(cfg, ""), ProxySource: perchFingerprintProxySource(a.ProxyURL),
+			ThreadID: s.perchThreadID(cfg, "", a.ID), ThreadPool: s.perchThreadPool(cfg, a.ID),
+			ProxySource: perchFingerprintProxySource(a.ProxyURL),
 		}
 		if tk, ok := s.perchClient().TicketStatus(a.ID); ok {
 			row.HasTicket = true
@@ -336,6 +400,41 @@ func (s *Server) apiPerchFingerprint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// perchEgressReport is the pool's exit-address picture.
+//
+// Accounts behind one address are one identity's worth of network position
+// shared by several identities. It is a deployment fact the operator chooses,
+// so this reports rather than refuses.
+type perchEgressReport struct {
+	// SharedProxies maps a proxy URL to the accounts that use it, only when
+	// more than one does.
+	SharedProxies map[string][]string `json:"sharedProxies,omitempty"`
+	// SharedProxyGroups is how many proxies are shared by more than one account.
+	SharedProxyGroups int `json:"sharedProxyGroups"`
+	// AffectedAccounts is how many accounts share an exit with another.
+	AffectedAccounts int `json:"affectedAccounts"`
+	// DirectAccounts egress from the host's own address, which is shared by
+	// construction. Reported separately because it is not a proxy collision.
+	DirectAccounts int `json:"directAccounts"`
+	// Note explains the reading so the numbers are not mistaken for errors.
+	Note string `json:"note"`
+}
+
+// buildPerchEgressReport counts how many accounts share an exit address.
+func buildPerchEgressReport(cfg *config.Config) perchEgressReport {
+	shared := cfg.SharedProxyGroups()
+	rep := perchEgressReport{
+		SharedProxies:     shared,
+		SharedProxyGroups: len(shared),
+		DirectAccounts:    cfg.DirectEgressAccounts(),
+		Note:              "同一代理下的多个账号在上游看来共用出口地址，是最强的跨账号关联信号；直连账号同样共用本机地址",
+	}
+	for _, ids := range shared {
+		rep.AffectedAccounts += len(ids)
+	}
+	return rep
 }
 
 // Proxy source is configuration provenance, not an observed network route.

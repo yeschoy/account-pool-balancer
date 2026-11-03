@@ -86,17 +86,17 @@ docker compose up -d --build
 
 支持 [Modal](https://modal.com/) 的 **Shared Endpoint**（[文档](https://modal.com/docs/guide/shared-endpoints)，[接入说明](https://modal.com/docs/guide/endpoint-integrations)）。上游 `https://inference.us-west.modal.direct/v1`（设置 `upstream.modalBase` 可改；只填到 `…modal.direct` 时启动会自动补 `/v1`，因为该 host 不带 `/v1` 一律 404）。
 
-**这个池和别的池不一样：所有模型共用一个 base URL，模型名就是 Endpoint 的 hostname。**
+**所有模型共用一个 base URL。下游使用统一模型名，本服务选号后自动转换为该账号的 Endpoint hostname。**
 
 | | 其他池 | Modal |
 |---|---|---|
 | 每个模型的 URL | 同一个 base | 同一个 base（`inference.<region>.modal.direct/v1`） |
-| `model` 字段 | 模型名，如 `claude-sonnet-5` | **Endpoint 的 hostname**，如 `my-endpoint.us-west.modal.direct` |
+| 下游 `model` 字段 | 模型名，如 `claude-sonnet-5` | 统一短名称，如 `glm-5-3`（发往上游时转换为 Endpoint hostname） |
 | 能调哪些模型 | 服务商目录 | 该 token 能访问的 Endpoint（`GET /v1/models` 列出） |
 | 鉴权 | `Authorization: Bearer <key>` | `Authorization: Bearer wk-<id>.ws-<secret>` |
 
 - **Proxy Token 的完整形态是 `wk-<id>.ws-<secret>`，两段都要**。只贴 `wk-<id>` 那段（省略 `.ws-<secret>`）上游会回 401 `invalid proxy auth credentials`。Token 在 [modal.com/settings/proxy-auth-tokens](https://modal.com/settings/proxy-auth-tokens) 或 `modal workspace proxy-tokens create` 创建。账号按 `wk-` 前缀自动识别为 Modal，没有控制密钥（Modal 没有额度接口）。
-- **模型就是 hostname**：Endpoint 建好后控制台会给一个 hostname，把它填进客户端的模型名即可。取法：`curl "$MODAL_BASE/models" -H "Authorization: Bearer wk-…"`，返回就是该 token 能访问的 Endpoint 列表。本服务每 10 分钟读一次并缓存，不在列表里的模型不派给该账号（与 OpenDesign 的 catalog 机制一致；`ignoreCatalog` 同样能关掉）。
+- **统一模型名**：下游 `GET /v1/models` 将各账号的 Endpoint 按基础模型合并去重，当前短名称为 `glm-5-3`、`deepseek-v4-1-flash-1017`、`kimi-k3`、`glm-5-3-flash`、`qwen3-8-max`。其中 `qwen3-8-max` 对应 `Qwen/Qwen3.8-Max-VL-Thinking`。请求选号后自动替换为该账号的 hostname；原始 `base_model_id` 和完整 hostname 仍可调用。上游 `curl "$MODAL_BASE/models" -H "Authorization: Bearer wk-…"` 列的是该 token 可访问的 Endpoint。本服务每 10 分钟读一次并缓存，不支持该模型的账号不会接单（`ignoreCatalog` 可关闭目录筛选）。
 - **三种协议都能接**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（Claude Code 可直接接，anthropic 客户端漏传 `anthropic-version` 时补 `2023-06-01`）。`/v1/embeddings` 等 Shared Endpoint 没有的路径本地直接 404，不打上游。
 - **鉴权头只发 `Authorization`**，与 Ollama 同理，不附带 `x-api-key`。
 - **会话粘性顺带命中上游缓存**：Shared Endpoint 会把请求路由到「最可能缓存了该提示前缀」的容器，靠 `Modal-Routing-Affinity-Key` 头聚合一轮对话。本服务把**自己算出的会话指纹**（HMAC，不是原始会话值或提示词）塞进这个头，所以同一会话在 Modal 侧也会落到同一容器。该头只在上游发出，不影响下游客户端。
@@ -105,11 +105,13 @@ docker compose up -d --build
 - **token 只填了一半的报错**：完整 token 是 `wk-<id>.ws-<secret>`。只填 `wk-<id>` 时 Modal 的每个 host、每条路径都回 401 `proxy auth required: … supply your proxy token as Bearer wk-<id>.ws-<secret>`，本服务会把它识别成「Token 不完整」并在账号列表里直接标出来，而不是当成上游故障。token secret 只在创建时显示一次，看不到就新建一个。
 - 实测（2026-10-31，一个 deepseek-v4-1-flash + 一个 kimi-k3 的 Shared Endpoint）：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、流式全部可用；`/v1/embeddings` 返回 404，所以本池不接。`/v1/models` 返回的每个 `id` 就是 Endpoint hostname，可直接当模型名用。
 - 错误规则独立一套（`modalErrorRules` / `modalRetryRules`，默认见下表）：token 失效 401 隔离、无权 403 隔离、402 余额不足整号冷却（10 分钟起翻倍）、429 按 `Retry-After` 冷却**该模型**（Shared Endpoint 的并发上限是按模型在整个工作区共享的，只有这个模型会 429）、5xx 短冷却换号；404 命中重试规则 `modal-bad-request`，停止换号、原样返回。已有实例升级后需在「路由设置 → Modal 号池」点「恢复默认规则」再保存。
-- 分组：不指定分组时进 `modal` 组，各池之间不混放；下游密钥填 `modal` 分组（new-api 里再建渠道，Base URL 填本服务地址，模型名填 Endpoint 的 hostname）。导入：开放接口传 `"provider":"modal"` 或直接用 `wk-` 开头的 key。
+- 分组：不指定分组时进 `modal` 组，各池之间不混放；下游密钥填 `modal` 分组（new-api 里再建渠道，Base URL 填本服务地址，模型名填本服务 `/v1/models` 返回的统一短名称）。导入：开放接口传 `"provider":"modal"` 或直接用 `wk-` 开头的 key。
 
 ## Perch 号池（chat.perchai.app）
 
 管理 [Perch](https://chat.perchai.app) 的 Supabase 会话池：导入账号 JSON，之后**自动续期、自动检测状态、读额度**，不需要手工维护 Token。参考 [perchai2api](https://github.com/zoeee1125/perchai2api) 的刷新与 usage meter 实现。
+
+**attribution（`userId` + `workspaceId`）**：官方 CLI 只要缺一个 id 就整体发 `null`，本服务照做。`workspaceId` 只能从 `POST /api/perch-terminal/cli-context` 拿到（与领票同 host 同 token，body `{"query":"","includeIndex":false}`，读 `session.workspaceId`），因为 `/api/perchai/account` 不带它、Perch 也没有 OpenDesign 那种控制密钥可查 `/api/v1/workspaces/current`。该读取挂在额度轮询上，**失败不影响额度**；Perch 某次不再声明 workspace 时会**清空**旧值而不是沿用，避免把 turn 归属到已离开的 workspace。刚导入、还没跑过一轮轮询的账号发的是 `null`。
 
 **这个池和别的池不同：账号没有 API Key。** 凭证是一份 Supabase 会话（Access Token + 会轮换的 Refresh Token），由本服务加密保存并自动续期。
 
@@ -330,6 +332,21 @@ Perch 账号没有 API Key，但**下游要调本服务仍然需要一把 `sk-od
 
 诊断接口 `perch/fingerprint` 现在额外返回每个账号的 `hasTicket` / `ticketRunId` / `ticketUses` / `ticketRemaining` / `ticketExpiresAt`，这些是本地缓存的观察，不代表服务端判定。
 
+### held-context 增量的容量（`deltaTtlMin` / `deltaMaxKeys`）
+
+官方 CLI 把这两个数写死在代码里（9 分钟 / 32 个键 / 每键 4 个快照），因为一个进程只服务一个账号。本服务把它们做成设置，因为池子里同时在跑的对话远多于一个。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `deltaTtlMin` | `30` | 服务端确认「已持有」的前缀保持多久仍发增量，单位分钟（1–60） |
+| `deltaMaxKeys` | `8192` | 缓存的「账号 + runId」前缀条目上限（1–65536） |
+
+**读数前先理解代价。** 快照过期**不会报错**：`find()` 跳过它，请求退回全量，一次请求、不多领票、不多花额度。而信任窗口**长于服务端自己的记忆**才是亏的那种：本服务声称一段服务端早已丢掉的前缀 → 吃一个 409 → 再发全量，**一次请求变成两次**。所以 `refusedDeltas` 持续增长就是窗口太大的直接证据。
+
+同理，每个缓存条目存的是**每条消息一个 SHA-256**：一个 100 轮对话的一个快照约 6 KB，每键 4 个快照。8192 键满载是百 MB 量级，这就是上限存在的理由。
+
+`GET /api/perch/fingerprint` 的 `delta.limits` 回显当前生效的窗口与上限，`pcDeltaLive` 在「Perch 设置 → Held-context 增量」下方展示命中率、被拒次数与少发的消息/字节数。
+
 ### 设备标识、指纹与遥测
 
 依据 `perchai-cli@2.4.121` 的静态分析（`.analysis/perchai-cli-2.4.121/analysis.md` §设备、指纹及遥测），官方 CLI 的身份面很小且基本确定，这里逐项对齐，但**一律按账号隔离**：
@@ -380,7 +397,7 @@ Perch 账号没有 API Key，但**下游要调本服务仍然需要一把 `sk-od
 | `POST /v1/responses` | OpenAI Responses，原样转发 |
 | `POST /v1/messages` | Anthropic Messages，原样转发（错误按 Anthropic 格式返回） |
 | `POST /v1/*` | 其他 POST 同样转发 |
-| `GET /v1/models` | 上游模型列表，按分组缓存 10 分钟，并发请求合并为一次上游读取（Modal 池里就是该 token 能访问的 Endpoint hostname） |
+| `GET /v1/models` | 组内账号可用模型的去重列表，按分组缓存 10 分钟，并发请求合并为一次上游读取；Modal 池发布统一短名称 |
 | `POST /open/v1/accounts/import` | 开放导入接口（自动上号），用**导入密钥**鉴权，见下文 |
 
 鉴权：`Authorization: Bearer sk-odb-…` 或 `x-api-key`。响应头带 `X-Request-Id`（可在请求日志里查）和 `X-Attempts`。
@@ -607,7 +624,7 @@ Modal 的 404 `unknown inference model` 不冷却账号，由重试规则 `modal
 - `model_limit_exceeded`、`tier_limit_exceeded` 的正文格式来自官方客户端源码，尚未在本账号上真实触发过，见 [docs/upstream-findings.md](docs/upstream-findings.md)。
 - **Modal 没有额度接口**：工作区余额只能在 Modal 控制台看，本服务靠 402 推断冷却；`/v1/models` 返回的是 Endpoint 列表，不能当余额依据。
 - **Modal 的 404 不等于 token 失效**：请求路径上的 404 `unknown inference model` 只说明模型名不是本 token 可见的 Endpoint，token 好坏以额度轮询读 `/v1/models` 的结果为准。
-- Modal 的 `model` 是 Endpoint hostname，**换 Endpoint（改模型名）等于换模型**：价格表要按 hostname 配，否则不计费用。
+- Modal 下游使用统一短名称，价格表也按下游请求的模型名配置；上游 Endpoint hostname 由本服务按账号映射。
 
 ## 回滚
 

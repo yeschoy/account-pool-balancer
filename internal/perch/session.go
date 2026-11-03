@@ -489,6 +489,96 @@ func (c *Client) StarterMonthlyUSD(ctx context.Context, appURL, accessToken stri
 	return raw.Config.MonthlyUSD, nil
 }
 
+// CliContext is /api/perch-terminal/cli-context: the identity the CLI attaches
+// to a turn.
+//
+// This is where workspaceId comes from, and it is the only route that states
+// it for an account. The published client resolves it exactly this way (its
+// vte / Z8i): POST {query:"", includeIndex:false}, read session.userId and
+// session.workspaceId from the answer, and fall back to the token's own user id
+// when the route omits one. It is the same host and token as turn-ticket, so a
+// session that can run a turn can answer this; there is no control key and no
+// /api/v1/workspaces/current here (that route belongs to a different pool).
+//
+// A missing workspaceId is reported as such rather than guessed: the
+// attribution block the model call carries is dropped entirely when either id
+// is absent, which is what the published client does too.
+type CliContext struct {
+	// UserID is session.userId, or the token's own subject when Perch omitted
+	// it.
+	UserID string
+	// WorkspaceID is session.workspaceId. Empty means Perch stated none.
+	WorkspaceID string
+}
+
+// CliContext reads the account's cli-context. The request body matches the
+// client's (query "" and no index): asking for an index would make Perch do
+// work this program does not use.
+func (c *Client) CliContext(ctx context.Context, appURL, accessToken string) (CliContext, error) {
+	base := strings.TrimRight(strings.TrimSpace(appURL), "/")
+	if base == "" {
+		base = AppURL
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		return CliContext{}, &Error{Kind: KindAuth, Message: "the account has no access token"}
+	}
+	body, _ := json.Marshal(map[string]any{"query": "", "includeIndex": false})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/perch-terminal/cli-context", strings.NewReader(string(body)))
+	if err != nil {
+		return CliContext{}, &Error{Kind: KindTransient, Message: err.Error(), Err: err}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	var raw struct {
+		OK      bool `json:"ok"`
+		Session struct {
+			UserID      string `json:"userId"`
+			WorkspaceID string `json:"workspaceId"`
+		} `json:"session"`
+	}
+	if err := c.do(ctx, req, &raw); err != nil {
+		return CliContext{}, err
+	}
+	if !raw.OK {
+		return CliContext{}, &Error{Kind: KindUnknown, Message: "cli-context answered ok=false"}
+	}
+	out := CliContext{
+		UserID:      strings.TrimSpace(raw.Session.UserID),
+		WorkspaceID: strings.TrimSpace(raw.Session.WorkspaceID),
+	}
+	// The client falls back to the token's subject when the route omits a user.
+	if out.UserID == "" {
+		if id, ok := userIDOf(accessToken); ok {
+			out.UserID = id
+		}
+	}
+	return out, nil
+}
+
+// userIDOf reads the `sub` claim out of an access token. It is not a
+// verification: the token already came from a successful renewal, and this is
+// only used to fill a field the server chose not to repeat.
+func userIDOf(token string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return "", false
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if json.Unmarshal(raw, &claims) != nil {
+		return "", false
+	}
+	sub := strings.TrimSpace(claims.Sub)
+	return sub, sub != ""
+}
+
 // modelDefault is /api/perch-terminal/public-model-default: the model Perch
 // would pick for an account with no preference.
 //

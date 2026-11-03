@@ -111,9 +111,9 @@ func envelopeFor(runID string, n int, tools []Tool) Envelope {
 		msgs[i] = Message{Role: role, Content: "m" + itoa(i)}
 	}
 	env := Envelope{
-		RunID:   runID,
-		Lane:    "chat",
-		Surface: "cli",
+		RunID:    runID,
+		Lane:     "chat",
+		Surface:  "cli",
 		AvoidIDs: []string{},
 	}
 	env.Request.Messages = msgs
@@ -336,7 +336,7 @@ func TestDeltaOmitsUnchangedTools(t *testing.T) {
 	}
 }
 
-// Snapshots expire after DeltaTTL.
+// Snapshots expire after the trust window.
 func TestDeltaExpires(t *testing.T) {
 	f := newDeltaFake(t)
 	c := NewClient(nil)
@@ -349,7 +349,7 @@ func TestDeltaExpires(t *testing.T) {
 		t.Fatalf("first: %v", err)
 	}
 
-	later := time.Now().Add(DeltaTTL + time.Minute)
+	later := time.Now().Add(DefaultDeltaTTL + time.Minute)
 	c.Now = func() time.Time { return later }
 
 	env2 := envelopeFor("run-1", 5, nil)
@@ -406,4 +406,118 @@ func TestDigestShape(t *testing.T) {
 	}
 }
 
+// A longer trust window keeps a delta alive past the published client's nine
+// minutes. The window is a setting, not a protocol constant, so this is the
+// behaviour TestDeltaExpires must NOT see once the operator raises it.
+func TestDeltaTTLIsConfigurable(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	c.SetDeltaLimits(DeltaLimits{TTL: 45 * time.Minute, MaxKeys: 8192})
+
+	env1 := envelopeFor("run-ttl", 3, nil)
+	f.holdLen, f.holdDigest = 3, prefixDigest(digestMessages(env1.Request.Messages), 3)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	// Well past the 9-minute default, still inside the configured window.
+	past := time.Now().Add(DefaultDeltaTTL + 10*time.Minute)
+	c.Now = func() time.Time { return past }
+
+	env2 := envelopeFor("run-ttl", 5, nil)
+	f.holdLen = 5
+	f.holdDigest = prefixDigest(digestMessages(env2.Request.Messages), 5)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env2),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	body, hdr := f.last()
+	if hdr.Get(DeltaHeader) != "1" {
+		t.Fatalf("%s = %q, want 1 for a snapshot inside the configured TTL",
+			DeltaHeader, hdr.Get(DeltaHeader))
+	}
+	if _, has := body["messagesDelta"]; !has {
+		t.Fatal("messagesDelta missing: the configured TTL should still trust the prefix")
+	}
+
+	// Beyond the configured window it expires like any other snapshot.
+	far := past.Add(46 * time.Minute)
+	c.Now = func() time.Time { return far }
+	env3 := envelopeFor("run-ttl", 7, nil)
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", Body: envJSON(t, env3),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("third: %v", err)
+	}
+	if _, hdr := f.last(); hdr.Get(DeltaHeader) != "" {
+		t.Fatal("a snapshot past the configured TTL must not produce a delta")
+	}
+}
+
+// DeltaLimits fills absent values rather than shrinking to zero: a config that
+// never mentions the fields must behave exactly like the shipped defaults.
+func TestDeltaLimitsResolveDefaults(t *testing.T) {
+	got := DeltaLimits{}.Resolved()
+	if got.TTL != DefaultDeltaTTL || got.MaxKeys != DefaultDeltaMaxKeys {
+		t.Fatalf("zero limits resolved to %+v, want the defaults", got)
+	}
+	// Negative values are treated as absent, not as "expire immediately".
+	got = DeltaLimits{TTL: -time.Minute, MaxKeys: -1}.Resolved()
+	if got.TTL != DefaultDeltaTTL || got.MaxKeys != DefaultDeltaMaxKeys {
+		t.Fatalf("negative limits resolved to %+v, want the defaults", got)
+	}
+	// Explicit values survive.
+	got = DeltaLimits{TTL: 30 * time.Minute, MaxKeys: 8192}.Resolved()
+	if got.TTL != 30*time.Minute || got.MaxKeys != 8192 {
+		t.Fatalf("explicit limits resolved to %+v", got)
+	}
+}
+
+// SetDeltaLimits is what the console calls; the client must report back the
+// resolved value so the diagnostics endpoint can show what is in force.
+func TestSetDeltaLimitsReported(t *testing.T) {
+	c := NewClient(nil)
+	c.SetDeltaLimits(DeltaLimits{TTL: 30 * time.Minute, MaxKeys: 8192})
+	if got := c.DeltaLimits(); got.TTL != 30*time.Minute || got.MaxKeys != 8192 {
+		t.Fatalf("DeltaLimits() = %+v, want 30m/8192", got)
+	}
+	// A zero field keeps its default instead of disabling the cache.
+	c.SetDeltaLimits(DeltaLimits{})
+	if got := c.DeltaLimits(); got.TTL != DefaultDeltaTTL || got.MaxKeys != DefaultDeltaMaxKeys {
+		t.Fatalf("DeltaLimits() after empty set = %+v, want defaults", got)
+	}
+}
+
 var _ = strings.TrimSpace
+
+// A call with no account scope can never match a snapshot, so it must be
+// counted: otherwise a caller that forgot the account would only see the hit
+// rate quietly collapse with nothing to point at.
+func TestPlanDeltaCountsUnscopedCalls(t *testing.T) {
+	c := NewClient(nil)
+	env := Envelope{Request: RequestEnvelope{Messages: []Message{{Role: "user", Content: "hi"}}}}
+
+	if got := c.DeltaReport().Unscoped; got != 0 {
+		t.Fatalf("unscoped counter starts at %d, want 0", got)
+	}
+	plan := c.PlanDelta("https://app.example", "", "run-1", env)
+	if plan.IsDelta {
+		t.Fatal("an unscoped call produced a delta")
+	}
+	if got := c.DeltaReport().Unscoped; got != 1 {
+		t.Fatalf("unscoped counter = %d after one unscoped call, want 1", got)
+	}
+	// A scoped call is not counted, and still never hits without a snapshot.
+	c.PlanDelta("https://app.example", "acct-a", "run-1", env)
+	if got := c.DeltaReport().Unscoped; got != 1 {
+		t.Fatalf("a scoped call was counted as unscoped: %d", got)
+	}
+	// Resetting clears it with the other counters.
+	c.ResetDeltaCounters()
+	if got := c.DeltaReport().Unscoped; got != 0 {
+		t.Fatalf("reset left the unscoped counter at %d", got)
+	}
+}

@@ -112,6 +112,11 @@ type PerchMeter struct {
 	RoostUnlimited bool `json:"roostUnlimited,omitempty"`
 	// Unlimited: an internal/staff account Perch does not meter.
 	Unlimited bool `json:"unlimited,omitempty"`
+	// WorkspaceID is the workspace the account's turns are attributed to, as
+	// /api/perch-terminal/cli-context stated it. Empty means Perch said none
+	// (or the route was not read); the model call then sends no attribution
+	// block, exactly as the published client does.
+	WorkspaceID string `json:"workspaceId,omitempty"`
 	// UsedPT is this month's plan spend (the month's total less the manual
 	// part, which the plan's allowance does not cover).
 	UsedPT        int64     `json:"usedPt"`
@@ -221,12 +226,7 @@ func (s *Snapshot) NotEntitled(model string, now time.Time) bool {
 	if len(s.Catalog) > 0 && now.Sub(s.CatalogAt) < catalogStale {
 		// a base model this account serves through one of its aliases counts
 		// as served: the request is translated back to that id when sent
-		id := model
-		if !s.Catalog[id] {
-			if alias := s.Aliases[model]; alias != "" {
-				id = alias
-			}
-		}
+		id := s.UpstreamModel(model)
 		if enabled, ok := s.Catalog[id]; !ok || !enabled {
 			return true
 		}
@@ -265,10 +265,7 @@ func (s *Snapshot) PublicModels(now time.Time) []string {
 	seen := make(map[string]bool, len(ids))
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
-		name := id
-		if b := s.Bases[id]; b != "" {
-			name = b
-		}
+		name := PublicModelID(id, s.Bases[id])
 		if seen[name] {
 			continue
 		}
@@ -290,6 +287,17 @@ func (s *Snapshot) UpstreamModel(model string) string {
 		return model
 	}
 	if id := s.Aliases[model]; id != "" {
+		return id
+	}
+	// Resolve short names from the stored base metadata as well, so older
+	// snapshots work immediately without waiting for the next catalogue read.
+	id := ""
+	for upstream, base := range s.Bases {
+		if s.Catalog[upstream] && PublicModelID(upstream, base) == model && (id == "" || upstream < id) {
+			id = upstream
+		}
+	}
+	if id != "" {
 		return id
 	}
 	return model
@@ -1018,6 +1026,18 @@ func (p *Poller) fetchPerch(ctx context.Context, cfg *config.Config, a config.Ac
 		return err
 	}
 	s.Perch, s.PerchAt, s.PerchError = met, now, ""
+	// The workspace is an identity, so it tracks the latest answer in both
+	// directions: a workspace Perch no longer states is cleared rather than
+	// kept from the previous read. A stale id would attribute a turn to a
+	// workspace the account has since left, which is worse than the null block
+	// the published client sends when it has none.
+	if met != nil {
+		if met.WorkspaceID != "" {
+			s.WorkspaceID, s.WorkspaceAt = met.WorkspaceID, now
+		} else {
+			s.WorkspaceID, s.WorkspaceAt = "", time.Time{}
+		}
+	}
 	s.LastOKAt, s.Failures = now, 0
 	s.LastError = ""
 	// The catalogue is read on its own schedule and failure: not having a

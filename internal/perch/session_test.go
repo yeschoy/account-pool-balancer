@@ -2,6 +2,8 @@ package perch
 
 import (
 	"context"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,5 +175,96 @@ func TestPtOfAndMeterReset(t *testing.T) {
 	}
 	if !(Meter{}).ResetAt().IsZero() {
 		t.Fatal("an absent period start yields no reset date")
+	}
+}
+
+// cli-context is where workspaceId comes from; the published client resolves it
+// here and falls back to the token's own subject when Perch omits a user id.
+func TestCliContextReadsWorkspace(t *testing.T) {
+	var gotPath, gotBody string
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		buf := new(strings.Builder)
+		_, _ = io.Copy(buf, r.Body)
+		gotBody = buf.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"session":{"userId":"u-1","workspaceId":"ws-9"}}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClient(nil).CliContext(context.Background(), srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("CliContext: %v", err)
+	}
+	if gotPath != "/api/perch-terminal/cli-context" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer tok" {
+		t.Fatalf("authorization = %q", gotAuth)
+	}
+	// The client asks for no index; asking would make Perch do unused work.
+	if !strings.Contains(gotBody, `"includeIndex":false`) || !strings.Contains(gotBody, `"query":""`) {
+		t.Fatalf("body = %s", gotBody)
+	}
+	if got.UserID != "u-1" || got.WorkspaceID != "ws-9" {
+		t.Fatalf("context = %+v", got)
+	}
+}
+
+// A route that answers ok=false is not a workspace, and must not be reported as
+// one: the caller then sends no attribution block rather than a made-up id.
+func TestCliContextRefusesOkFalse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false}`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(nil).CliContext(context.Background(), srv.URL, "tok"); err == nil {
+		t.Fatal("ok=false was accepted as a workspace")
+	}
+}
+
+// When Perch omits session.userId the client falls back to the token subject;
+// workspaceId is never invented, so a response without one stays empty.
+func TestCliContextFallsBackToTokenSubject(t *testing.T) {
+	// {"sub":"tok-user"} in the middle segment
+	token := "h." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"tok-user"}`)) + ".s"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"session":{"workspaceId":"ws-2"}}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClient(nil).CliContext(context.Background(), srv.URL, token)
+	if err != nil {
+		t.Fatalf("CliContext: %v", err)
+	}
+	if got.UserID != "tok-user" {
+		t.Fatalf("userId = %q, want the token subject", got.UserID)
+	}
+	if got.WorkspaceID != "ws-2" {
+		t.Fatalf("workspaceId = %q", got.WorkspaceID)
+	}
+
+	// No workspace in the answer -> none reported, not a guess.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"session":{"userId":"u-1"}}`))
+	}))
+	defer srv2.Close()
+	got2, err := NewClient(nil).CliContext(context.Background(), srv2.URL, "tok")
+	if err != nil {
+		t.Fatalf("CliContext: %v", err)
+	}
+	if got2.WorkspaceID != "" {
+		t.Fatalf("workspaceId = %q, want empty when Perch states none", got2.WorkspaceID)
+	}
+}
+
+// An account with no token cannot read its context; that is an auth error, not
+// a silent empty workspace.
+func TestCliContextNeedsToken(t *testing.T) {
+	if _, err := NewClient(nil).CliContext(context.Background(), "http://127.0.0.1:1", ""); err == nil {
+		t.Fatal("an empty token was accepted")
 	}
 }

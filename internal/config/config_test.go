@@ -464,3 +464,39 @@ func TestTurnTicketDefaultsOnWhenAbsent(t *testing.T) {
 		t.Fatal("an explicit false must survive Normalize")
 	}
 }
+
+// Accounts behind one proxy are several identities behind one address, which is
+// the loudest correlation signal a pool can emit. The report must name them.
+func TestSharedProxyGroups(t *testing.T) {
+	c := Default()
+	c.Accounts = []Account{
+		{ID: "a1", Group: "perch", ProxyURL: "http://proxy.example:8080"},
+		{ID: "a2", Group: "perch", ProxyURL: "http://proxy.example:8080"},
+		{ID: "a3", Group: "perch", ProxyURL: "http://other.example:3128"},
+		{ID: "a4", Group: "perch"},
+	}
+	shared := c.SharedProxyGroups()
+	if len(shared) != 1 {
+		t.Fatalf("shared proxies = %v, want exactly the one shared endpoint", shared)
+	}
+	ids := shared["http://proxy.example:8080"]
+	if len(ids) != 2 || ids[0] != "a1" || ids[1] != "a2" {
+		t.Fatalf("shared ids = %v, want [a1 a2]", ids)
+	}
+	// A direct account is not a proxy collision, but it is still shared egress.
+	if got := c.DirectEgressAccounts(); got != 1 {
+		t.Fatalf("direct accounts = %d, want 1", got)
+	}
+}
+
+// A pool where every account has its own egress reports nothing.
+func TestSharedProxyGroupsEmptyWhenIsolated(t *testing.T) {
+	c := Default()
+	c.Accounts = []Account{
+		{ID: "a1", Group: "perch", ProxyURL: "http://one.example:8080"},
+		{ID: "a2", Group: "perch", ProxyURL: "http://two.example:8080"},
+	}
+	if got := c.SharedProxyGroups(); len(got) != 0 {
+		t.Fatalf("isolated hosts reported as shared: %v", got)
+	}
+}

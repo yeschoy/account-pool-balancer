@@ -33,11 +33,11 @@ func TestCatalogAliasesCollapseAndTranslate(t *testing.T) {
 	for _, m := range a.PublicModels(now) {
 		pub[m] = true
 	}
-	if !pub["deepseek-ai/DeepSeek-V4.1-Flash-1017"] {
+	if !pub["deepseek-v4-1-flash-1017"] {
 		t.Fatalf("base model must be published, got %v", pub)
 	}
 	// the two accounts publish the same name for their own hostnames
-	if got := b.PublicModels(now); len(got) != 1 || got[0] != "deepseek-ai/DeepSeek-V4.1-Flash-1017" {
+	if got := b.PublicModels(now); len(got) != 1 || got[0] != "deepseek-v4-1-flash-1017" {
 		t.Fatalf("second account = %v", got)
 	}
 	// and each is asked for its own hostname
@@ -61,6 +61,40 @@ func TestCatalogAliasesCollapseAndTranslate(t *testing.T) {
 	}
 	if a.NotEntitled("deepseek-ai/DeepSeek-V4.1-Flash-1017", now) {
 		t.Fatal("the base model is served through an alias and must be entitled")
+	}
+}
+
+func TestModalShortNamesFromExistingCatalog(t *testing.T) {
+	models := []struct {
+		name, base, endpoint string
+	}{
+		{"glm-5-3", "zai-org/GLM-5.3", "glm-5-3"},
+		{"deepseek-v4-1-flash-1017", "deepseek-ai/DeepSeek-V4.1-Flash-1017", "deepseek-v4-1-flash-1017"},
+		{"kimi-k3", "moonshotai/Kimi-K3", "kimi-k3"},
+		{"glm-5-3-flash", "zai-org/GLM-5.3-Flash", "glm-5-3-flash"},
+		{"qwen3-8-max", "Qwen/Qwen3.8-Max-VL-Thinking", "qwen3-8-max-vl-thinking"},
+	}
+	for _, model := range models {
+		t.Run(model.name, func(t *testing.T) {
+			now := time.Now()
+			host := "tokenA--ep-" + model.endpoint + "-server.us-west.modal.direct"
+			// A snapshot saved before short names existed must work immediately.
+			s := &Snapshot{
+				Catalog: map[string]bool{host: true}, CatalogAt: now,
+				Bases: map[string]string{host: model.base}, Aliases: map[string]string{model.base: host},
+			}
+			if got := s.PublicModels(now); len(got) != 1 || got[0] != model.name {
+				t.Fatalf("public models = %v, want [%s]", got, model.name)
+			}
+			for _, name := range []string{model.name, model.base, host} {
+				if got := s.UpstreamModel(name); got != host {
+					t.Fatalf("upstream model for %q = %q, want %q", name, got, host)
+				}
+				if s.NotEntitled(name, now) {
+					t.Fatalf("account must serve %q", name)
+				}
+			}
+		})
 	}
 }
 

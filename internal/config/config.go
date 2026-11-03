@@ -613,14 +613,40 @@ type Perch struct {
 	// does not need.
 	TicketProfile string `json:"ticketProfile"`
 
+	// ---- held-context delta sizing ---------------------------------------
+
+	// DeltaTTLMin is how long a prefix the server confirmed it holds stays
+	// trusted, in minutes. Zero means the default (9, the published client's
+	// own window).
+	//
+	// Raising it only helps conversations that go idle longer than the window:
+	// the pool then keeps sending deltas instead of whole requests. Raising it
+	// past the server's own retention is a net loss — the claim is refused with
+	// 409 and the whole request goes out anyway, so that turn costs two round
+	// trips instead of one.
+	DeltaTTLMin int `json:"deltaTtlMin"`
+	// DeltaMaxKeys caps cached conversation prefixes. Zero means 4096.
+	//
+	// Each entry holds one SHA-256 per held message, so the memory a cap allows
+	// scales with conversation length: a few thousand entries of long agent
+	// sessions is tens to hundreds of megabytes, and this is what bounds it.
+	DeltaMaxKeys int `json:"deltaMaxKeys"`
+
 	// CLIVersion is what the User-Agent claims ("perchai-cli/<version>").
 	CLIVersion string `json:"cliVersion"`
 	// Locale is the x-perch-locale header the CLI surface sends.
 	Locale string `json:"locale"`
 	// DeviceFingerprint makes every request of one account carry that
-	// account's persistent machine id (cwd thread, and the device echo where
-	// the wire format has a field for it). Off means each call looks new,
-	// which is the old behaviour and is itself a signal.
+	// account's persistent machine id: the account-scoped cwd thread, and the
+	// device echo where the wire format has a field for it. Off means each call
+	// looks new, which is the old behaviour and is itself a signal.
+	//
+	// Scope, stated because it is easy to overestimate: the model-call envelope
+	// has no device field, so this reaches Perch only as the thread id and, when
+	// telemetry egress is on, as the PostHog machine id. It does not make two
+	// accounts look like two machines to the model call itself — what separates
+	// them there is the per-account token, the per-account proxy, and the
+	// account-scoped thread id.
 	DeviceFingerprint bool `json:"deviceFingerprint"`
 	// CwdThreadID makes an account with no conversation id use the CLI's
 	// cwd-derived thread id ("cli-cwd-<sha16>") on the envelope and in
@@ -700,8 +726,15 @@ func DefaultPerch() Perch {
 		// exists to stop producing.
 		TurnTicket:    boolPtr(true),
 		TicketProfile: perch.TicketProfileStandard,
-		CLIVersion:    perch.CLIVersion,
-		Locale:        perch.DefaultLocale,
+		// Delta sizing. The TTL is raised from the client's nine minutes to
+		// thirty because a pool's conversations (chat threads, agent sessions)
+		// routinely idle longer than a single CLI turn, and an expired snapshot
+		// costs a resend of the whole message list. The 409-on-a-stale-claim
+		// risk that argues against going further is written up in README.
+		DeltaTTLMin:  30,
+		DeltaMaxKeys: 8192,
+		CLIVersion:   perch.CLIVersion,
+		Locale:       perch.DefaultLocale,
 		// Both identity features default ON: they make a call look like the
 		// CLI's, which is the point of this layer.
 		DeviceFingerprint: true,
@@ -824,6 +857,15 @@ func (p *Perch) normalize() error {
 	if p.LogRetentionDays == 0 {
 		p.LogRetentionDays = d.LogRetentionDays
 	}
+	// Delta sizing: absent (0) means the default, which is also what an
+	// existing config.json gets, so an upgrade picks up the new values without
+	// rewriting anyone's file.
+	if p.DeltaTTLMin == 0 {
+		p.DeltaTTLMin = d.DeltaTTLMin
+	}
+	if p.DeltaMaxKeys == 0 {
+		p.DeltaMaxKeys = d.DeltaMaxKeys
+	}
 	for _, f := range []struct {
 		v    *int
 		lo   int
@@ -839,6 +881,12 @@ func (p *Perch) normalize() error {
 		{&p.CheckConcurrency, 1, 64, "checkConcurrency"},
 		{&p.QuotaIntervalSec, 60, 86400, "quotaIntervalSec"},
 		{&p.LogRetentionDays, 1, 3650, "logRetentionDays"},
+		// The upper bounds are not arbitrary: past an hour a prefix claim is
+		// far likelier to be refused (a 409 plus a whole resend) than to save
+		// a send, and each cache entry holds one SHA-256 per held message, so
+		// a very high key cap can hold a lot of memory.
+		{&p.DeltaTTLMin, 1, 60, "deltaTtlMin"},
+		{&p.DeltaMaxKeys, 1, 65536, "deltaMaxKeys"},
 	} {
 		if err := clampInt(f.v, f.lo, f.hi, "perch."+f.name); err != nil {
 			return err
@@ -968,7 +1016,50 @@ func ValidateProxyURL(raw string) error {
 	return nil
 }
 
-// Normalize fills defaults on zero values and validates c in place.
+// SharedProxyGroups reports the egress endpoints used by more than one account,
+// mapped to the account ids that share them.
+//
+// A proxy is how a pool makes one account look like one location. Two accounts
+// behind the same proxy are two identities behind one IP, which is the strongest
+// correlation signal a pool can emit and one that needs no inference at all: a
+// server grouping its traffic by address sees them together.
+//
+// This is a diagnosis, not a validation error: a single-egress deployment and a
+// shared corporate proxy are both legitimate. Callers warn; they do not refuse.
+// The empty proxy (direct egress) is not reported here — it means "the host's
+// own address", and every such account shares it by construction, which is a
+// deployment fact rather than a misconfiguration.
+func (c *Config) SharedProxyGroups() map[string][]string {
+	byProxy := map[string][]string{}
+	for _, a := range c.Accounts {
+		p := strings.TrimSpace(a.ProxyURL)
+		if p == "" {
+			continue
+		}
+		byProxy[p] = append(byProxy[p], a.ID)
+	}
+	out := map[string][]string{}
+	for p, ids := range byProxy {
+		if len(ids) > 1 {
+			out[p] = ids
+		}
+	}
+	return out
+}
+
+// DirectEgressAccounts is how many enabled accounts would egress from the host's
+// own address rather than a proxy. It is what makes "N accounts share an
+// address" visible for the direct case, which SharedProxyGroups deliberately
+// leaves out.
+func (c *Config) DirectEgressAccounts() int {
+	n := 0
+	for _, a := range c.Accounts {
+		if strings.TrimSpace(a.ProxyURL) == "" {
+			n++
+		}
+	}
+	return n
+}
 func (c *Config) Normalize() error {
 	d := Default()
 	if c.Version == 0 {

@@ -89,7 +89,7 @@ curl -s -w '\nHTTP %{http_code}\n' --max-time 90 \
 
 回复里给用户：账号名、accountId、分组、状态、可选 Endpoint 列表，并提醒：
 
-- 下游 `model` 填 **Endpoint 的 hostname**，不是模型名。
+- 下游 `GET /v1/models` 返回去重后的统一短名称：`glm-5-3`、`deepseek-v4-1-flash-1017`、`kimi-k3`、`glm-5-3-flash`、`qwen3-8-max`（以池内账号实际可见模型为准）。`model` 填该短名称，本服务自动换成所选账号的 Endpoint hostname；原始 `base_model_id` 和完整 hostname 也兼容。
 - 只有分组填 `modal` 的下游密钥才会调度到这个号。
 - Modal 无额度接口，余额只能在控制台看，本服务只在 402 时冷却。
 - 每 10 分钟读一次 `/v1/models` 缓存 catalog，不在列表里的模型不派给该账号。

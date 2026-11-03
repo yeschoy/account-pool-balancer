@@ -13,6 +13,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/fsutil"
+	"account-pool-balancer/internal/perch"
 	"account-pool-balancer/internal/perchactivate"
 	"account-pool-balancer/internal/perchimport"
 	"account-pool-balancer/internal/perchsignupstore"
@@ -278,6 +279,95 @@ func (s *Server) apiPerchAutoActivateCandidate(w http.ResponseWriter, r *http.Re
 	}
 	writeJSON(w, 200, map[string]string{"status": "ready"})
 }
+
+// renewAutoSession refreshes a candidate's stored Supabase session in place.
+//
+// A candidate is registered and activated ahead of time on purpose, so it can
+// sit in the store for weeks. Nothing renews it meanwhile: the keeper renews
+// pool accounts, and activation deliberately does not touch tokens. An expired
+// session is therefore the normal state of an old candidate, not a failure,
+// and its refresh token is what makes it recoverable.
+func (s *Server) renewAutoSession(ctx context.Context, rec perchsignupstore.Record) ([]byte, error) {
+	parsed, err := perchimport.ParseJSON(rec.Session)
+	if err != nil || parsed.RefreshToken == "" {
+		return nil, errors.New("候选账号没有可续期的会话，请重新注册该账号")
+	}
+	creds := perch.Creds{SupabaseURL: parsed.SupabaseURL, SupabaseKey: parsed.SupabaseKey, ProxyURL: rec.Candidate.ProxyURL}
+	started := time.Now()
+	sess, err := s.perchRenew(ctx, creds, parsed.RefreshToken)
+	s.logPerchDiagnostic("", "refresh", autoPerchProxySource(rec.Candidate.ProxyURL), "", started, err)
+	if err != nil {
+		switch perch.KindOf(err) {
+		case perch.KindAuth:
+			return nil, errors.New("候选账号的会话已被拒绝，请重新注册该账号")
+		case perch.KindTransient:
+			return nil, errors.New("续期会话时网络或 Perch 服务暂时不可用，请稍后重试")
+		}
+		return nil, errors.New("续期会话失败，请人工核查")
+	}
+	if sess.UserID != "" && sess.UserID != parsed.UserID {
+		return nil, errors.New("续期后的会话身份与候选账号不一致，请人工核查")
+	}
+	// Keep every stored field and move only the tokens. The document is edited
+	// as generic JSON so no field the importer does not model is dropped, and
+	// supabase_session is rewritten in place because validAutoSession requires
+	// it to agree field for field with session.
+	var doc map[string]any
+	if json.Unmarshal(rec.Session, &doc) != nil || doc == nil {
+		return nil, errors.New("候选账号的会话无法解析，请人工核查")
+	}
+	tokens := func() map[string]any {
+		return map[string]any{"access_token": sess.AccessToken, "refresh_token": sess.RefreshToken, "expires_at": sess.ExpiresAt}
+	}
+	session := tokens()
+	session["user"] = map[string]any{"id": parsed.UserID}
+	doc["session"] = session
+	if inner, ok := doc["supabase_session"].(map[string]any); ok {
+		// Preserve whatever else the envelope carried (token_type, expiry
+		// windows) and overwrite only what the refresh produced.
+		for k, v := range tokens() {
+			inner[k] = v
+		}
+		if _, hasUser := inner["user"]; !hasUser || inner["user"] == nil {
+			inner["user"] = map[string]any{"id": parsed.UserID}
+		}
+		doc["supabase_session"] = inner
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, errors.New("保存续期后的会话失败，请人工核查")
+	}
+	if !validAutoSession(raw) {
+		return nil, errors.New("续期后的会话校验失败，请人工核查")
+	}
+	// Persist before importing: a refresh rotates the refresh token, so losing
+	// the new one here would cost the account.
+	if err := s.perchAuto.store.Update(rec.ID, perchsignupstore.Ready, raw, ""); err != nil {
+		return nil, errors.New("保存续期后的会话失败，请人工核查")
+	}
+	return raw, nil
+}
+
+// readyCandidateForImport returns a ready candidate with a session that is
+// valid now, renewing an expired one first.
+func (s *Server) readyCandidateForImport(ctx context.Context, rec perchsignupstore.Record) (perchsignupstore.Record, error) {
+	if validAutoSession(rec.Session) {
+		return rec, nil
+	}
+	if _, err := perchimport.ParseJSON(rec.Session); err != nil {
+		return rec, errors.New("会话无效或已过期，请人工核查")
+	}
+	raw, err := s.renewAutoSession(ctx, rec)
+	if err != nil {
+		return rec, err
+	}
+	rec.Session = raw
+	if !validAutoSession(rec.Session) {
+		return rec, errors.New("续期后的会话仍无效，请人工核查")
+	}
+	return rec, nil
+}
+
 func (s *Server) apiPerchAutoImportCandidate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var in struct {
@@ -308,7 +398,15 @@ func (s *Server) apiPerchAutoImportCandidate(w http.ResponseWriter, r *http.Requ
 	a.workingID = rec.ID
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); a.workingID = ""; a.mu.Unlock() }()
-	if err := s.importReadyPerchCandidate(rec, in.Group); err != nil {
+	// An old candidate's access token has expired by now; renew it before the
+	// import validates the session, or every refill of an aged account fails.
+	fresh, err := s.readyCandidateForImport(r.Context(), rec)
+	if err != nil {
+		s.perchAutoError(err.Error())
+		apiError(w, 409, err)
+		return
+	}
+	if err := s.importReadyPerchCandidate(fresh, in.Group); err != nil {
 		apiError(w, 409, err)
 		return
 	}
@@ -529,7 +627,7 @@ func (s *Server) perchAutoCheck(ctx context.Context) {
 		a.status.Running = true
 		a.mu.Unlock()
 		defer func() { a.mu.Lock(); a.workingID = ""; a.status.Running = false; a.mu.Unlock() }()
-		if !s.perchAutoImportOnly(rec, settings.Group) {
+		if !s.perchAutoImportOnly(ctx, rec, settings.Group) {
 			// The import failed; the candidate is back to ready or uncertain and the
 			// next check retries instead of registering a duplicate account.
 			return
@@ -637,7 +735,7 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 // never registers or activates: the session was written when the candidate was
 // registered ahead of time, so re-running either step would risk a duplicate
 // account or a second activation.
-func (s *Server) perchAutoImportOnly(rec perchsignupstore.Record, group string) bool {
+func (s *Server) perchAutoImportOnly(ctx context.Context, rec perchsignupstore.Record, group string) bool {
 	a := s.perchAuto
 	fail := func(msg string) bool {
 		if a.store.Update(rec.ID, perchsignupstore.Ready, nil, "") != nil {
@@ -648,9 +746,14 @@ func (s *Server) perchAutoImportOnly(rec perchsignupstore.Record, group string) 
 		return false
 	}
 	if !validAutoSession(rec.Session) {
-		// An expired session needs a fresh login: hand it to the operator rather
-		// than registering a new account behind their back.
-		return fail("已注册账号的会话已过期，请人工核查后重新注册")
+		// The access token of a candidate stored long ago has expired. Its
+		// refresh token still works, so renew it rather than hand the operator
+		// an account that can never be refilled.
+		fresh, err := s.readyCandidateForImport(ctx, rec)
+		if err != nil {
+			return fail(err.Error())
+		}
+		rec = fresh
 	}
 	if err := s.importReadyPerchCandidate(rec, group); err != nil {
 		return fail(err.Error())

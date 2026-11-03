@@ -23,6 +23,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/pool"
+	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/rules"
 	"account-pool-balancer/internal/stats"
 )
@@ -50,46 +51,57 @@ type workflowDecision struct {
 }
 
 type requestLog struct {
-	TS                 time.Time          `json:"ts"`
-	RequestID          string             `json:"requestId"`
-	ClientKeyID        string             `json:"clientKeyId,omitempty"`
-	ClientKeyName      string             `json:"clientKeyName,omitempty"`
-	Group              string             `json:"group,omitempty"`
-	Provider           string             `json:"provider,omitempty"`
-	Path               string             `json:"path"`
-	InboundProtocol    string             `json:"inboundProtocol"`
-	Protocol           string             `json:"protocol"`
-	Model              string             `json:"model"`
-	Stream             bool               `json:"stream"`
-	AccountID          string             `json:"accountId,omitempty"`
-	AccountName        string             `json:"accountName,omitempty"`
-	Proxy              string             `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
-	SelectionReason    string             `json:"selectionReason,omitempty"`
-	Selector           string             `json:"selector"`
-	Overflow           bool               `json:"overflow"`
-	Switched           bool               `json:"switched"`
-	SessionSource      string             `json:"sessionSource"`
-	AffinityKeyType    string             `json:"affinityKeyType"`
-	AffinityConfidence string             `json:"affinityConfidence"`
-	BindingResult      string             `json:"bindingResult"`
-	Status             int                `json:"status"`
-	Result             string             `json:"result"`
-	UpstreamStatus     *int               `json:"upstreamStatus"`
-	ErrorCategory      string             `json:"errorCategory,omitempty"`
-	BlockedBy          string             `json:"blockedBy,omitempty"`
-	RetryAfter         *int               `json:"retryAfter,omitempty"`
-	DurationMs         int64              `json:"durationMs"`
-	TTFTMs             *int64             `json:"ttftMs"`
-	InputTokens        *int64             `json:"inputTokens"`
-	OutputTokens       *int64             `json:"outputTokens"`
-	CachedTokens       *int64             `json:"cachedTokens"`
-	CacheHit           *bool              `json:"cacheHit"`
-	CacheRate          *float64           `json:"cacheRate"`      // cached share of the prompt, 0..1
-	Cost               *float64           `json:"cost,omitempty"` // in Currency, from the price table
-	Currency           string             `json:"currency,omitempty"`
-	UpstreamRequestID  string             `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
-	Attempts           []attemptLog       `json:"attempts"`
-	Workflow           []workflowDecision `json:"workflow,omitempty"`
+	TS                 time.Time `json:"ts"`
+	RequestID          string    `json:"requestId"`
+	ClientKeyID        string    `json:"clientKeyId,omitempty"`
+	ClientKeyName      string    `json:"clientKeyName,omitempty"`
+	Group              string    `json:"group,omitempty"`
+	Provider           string    `json:"provider,omitempty"`
+	Path               string    `json:"path"`
+	InboundProtocol    string    `json:"inboundProtocol"`
+	Protocol           string    `json:"protocol"`
+	Model              string    `json:"model"`
+	Stream             bool      `json:"stream"`
+	AccountID          string    `json:"accountId,omitempty"`
+	AccountName        string    `json:"accountName,omitempty"`
+	Proxy              string    `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
+	SelectionReason    string    `json:"selectionReason,omitempty"`
+	Selector           string    `json:"selector"`
+	Overflow           bool      `json:"overflow"`
+	Switched           bool      `json:"switched"`
+	SessionSource      string    `json:"sessionSource"`
+	AffinityKeyType    string    `json:"affinityKeyType"`
+	AffinityConfidence string    `json:"affinityConfidence"`
+	BindingResult      string    `json:"bindingResult"`
+	Status             int       `json:"status"`
+	Result             string    `json:"result"`
+	UpstreamStatus     *int      `json:"upstreamStatus"`
+	ErrorCategory      string    `json:"errorCategory,omitempty"`
+	BlockedBy          string    `json:"blockedBy,omitempty"`
+	RetryAfter         *int      `json:"retryAfter,omitempty"`
+	DurationMs         int64     `json:"durationMs"`
+	TTFTMs             *int64    `json:"ttftMs"`
+	InputTokens        *int64    `json:"inputTokens"`
+	OutputTokens       *int64    `json:"outputTokens"`
+	CachedTokens       *int64    `json:"cachedTokens"`
+	CacheHit           *bool     `json:"cacheHit"`
+	CacheRate          *float64  `json:"cacheRate"`      // cached share of the prompt, 0..1
+	Cost               *float64  `json:"cost,omitempty"` // in Currency, from the price table
+	Currency           string    `json:"currency,omitempty"`
+	UpstreamRequestID  string    `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
+	// Conversations is how many distinct accounts this request tried while a
+	// conversation fingerprint was present. It stays 1 while every attempt
+	// remained on one account, and only exceeds 1 when a failover handed one
+	// conversation's history to a second Perch identity.
+	Conversations int `json:"conversations,omitempty"`
+	// CrossAccount marks a request whose failover continued a conversation on a
+	// different account than the one that started it. The upstream then sees one
+	// chat split across two identities, which is the exact shape per-account
+	// isolation exists to prevent, so it is recorded rather than left silent.
+	CrossAccount     bool               `json:"crossAccount,omitempty"`
+	CrossAccountFrom string             `json:"crossAccountFrom,omitempty"`
+	Attempts         []attemptLog       `json:"attempts"`
+	Workflow         []workflowDecision `json:"workflow,omitempty"`
 }
 
 type errorLog struct {
@@ -141,10 +153,16 @@ func cacheRate(in, cached *int64, anthropic bool) *float64 {
 // LogKeys are the logstore filter keys (logstore.Filters), as it would read
 // them back from the JSON.
 func (r *requestLog) LogKeys() map[string]string {
-	return map[string]string{"requestId": r.RequestID, "accountId": r.AccountID, "status": strconv.Itoa(r.Status),
+	keys := map[string]string{"requestId": r.RequestID, "accountId": r.AccountID, "status": strconv.Itoa(r.Status),
 		"result": r.Result, "model": r.Model, "errorCategory": r.ErrorCategory, "bindingResult": r.BindingResult,
 		"provider": r.Provider, "clientKeyId": r.ClientKeyID, "stream": strconv.FormatBool(r.Stream), "protocol": r.Protocol,
 		"affinityKeyType": r.AffinityKeyType, "affinityConfidence": r.AffinityConfidence}
+	// Only present when true, so the filter does not gain a column that is
+	// "false" for almost every request.
+	if r.CrossAccount {
+		keys["crossAccount"] = "true"
+	}
+	return keys
 }
 
 func (e errorLog) LogKeys() map[string]string {
@@ -454,6 +472,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec.SessionSource, rec.AffinityKeyType, rec.AffinityConfidence = ident.Source, ident.KeyType, ident.Confidence
 
 	excluded := map[string]bool{}
+	// triedAccounts and firstAccount track whether one conversation's history
+	// was handed to a second account (see CrossAccount on requestLog).
+	triedAccounts := map[string]bool{}
+	firstAccount := ""
 	var last *attemptResult
 	strippedTools := 0
 	for i := 0; i < cfg.Routing.MaxAccounts; i++ {
@@ -506,6 +528,22 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		acct := lease.Account
 		if i == 0 {
 			rec.BindingResult = d.BindingResult
+		}
+		// Conversation continuity: a request that names a conversation and then
+		// switches accounts splits that one conversation across two Perch
+		// identities. Track it per request so the log shows a pool that handed
+		// a chat to a second account instead of only showing a switch count.
+		if ident.Fingerprint != "" {
+			if _, seenAccount := triedAccounts[acct.ID]; !seenAccount {
+				triedAccounts[acct.ID] = true
+				rec.Conversations = len(triedAccounts)
+				if firstAccount == "" {
+					firstAccount = acct.ID
+				} else {
+					rec.CrossAccount = true
+					rec.CrossAccountFrom = firstAccount
+				}
+			}
 		}
 		if len(rec.Workflow) < 4 {
 			order := d.Order
@@ -1613,10 +1651,8 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 			// publish the base model an alias stands for: each Modal proxy
 			// token has its own hostname for the same model, so without this
 			// three accounts running DeepSeek offer three different names
-			id, base := mid, ""
-			if b, _ := m["base_model_id"].(string); b != "" && b != mid {
-				id, base = b, b
-			}
+			base, _ := m["base_model_id"].(string)
+			id := quota.PublicModelID(mid, base)
 			if seen[id] {
 				continue
 			}
@@ -1633,7 +1669,7 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 			}
 			// keep the upstream id visible without making it a second model:
 			// a caller can still name it to target one account
-			if base != "" {
+			if id != mid {
 				entry["upstream_ids"] = appendUpstream(entry["upstream_ids"], mid)
 			}
 			data = append(data, entry)

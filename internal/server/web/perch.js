@@ -650,6 +650,17 @@ async function pcAutoDeleteProxy(id) {
   finally { pcAuto.busy = false; pcAutoUpdateRunButton(); }
 }
 
+// pcAutoReportFailure surfaces a failed candidate action. The reload that follows
+// makes loadPerchAutosignup clear #pc-auto-error, so a write to that element
+// alone would be wiped the next line; the toast survives it, and the page
+// error is restored afterwards unless the reload supplied a fresher one.
+async function pcAutoReportFailure(prefix, err) {
+  const message = prefix + (pcRegistrationSafe(err && err.message) || '未知错误');
+  toast(message, 'error');
+  await loadPerchAutosignup();
+  if (!$('#pc-auto-error').textContent) $('#pc-auto-error').textContent = message;
+}
+
 async function pcAutoActivate(id, login) {
   if (pcAuto.busy || !confirm(`确定验证候选账号 ${login || id} 的激活状态？此操作可能发送 hi 消息。`)) return;
   pcAuto.busy = true; pcAutoUpdateRunButton();
@@ -659,10 +670,7 @@ async function pcAutoActivate(id, login) {
     toast('已请求验证激活');
     await loadPerchAutosignup();
   } catch (e) {
-    const message = '验证激活失败：' + pcRegistrationSafe(e.message);
-    await loadPerchAutosignup();
-    const refreshError = $('#pc-auto-error').textContent;
-    $('#pc-auto-error').textContent = message + (refreshError ? '；' + refreshError : '');
+    await pcAutoReportFailure('验证激活失败：', e);
   } finally {
     pcAuto.busy = false;
     pcAutoUpdateRunButton();
@@ -678,10 +686,7 @@ async function pcAutoRetrySave(id) {
     toast('已重试保存');
     await loadPerchAutosignup();
   } catch (e) {
-    const message = '重试保存失败：' + pcRegistrationSafe(e.message);
-    await loadPerchAutosignup();
-    const refreshError = $('#pc-auto-error').textContent;
-    $('#pc-auto-error').textContent = message + (refreshError ? '；' + refreshError : '');
+    await pcAutoReportFailure('重试保存失败：', e);
   } finally {
     pcAuto.busy = false;
     pcAutoUpdateRunButton();
@@ -692,10 +697,15 @@ async function pcAutoImport(id, login) {
   if (pcAuto.busy || !pcAuto.loaded) return;
   if (pcAuto.dirty) {
     $('#pc-auto-error').textContent = '请先保存自动补号设置，再确认入池。';
+    toast('请先保存自动补号设置，再确认入池', 'error');
     return;
   }
   const group = $('#pc-auto-group').value.trim();
-  if (!group) { $('#pc-auto-error').textContent = '当前设置的入池分组为空，请先保存设置。'; return; }
+  if (!group) {
+    $('#pc-auto-error').textContent = '当前设置的入池分组为空，请先保存设置。';
+    toast('入池分组为空，请先保存设置', 'error');
+    return;
+  }
   if (!confirm(`确定将候选账号 ${login || id} 导入当前设置分组「${group}」？`)) return;
   pcAuto.busy = true; pcAutoUpdateRunButton();
   $('#pc-auto-error').textContent = '';
@@ -704,10 +714,7 @@ async function pcAutoImport(id, login) {
     toast('已确认入池');
     await loadPerchAutosignup();
   } catch (e) {
-    const message = '确认入池失败：' + pcRegistrationSafe(e.message);
-    await loadPerchAutosignup();
-    const refreshError = $('#pc-auto-error').textContent;
-    $('#pc-auto-error').textContent = message + (refreshError ? '；' + refreshError : '');
+    await pcAutoReportFailure('确认入池失败：', e);
   } finally {
     pcAuto.busy = false;
     pcAutoUpdateRunButton();
@@ -722,7 +729,10 @@ async function pcAutoDelete(id, login) {
     await api('DELETE', '/api/perch/autosignup/candidates/' + encodeURIComponent(id));
     toast('候选账号已删除');
     await loadPerchAutosignup();
-  } catch (e) { $('#pc-auto-error').textContent = '删除候选账号失败：' + pcRegistrationSafe(e.message); }
+  } catch (e) {
+    $('#pc-auto-error').textContent = '删除候选账号失败：' + pcRegistrationSafe(e.message);
+    toast('删除候选账号失败', 'error');
+  }
   finally { pcAuto.busy = false; pcAutoUpdateRunButton(); }
 }
 
@@ -734,7 +744,10 @@ async function pcAutoRun() {
     await api('POST', '/api/perch/autosignup/run');
     toast('已触发检查');
     await loadPerchAutosignup();
-  } catch (e) { $('#pc-auto-error').textContent = '触发检查失败：' + pcRegistrationSafe(e.message); }
+  } catch (e) {
+    $('#pc-auto-error').textContent = '触发检查失败：' + pcRegistrationSafe(e.message);
+    toast('触发检查失败', 'error');
+  }
   finally { pcAuto.busy = false; pcAutoUpdateRunButton(); }
 }
 
@@ -871,6 +884,11 @@ async function loadPerchSettings() {
     ['neutralSystem', '默认 system（调用方没给时）', 'textarea', ''],
   ], p);
   $('#form-perch-gate').innerHTML += `<label class="row"><input type="checkbox" data-pc-k="exposeReasoning" ${p.exposeReasoning ? 'checked' : ''}> 透传 reasoning_content</label>`;
+  $('#form-perch-delta').innerHTML = pcFields([
+    ['deltaTtlMin', '前缀信任窗口（分钟）', 'number', '服务端确认「已持有」的消息前缀保持多久仍发增量。0 用默认 9（官方 CLI 的窗口）。调大只对闲置超过窗口的对话有效；超过服务端自己的记忆则会被 409 拒一次再发全量'],
+    ['deltaMaxKeys', '缓存对话数上限', 'number', '每个对话前缀约「每条消息一个 SHA-256」，长会话的缓存会明显更大。0 用默认 4096'],
+  ], p);
+  $('#pc-delta-live').innerHTML = pcDeltaLive(fingerprint);
   $('#form-perch-logs').innerHTML = pcFields([
     ['logRetentionDays', '日志保留天数', 'number', ''],
     ['adminReadOnlyView', '隐藏 Token 尾号', 'checkbox', ''],
@@ -881,6 +899,21 @@ async function loadPerchSettings() {
     Session 加密保存在 data/perch-secrets.json（AES-GCM），config.json 与页面都不含 Token。`;
   $('#pc-store').insertAdjacentHTML('beforeend', pcFingerprintProxyReport(fingerprint));
   await loadPerchLogs();
+}
+
+// pcDeltaLive renders the held-context delta counters: whether the pool is
+// actually sending only what is new, and what it is sized to.
+function pcDeltaLive(report) {
+  const d = report && report.delta;
+  if (!d) return '增量诊断暂不可用。';
+  const pct = (v) => `${(Math.round((v || 0) * 1000) / 10).toFixed(1)}%`;
+  const lim = d.limits || {};
+  const total = (d.deltaRequests || 0) + (d.wholeRequests || 0);
+  return `当前生效：信任窗口 <b>${esc(lim.ttlMinutes ?? '?')}</b> 分钟 · 缓存上限 <b>${esc(lim.maxKeys ?? '?')}</b> 个对话<br>
+    已缓存对话 <b>${esc(d.cachedKeys ?? 0)}</b> / 快照 <b>${esc(d.cachedSnapshots ?? 0)}</b> · 跟踪中的 runId <b>${esc(d.trackedConversations ?? 0)}</b><br>
+    增量 <b>${esc(d.deltaRequests ?? 0)}</b> · 全量 <b>${esc(d.wholeRequests ?? 0)}</b> · 命中率 <b>${pct(d.hitRate)}</b>（共 ${esc(total)} 次）<br>
+    被拒 <b>${esc(d.refusedDeltas ?? 0)}</b> · 少发 <b>${esc(d.messagesOmitted ?? 0)}</b> 条消息 / <b>${esc(d.bytesOmitted ?? 0)}</b> 字节<br>
+    <span class="hint">被拒持续增长说明服务端不再持有该前缀——调大信任窗口会让这个数字变高，因为它声称了服务端已经丢掉的前缀。</span>`;
 }
 
 function pcFingerprintProxyReport(report) {

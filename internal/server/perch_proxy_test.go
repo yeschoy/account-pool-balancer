@@ -19,6 +19,7 @@ import (
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/perch"
 	"account-pool-balancer/internal/perchstore"
+	"account-pool-balancer/internal/quota"
 )
 
 // perchModelFake is a Perch model-call proxy: it records the envelope it was
@@ -1324,5 +1325,99 @@ func TestPerchAttributionNeedsWorkspace(t *testing.T) {
 	env, _ := fake.lastEnvelope.Load().(map[string]any)
 	if attrib, ok := env["attribution"]; ok && attrib != nil {
 		t.Fatalf("attribution = %v, want null/absent without a workspace id", attrib)
+	}
+}
+
+// A complete block names the run, as the published client's ck() does: its
+// attribution.runId is the same value the envelope carries. The pool resolves
+// the run id from the conversation after the options are built, so this also
+// covers the re-stamping that makes the two agree.
+func TestPerchAttributionNamesTheRun(t *testing.T) {
+	fake := newPerchModelFake(t)
+	e := withPerchPool(t, fake)
+
+	// A quota snapshot is where the workspace id comes from.
+	e.srv.quota.Load(map[string]*quota.Snapshot{
+		"p1": {WorkspaceID: "ws-1", WorkspaceName: "WS"},
+	})
+
+	resp := postPerch(t, e, "/v1/chat/completions", map[string]any{
+		"model": "auto", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	resp.Body.Close()
+
+	env, _ := fake.lastEnvelope.Load().(map[string]any)
+	attrib, ok := env["attribution"].(map[string]any)
+	if !ok {
+		t.Fatalf("attribution = %v, want a block once a workspace id exists", env["attribution"])
+	}
+	if got := attrib["workspaceId"]; got != "ws-1" {
+		t.Fatalf("attribution.workspaceId = %v, want ws-1", got)
+	}
+	if got := attrib["userId"]; got != "supa-p1" {
+		t.Fatalf("attribution.userId = %v, want supa-p1", got)
+	}
+	if got := attrib["source"]; got != "cli" {
+		t.Fatalf("attribution.source = %v, want cli", got)
+	}
+	// The two run ids must agree: the client stamps the same value in both
+	// places, so a mismatch is a shape no real caller produces.
+	envRun, _ := env["runId"].(string)
+	attrRun, _ := attrib["runId"].(string)
+	if envRun == "" {
+		t.Fatal("envelope runId is empty")
+	}
+	if attrRun != envRun {
+		t.Fatalf("attribution.runId = %q, envelope runId = %q; want the same value", attrRun, envRun)
+	}
+}
+
+// A failover that hands one conversation to a second account must be recorded:
+// the upstream sees a single chat split across two identities, which is what
+// per-account isolation is meant to prevent. Here the tracking is exercised
+// directly, without a pool, so the assertion is about the record and not about
+// routing.
+func TestRequestLogRecordsCrossAccountConversation(t *testing.T) {
+	rec := &requestLog{}
+	tried := map[string]bool{}
+	first := ""
+	same := func(acct string) {
+		if _, seen := tried[acct]; !seen {
+			tried[acct] = true
+			rec.Conversations = len(tried)
+			if first == "" {
+				first = acct
+			} else {
+				rec.CrossAccount = true
+				rec.CrossAccountFrom = first
+			}
+		}
+	}
+	same("acct-a")
+	if rec.CrossAccount || rec.Conversations != 1 {
+		t.Fatalf("one account: crossAccount=%v conversations=%d", rec.CrossAccount, rec.Conversations)
+	}
+	// Retrying the same account is not a conversation split.
+	same("acct-a")
+	if rec.CrossAccount || rec.Conversations != 1 {
+		t.Fatalf("same account retry: crossAccount=%v conversations=%d", rec.CrossAccount, rec.Conversations)
+	}
+	// Switching does split it, and names the account it came from.
+	same("acct-b")
+	if !rec.CrossAccount || rec.Conversations != 2 || rec.CrossAccountFrom != "acct-a" {
+		t.Fatalf("switch: crossAccount=%v conversations=%d from=%q",
+			rec.CrossAccount, rec.Conversations, rec.CrossAccountFrom)
+	}
+	if got := rec.LogKeys()["crossAccount"]; got != "true" {
+		t.Fatalf("log key crossAccount = %q, want true", got)
+	}
+}
+
+// A request with no conversation fingerprint cannot be split, so it never
+// reports a cross-account conversation even when the pool switches accounts.
+func TestRequestLogNoConversationNoCrossAccount(t *testing.T) {
+	rec := &requestLog{Conversations: 0}
+	if _, ok := rec.LogKeys()["crossAccount"]; ok {
+		t.Fatal("a request without a conversation advertised crossAccount")
 	}
 }

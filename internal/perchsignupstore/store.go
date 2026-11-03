@@ -506,12 +506,14 @@ func (s *Store) ResumeUncertain(id string) (Record, error) {
 // Failed or uncertain work can be explicitly requeued. A non-nil session
 // replaces the stored session, and a nonempty accountID replaces the account ID.
 // Ready requires a session; Completed clears the session and signup credentials.
+// Ready may be written again as Ready with a new session: that is a renewal of
+// the stored tokens for a candidate still waiting to be imported.
 func (s *Store) Update(id string, status Status, session []byte, accountID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, r := range s.records {
 		if r.ID == id {
-			if !(r.Status == Running && (status == Running || status == Ready || status == Completed || status == Failed || status == Uncertain) || r.Status == Ready && (status == Completed || status == Failed || status == Uncertain) || (r.Status == Failed || r.Status == Uncertain) && status == Queued) {
+			if !(r.Status == Running && (status == Running || status == Ready || status == Completed || status == Failed || status == Uncertain) || r.Status == Ready && (status == Completed || status == Failed || status == Uncertain) || r.Status == Ready && status == Ready && session != nil || (r.Status == Failed || r.Status == Uncertain) && status == Queued) {
 				return ErrInvalid
 			}
 			rs := append([]diskRecord(nil), s.records...)

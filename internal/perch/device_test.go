@@ -1,6 +1,7 @@
 package perch
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,33 @@ func TestCwdThreadID(t *testing.T) {
 	}
 }
 
+// Two accounts served from one process must not present the same thread id.
+// The published CLI derives it from the working directory alone, so an
+// unscoped pool would put every identity on one machine id.
+func TestCwdThreadIDIsPerAccount(t *testing.T) {
+	dir := "/Users/example/work"
+	a := CwdThreadIDFor(dir, "account-a")
+	b := CwdThreadIDFor(dir, "account-b")
+	if a == b {
+		t.Fatal("two accounts share one thread id")
+	}
+	if !strings.HasPrefix(a, ThreadIDPrefix) || len(strings.TrimPrefix(a, ThreadIDPrefix)) != 16 {
+		t.Fatalf("scoped thread id %q does not have the CLI shape", a)
+	}
+	// Stable per account across calls, or the id is useless as a thread.
+	if a != CwdThreadIDFor(dir, "account-a") {
+		t.Fatal("a scoped thread id must be stable for the same account")
+	}
+	// An empty account keeps the published, unscoped value.
+	if CwdThreadIDFor(dir, "") != CwdThreadID(dir) {
+		t.Fatal("an empty account must keep the published thread id")
+	}
+	// A different directory is still a different thread for the same account.
+	if CwdThreadIDFor(dir, "account-a") == CwdThreadIDFor("/Users/example/other", "account-a") {
+		t.Fatal("the directory stopped affecting the thread id")
+	}
+}
+
 func TestLocaleAndUserAgent(t *testing.T) {
 	cases := map[string]string{
 		"en":      "en",
@@ -141,5 +169,75 @@ func TestPromptOf(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt %q lacks %q", p, want)
 		}
+	}
+}
+
+// A conversation must keep one thread id: it stands for a project directory,
+// and a directory does not change name between requests.
+func TestThreadSlotIsStablePerConversation(t *testing.T) {
+	a := ThreadSlot("conv-alpha", ThreadPoolSize)
+	if a == "" {
+		t.Fatal("a named conversation got no slot")
+	}
+	if a != ThreadSlot("conv-alpha", ThreadPoolSize) {
+		t.Fatal("the same conversation moved slots")
+	}
+	if a == ThreadSlot("conv-beta", ThreadPoolSize) {
+		t.Fatal("two conversations landed on one slot")
+	}
+	// No conversation, or no pool: no slot, so the caller keeps one thread.
+	if ThreadSlot("", ThreadPoolSize) != "" || ThreadSlot("   ", ThreadPoolSize) != "" {
+		t.Fatal("an empty conversation produced a slot")
+	}
+	if ThreadSlot("conv-alpha", 0) != "" {
+		t.Fatal("a zero-size pool produced a slot")
+	}
+}
+
+// The pool is what makes one account look like a developer with several
+// projects: many conversations, a bounded set of thread ids, all of them used.
+func TestThreadPoolSpreadsConversationsAcrossSlots(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 400; i++ {
+		seen[ThreadSlot(fmt.Sprintf("conv-%d", i), ThreadPoolSize)] = true
+	}
+	if len(seen) != ThreadPoolSize {
+		t.Fatalf("%d conversations covered %d slots, want all %d",
+			400, len(seen), ThreadPoolSize)
+	}
+	// Slots must stay inside the pool: a slot name above size would mean the
+	// modulo was skipped and the account could grow unbounded.
+	for slot := range seen {
+		var n int
+		if _, err := fmt.Sscanf(slot, "p%d", &n); err != nil {
+			t.Fatalf("slot %q is not of the form p<n>", slot)
+		}
+		if n < 0 || n >= ThreadPoolSize {
+			t.Fatalf("slot %q is outside the pool", slot)
+		}
+	}
+}
+
+// Every slot yields a distinct thread id, and the ids stay per account.
+func TestThreadPoolIdsAreDistinctAndAccountScoped(t *testing.T) {
+	dir := "/data"
+	seen := map[string]bool{}
+	for n := 0; n < ThreadPoolSize; n++ {
+		id := CwdThreadIDForSlot(dir, "account-a", fmt.Sprintf("p%d", n))
+		if !strings.HasPrefix(id, ThreadIDPrefix) {
+			t.Fatalf("slot p%d produced %q without the CLI prefix", n, id)
+		}
+		if seen[id] {
+			t.Fatalf("slot p%d repeated the thread id %s", n, id)
+		}
+		seen[id] = true
+	}
+	// Another account on the same slot is a different thread id.
+	if CwdThreadIDForSlot(dir, "account-a", "p0") == CwdThreadIDForSlot(dir, "account-b", "p0") {
+		t.Fatal("two accounts share a thread id on the same slot")
+	}
+	// An empty slot keeps the plain account-scoped id.
+	if CwdThreadIDForSlot(dir, "account-a", "") != CwdThreadIDFor(dir, "account-a") {
+		t.Fatal("an empty slot changed the plain thread id")
 	}
 }
