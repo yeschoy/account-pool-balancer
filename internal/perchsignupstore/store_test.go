@@ -305,3 +305,53 @@ func TestConcurrentClaim(t *testing.T) {
 		t.Fatalf("claimed %d", len(seen))
 	}
 }
+
+// The reason an attempt failed has to survive in the store, because the list an
+// operator reads is served from there and the worker's stderr is discarded.
+func TestDetailPersistsWithFailureAndClearsOnReclaim(t *testing.T) {
+	s, _ := openTest(t)
+	if _, e := s.Import([]Candidate{candidate("user-a@example.test")}); e != nil {
+		t.Fatal(e)
+	}
+	r, e := s.Claim()
+	if e != nil {
+		t.Fatal(e)
+	}
+	reason := "注册结果不确定（GitHub 登录或授权阶段失败，请检查账号、代理或上游验证），请人工核查"
+	if e = s.UpdateDetail(r.ID, Uncertain, nil, "", reason); e != nil {
+		t.Fatal(e)
+	}
+	if got := s.List()[0].Detail; got != reason {
+		t.Fatalf("detail = %q, want %q", got, reason)
+	}
+	// Requeuing starts a new attempt; the old reason no longer describes it.
+	if e = s.Update(r.ID, Queued, nil, ""); e != nil {
+		t.Fatal(e)
+	}
+	if got := s.List()[0].Detail; got != "" {
+		t.Fatalf("stale detail survived a requeue: %q", got)
+	}
+}
+
+// The detail is written to disk, so it must survive a reopen.
+func TestDetailSurvivesRestart(t *testing.T) {
+	s, p := openTest(t)
+	if _, e := s.Import([]Candidate{candidate("user-b@example.test")}); e != nil {
+		t.Fatal(e)
+	}
+	r, e := s.Claim()
+	if e != nil {
+		t.Fatal(e)
+	}
+	reason := "注册结果不确定（注册进程失败: exit status 1），请人工核查"
+	if e = s.UpdateDetail(r.ID, Uncertain, nil, "", reason); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := Open(p, testKey)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got := reopened.List()[0].Detail; got != reason {
+		t.Fatalf("detail lost across reopen: %q", got)
+	}
+}

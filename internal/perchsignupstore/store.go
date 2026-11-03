@@ -58,6 +58,11 @@ type Record struct {
 	Status    Status
 	Session   []byte
 	AccountID string
+	// Detail is why the last attempt ended the way it did. It survives the
+	// attempt: the operator-facing list runs in another goroutine from the
+	// worker, so an in-memory status line loses the reason exactly when it is
+	// needed most. It never carries credentials; callers store a stage label.
+	Detail string
 }
 
 func (Record) String() string               { return "[REDACTED]" }
@@ -71,6 +76,8 @@ type Summary struct {
 	Login      string `json:"login"`
 	Proxy      string `json:"proxy"`
 	HasSession bool   `json:"hasSession"`
+	// Detail is the last attempt's reason, empty when there is none to report.
+	Detail string `json:"detail,omitempty"`
 }
 
 // ProxyRecord is returned only to trusted code; JSON and formatting redact its URL.
@@ -94,6 +101,9 @@ type diskRecord struct {
 	Status    Status
 	Session   []byte
 	AccountID string
+	// Detail is additive: a store written before it existed decodes with an
+	// empty value, so no version bump or migration is needed.
+	Detail string `json:",omitempty"`
 }
 type diskData struct {
 	Version int
@@ -229,10 +239,10 @@ func summary(r diskRecord) Summary {
 	if publicLogin.MatchString(r.Candidate.Login) {
 		login = r.Candidate.Login
 	}
-	return Summary{ID: r.ID, Status: r.Status, Login: login, Proxy: proxy, HasSession: len(r.Session) != 0}
+	return Summary{ID: r.ID, Status: r.Status, Login: login, Proxy: proxy, HasSession: len(r.Session) != 0, Detail: r.Detail}
 }
 func record(r diskRecord) Record {
-	return Record{ID: r.ID, Candidate: Candidate(r.Candidate), Status: r.Status, Session: append([]byte(nil), r.Session...), AccountID: r.AccountID}
+	return Record{ID: r.ID, Candidate: Candidate(r.Candidate), Status: r.Status, Session: append([]byte(nil), r.Session...), AccountID: r.AccountID, Detail: r.Detail}
 }
 
 // Import adds previously unseen logins atomically; existing entries are unchanged.
@@ -604,7 +614,42 @@ func (s *Store) ResumeUncertain(id string) (Record, error) {
 // Ready requires a session; Completed clears the session and signup credentials.
 // Ready may be written again as Ready with a new session: that is a renewal of
 // the stored tokens for a candidate still waiting to be imported.
+//
+// Update leaves Detail untouched so a reason written by UpdateDetail survives a
+// later state change; SetDetail writes one.
 func (s *Store) Update(id string, status Status, session []byte, accountID string) error {
+	return s.update(id, status, session, accountID, nil)
+}
+
+// UpdateDetail is Update plus the reason this attempt ended the way it did.
+func (s *Store) UpdateDetail(id string, status Status, session []byte, accountID, detail string) error {
+	return s.update(id, status, session, accountID, &detail)
+}
+
+// SetDetail records why the current attempt failed without changing its status,
+// for callers that already persisted the state.
+func (s *Store) SetDetail(id, detail string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.records {
+		if r.ID != id {
+			continue
+		}
+		if r.Detail == detail {
+			return nil
+		}
+		rs := append([]diskRecord(nil), s.records...)
+		rs[i].Detail = detail
+		if err := s.save(rs, s.proxies); err != nil {
+			return err
+		}
+		s.records = rs
+		return nil
+	}
+	return ErrNotFound
+}
+
+func (s *Store) update(id string, status Status, session []byte, accountID string, detail *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, r := range s.records {
@@ -614,6 +659,16 @@ func (s *Store) Update(id string, status Status, session []byte, accountID strin
 			}
 			rs := append([]diskRecord(nil), s.records...)
 			rs[i].Status = status
+			if detail != nil {
+				rs[i].Detail = *detail
+			}
+			// A fresh claim is a new attempt: the previous reason no longer
+			// describes it and would read as if it had already failed.
+			if status == Queued || status == Running {
+				if detail == nil {
+					rs[i].Detail = ""
+				}
+			}
 			if session != nil {
 				rs[i].Session = append([]byte(nil), session...)
 			}

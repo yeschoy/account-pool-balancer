@@ -609,3 +609,48 @@ func TestAutoRefreshTransientMessageCarriesReason(t *testing.T) {
 		t.Fatalf("transient failure lost its reason: %v", err)
 	}
 }
+
+// A failed registration must record WHY, not just that it is uncertain. The
+// worker reports one stage label and discards its traceback, so that label is
+// the only diagnosis there is; losing it leaves the operator with "check by
+// hand" and no idea what to check.
+func TestRegisterFailureDetailReachesTheList(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"github stage", &registrationWorkerError{detail: "GitHub 登录或授权阶段失败，请检查账号、代理或上游验证"}, "GitHub 登录或授权阶段失败"},
+		{"dependency", &registrationWorkerError{detail: "注册依赖不可用"}, "注册依赖不可用"},
+		{"plain process error", errors.New("exit status 1"), "注册进程异常"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{logs: nil}
+			s.perch = &perchRuntime{}
+			s.perchAuto = &perchAutoManager{settings: perchAutoSettings{IntervalSec: 60, MinAvailable: 1, Group: "perch"}, trigger: make(chan struct{}, 1)}
+			st, err := perchsignupstore.Open(filepath.Join(t.TempDir(), "signup.enc"), bytes.Repeat([]byte("k"), 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.perchAuto.store = st
+			if _, err := st.Import([]perchsignupstore.Candidate{{Login: "user-a", Password: "p", TOTPSecret: "t", MailboxURL: "https://m/"}}); err != nil {
+				t.Fatal(err)
+			}
+			rec, err := st.Claim()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) {
+				return nil, tc.err
+			}
+			s.perchAutoRegisterOne(context.Background(), rec)
+			got := st.List()[0].Detail
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("detail = %q, want it to mention %q", got, tc.want)
+			}
+			if got == "执行结果不确定，请人工核查" {
+				t.Fatal("detail did not carry the reason")
+			}
+		})
+	}
+}

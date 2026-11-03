@@ -95,7 +95,7 @@ func (s *Server) apiPerchAuto(w http.ResponseWriter, r *http.Request) {
 	list := make([]candidate, 0)
 	for _, x := range a.store.List() {
 		item := candidate{ID: x.ID, Login: x.Login, Status: x.Status, Proxy: autoProxyLabel(x.Proxy),
-			HasProxy: x.Proxy != "", Detail: autoCandidateDetail(x.Status),
+			HasProxy: x.Proxy != "", Detail: autoCandidateDetailWithReason(x),
 			CanRevalidate: x.Status == perchsignupstore.Uncertain && x.HasSession, CanRegister: x.Status == perchsignupstore.Queued}
 		// CanEditProxy mirrors the store's rule: a candidate that is mid-run has
 		// already handed its proxy to the worker, and a completed one became a
@@ -137,6 +137,16 @@ func autoCandidateDetail(st perchsignupstore.Status) string {
 		return "已注册并激活，等待补号时入池（不会再注册）"
 	}
 	return ""
+}
+
+// autoCandidateDetailWithReason prefers the reason the last attempt recorded
+// over the generic line its status would produce. A stored reason only exists
+// for an attempt that actually failed, so it is never shown for a healthy row.
+func autoCandidateDetailWithReason(x perchsignupstore.Summary) string {
+	if x.Detail != "" && (x.Status == perchsignupstore.Uncertain || x.Status == perchsignupstore.Failed) {
+		return x.Detail
+	}
+	return autoCandidateDetail(x.Status)
 }
 func (s *Server) apiPerchAutoSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -813,6 +823,17 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 		}
 		return true
 	}
+	// fail persists the attempt's outcome together with its reason. The reason
+	// has to reach the store, not just the status line: the list an operator
+	// reads is served from the store, and the worker's stderr is discarded by
+	// design, so this is the only place the cause survives the attempt.
+	fail := func(st perchsignupstore.Status, reason string) {
+		if err := a.store.UpdateDetail(rec.ID, st, nil, "", reason); err != nil {
+			s.perchAutoError("保存候选状态失败，请人工核查")
+			return
+		}
+		s.perchAutoError(reason)
+	}
 	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	c := rec.Candidate
@@ -825,8 +846,11 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 	doc, err := worker(ctx, input)
 	s.logPerchDiagnostic("", "register", autoPerchProxySource(c.ProxyURL), "", started, err)
 	if err != nil || ctx.Err() != nil {
-		update(perchsignupstore.Uncertain, nil, "")
-		s.perchAutoError("注册结果不确定，请人工核查")
+		// "结果不确定" is the verdict, not the reason. A registration can stop
+		// at input validation, at GitHub sign-in, or at the session check, and
+		// each needs a different fix; the worker names the stage in its error,
+		// so keep it instead of repeating "please check by hand".
+		fail(perchsignupstore.Uncertain, "注册结果不确定（"+autoRegisterFailureReason(err, ctx)+"），请人工核查")
 		return nil, false
 	}
 	if !update(perchsignupstore.Running, doc, "") {
@@ -838,13 +862,11 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 		return nil, false
 	}
 	if !validAutoSession(doc) {
-		update(perchsignupstore.Uncertain, nil, "")
-		s.perchAutoError("注册会话无效，请人工核查")
+		fail(perchsignupstore.Uncertain, "注册会话无效，请人工核查")
 		return nil, false
 	}
 	if s.activateAutoSession(ctx, c.ProxyURL, doc) != nil || ctx.Err() != nil {
-		update(perchsignupstore.Uncertain, nil, "")
-		s.perchAutoError("Starter 激活结果不确定，请人工核查")
+		fail(perchsignupstore.Uncertain, "Starter 激活结果不确定（"+autoRegisterFailureReason(nil, ctx)+"），请人工核查")
 		return nil, false
 	}
 	// Close the account's data collection before it can be imported. Like the
@@ -956,6 +978,45 @@ func autoRefreshFailureReason(err error) string {
 		return "请求超时"
 	}
 	return "连接失败"
+}
+
+// autoRegisterFailureReason turns one failed registration into a cause an
+// operator can act on.
+//
+// The worker deliberately swallows the traceback (its stdout is the result
+// document, and a library must never contaminate it) and reports a single stage
+// label on stderr instead. That label is the whole diagnosis available, so it is
+// translated here rather than collapsed into "please check by hand": the
+// remedy for a wrong password, a dead proxy and an exhausted signup mailbox
+// have nothing in common.
+func autoRegisterFailureReason(err error, ctx context.Context) string {
+	if ctx != nil {
+		switch ctx.Err() {
+		case context.Canceled:
+			return "注册被取消"
+		case context.DeadlineExceeded:
+			return "注册超时（超过 10 分钟）"
+		}
+	}
+	if err == nil {
+		return "未知原因"
+	}
+	var we *registrationWorkerError
+	if errors.As(err, &we) {
+		return we.detail
+	}
+	// A plain error here is usually the worker process failing to start, which
+	// is a dependency problem rather than a credential one.
+	return "注册进程异常：" + trimForStatus(err.Error())
+}
+
+// trimForStatus bounds text that is shown in one table cell.
+func trimForStatus(s string) string {
+	s = strings.TrimSpace(s)
+	if len([]rune(s)) > 120 {
+		return string([]rune(s)[:120]) + "…"
+	}
+	return s
 }
 
 func (s *Server) activateAutoSession(ctx context.Context, proxy string, doc []byte) (resultErr error) {
