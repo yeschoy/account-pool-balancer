@@ -8,6 +8,8 @@
 
 另有一个 **Perch 号池**（[chat.perchai.app](https://chat.perchai.app)）：它管理的是 **Supabase 会话池**而不是 API Key —— 导入账号 JSON 后自动续期、自动检测状态、读额度，不需要手工换 Token。见 [Perch 号池](#perch-号池chatperchaiapp)。
 
+新增 **OpenCode Zen / Go 授权 Key 号池**，在原有后台、分组和调度器上增量接入，默认关闭。支持套餐独立目录/设置、原生三协议、显式回退及 Go usage；受限跨协议转换另行开关，流为缓冲输出，不承诺完整客户端能力。详见 [使用、配置与验收边界](docs/opencode.md) 和 [源码对比审计 / GPL 处理](docs/opencode-audit.md)。真实上游及五种客户端尚未实机验收。
+
 单个 Go 二进制，无外部依赖，无数据库。
 
 ## 快速开始

@@ -5,23 +5,25 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 let csrf = '';
 let accountsCache = [];
+const ocSelected = new Set();
 let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'perch'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'perch', 'opencode-zen', 'opencode-go'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', perch: 'Perch' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', perch: 'perch' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
 // pools whose key carries no provider prefix the backend can verify: the
 // console declares the pool explicitly when adding an account
-const keyNeedsProvider = () => isOllama();
+const isOpenCode = () => pool === 'opencode-zen' || pool === 'opencode-go';
+const keyNeedsProvider = () => isOllama() || isOpenCode();
 const RT_HINT = { opendesign: 'sk-amr-…', river: 'rv_…', ollama: 'ollama.com/settings/keys 签发的 key 原样粘贴',
-  modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）' };
+  modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
 const withPool = (path) => path + (path.includes('?') ? '&' : '?') + 'provider=' + pool;
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -231,14 +233,17 @@ function renderPoolTabs() {
   document.title = POOL_LABEL[pool] + ' 账号池';
   document.body.dataset.pool = pool;
   $('#btn-add-device').classList.toggle('hidden', pool !== 'opendesign');
+  $('#oc-batch').classList.toggle('hidden', !isOpenCode());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint' },
-    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量' } };
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
     river: '还没有 River 账号。点「批量导入」粘贴 rv_ 开头的 key，每行一个。',
     ollama: '还没有 Ollama 账号。点「批量导入」一行一个 key（ollama.com/settings/keys 签发，本池的 key 不要求前缀），或「手动添加」。',
     modal: '还没有 Modal 账号。点「批量导入」一行一个 Proxy Token（wk-<id>.ws-<secret>，modal.com/settings/proxy-auth-tokens 创建），或「手动添加」。',
+    'opencode-zen': '添加 Zen API Key；独立分组，不会推断或混入 Go 池。请先在设置启用 OpenCode。',
+    'opencode-go': '添加 Go API Key；额度是订阅共享百分比，不对多个 Key 求和。请先在设置启用 OpenCode。',
   }[pool] || '还没有账号。点「设备授权添加」，在已登录该账号的浏览器里批准即可。';
 }
 $('#pool-tabs').addEventListener('click', (ev) => {
@@ -247,6 +252,7 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   pool = b.dataset.pool;
   localStorage.setItem('odb-pool', pool);
   accountsCache = [];
+  ocSelected.clear();
   logState.requests = { cursor: '', items: [] }; logState.errors = { cursor: '', items: [] }; logState.details = { cursor: '', items: [] };
   $('#acc-group-filter').value = '';
   renderPoolTabs();
@@ -359,7 +365,26 @@ function modalEndpointsHTML(a) {
   return parts.join('');
 }
 
+function openCodeQuotaHTML(a) {
+  const q = a.quota?.opencode;
+  const parts = [];
+  if (a.provider === 'opencode-zen') parts.push('<span class="badge">Zen 余额未知</span>');
+  else if (!q?.usageAt) parts.push('<span class="badge">Go 额度未知</span>');
+  else {
+    if (!a.quotaFresh) parts.push('<span class="badge warn">额度已过期 / 查询失败</span>');
+    for (const name of ['rolling', 'weekly', 'monthly']) {
+      const w = q.usage?.[name]; if (!w) continue;
+      const expired = new Date(w.resetsAt).getTime() <= Date.now();
+      parts.push(`<div class="acc-sub">${esc(name)} ${expired ? '窗口已到期，等待新数据（旧值）' : ''}已用 ${num(w.usedPercent)}% · 剩余 ${num(w.remainingPercent)}%<br>重置 ${esc(fmtTime(w.resetsAt, true))}</div>`);
+    }
+    parts.push(`<div class="acc-sub">真实数据 · 更新 ${esc(fmtTime(q.usageAt, true))} · 订阅共享，不可相加</div>`);
+  }
+  for (const err of [q?.usageError, q?.capabilityError]) if (err) parts.push(`<div class="acc-sub">${esc(err)}</div>`);
+  return parts.join('');
+}
+
 function windowsHTML(a) {
+  if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
   if (a.provider === 'ollama') return ollamaQuotaHTML(a);
   if (a.provider === 'modal') return modalEndpointsHTML(a);
   const q = a.quota;
@@ -393,6 +418,7 @@ function accountRow(a) {
   const models = Object.entries(st.models || {});
   let status = `<span class="badge ${statusClass(r.status)}">${esc(statusLabel(r.status))}</span>`;
   if (a.tokenIncomplete) status = '<span class="badge bad">Token 不完整</span><div class="acc-sub" title="只填了 wk-<id> 那段。Modal 要的是 wk-<id>.ws-<secret>：到 modal.com/settings/proxy-auth-tokens 复制完整的 Proxy Token；旧 token 的 secret 只在创建时显示一次，看不到就新建一个，然后在这里改运行密钥">只有 wk-&lt;id&gt;，缺少 .ws-&lt;secret&gt;</div>';
+  if (a.proxyHealth) status += `<div class="acc-sub">出口 ${esc(a.proxyHealth.status)}${a.proxyHealth.reason ? ' · ' + esc(a.proxyHealth.reason) : ''}</div>`;
   if (st.cooldownUntil) status += `<div class="acc-sub">至 ${esc(fmtTime(st.cooldownUntil, true))}</div>`;
   if (st.ruleId) status += `<div class="acc-sub">规则 ${esc(st.ruleId)}${st.statusCode ? ' · ' + st.statusCode : ''}</div>`;
   if (st.learnedConcurrency || st.learnedRpm) status += `<div class="acc-sub" title="网关 tier_limit_exceeded 告知的套餐上限；点「恢复」清除">学到上限：${st.learnedConcurrency ? '并发 ' + st.learnedConcurrency : ''}${st.learnedRpm ? ' RPM ' + st.learnedRpm : ''}</div>`;
@@ -407,27 +433,28 @@ function accountRow(a) {
   // pool sent in the last 24h; Modal has neither wallet nor package credits
   const ollama = a.provider === 'ollama';
   const modal = a.provider === 'modal';
+  const openCode = a.provider === 'opencode-zen' || a.provider === 'opencode-go';
   const ou = a.usage24h || {};
   const usage24 = `<div class="acc-sub">24h ${num(ou.r || 0)} 次 · ${num((ou.i || 0) + (ou.o || 0))} tokens</div>`;
-  const wallet = modal
+  const wallet = (modal || openCode)
     ? (ou.r ? num(ou.r) + usage24 : '—')
     : ollama
       ? (q && q.ollama && q.ollama.purchasedUsd !== undefined && q.ollama.purchasedUsd !== ''
         ? usd(q.ollama.purchasedUsd) + usage24 : '—')
       : (q && q.walletUsd !== undefined && q.walletUsd !== '' ? usd(q.walletUsd) + (q.walletSource === 'preflight' ? '<div class="acc-sub">来源 preflight</div>' : '') : '—');
-  const pkg = !ollama && !modal && q && q.summary ? `<div class="acc-sub" title="套餐模型额度：Design Plan 窗口用尽后、以及调用套餐模型（Claude Sonnet、GPT-6 Sol、Gemini 等）时扣这里，按计费周期重置不结转">套餐模型 ${credits(q.summary.subscriptionCredits)}</div><div class="acc-sub">充值 ${credits(q.summary.rechargeCredits)}</div>` : '';
-  const cov = !ollama && !modal && q && q.coverage ? Object.entries(q.coverage) : [];
+  const pkg = !ollama && !modal && !openCode && q && q.summary ? `<div class="acc-sub" title="套餐模型额度：Design Plan 窗口用尽后、以及调用套餐模型（Claude Sonnet、GPT-6 Sol、Gemini 等）时扣这里，按计费周期重置不结转">套餐模型 ${credits(q.summary.subscriptionCredits)}</div><div class="acc-sub">充值 ${credits(q.summary.rechargeCredits)}</div>` : '';
+  const cov = !ollama && !modal && !openCode && q && q.coverage ? Object.entries(q.coverage) : [];
   const cat = q && q.catalog ? Object.entries(q.catalog) : [];
   const catOn = cat.filter(([, en]) => en).map(([m]) => m).sort();
-  const catTitle = ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
-  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">可用模型 ${catOn.length}${cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
+  const catTitle = openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
+  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : '可用模型 '}${catOn.length}${cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
   status += catHTML;
   const covHTML = cov.length ? `<div class="acc-sub" title="${esc(cov.map(([m, c]) => m + '：' + (c.covered === true ? 'Design Plan 模型' : c.covered === false ? '套餐模型' : '未知')).join('\n'))}">已识别 ${cov.length} 个模型的类别</div>` : '';
-  const sum = !ollama && !modal && q && q.summary ? `<div class="acc-sub" title="累计消费 ${esc(q.summary.totalConsumedUsd)} · 累计充值 ${esc(q.summary.totalRechargedUsd)} · 调用 ${esc(q.summary.usageCount)} 次">今日 ${esc(usd(q.summary.todayConsumedUsd))}</div>` : '';
+  const sum = !ollama && !modal && !openCode && q && q.summary ? `<div class="acc-sub" title="累计消费 ${esc(q.summary.totalConsumedUsd)} · 累计充值 ${esc(q.summary.totalRechargedUsd)} · 调用 ${esc(q.summary.usageCount)} 次">今日 ${esc(usd(q.summary.todayConsumedUsd))}</div>` : '';
   const tier = q && (q.tier || q.membershipTier) ? `<span class="badge accent">${esc(q.tier || q.membershipTier)}</span>` : '';
   const shared = a.sharedWorkspaceWith && a.sharedWorkspaceWith.length ? `<span class="badge warn" title="与其他账号同一工作区，额度共享">共享工作区</span>` : '';
   return `<tr data-id="${esc(a.id)}">
-    <td><div class="acc-name">${esc(a.name)}</div><div class="acc-sub">${esc(a.email || a.id)}</div>
+    <td><div class="acc-name">${isOpenCode() ? `<input type="checkbox" data-oc-select="${esc(a.id)}" aria-label="选择 ${esc(a.name)}" ${ocSelected.has(a.id) ? 'checked' : ''}> ` : ''}${esc(a.name)}</div><div class="acc-sub">${esc(a.email || a.id)}</div>
       <div class="chips"><span class="badge">${esc(a.group)}</span>${tier}${a.hasProxy ? '<span class="badge" title="' + esc(a.proxyUrl) + '">代理</span>' : ''}${a.priority !== 50 ? '<span class="badge">优先级 ' + a.priority + '</span>' : ''}${shared}</div></td>
     <td>${status}</td>
     <td>${windowsHTML(a)}</td>
@@ -439,6 +466,37 @@ function accountRow(a) {
     <td><div class="menu"><button class="btn small" data-menu>操作 ▾</button></div></td>
   </tr>`;
 }
+
+$('#acc-table').addEventListener('change', (ev) => {
+  const id = ev.target.dataset.ocSelect; if (!id) return;
+  if (ev.target.checked) ocSelected.add(id); else ocSelected.delete(id);
+});
+$('#oc-batch').addEventListener('click', async (ev) => {
+  const button = ev.target.closest('[data-oc-batch]'); if (!button || !isOpenCode()) return;
+  const action = button.dataset.ocBatch;
+  if (action === 'select' || action === 'clear') {
+    $$('#acc-table [data-oc-select]').forEach((input) => { input.checked = action === 'select'; if (input.checked) ocSelected.add(input.dataset.ocSelect); else ocSelected.delete(input.dataset.ocSelect); }); return;
+  }
+  const selected = accountsCache.filter((a) => a.provider === pool && ocSelected.has(a.id));
+  if (!selected.length) { toast('请先选择账号'); return; }
+  if (action === 'delete' && await modal({ title: '批量删除', body: `<p>删除选中的 ${selected.length} 个账号及其凭证？不能撤销；状态续传将失效。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '删除', value: 'delete', danger: true }] }) !== 'delete') return;
+  $$('#oc-batch button').forEach((b) => { b.disabled = true; });
+  const errors = []; let completed = 0;
+  try {
+    for (const a of selected) {
+      try {
+        const path = `/api/accounts/${encodeURIComponent(a.id)}`;
+        if (action === 'enable' || action === 'disable') await api('PUT', path, { enabled: action === 'enable' });
+        else if (action === 'delete') await api('DELETE', path);
+        else { const result = await api('POST', path + '/' + ({ refresh: 'refresh-quota', proxy: 'test-proxy', recover: 'recover' }[action])); if (action === 'proxy' && !result.ok) throw new Error(result.error); }
+        completed++;
+      } catch (e) { errors.push(a.name + ': ' + e.message); }
+    }
+    $('#oc-batch-result').textContent = `完成 ${completed}/${selected.length}` + (errors.length ? '；' + errors.join('；') : '');
+    if (action === 'delete') ocSelected.clear();
+    await loadAccounts();
+  } finally { $$('#oc-batch button').forEach((b) => { b.disabled = false; }); }
+});
 
 async function loadAccounts() {
   const d = await api('GET', withPool('/api/accounts'));
@@ -507,7 +565,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ['test', '测试连通'], ['refresh', a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -527,6 +585,7 @@ async function accountAction(a, act) {
     switch (act) {
       case 'edit': return editAccount(a);
       case 'test': return testAccount(a);
+      case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? '固定出口可达（不代表账号授权成功）' : r.error); break; }
       case 'refresh': await api('POST', `/api/accounts/${a.id}/refresh-quota`); toast('额度已刷新'); break;
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
@@ -549,14 +608,14 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" placeholder="${a ? esc(a.runtimeKey) + '（留空不变）' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isModal()
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
         : 'River 直接使用 API Key（rv_…）推理，没有额度接口，没有控制密钥。'}</span>`
       : `<label>控制密钥</label><input id="f-ctrl" placeholder="${a && a.hasControlKey ? esc(a.controlKey) + '（留空不变）' : 'vela_ctrl_…（可选，用于读额度）'}" autocomplete="off">
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
-    ${a ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
+    ${a && !isOpenCode() ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
     <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', 0)}">
     <span class="hint">0 表示不限</span>
@@ -605,20 +664,22 @@ $('#btn-add-manual').addEventListener('click', async () => {
   loadAccounts().catch(() => {});
 });
 $('#btn-import').addEventListener('click', async () => {
-  const help = isModal()
+  const help = isOpenCode()
+    ? `<p class="muted small">每行 <code>API Key[,名称[,固定代理URL]]</code>。导入到 ${esc(POOL_LABEL[pool])}；相同 Key 去重。不要将不同套餐放入同一分组。</p>`
+    : isModal()
     ? `<p class="muted small">每行一个账号：<code>运行密钥[,名称[,代理URL]]</code>。Modal 的 Proxy Token 形如 <code>wk-&lt;id&gt;.ws-&lt;secret&gt;</code>，<b>两段都要</b>（只有 <code>wk-</code> 那段上游会回 401）。Modal 没有控制密钥。逗号、空格或制表符分隔，<code>#</code> 开头为注释。</p>`
     : isOllama()
       ? `<p class="muted small">每行一个账号：<code>运行密钥[,名称[,代理URL]]</code>。Ollama 的 key 没有固定前缀，导入时整行按本池默认的 <code>provider=ollama</code> 处理；也可以在行首写 <code>provider:ollama</code> 明确指定。逗号、空格或制表符分隔，<code>#</code> 开头为注释。</p>`
       : `<p class="muted small">每行一个账号：<code>运行密钥[,控制密钥[,名称[,代理URL]]]</code>（<code>rv_</code> 开头的自动识别为 River 账号、<code>wk-</code> 开头的是 Modal 账号，都没有控制密钥），逗号、空格或制表符分隔，<code>#</code> 开头为注释。行首可写 <code>provider:ollama</code> / <code>provider:modal</code> 指定号池。</p>`;
   const ph = { opendesign: 'sk-amr-xxx,vela_ctrl_xxx,账号A\nrv_xxx,River-1\nwk-xxx.ws-yyy,Modal-1', river: 'rv_xxx,River-1',
-    ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1' }[pool];
+    ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1', 'opencode-zen': 'ZEN_API_KEY,zen-1', 'opencode-go': 'GO_API_KEY,go-1' }[pool];
   await modal({ title: '批量导入', wide: true,
     body: `${help}
       <textarea id="imp-text" class="code" rows="10" placeholder="${esc(ph)}"></textarea>
       <div class="row"><label class="muted">分组</label><input id="imp-group" placeholder="${defaultGroup()}"></div>`,
     buttons: [{ label: '取消', value: 'c' }, { label: '导入', value: 'ok', primary: true, action: async () => {
       const r = await api('POST', '/api/accounts/import', { text: $('#imp-text').value, group: $('#imp-group').value, provider: keyNeedsProvider() ? pool : '' });
-      toast(`已导入 ${r.added} 个账号`);
+      toast(`已导入 ${r.added} 个账号${r.unchanged ? ` · 跳过 ${r.unchanged} 个重复项` : ''}`);
     } }] });
   loadAccounts().catch(() => {});
 });
@@ -630,8 +691,8 @@ async function testAccount(a) {
     $('#test-out').textContent = JSON.stringify(r, null, 2);
   };
   await modal({ title: '测试 ' + a.name, wide: true,
-    body: `<p class="muted small">「免费检查」只读取${a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
-      <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : a.provider === 'modal' ? '该账号列表里的第一个 Endpoint hostname' : 'deepseek-v4.1-flash')}" size="34"></div>
+    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
+      <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : (a.provider === 'modal' || a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '该账号模型列表中的首个模型（按原生协议）' : 'deepseek-v4.1-flash')}" size="34"></div>
       <pre id="test-out" class="mt">点击下方按钮开始</pre>`,
     buttons: [{ label: '关闭', value: 'c' }, { label: '真实请求', value: 'inf', action: async () => { await run(true); return false; } },
       { label: '免费检查', value: 'free', primary: true, action: async () => { await run(false); return false; } }] });
@@ -817,6 +878,14 @@ const ROUTING_FIELDS = [
   ['maxBodyMB', '请求体上限（MB）', 'int'],
   ['modelsCacheSec', '模型列表缓存（秒）', 'int'],
 ];
+const OPENCODE_FIELDS = [
+  ['enabled', '启用 OpenCode 接入', 'bool'],
+  ['compatibility', '受限协议转换（缓冲流）', 'bool'],
+  ['zenBase', 'Zen API Base（包含 /v1）', 'text'], ['goBase', 'Go API Base（包含 /v1）', 'text'],
+  ['capabilitiesUrl', '公开能力目录 URL', 'text'], ['refreshSec', '模型刷新间隔（秒）', 'int'],
+  ['zenDocsUrl', 'Zen 端点文档 URL（可选）', 'text'], ['goDocsUrl', 'Go 端点文档 URL（可选）', 'text'],
+  ['zenFallbackGroup', 'Zen 回退的 Go 分组（默认不回退）', 'text'], ['goFallbackGroup', 'Go 回退的 Zen 分组（默认不回退）', 'text'],
+];
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -835,6 +904,7 @@ function renderForm(el, fields, obj, prefix) {
     if (type === 'bool') input = `<label class="check"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}>开启</label>`;
     else if (type === 'strategy') input = `<select id="${id}">${settingsCache.strategies.map((s) => `<option ${s === v ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>`;
     else if (type === 'select') input = `<select id="${id}">${extra.map((s) => `<option ${s === v ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>`;
+    else if (type === 'text') input = `<input id="${id}" value="${esc(v || '')}" autocomplete="off">`;
     else if (type === 'list') input = `<input id="${id}" value="${esc((v || []).join(', '))}">`;
     else input = `<input id="${id}" type="number" step="${type === 'float' ? 'any' : '1'}" value="${esc(v)}">`;
     const h = type === 'select' ? hint : extra;
@@ -1005,6 +1075,10 @@ $('#btn-default-pricing').addEventListener('click', () => { priceRows = clone(se
 async function loadSettings() {
   settingsCache = await api('GET', withPool('/api/settings'));
   const s = settingsCache.settings;
+  $('#opencode-settings').classList.toggle('hidden', !isOpenCode());
+  renderForm($('#form-opencode'), OPENCODE_FIELDS, s.opencode || {}, 'oc');
+  $('#oc-protocols').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocols : s.opencode?.zenProtocols) || {}, null, 2);
+  $('#oc-bases').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocolBases : s.opencode?.zenProtocolBases) || {}, null, 2);
   renderForm($('#form-routing'), ROUTING_FIELDS, s.routing, 'rt');
   renderForm($('#form-quota'), QUOTA_FIELDS, s.quota, 'qt');
   renderForm($('#form-logs'), LOG_FIELDS, s.logs, 'lg');
@@ -1024,6 +1098,14 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(ROUTING_FIELDS, 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  if (isOpenCode()) {
+    body.opencode = readForm(OPENCODE_FIELDS, 'oc', s.opencode || {});
+    try {
+      body.opencode[pool === 'opencode-go' ? 'goProtocols' : 'zenProtocols'] = JSON.parse($('#oc-protocols').value || '{}');
+      body.opencode[pool === 'opencode-go' ? 'goProtocolBases' : 'zenProtocolBases'] = JSON.parse($('#oc-bases').value || '{}');
+    }
+    catch { toast('模型协议与协议 Base 覆盖必须是 JSON 对象'); return; }
+  }
   try { await api('PUT', withPool('/api/settings'), body); toast('已保存'); loadSettings(); } catch (e) { toast(e.message); }
 });
 $('#btn-default-rules').addEventListener('click', () => {

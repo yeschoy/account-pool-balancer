@@ -52,6 +52,8 @@
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
+      <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
+      <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
     </div>
     <section id="page-overview" class="page">
       <header class="page-head"><h1>概览</h1><span class="muted" id="ov-updated"></span></header>
@@ -361,6 +363,10 @@
           <button class="btn primary" id="btn-add-device">设备授权添加</button>
         </div>
       </header>
+      <div class="panel hidden" id="oc-batch">
+        <div class="actions"><button class="btn small" data-oc-batch="select">全选当前列表</button><button class="btn small" data-oc-batch="clear">取消选择</button><button class="btn small" data-oc-batch="enable">批量启用</button><button class="btn small" data-oc-batch="disable">批量禁用</button><button class="btn small" data-oc-batch="recover">批量恢复</button><button class="btn small" data-oc-batch="refresh">同步模型 / 额度</button><button class="btn small" data-oc-batch="proxy">检测出口</button><button class="btn small danger" data-oc-batch="delete">批量删除</button></div>
+        <p class="muted small" id="oc-batch-result">在账号名前勾选；复用已有账号 API，顺序执行，逐项报告结果。</p>
+      </div>
       <div class="panel flush"><div class="table-wrap"><table class="table" id="acc-table">
         <thead><tr><th>账号</th><th>状态</th><th data-head="windows">Design Plan 窗口</th><th data-head="wallet">钱包 / 套餐模型额度</th><th>并发</th><th>RPM</th><th>健康</th><th>选中/绑定</th><th></th></tr></thead>
         <tbody></tbody></table></div>
@@ -415,6 +421,15 @@
 
     <section id="page-routing" class="page hidden">
       <header class="page-head"><h1>路由设置</h1><div class="actions"><span class="muted" id="set-rev"></span><button class="btn primary" id="btn-save-settings">保存</button></div></header>
+      <div class="panel hidden" id="opencode-settings">
+        <h2>OpenCode 独立设置（Zen / Go 共用接入开关，路由与错误规则分别保存）</h2>
+        <p class="muted small">仅授权 Key；不提供匿名门禁绕过。原生协议原样转发。兼容转换默认关闭，开启后只支持受限字段，转换流为缓冲输出，不可表达的能力明确报错。Go 额度为订阅共享百分比，不能将多 Key 相加。</p>
+        <div class="form" id="form-opencode"></div>
+        <label for="oc-protocols">本套餐模型原生协议覆盖（JSON，值为 chat / responses / messages）</label>
+        <textarea id="oc-protocols" class="code" rows="4"></textarea>
+        <label for="oc-bases">本套餐协议 Base 覆盖（JSON，可为空；管理员确认的 chat / responses / messages 地址，包含 /v1）</label>
+        <textarea id="oc-bases" class="code" rows="4"></textarea>
+      </div>
       <div class="grid2">
         <div class="panel">
           <h2>选号与会话粘性</h2>
