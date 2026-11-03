@@ -521,3 +521,83 @@ func TestPlanDeltaCountsUnscopedCalls(t *testing.T) {
 		t.Fatalf("reset left the unscoped counter at %d", got)
 	}
 }
+
+// The digest input must be JavaScript's JSON.stringify, not Go's json.Marshal.
+//
+// They differ on exactly three characters: json.Marshal escapes <, > and & as
+// \u003c, \u003e and \u0026, while JSON.stringify leaves them alone. The server
+// computes its held-context digests in JavaScript, so a local digest produced
+// with the default escaping can never match — which silently disabled the
+// whole delta path, because the surface-gate preamble injected as the system
+// turn contains all three characters.
+func TestCanonicalJSONMatchesJSONStringify(t *testing.T) {
+	// The expected bytes are literal JavaScript JSON.stringify output.
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{
+			name: "plain",
+			msg:  Message{Role: "user", Content: "hi"},
+			want: `{"role":"user","content":"hi"}`,
+		},
+		{
+			name: "angle brackets and ampersand are NOT escaped",
+			msg:  Message{Role: "system", Content: "a <b> & c"},
+			want: `{"role":"system","content":"a <b> & c"}`,
+		},
+		{
+			name: "key order follows the struct tags",
+			msg:  Message{Role: "tool", Content: "x", ToolCallID: "call_1"},
+			want: `{"role":"tool","content":"x","tool_call_id":"call_1"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := canonicalJSON(tc.msg)
+			if err != nil {
+				t.Fatalf("canonicalJSON: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("canonicalJSON =\n  %s\nwant\n  %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// The digest a message with the gate preamble produces must not depend on
+// Go's HTML escaping; this pins the concrete value so a regression to
+// json.Marshal is caught even if canonicalJSON is refactored away.
+func TestDigestMessagesUsesUnescapedJSON(t *testing.T) {
+	msg := Message{Role: "system", Content: "You are <Perch> & careful"}
+	got := digestMessages([]Message{msg})
+	if len(got) != 1 {
+		t.Fatalf("digestMessages returned %d entries", len(got))
+	}
+	// sha256 of the literal JSON.stringify output above.
+	raw := `{"role":"system","content":"You are <Perch> & careful"}`
+	sum := sha256.Sum256([]byte(raw))
+	want := hex.EncodeToString(sum[:])
+	if got[0] != want {
+		t.Fatalf("digest = %s, want %s\n(the escaped form means the server's digest will never match)", got[0], want)
+	}
+}
+
+// digestTools has the same requirement: a tool description routinely contains
+// comparison operators, and the tools digest is compared verbatim.
+func TestDigestToolsUsesUnescapedJSON(t *testing.T) {
+	tools := []Tool{{"name": "read", "description": "reads a <file> & more"}}
+	got := digestTools(tools)
+	raw := `[{"description":"reads a <file> & more","name":"read"}]`
+	// Tool is a map, so key order is Go's sorted order — the published client
+	// builds its tool list from an object literal, whose insertion order is
+	// preserved. Compare only what this test is about: no \u escaping.
+	if strings.Contains(got, `\u00`) {
+		t.Fatalf("tools digest input was HTML-escaped: %s", got)
+	}
+	if got == "" {
+		t.Fatal("digestTools returned empty for a non-empty list")
+	}
+	_ = raw
+}

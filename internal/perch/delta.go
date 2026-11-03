@@ -28,6 +28,7 @@ package perch
 // .analysis/perch-turn-ticket-flow.md for the byte-level traces.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -692,12 +693,46 @@ func prefixDigest(digests []string, n int) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// canonicalJSON renders one value the way the published client's
+// JSON.stringify does.
+//
+// This cannot be left to encoding/json's defaults. Go's json.Marshal escapes
+// <, > and & as \u003c, \u003e and \u0026 (an XSS guard for embedding JSON in
+// HTML); JavaScript's JSON.stringify leaves them alone. The digests below are
+// compared against digests the SERVER computes in JavaScript, so a message
+// containing one of those three characters yields a local digest the server
+// never agrees with.
+//
+// That is not hypothetical: the surface-gate preamble this pool injects as the
+// system turn contains eleven '<', five '>' and seven '&'. Under the default
+// escaping every request's prefix digest disagreed with the server's, so
+// SettleDelta could never confirm a prefix, the delta cache stayed empty, and
+// every model call went out whole — measured as confirmedPrefixes=0 while
+// unconfirmedPrefixes rose one-for-one with wholeRequests.
+//
+// Marshal offers no way to disable the escaping, so the value goes through an
+// Encoder with SetEscapeHTML(false) and its trailing newline trimmed. Key order
+// is unchanged: it follows the struct tags, which match the order the published
+// client writes (role, content, tool_calls, ...).
+func canonicalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
 // digestMessages is the client's XQt + SHA-256 over each message's canonical
 // JSON.
+//
+// The per-message JSON has to match JavaScript's JSON.stringify byte for byte;
+// see canonicalJSON for why that is not the same thing as json.Marshal.
 func digestMessages(msgs []Message) []string {
 	out := make([]string, len(msgs))
 	for i, m := range msgs {
-		b, err := json.Marshal(m)
+		b, err := canonicalJSON(m)
 		if err != nil {
 			return nil
 		}
@@ -713,7 +748,7 @@ func digestTools(tools []Tool) string {
 	if len(tools) == 0 {
 		return ""
 	}
-	b, err := json.Marshal(tools)
+	b, err := canonicalJSON(tools)
 	if err != nil {
 		return ""
 	}
