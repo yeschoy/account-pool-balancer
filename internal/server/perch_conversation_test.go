@@ -16,10 +16,10 @@ func TestPerchConversationFingerprintUnifiesProtocols(t *testing.T) {
 	acct := cfg.Accounts[0]
 
 	cases := []struct {
-		name  string
-		hdr   map[string]string
-		body  map[string]any
-		same  bool
+		name string
+		hdr  map[string]string
+		body map[string]any
+		same bool
 	}{
 		{
 			name: "chat with session header",

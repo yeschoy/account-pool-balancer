@@ -81,6 +81,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /api/accounts/{id}/reset-health", s.apiAccountAction)
 	a("POST /api/accounts/{id}/refresh-quota", s.apiAccountAction)
 	a("POST /api/accounts/{id}/test", s.apiTestAccount)
+	a("POST /api/accounts/{id}/test-proxy", s.apiOpenCodeProxyTest)
 	a("GET /api/accounts/{id}/keys", s.apiAccountKeys)
 	a("POST /api/device-auth", s.apiDeviceStart)
 	a("GET /api/device-auth/{flow}", s.apiDevicePoll)
@@ -238,28 +239,30 @@ func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {
 // ---- accounts ----
 
 type accountView struct {
-	ID            string          `json:"id"`
-	Provider      string          `json:"provider"`
-	Name          string          `json:"name"`
-	Email         string          `json:"email"`
-	UserID        string          `json:"userId"`
-	Note          string          `json:"note"`
-	Group         string          `json:"group"`
-	Enabled       bool            `json:"enabled"`
-	RuntimeKey    string          `json:"runtimeKey"`
-	ControlKey    string          `json:"controlKey"`
-	HasControlKey bool            `json:"hasControlKey"`
-	MaxConcurrent int             `json:"maxConcurrent"`
-	MaxRPM        int             `json:"maxRpm"`
-	Weight        int             `json:"weight"`
-	Priority      int             `json:"priority"`
-	HasProxy      bool            `json:"hasProxy"`
-	ProxyURL      string          `json:"proxyUrl"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	Runtime       pool.View       `json:"runtime"`
-	Quota         *quota.Snapshot `json:"quota"`
-	QuotaFresh    bool            `json:"quotaFresh"`
-	SharedWith    []string        `json:"sharedWorkspaceWith,omitempty"`
+	ID             string           `json:"id"`
+	Provider       string           `json:"provider"`
+	Name           string           `json:"name"`
+	Email          string           `json:"email"`
+	UserID         string           `json:"userId"`
+	Note           string           `json:"note"`
+	Group          string           `json:"group"`
+	Enabled        bool             `json:"enabled"`
+	RuntimeKey     string           `json:"runtimeKey"`
+	ControlKey     string           `json:"controlKey"`
+	HasControlKey  bool             `json:"hasControlKey"`
+	MaxConcurrent  int              `json:"maxConcurrent"`
+	MaxRPM         int              `json:"maxRpm"`
+	Weight         int              `json:"weight"`
+	Priority       int              `json:"priority"`
+	HasProxy       bool             `json:"hasProxy"`
+	ProxyURL       string           `json:"proxyUrl"`
+	ProxyHealth    *proxyHealthView `json:"proxyHealth,omitempty"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	Runtime        pool.View        `json:"runtime"`
+	Quota          *quota.Snapshot  `json:"quota"`
+	QuotaFresh     bool             `json:"quotaFresh"`
+	RoutableModels *int             `json:"routableModels,omitempty"`
+	SharedWith     []string         `json:"sharedWorkspaceWith,omitempty"`
 	// TokenIncomplete flags a Modal proxy token that is only its Token ID:
 	// nothing reads with it, and every host says so with the same 401.
 	TokenIncomplete bool `json:"tokenIncomplete,omitempty"`
@@ -296,6 +299,10 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
 			HasProxy: a.ProxyURL != "", ProxyURL: maskProxy(a.ProxyURL), CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
+		if config.IsOpenCode(a.Provider) {
+			ph := s.openCodeProxyView(a.ProxyURL)
+			v.ProxyHealth = &ph
+		}
 		if a.Provider == config.ProviderPerch {
 			v.PerchUserID, v.PerchRefreshFailed = a.PerchUserID, a.PerchRefreshFailed
 			v.PerchLastError, v.PerchLastErrorAt = a.PerchLastError, a.PerchLastErrorAt
@@ -317,6 +324,17 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil) {
 			v.Quota = q
 			switch a.Provider {
+			case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+				v.QuotaFresh = q.OpenCode.Fresh(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
+				if q.OpenCode != nil && q.OpenCode.Source == quota.OpenCodeSource(cfg, a) && !q.CatalogAt.IsZero() && now.Sub(q.CatalogAt) < 24*time.Hour {
+					count := 0
+					for id, en := range q.Catalog {
+						if en && openCodeNativeProtocol(cfg, a, q, id, now) != "" {
+							count++
+						}
+					}
+					v.RoutableModels = &count
+				}
 			case config.ProviderOllama:
 				v.QuotaFresh = q.FreshOllama(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
 			case config.ProviderModal:
@@ -512,7 +530,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	declared := strings.TrimSpace(in.Provider)
 	if declared != "" && !config.KnownProvider(declared) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be one of: "+strings.Join(config.Providers, ", ")))
 		return
 	}
 	rec := importRecord{Source: "console", Group: strings.TrimSpace(in.Group)}
@@ -532,7 +550,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			switch {
-			case provider == config.ProviderOllama && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
+			case (provider == config.ProviderOllama || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
 				// an Ollama key has no prefix the pool can check, so the
 				// first free token of such a line is the key
 				a.RuntimeKey = field
@@ -548,7 +566,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		a.Provider = config.ResolveProvider(provider, a.RuntimeKey)
 		if !config.ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
-			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行缺少运行密钥（OpenDesign 的 sk-amr- / River 的 rv_ / Ollama 的任意 key）")
+			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行缺少运行密钥（OpenCode 请明确 provider 并粘贴完整 API Key；其他池保留原有格式）")
 			continue
 		}
 		if a.Group == "" {
@@ -568,8 +586,21 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, errors.New("没有可导入的账号"))
 		return
 	}
+	count := 0
 	cfg, err := s.cfg.Update(-1, func(c *config.Config) error {
-		c.Accounts = append(c.Accounts, added...)
+		seen := map[string]bool{}
+		for _, a := range c.Accounts {
+			seen[a.Provider+"\x00"+a.RuntimeKey] = true
+		}
+		for _, a := range added {
+			key := a.Provider + "\x00" + a.RuntimeKey
+			if config.IsOpenCode(a.Provider) && seen[key] {
+				continue
+			}
+			c.Accounts = append(c.Accounts, a)
+			seen[key] = true
+			count++
+		}
 		return nil
 	})
 	if err != nil {
@@ -578,9 +609,9 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		s.configError(w, err)
 		return
 	}
-	rec.Added, rec.Status = len(added), http.StatusOK
+	rec.Added, rec.Unchanged, rec.Status = count, len(added)-count, http.StatusOK
 	s.recordImport(r, rec)
-	writeJSON(w, http.StatusOK, map[string]any{"revision": cfg.Revision, "added": len(added)})
+	writeJSON(w, http.StatusOK, map[string]any{"revision": cfg.Revision, "added": count, "unchanged": len(added) - count})
 }
 
 func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
@@ -618,6 +649,10 @@ func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
+	if config.IsOpenCode(a.Provider) {
+		apiError(w, http.StatusForbidden, errors.New("OpenCode upstream credentials are write-only"))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey})
 }
 
@@ -636,6 +671,10 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 	_ = readBody(r, &in)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	if config.IsOpenCode(a.Provider) {
+		writeJSON(w, http.StatusOK, s.testOpenCode(ctx, cfg, a, in.Inference, in.Model))
+		return
+	}
 	client := s.httpClient(a.ProxyURL)
 	out := map[string]any{}
 
@@ -970,7 +1009,7 @@ func (s *Server) apiCreateClientKey(w http.ResponseWriter, r *http.Request) {
 		provider = providerParam(r)
 	}
 	if provider != "" && !config.KnownProvider(provider) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be one of: "+strings.Join(config.Providers, ", ")))
 		return
 	}
 	key := "sk-odb-" + randHex(24)
@@ -996,7 +1035,7 @@ func (s *Server) apiUpdateClientKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Provider != nil && !config.KnownProvider(strings.TrimSpace(*in.Provider)) {
-		apiError(w, http.StatusBadRequest, errors.New("provider must be opendesign, river, ollama, modal or perch"))
+		apiError(w, http.StatusBadRequest, errors.New("provider must be one of: "+strings.Join(config.Providers, ", ")))
 		return
 	}
 	_, err := s.cfg.Update(-1, func(c *config.Config) error {
@@ -1070,6 +1109,7 @@ type settingsDoc struct {
 	Pricing    pricing.Config    `json:"pricing"`
 	ErrorRules []rules.ErrorRule `json:"errorRules"`
 	RetryRules []rules.RetryRule `json:"retryRules"`
+	OpenCode   *config.OpenCode  `json:"opencode,omitempty"`
 }
 
 func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
@@ -1078,7 +1118,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{c.Revision, c.Upstream, c.Routing, c.Quota, c.Logs, c.Pricing, errRules, retRules},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1093,9 +1133,21 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
-		c.Upstream, c.Routing, c.Quota, c.Logs = in.Upstream, in.Routing, in.Quota, in.Logs
+		c.Upstream, c.Quota, c.Logs = in.Upstream, in.Quota, in.Logs
+		if !config.IsOpenCode(prov) {
+			c.Routing = in.Routing
+		}
 		c.Pricing = in.Pricing
+		if in.OpenCode != nil {
+			c.OpenCode = *in.OpenCode
+		}
 		switch prov {
+		case config.ProviderOpenCodeZen:
+			c.OpenCode.ZenRouting = &in.Routing
+			c.OpenCode.ZenErrorRules, c.OpenCode.ZenRetryRules = in.ErrorRules, in.RetryRules
+		case config.ProviderOpenCodeGo:
+			c.OpenCode.GoRouting = &in.Routing
+			c.OpenCode.GoErrorRules, c.OpenCode.GoRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderRiver:
 			c.RiverErrorRules, c.RiverRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderOllama:
@@ -1274,7 +1326,8 @@ func (s *Server) apiPreview(w http.ResponseWriter, r *http.Request) {
 	if in.Group == "" {
 		in.Group = config.DefaultGroup
 	}
-	order, excluded := s.pool.Preview(s.cfg.Get(), in.Group, in.Model)
+	cfg := s.cfg.Get()
+	order, excluded := s.pool.Preview(cfg.ForProvider(cfg.GroupPool(in.Group)), in.Group, in.Model)
 	if order == nil {
 		order = []string{}
 	}

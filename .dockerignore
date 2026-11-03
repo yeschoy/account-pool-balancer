@@ -2,3 +2,19 @@
 .git
 _tmp_artifacts.md
 data
+# Never ship research checkouts, credentials/fixtures, caches or build output.
+.analysis
+.gocache
+.gomodcache
+.gopath
+.gotmp
+artifacts
+.trellis
+odb
+bin
+node_modules
+.pnpm-store
+package-lock.json
+pnpm-lock.yaml
+tools/perch-register/.venv
+tools/perch-register/__pycache__

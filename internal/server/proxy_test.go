@@ -65,6 +65,9 @@ func newEnv(t *testing.T, accts []config.Account, tweak func(c *config.Config)) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Flush the asynchronous writer before TempDir removal; otherwise it can
+	// create a segment while the test runner removes the log directory.
+	t.Cleanup(s.logs.Close)
 	clientKey := "sk-odb-test-client-key-0001"
 	_, err = s.cfg.Update(-1, func(c *config.Config) error {
 		c.Upstream.RuntimeBase = upSrv.URL + "/v1"
@@ -89,10 +92,11 @@ func newEnv(t *testing.T, accts []config.Account, tweak func(c *config.Config)) 
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go s.quota.Run(ctx)
+	quotaDone := make(chan struct{})
+	go func() { defer close(quotaDone); s.quota.Run(ctx) }()
 	front := httptest.NewServer(s.Handler())
 	t.Cleanup(front.Close)
-	t.Cleanup(cancel)
+	t.Cleanup(func() { cancel(); <-quotaDone })
 	for !s.logs.Ready() {
 		time.Sleep(5 * time.Millisecond)
 	}

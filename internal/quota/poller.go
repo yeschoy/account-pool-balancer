@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/opencode"
 )
 
 // Snapshot is what was last read for one account. Each part keeps its own
@@ -69,6 +70,8 @@ type Snapshot struct {
 	Perch      *PerchMeter `json:"perch,omitempty"`
 	PerchAt    time.Time   `json:"perchAt,omitzero"`
 	PerchError string      `json:"perchError,omitempty"`
+
+	OpenCode *opencode.State `json:"opencode,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
@@ -308,6 +311,7 @@ func (s *Snapshot) clone() *Snapshot {
 		return nil
 	}
 	c := *s
+	c.OpenCode = s.OpenCode.Clone()
 	c.Windows = append([]Window(nil), s.Windows...)
 	if s.Catalog != nil {
 		c.Catalog = make(map[string]bool, len(s.Catalog))
@@ -586,13 +590,15 @@ type Poller struct {
 	// pool-wide /v1/models has nothing to publish.
 	PerchModels func(ctx context.Context, a config.Account) (*Catalog, error)
 
-	mu      sync.Mutex
-	snaps   map[string]*Snapshot
-	running map[string]chan struct{}
-	pending map[string]bool
-	urgent  map[string]bool
-	models  map[string]time.Time // models requested lately → last seen
-	wake    chan struct{}
+	discovery opencode.Discovery
+	workers   sync.WaitGroup
+	mu        sync.Mutex
+	snaps     map[string]*Snapshot
+	running   map[string]chan struct{}
+	pending   map[string]bool
+	urgent    map[string]bool
+	models    map[string]time.Time // models requested lately → last seen
+	wake      chan struct{}
 }
 
 func NewPoller(cfg func() *config.Config, httpFor func(string) *http.Client) *Poller {
@@ -671,8 +677,9 @@ func (p *Poller) Load(m map[string]*Snapshot) {
 
 func (p *Poller) Get(id string) *Snapshot {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.snaps[id].clone()
+	s := p.snaps[id]
+	p.mu.Unlock()
+	return s.clone() // immutable snapshots can be cloned outside the admission hot-path lock
 }
 
 // View returns the stored snapshot itself, without a copy, for hot read-only
@@ -694,9 +701,14 @@ func (p *Poller) rescheduleLocked(id string, s *Snapshot) {
 
 func (p *Poller) All() map[string]*Snapshot {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	out := make(map[string]*Snapshot, len(p.snaps))
 	for id, s := range p.snaps {
+		out[id] = s
+	}
+	p.mu.Unlock()
+	// Large per-account catalogs must not block inference's quota.View while
+	// metadata/admin readers deep-copy every account.
+	for id, s := range out {
 		out[id] = s.clone()
 	}
 	return out
@@ -748,6 +760,7 @@ func (p *Poller) refresh(id string, force bool) {
 }
 
 func (p *Poller) Run(ctx context.Context) {
+	defer p.workers.Wait() // shutdown must not close logs/state beneath active refreshes
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
@@ -768,6 +781,9 @@ func (p *Poller) dispatch(ctx context.Context) {
 	inFlight := len(p.running)
 	var urgent, due []config.Account
 	for _, a := range cfg.Accounts {
+		if config.IsOpenCode(a.Provider) && !cfg.OpenCode.Enabled {
+			continue
+		}
 		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && !p.urgent[a.ID]) {
 			continue
 		}
@@ -785,7 +801,9 @@ func (p *Poller) dispatch(ctx context.Context) {
 		inFlight++
 		p.running[a.ID] = make(chan struct{})
 		delete(p.urgent, a.ID)
+		p.workers.Add(1)
 		go func(a config.Account) {
+			defer p.workers.Done()
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			_ = p.fetch(c, cfg, a)
@@ -813,6 +831,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 		break
 	}
 	defer p.finish(a.ID)
+	if config.IsOpenCode(a.Provider) {
+		return p.fetchOpenCodeForce(ctx, p.Cfg(), a, true)
+	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
 		p.mu.Lock()
@@ -898,6 +919,8 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
 	switch a.Provider {
+	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+		return p.fetchOpenCode(ctx, cfg, a)
 	case config.ProviderOllama:
 		return p.fetchOllama(ctx, cfg, a)
 	case config.ProviderModal:

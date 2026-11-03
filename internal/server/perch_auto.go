@@ -81,11 +81,11 @@ func (s *Server) apiPerchAuto(w http.ResponseWriter, r *http.Request) {
 		// Proxy is the redacted endpoint; HasProxy says whether the candidate
 		// runs behind a proxy at all, which an empty Proxy cannot express for
 		// an unreadable URL.
-		Proxy         string                  `json:"proxy"`
-		HasProxy      bool                    `json:"hasProxy"`
-		Detail        string                  `json:"detail"`
-		CanRetrySave  bool                    `json:"canRetrySave"`
-		CanRevalidate bool                    `json:"canRevalidate"`
+		Proxy         string `json:"proxy"`
+		HasProxy      bool   `json:"hasProxy"`
+		Detail        string `json:"detail"`
+		CanRetrySave  bool   `json:"canRetrySave"`
+		CanRevalidate bool   `json:"canRevalidate"`
 		// CanRegister marks a candidate the operator can register ahead of time.
 		CanRegister bool `json:"canRegister"`
 		// CanEditProxy marks a candidate whose proxy the operator may still

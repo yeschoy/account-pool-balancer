@@ -25,7 +25,7 @@ type Identity struct {
 
 // Headers new-api passes through, in priority order: parents first so a
 // parent agent and its sub-agents land on one account.
-var parentHeaders = []string{"X-Parent-Session-Id", "X-Parent-Session-Affinity", "X-Codex-Parent-Thread-Id", "X-Claude-Code-Parent-Agent-Id"}
+var parentHeaders = []string{"X-Opencode-Parent-Session-Id", "X-Parent-Session-Id", "X-Parent-Session-Affinity", "X-Codex-Parent-Thread-Id", "X-Claude-Code-Parent-Agent-Id"}
 
 var sessionHeaders = []struct{ name, keyType string }{
 	{"X-Claude-Code-Session-Id", "session_id"},
@@ -41,6 +41,7 @@ var sessionHeaders = []struct{ name, keyType string }{
 	// agents that name their own header (read from their source, 2026-10)
 	{"X-Deepseek-Harness-Session-Id", "session_id"},
 	{"X-Opencode-Session", "session_id"},
+	{"X-Opencode-Session-Id", "session_id"},
 	{"Agent-Session-Id", "session_id"}, // Goose
 	{"X-Litellm-Session-Id", "session_id"},
 	{"X-Http-Session-Id", "session_id"},
@@ -157,6 +158,9 @@ func (s *Server) identity(cfg *config.Config, group string, h http.Header, body 
 		if v, ok := validValue(headerValue(h, name)); ok {
 			return explicit("header", "parent_session", v)
 		}
+	}
+	if v, ok := validValue(lookup(body, "metadata.parent_session_id")); ok {
+		return explicit("body", "parent_session", v)
 	}
 	for _, k := range bodyKeys {
 		if v, ok := validValue(lookup(body, k.path)); ok {

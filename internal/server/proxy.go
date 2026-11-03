@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/rules"
@@ -51,44 +52,46 @@ type workflowDecision struct {
 }
 
 type requestLog struct {
-	TS                 time.Time `json:"ts"`
-	RequestID          string    `json:"requestId"`
-	ClientKeyID        string    `json:"clientKeyId,omitempty"`
-	ClientKeyName      string    `json:"clientKeyName,omitempty"`
-	Group              string    `json:"group,omitempty"`
-	Provider           string    `json:"provider,omitempty"`
-	Path               string    `json:"path"`
-	InboundProtocol    string    `json:"inboundProtocol"`
-	Protocol           string    `json:"protocol"`
-	Model              string    `json:"model"`
-	Stream             bool      `json:"stream"`
-	AccountID          string    `json:"accountId,omitempty"`
-	AccountName        string    `json:"accountName,omitempty"`
-	Proxy              string    `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
-	SelectionReason    string    `json:"selectionReason,omitempty"`
-	Selector           string    `json:"selector"`
-	Overflow           bool      `json:"overflow"`
-	Switched           bool      `json:"switched"`
-	SessionSource      string    `json:"sessionSource"`
-	AffinityKeyType    string    `json:"affinityKeyType"`
-	AffinityConfidence string    `json:"affinityConfidence"`
-	BindingResult      string    `json:"bindingResult"`
-	Status             int       `json:"status"`
-	Result             string    `json:"result"`
-	UpstreamStatus     *int      `json:"upstreamStatus"`
-	ErrorCategory      string    `json:"errorCategory,omitempty"`
-	BlockedBy          string    `json:"blockedBy,omitempty"`
-	RetryAfter         *int      `json:"retryAfter,omitempty"`
-	DurationMs         int64     `json:"durationMs"`
-	TTFTMs             *int64    `json:"ttftMs"`
-	InputTokens        *int64    `json:"inputTokens"`
-	OutputTokens       *int64    `json:"outputTokens"`
-	CachedTokens       *int64    `json:"cachedTokens"`
-	CacheHit           *bool     `json:"cacheHit"`
-	CacheRate          *float64  `json:"cacheRate"`      // cached share of the prompt, 0..1
-	Cost               *float64  `json:"cost,omitempty"` // in Currency, from the price table
-	Currency           string    `json:"currency,omitempty"`
-	UpstreamRequestID  string    `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
+	TS                  time.Time `json:"ts"`
+	RequestID           string    `json:"requestId"`
+	ClientKeyID         string    `json:"clientKeyId,omitempty"`
+	ClientKeyName       string    `json:"clientKeyName,omitempty"`
+	Group               string    `json:"group,omitempty"`
+	Provider            string    `json:"provider,omitempty"`
+	Path                string    `json:"path"`
+	InboundProtocol     string    `json:"inboundProtocol"`
+	Protocol            string    `json:"protocol"`
+	Model               string    `json:"model"`
+	Stream              bool      `json:"stream"`
+	AccountID           string    `json:"accountId,omitempty"`
+	AccountName         string    `json:"accountName,omitempty"`
+	Proxy               string    `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
+	SelectionReason     string    `json:"selectionReason,omitempty"`
+	Selector            string    `json:"selector"`
+	Overflow            bool      `json:"overflow"`
+	Switched            bool      `json:"switched"`
+	SessionSource       string    `json:"sessionSource"`
+	AffinityKeyType     string    `json:"affinityKeyType"`
+	AffinityConfidence  string    `json:"affinityConfidence"`
+	BindingResult       string    `json:"bindingResult"`
+	Status              int       `json:"status"`
+	Result              string    `json:"result"`
+	UpstreamStatus      *int      `json:"upstreamStatus"`
+	ErrorCategory       string    `json:"errorCategory,omitempty"`
+	BlockedBy           string    `json:"blockedBy,omitempty"`
+	RetryAfter          *int      `json:"retryAfter,omitempty"`
+	DurationMs          int64     `json:"durationMs"`
+	TTFTMs              *int64    `json:"ttftMs"`
+	InputTokens         *int64    `json:"inputTokens"`
+	OutputTokens        *int64    `json:"outputTokens"`
+	CachedTokens        *int64    `json:"cachedTokens"`
+	CacheCreationTokens *int64    `json:"cacheCreationTokens,omitempty"`
+	ReasoningTokens     *int64    `json:"reasoningTokens,omitempty"`
+	CacheHit            *bool     `json:"cacheHit"`
+	CacheRate           *float64  `json:"cacheRate"`      // cached share of the prompt, 0..1
+	Cost                *float64  `json:"cost,omitempty"` // in Currency, from the price table
+	Currency            string    `json:"currency,omitempty"`
+	UpstreamRequestID   string    `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
 	// Conversations is how many distinct accounts this request tried while a
 	// conversation fingerprint was present. It stays 1 while every attempt
 	// remained on one account, and only exceeds 1 when a failover handed one
@@ -181,7 +184,8 @@ const (
 )
 
 type usage struct {
-	in, out, cached *int64
+	in, out, cached       *int64
+	cacheWrite, reasoning *int64
 }
 
 type attemptResult struct {
@@ -194,7 +198,7 @@ type attemptResult struct {
 	body           []byte
 	header         http.Header
 	contentType    string
-	sent           bool
+	sent           atomic.Bool
 	wrapped        bool
 	accountScoped  bool
 	evaluated      bool
@@ -312,6 +316,8 @@ func perchPath(p string) bool {
 // Perch equivalent, so they are refused locally rather than sent upstream.
 func poolPathOK(provider, path string) bool {
 	switch provider {
+	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+		return opencode.FromPath(path) != "" || path == "/v1/models"
 	case config.ProviderPerch:
 		return perchPath(path)
 	case config.ProviderRiver:
@@ -379,6 +385,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.DurationMs = time.Since(start).Milliseconds()
 		if res != nil {
 			rec.InputTokens, rec.OutputTokens, rec.CachedTokens = res.usage.in, res.usage.out, res.usage.cached
+			rec.CacheCreationTokens, rec.ReasoningTokens = res.usage.cacheWrite, res.usage.reasoning
 			if res.usage.cached != nil {
 				hit := *res.usage.cached > 0
 				rec.CacheHit = &hit
@@ -400,6 +407,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		anthropic := proto == "anthropic"
 		rec.CacheRate = cacheRate(rec.InputTokens, rec.CachedTokens, anthropic)
+		if config.IsOpenCode(rec.Provider) && anthropic && rec.InputTokens != nil && rec.CacheCreationTokens != nil {
+			inputWithWrites := *rec.InputTokens + *rec.CacheCreationTokens
+			rec.CacheRate = cacheRate(&inputWithWrites, rec.CachedTokens, true)
+		}
 		var cost float64
 		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok {
 			cost, rec.Cost, rec.Currency = c, &c, cur
@@ -422,6 +433,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			if anthropic && rec.CachedTokens != nil {
 				prompt += *rec.CachedTokens
 			}
+			if config.IsOpenCode(rec.Provider) && anthropic && rec.CacheCreationTokens != nil {
+				prompt += *rec.CacheCreationTokens
+			}
 		}
 		s.stats.Record(stats.Sample{AccountID: rec.AccountID, Provider: rec.Provider, Proxy: rec.Proxy, Model: rec.Model, Result: result, Input: rec.InputTokens, Output: rec.OutputTokens,
 			Cached: rec.CachedTokens, Prompt: prompt, Currency: rec.Currency, Cost: cost})
@@ -437,6 +451,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.ClientKeyID, rec.ClientKeyName, rec.Group = ck.ID, ck.Name, ck.Group
 	rec.Provider = keyPool(cfg, ck)
+	rootCfg := cfg
+	cfg = rootCfg.ForProvider(rec.Provider)
+	rec.Selector = cfg.Routing.Strategy
 	if !poolPathOK(rec.Provider, r.URL.Path) {
 		// River serves only OpenAI Chat Completions and Responses
 		rec.ErrorCategory = "request"
@@ -467,38 +484,79 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Model, _ = obj["model"].(string)
 	rec.Stream, _ = obj["stream"].(bool)
-	s.quota.NoteModel(rec.Model) // learn whether it is a Design Plan model on each account
-	ident := s.identity(cfg, ck.Group, r.Header, obj)
+	if !config.IsOpenCode(rec.Provider) {
+		s.quota.NoteModel(rec.Model)
+	} // OpenCode must not feed OpenDesign preflight coverage
+	identityScope := ck.Group
+	if config.IsOpenCode(rec.Provider) {
+		identityScope += "\x00" + ck.ID
+	}
+	ident := s.identity(cfg, identityScope, r.Header, obj)
+	stateful := config.IsOpenCode(rec.Provider) && lookup(obj, "previous_response_id") != ""
+	routeGroup := ck.Group
+	fallbackGroup := cfg.OpenCode.FallbackGroup(rec.Provider)
+	usedFallback := false
+	if config.IsOpenCode(rec.Provider) && ident.Fingerprint != "" {
+		if id, ok := s.pool.BoundAccount(ident.Fingerprint); ok {
+			if a, ok := rootCfg.Account(id); ok && (a.Group == ck.Group || a.Group == fallbackGroup) {
+				routeGroup = a.Group
+				usedFallback = routeGroup != ck.Group
+				cfg = rootCfg.ForProvider(a.Provider)
+			}
+		}
+	}
 	rec.SessionSource, rec.AffinityKeyType, rec.AffinityConfidence = ident.Source, ident.KeyType, ident.Confidence
 
 	excluded := map[string]bool{}
+	if config.IsOpenCode(rec.Provider) {
+		for _, a := range cfg.Accounts {
+			if (a.Group == ck.Group || a.Group == fallbackGroup) && s.openCodeProxyView(a.ProxyURL).Status == "unhealthy" {
+				excluded[a.ID] = true
+			}
+		}
+	}
 	// triedAccounts and firstAccount track whether one conversation's history
 	// was handed to a second account (see CrossAccount on requestLog).
 	triedAccounts := map[string]bool{}
 	firstAccount := ""
 	var last *attemptResult
 	strippedTools := 0
-	for i := 0; i < cfg.Routing.MaxAccounts; i++ {
+	maxAttempts := rootCfg.ForProvider(keyPool(rootCfg, ck)).Routing.MaxAccounts
+	for i := 0; i < maxAttempts; i++ {
 		wait := time.Duration(cfg.Routing.ConcurrencyWaitMs) * time.Millisecond
 		if i > 0 {
 			wait = 0 // a switch probes the others without waiting
 		}
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
-			Group: ck.Group, Model: rec.Model, RequestID: rid,
+			Group: routeGroup, Model: rec.Model, RequestID: rid,
 			Affinity: ident.Fingerprint, Explicit: ident.Confidence == "explicit",
 			Excluded: excluded, Wait: wait,
+			RequireBinding: stateful, PreserveBinding: config.IsOpenCode(rec.Provider),
 		})
 		if err != nil {
 			if r.Context().Err() != nil {
 				finish(499, "client_cancelled")
 				return
 			}
+			var unavailable *pool.UnavailableError
+			if !stateful && !usedFallback && fallbackGroup != "" && errors.As(err, &unavailable) {
+				routeGroup = fallbackGroup
+				usedFallback = true
+				cfg = rootCfg.ForProvider(rootCfg.GroupPool(routeGroup))
+				i-- // no account or RPM permit was acquired; still bounded by one fallback group
+				continue
+			}
 			if last != nil {
 				break // nobody else to switch to: answer with the last failure
 			}
 			var ce *pool.CapacityError
 			var ue *pool.UnavailableError
+			var be *pool.BindingError
 			switch {
+			case errors.As(err, &be):
+				rec.ErrorCategory = "stateful_binding"
+				writeLocalError(w, proto, http.StatusConflict, "invalid_request_error", "stateful_binding_unavailable", be.Error(), 0)
+				finish(http.StatusConflict, "failed")
 			case errors.As(err, &ce):
 				ra := ceilSeconds(ce.RetryAfter)
 				rec.ErrorCategory, rec.BlockedBy, rec.RetryAfter = "capacity", ce.BlockedBy, &ra
@@ -526,6 +584,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		d := lease.Decision
 		acct := lease.Account
+		if config.IsOpenCode(acct.Provider) {
+			rec.Provider = acct.Provider
+			rec.Selector = cfg.Routing.Strategy
+		}
 		if i == 0 {
 			rec.BindingResult = d.BindingResult
 		}
@@ -555,7 +617,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.AccountID, rec.AccountName, rec.SelectionReason, rec.Overflow = acct.ID, acct.Name, d.Reason, d.Overflow
 		rec.Proxy = egressLabel(acct.ProxyURL)
 
-		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, ck.Group, ident)
+		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident)
 		lease.Release()
 		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", Terminal: res.terminal}
 		if acct.ProxyURL != "" {
@@ -597,7 +659,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		att.Action, att.RuleID = ev.action, ev.ruleID
 		rec.Attempts = append(rec.Attempts, att)
 		last = res
-		if res.status == http.StatusBadRequest && strippedTools < 3 {
+		if !config.IsOpenCode(rec.Provider) && res.status == http.StatusBadRequest && strippedTools < 3 {
 			// the upstream refuses a hosted tool (e.g. web_search) on this route:
 			// drop that tool type and ask the same account again
 			if nb, ok := stripUnsupportedTool(body, res.body); ok {
@@ -607,7 +669,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		if !ev.switchAccount || i+1 >= cfg.Routing.MaxAccounts {
+		if stateful || !ev.switchAccount || i+1 >= maxAttempts {
 			break
 		}
 		excluded[acct.ID] = true
@@ -713,6 +775,12 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	switch res.terminal {
 	case "upstream_http", "upstream_envelope":
 		st := res.status
+		if config.IsOpenCode(acct.Provider) && rules.IsOpenCodePolicyRefusal(st, redacted) {
+			res.downstreamStatus, res.ruleID, res.category = 403, acct.Provider+"-policy-refusal", "policy"
+			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = res.ruleID, rules.ActionIgnore, "none", "provider-policy", "stop", "policy"
+			s.logs.Append("errors", el.TS, el)
+			return ev
+		}
 		if st >= 500 {
 			if ws := wrappedStatus(matchText); ws != 0 {
 				res.status, res.wrapped, res.category = ws, true, "request"
@@ -818,9 +886,19 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"
 		}
+	case "compatibility":
+		sample, el.HealthAction = false, "none"
+	case "timeout":
+		if config.IsOpenCode(acct.Provider) {
+			ev.switchAccount = !res.sent.Load()
+			sample, el.HealthAction = false, "none"
+		}
 	case "proxy", "network":
 		// never sent: another account can take it without double billing
-		ev.switchAccount = !res.sent
+		ev.switchAccount = !res.sent.Load()
+		if config.IsOpenCode(acct.Provider) && res.category == "proxy" {
+			sample, el.HealthAction = false, "none"
+		}
 	}
 	if sample {
 		s.pool.Sample(acct.ID, false)
@@ -860,6 +938,8 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 			ra, typ, msg = ceilSeconds(res.retryAfter), "rate_limit_error", "upstream account limit reached, retry later"
 		case ds == http.StatusBadGateway:
 			msg = "upstream service unavailable"
+		case ds == http.StatusForbidden && strings.Contains(res.ruleID, "policy-refusal"):
+			typ, msg = "permission_error", "upstream policy refused this request; no account or egress replay was attempted"
 		}
 		writeLocalError(w, proto, ds, typ, strings.ReplaceAll(res.ruleID, "-", "_"), msg, ra)
 		return ds
@@ -880,7 +960,7 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 	}
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(st)
-	_, _ = w.Write(res.body)
+	_, _ = w.Write([]byte(redactSecrets(cfg, string(res.body))))
 	return st
 }
 
@@ -941,16 +1021,44 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return s.attemptPerch(w, r, cfg, lease, body, proto, rec, actx, res, &timedOut)
 	}
 
+	var ocFrom, ocTo opencode.Protocol
+	if config.IsOpenCode(acct.Provider) {
+		var err error
+		ocFrom, ocTo, body, err = s.prepareOpenCode(cfg, acct, r.URL.Path, rec.Model, body)
+		if err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadRequest, "compatibility", "request"
+			res.contentType = "application/json"
+			res.body, _ = json.Marshal(map[string]any{"error": map[string]string{"type": "invalid_request_error", "code": "unsupported_compatibility", "message": err.Error()}})
+			return res
+		}
+	}
 	var sentOnce sync.Once
-	markSent := func() { sentOnce.Do(func() { res.sent = true; lease.MarkSent() }) }
-	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) {
+	markSent := func() { sentOnce.Do(func() { res.sent.Store(true); lease.MarkSent() }) }
+	trace := &httptrace.ClientTrace{WroteHeaders: func() {
+		// Partial body writes are uncertain too: once headers left the socket,
+		// OpenCode must not replay a network failure on another account.
+		if config.IsOpenCode(acct.Provider) {
+			markSent()
+		}
+	}, WroteRequest: func(i httptrace.WroteRequestInfo) {
 		if i.Err == nil {
 			markSent()
 		}
 	}}
-	target := cfg.RuntimeBase(acct) + strings.TrimPrefix(r.URL.Path, "/v1")
+	targetPath := strings.TrimPrefix(r.URL.Path, "/v1")
+	if ocTo != "" {
+		targetPath = opencode.Path(ocTo)
+	}
+	target := cfg.InferenceBase(acct, string(ocTo)) + targetPath
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
+	}
+	if acct.Provider == config.ProviderOpenCodeGo && ocTo == opencode.Messages {
+		u, _ := url.Parse(target)
+		q := u.Query()
+		q.Set("beta", "true")
+		u.RawQuery = q.Encode()
+		target = u.String()
 	}
 	// the caller names a model by the pool's public name (a base model when
 	// several accounts serve it under their own ids); this account may only
@@ -964,6 +1072,14 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	copyRequestHeaders(req.Header, r.Header)
 	req.Header.Set("Authorization", "Bearer "+acct.RuntimeKey)
 	switch acct.Provider {
+	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+		if ocTo == opencode.Messages {
+			req.Header.Del("Authorization")
+			req.Header.Set("X-Api-Key", acct.RuntimeKey)
+			if req.Header.Get("Anthropic-Version") == "" {
+				req.Header.Set("Anthropic-Version", "2023-06-01")
+			}
+		}
 	case config.ProviderOllama, config.ProviderModal:
 		// Ollama's /v1/messages explicitly refuses x-api-key on its own, and
 		// Modal authenticates a proxy token in Authorization only: neither
@@ -992,7 +1108,18 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	req.ContentLength = int64(len(body))
 
-	resp, err := s.httpClient(acct.ProxyURL).Do(req)
+	client := s.httpClient(acct.ProxyURL)
+	if config.IsOpenCode(acct.Provider) {
+		client = opencode.NoRedirect(client)
+	}
+	resp, err := client.Do(req)
+	if config.IsOpenCode(acct.Provider) && r.Context().Err() == nil {
+		if err == nil {
+			s.observeOpenCodeProxy(acct.ProxyURL, resp.StatusCode == http.StatusProxyAuthRequired)
+		} else if isProxyError(err, acct.ProxyURL) {
+			s.observeOpenCodeProxy(acct.ProxyURL, true)
+		}
+	}
 	if err != nil {
 		res.kind = outFailed
 		switch {
@@ -1013,6 +1140,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	res.header = resp.Header
 	ct := resp.Header.Get("Content-Type")
 	res.contentType = ct
+	if config.IsOpenCode(acct.Provider) && acct.ProxyURL != "" && resp.StatusCode == http.StatusProxyAuthRequired {
+		res.kind, res.status, res.terminal, res.category = outFailed, 502, "proxy", "proxy"
+		return res
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -1022,6 +1153,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		}
 		res.kind, res.status, res.body, res.terminal, res.category = outFailed, resp.StatusCode, b, "upstream_http", "upstream"
 		return res
+	}
+	if ocTo != "" && ocFrom != ocTo {
+		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
+		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses")
 	if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
@@ -1164,9 +1299,16 @@ func scanUsage(m map[string]any, u *usage) {
 	set(&u.out, intField(us, "completion_tokens"))
 	set(&u.out, intField(us, "output_tokens"))
 	set(&u.cached, intField(us, "cache_read_input_tokens"))
+	set(&u.cacheWrite, intField(us, "cache_creation_input_tokens"))
 	for _, k := range []string{"prompt_tokens_details", "input_tokens_details"} {
 		if d, ok := us[k].(map[string]any); ok {
 			set(&u.cached, intField(d, "cached_tokens"))
+			set(&u.cacheWrite, intField(d, "cache_creation_tokens"))
+		}
+	}
+	for _, k := range []string{"completion_tokens_details", "output_tokens_details"} {
+		if d, ok := us[k].(map[string]any); ok {
+			set(&u.reasoning, intField(d, "reasoning_tokens"))
 		}
 	}
 }
@@ -1275,7 +1417,7 @@ func isTerminalEvent(event string, data []byte) bool {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return true
 	}
-	return event == "message_stop" || event == "response.completed"
+	return event == "message_stop" || event == "response.completed" || event == "response.incomplete"
 }
 
 type evMsg struct {
@@ -1397,7 +1539,11 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			if len(m.ev) > 0 {
 				event, data, _ := sseFields(m.ev)
 				done := isTerminalEvent(event, data)
-				if !write(m.ev) {
+				outEvent := m.ev
+				if isErr, _, _ := sseError(event, data); isErr {
+					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
+				}
+				if !write(outEvent) {
 					if done {
 						return res // the client had what it needs and hung up first
 					}
@@ -1469,7 +1615,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// An Ollama key's /v1/models is the public cloud catalogue (it answers
 	// 200 even for a refused key), so it can't narrow what this pool serves.
 	allowed, known := map[string]bool{}, false
-	if provider := keyPool(cfg, ck); !cfg.Routing.IgnoreCatalog && provider != config.ProviderOllama {
+	if provider := keyPool(cfg, ck); !cfg.Routing.IgnoreCatalog && provider != config.ProviderOllama && !config.IsOpenCode(provider) {
 		now := time.Now()
 		for _, a := range cfg.Accounts {
 			if a.Group != ck.Group || !a.Enabled {
@@ -1577,6 +1723,17 @@ func (s *Server) upstreamModels(ctx context.Context, cfg *config.Config, group s
 // what it can't see. Which account actually serves a model is decided per
 // request by the pool's own per-account catalogue, not here.
 func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group string) []byte {
+	if config.IsOpenCode(cfg.GroupPool(group)) {
+		if !cfg.OpenCode.Enabled {
+			return nil
+		}
+		data := s.openCodeModels(cfg, group)
+		if len(data) == 0 {
+			return nil
+		}
+		b, _ := json.Marshal(map[string]any{"object": "list", "data": data})
+		return b
+	}
 	seen := map[string]bool{}
 	var data []any
 	var object any = "list"

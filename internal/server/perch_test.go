@@ -261,6 +261,7 @@ func newPerchEnv(t *testing.T) *perchEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.logs.Close)
 	// the keeper's HTTP client is the fake's, whatever host an account names
 	hc := fake.srv.Client()
 	hc.Transport = &rewriteTransport{target: fake.srv.Listener.Addr().String()}

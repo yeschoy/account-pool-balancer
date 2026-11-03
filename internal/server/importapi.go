@@ -329,7 +329,7 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 	name := strings.TrimSpace(it.Name)
 	group := strings.TrimSpace(it.Group)
 	if p := strings.TrimSpace(it.Provider); p != "" && !config.KnownProvider(p) {
-		return importResult{Status: "error", Name: name, Error: "provider must be opendesign, river, ollama, modal or perch (a perch account carries no API key: use POST /open/v1/perch/import with its export JSON)"}
+		return importResult{Status: "error", Name: name, Error: "provider must be one of: " + strings.Join(config.Providers, ", ")}
 	}
 	// the item's own provider wins, else the import key's pool (it names the
 	// pool its accounts join), else the key's prefix
@@ -338,6 +338,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 		declared = ik.Provider
 	}
 	provider := config.ResolveProvider(declared, runtimeKey)
+	if (config.IsOpenCode(ik.Provider) || config.IsOpenCode(provider)) && provider != ik.Provider {
+		return importResult{Status: "error", Name: name, Error: "OpenCode import key cannot import into a different provider/tier"}
+	}
 	if group == "" {
 		group = ik.Group
 		if group == config.DefaultGroup {
@@ -351,6 +354,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 	case !config.ValidRuntimeKeyFor(provider, runtimeKey) || len(runtimeKey) > 512:
 		if provider == config.ProviderPerch {
 			return fail("perch accounts take no API key: POST the account export to /open/v1/perch/import instead")
+		}
+		if config.IsOpenCode(provider) {
+			return fail("OpenCode runtimeKey must be an 8..512 character ASCII API token without whitespace")
 		}
 		return fail("runtimeKey must start with sk-amr- (OpenDesign), rv_ (River) or wk- (Modal); an Ollama key has no prefix and needs \"provider\":\"ollama\"")
 	case controlKey != "" && provider != config.ProviderOpenDesign:
@@ -383,6 +389,9 @@ func (s *Server) importDecide(ik config.ImportKey, it importItem, now time.Time,
 	if len(conflicts) > 0 {
 		// The very same account again (same keys, same or no name): nothing to do.
 		if c := conflicts[0]; c.Reason == "runtimeKey" {
+			if a, ok := cfg.Account(c.AccountID); ok && a.Provider != provider && (config.IsOpenCode(a.Provider) || config.IsOpenCode(provider)) {
+				return fail("runtimeKey already belongs to another provider/tier"), false
+			}
 			if a, ok := cfg.Account(c.AccountID); ok && (controlKey == "" || a.ControlKey == controlKey) && (name == "" || strings.EqualFold(a.Name, name)) && len(conflicts) == 1 {
 				return importResult{Status: "unchanged", AccountID: a.ID, Name: a.Name, Conflicts: conflicts}, false
 			}

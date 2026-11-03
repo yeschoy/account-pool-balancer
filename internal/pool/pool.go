@@ -105,6 +105,8 @@ type binding struct {
 	confirmed  bool
 	generation uint64
 	owner      string
+	// source is set only for persisted OpenCode Responses bindings.
+	source string
 }
 
 type healthSlot struct {
@@ -198,10 +200,19 @@ func (e *CapacityError) Error() string { return "all accounts busy: " + e.Blocke
 
 // ---- selection ----
 
+// BindingError means a stateful chain cannot safely be replayed elsewhere.
+type BindingError struct{ Reason string }
+
+func (e *BindingError) Error() string { return "stateful binding " + e.Reason }
+
 type Request struct {
-	Group     string
-	Model     string
-	RequestID string
+	// RequireBinding forbids choosing a fresh account for server-side state.
+	RequireBinding bool
+	// PreserveBinding disallows temporary overflow when the bound account is busy.
+	PreserveBinding bool
+	Group           string
+	Model           string
+	RequestID       string
 	// Affinity is the session fingerprint; "" when the request has none.
 	Affinity string
 	Explicit bool
@@ -273,6 +284,9 @@ func (p *Pool) classLocked(cfg *config.Config, model string, now time.Time) stri
 	class := "unknown"
 	inCatalog := false
 	for _, a := range cfg.Accounts {
+		if config.IsOpenCode(a.Provider) {
+			continue
+		} // OpenDesign funding classes must not learn from OpenCode catalogs
 		snap := p.quota(a.ID)
 		if c := snap.ModelClass(model); c != "unknown" {
 			class = c
@@ -329,6 +343,9 @@ func (p *Pool) Succeeded(cfg *config.Config, id, model string) {
 	if st == nil || len(st.Strikes) == 0 {
 		return
 	}
+	if a, ok := cfg.Account(id); ok && config.IsOpenCode(a.Provider) {
+		delete(st.Strikes, "account")
+	}
 	delete(st.Strikes, "plan")
 	delete(st.Strikes, "model:"+model)
 	delete(st.Strikes, p.classLocked(cfg, model, p.now()))
@@ -360,6 +377,21 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 	}
 	if a.RuntimeKey == "" {
 		return "no-key"
+	}
+	if config.IsOpenCode(a.Provider) {
+		if !cfg.OpenCode.Enabled {
+			return "provider-disabled"
+		}
+		s := p.quota(a.ID)
+		if s == nil || s.OpenCode == nil || s.OpenCode.Source != quota.OpenCodeSource(cfg, a) || s.CatalogAt.IsZero() || now.Sub(s.CatalogAt) >= 24*time.Hour {
+			return "catalog-pending"
+		}
+		if model != "" && !s.Catalog[model] {
+			return "not-entitled"
+		}
+		if s.OpenCode.Exhausted(now, time.Duration(cfg.Quota.StaleSec)*time.Second) {
+			return "quota-exhausted"
+		}
 	}
 	if st := p.stateLocked(a.ID, now); st != nil {
 		if st.HardQuarantined {
@@ -524,6 +556,9 @@ func (p *Pool) getBindingLocked(key string, now time.Time) *binding {
 	}
 	b := el.Value.(*binding)
 	if !now.Before(b.expiresAt) {
+		if b.source != "" {
+			p.dirty = true
+		}
 		p.lru.Remove(el)
 		delete(p.bindings, key)
 		return nil
@@ -533,6 +568,9 @@ func (p *Pool) getBindingLocked(key string, now time.Time) *binding {
 
 func (p *Pool) deleteBindingLocked(key string) {
 	if el := p.bindings[key]; el != nil {
+		if el.Value.(*binding).source != "" {
+			p.dirty = true
+		}
 		p.lru.Remove(el)
 		delete(p.bindings, key)
 	}
@@ -569,6 +607,10 @@ func (p *Pool) Bind(cfg *config.Config, key, accountID string) {
 	p.deleteBindingLocked(key)
 	p.gen++
 	b := &binding{key: key, accountID: accountID, explicit: true, expiresAt: now.Add(ttl(cfg, true)), confirmed: true, generation: p.gen}
+	if a, ok := cfg.Account(accountID); ok && config.IsOpenCode(a.Provider) {
+		b.source = quota.OpenCodeSource(cfg, a)
+		p.dirty = true
+	}
 	p.bindings[key] = p.lru.PushFront(b)
 	for p.lru.Len() > maxBindings {
 		old := p.lru.Back()
@@ -589,6 +631,22 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
+	if config.IsOpenCode(a.Provider) {
+		if snap != nil && snap.OpenCode.Fresh(now, stale) {
+			s.Known = true
+			for _, name := range []string{"monthly", "weekly", "rolling"} {
+				w := snap.OpenCode.Usage[name]
+				if now.Before(w.ResetsAt) {
+					s.Used = max(s.Used, w.UsedPercent)
+					s.Soon = append(s.Soon, w.ResetsAt)
+				}
+			}
+			if w, ok := snap.OpenCode.Usage["weekly"]; ok && now.Before(w.ResetsAt) {
+				s.Pace = w.RemainingPercent / max(w.ResetsAt.Sub(now).Hours(), 1)
+			}
+		}
+		return s
+	}
 	if a.Provider == config.ProviderOllama {
 		// the balance is the pace signal: included allowance first, purchased
 		// credits only fill in behind it
@@ -631,6 +689,11 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 // bound account (wait-overflow after its budget).
 func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*Lease, error) {
 	now := p.now()
+	if req.RequireBinding {
+		if req.Affinity == "" || p.getBindingLocked(req.Affinity, now) == nil {
+			return nil, &BindingError{Reason: "missing or expired; resend full history without previous_response_id"}
+		}
+	}
 	var cands []candidate
 	details := map[string]int{}
 	inGroup := 0
@@ -653,6 +716,9 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		return nil, &UnavailableError{Reason: "no-accounts", Details: details}
 	}
 	if len(cands) == 0 {
+		if req.RequireBinding {
+			return nil, &BindingError{Reason: "account unavailable"}
+		}
 		ue := &UnavailableError{Reason: "all-unavailable", Details: details}
 		// some are only cooling down: say when the soonest is back
 		if details["cooldown"]+details["model-cooldown"]+details["funding-cooldown"] > 0 {
@@ -688,7 +754,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	}
 
 	d := Decision{BindingResult: "not-applicable", Candidates: len(cands)}
-	sticky := cfg.Routing.Sticky && req.Affinity != ""
+	sticky := (cfg.Routing.Sticky || req.RequireBinding) && req.Affinity != ""
 	overflow := false
 	blocked := map[string]bool{}
 	var retry time.Duration
@@ -702,14 +768,23 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				}
 			}
 			if idx < 0 {
+				if req.RequireBinding {
+					return nil, &BindingError{Reason: "account unavailable"}
+				}
 				// the bound account left the schedulable set (or failed this request)
 				p.deleteBindingLocked(req.Affinity)
 				d.BindingResult = "invalidated"
 			} else {
 				a := cands[idx].a
+				if req.RequireBinding && b.source != "" && b.source != quota.OpenCodeSource(cfg, a) {
+					return nil, &BindingError{Reason: "credential or proxy changed"}
+				}
 				ok, by, ra := p.admitLocked(a, now)
 				if ok {
 					b.expiresAt = now.Add(ttl(cfg, b.explicit)) // sliding
+					if b.source != "" {
+						p.dirty = true
+					}
 					p.lru.MoveToFront(p.bindings[req.Affinity])
 					d.AccountID, d.Reason = a.ID, "binding"
 					d.BindingResult = "hit"
@@ -719,7 +794,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 					return p.leaseLocked(a, d, false), nil
 				}
 				switch {
-				case cfg.Routing.OnBindingBusy == "reject":
+				case req.PreserveBinding || req.RequireBinding || cfg.Routing.OnBindingBusy == "reject":
 					return nil, &CapacityError{BlockedBy: by, RetryAfter: ra}
 				case cfg.Routing.OnBindingBusy == "wait-overflow" && !forceOverflow:
 					return nil, &CapacityError{BlockedBy: "binding", RetryAfter: ra}
@@ -859,6 +934,9 @@ func (l *Lease) MarkSent() {
 	p := l.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if l.released {
+		return
+	} // an asynchronous transport trace may arrive after cancellation
 	if l.permit {
 		l.permit = false
 		w := p.rpm[l.Account.ID]
@@ -1107,6 +1185,18 @@ func (p *Pool) Views(cfg *config.Config) map[string]View {
 	return out
 }
 
+// BoundAccount is read-only affinity inspection for choosing between explicitly
+// authorized OpenCode primary/fallback groups. It never admits or reserves.
+func (p *Pool) BoundAccount(key string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	b := p.getBindingLocked(key, p.now())
+	if b == nil {
+		return "", false
+	}
+	return b.accountID, true
+}
+
 func (p *Pool) BindingCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1117,9 +1207,17 @@ func (p *Pool) BindingCount() int {
 
 type HealthExport map[string]map[int64][2]int32
 
+type PersistedBinding struct {
+	Key       string    `json:"key"`
+	AccountID string    `json:"accountId"`
+	Source    string    `json:"source"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type Export struct {
-	States map[string]*AccountState `json:"accountStates"`
-	Health HealthExport             `json:"health"`
+	States   map[string]*AccountState `json:"accountStates"`
+	Health   HealthExport             `json:"health"`
+	Bindings []PersistedBinding       `json:"responseBindings,omitempty"`
 }
 
 // Dirty says, without clearing anything, whether the states or the health
@@ -1138,6 +1236,12 @@ func (p *Pool) ExportState() (Export, bool) {
 	changed := p.dirty || p.samplesDirty
 	p.dirty, p.samplesDirty = false, false
 	e := Export{States: map[string]*AccountState{}, Health: HealthExport{}}
+	for el := p.lru.Front(); el != nil; el = el.Next() {
+		b := el.Value.(*binding)
+		if b.confirmed && b.source != "" && p.now().Before(b.expiresAt) {
+			e.Bindings = append(e.Bindings, PersistedBinding{Key: b.key, AccountID: b.accountID, Source: b.source, ExpiresAt: b.expiresAt})
+		}
+	}
 	for id, st := range p.states {
 		e.States[id] = st.clone()
 	}
@@ -1159,6 +1263,17 @@ func (p *Pool) ExportState() (Export, bool) {
 func (p *Pool) ImportState(e Export, valid map[string]bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	for _, b := range e.Bindings {
+		if len(p.bindings) >= maxBindings {
+			break
+		}
+		if !valid[b.AccountID] || len(b.Key) != 64 || len(b.Source) != 64 || !p.now().Before(b.ExpiresAt) || p.bindings[b.Key] != nil {
+			continue
+		}
+		p.gen++
+		v := &binding{key: b.Key, accountID: b.AccountID, source: b.Source, expiresAt: b.ExpiresAt, explicit: true, confirmed: true, generation: p.gen}
+		p.bindings[b.Key] = p.lru.PushBack(v)
+	}
 	for id, st := range e.States {
 		if valid[id] && st != nil {
 			p.states[id] = st

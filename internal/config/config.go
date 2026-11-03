@@ -53,14 +53,17 @@ func GroupForProvider(provider string) string {
 		return ModalGroup
 	case ProviderPerch:
 		return PerchGroup
+	case ProviderOpenCodeZen, ProviderOpenCodeGo:
+		return provider
 	}
 	return DefaultGroup
 }
 
 var (
-	idRe     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
-	groupRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,50}$`)
-	headerRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+	idRe            = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+	groupRe         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,50}$`)
+	headerRe        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+	openCodeTokenRe = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 )
 
 type Upstream struct {
@@ -120,7 +123,7 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderOpenCodeZen, ProviderOpenCodeGo}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
@@ -165,6 +168,8 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 		return strings.HasPrefix(key, RiverKeyPrefix)
 	case ProviderOllama:
 		return !strings.ContainsAny(key, " \t\r\n")
+	case ProviderOpenCodeZen, ProviderOpenCodeGo:
+		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
 	case ProviderModal:
 		return strings.HasPrefix(key, ModalKeyPrefix) && !strings.ContainsAny(key, " \t\r\n")
 	case ProviderPerch:
@@ -194,6 +199,11 @@ func KnownProvider(p string) bool {
 // provider, and OpenDesign when that is empty (a config from before the other
 // pools had keys without a prefix).
 func ResolveProvider(declared, key string) string {
+	// OpenCode credentials are opaque and can overlap sk-/other prefixes.
+	// Only an explicit declaration selects a tier; never infer it from a key.
+	if IsOpenCode(declared) {
+		return declared
+	}
 	switch inferred := ProviderForKey(key); inferred {
 	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal:
 		return inferred
@@ -207,6 +217,8 @@ func ResolveProvider(declared, key string) string {
 // runtimeKeyError is the hint for a key its declared provider can't accept.
 func runtimeKeyError(provider string) string {
 	switch provider {
+	case ProviderOpenCodeZen, ProviderOpenCodeGo:
+		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderRiver:
 		return "runtime key must start with rv_"
 	case ProviderOllama:
@@ -223,6 +235,10 @@ func runtimeKeyError(provider string) string {
 // RulesFor are the error and retry rules of an account's pool.
 func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule) {
 	switch provider {
+	case ProviderOpenCodeZen:
+		return c.OpenCode.ZenErrorRules, c.OpenCode.ZenRetryRules
+	case ProviderOpenCodeGo:
+		return c.OpenCode.GoErrorRules, c.OpenCode.GoRetryRules
 	case ProviderRiver:
 		return c.RiverErrorRules, c.RiverRetryRules
 	case ProviderOllama:
@@ -238,6 +254,13 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 // DefaultErrorRulesFor is a pool's stock error rules (the console's
 // "restore defaults").
 func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
+	if IsOpenCode(provider) {
+		out := rules.DefaultOpenCodeErrorRules()
+		for i := range out {
+			out[i].ID = strings.Replace(out[i].ID, "opencode-", provider+"-", 1)
+		}
+		return out
+	}
 	switch provider {
 	case ProviderRiver:
 		return rules.DefaultRiverErrorRules()
@@ -253,6 +276,13 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 
 // DefaultRetryRulesFor is a pool's stock retry rules.
 func DefaultRetryRulesFor(provider string) []rules.RetryRule {
+	if IsOpenCode(provider) {
+		out := rules.DefaultOpenCodeRetryRules()
+		for i := range out {
+			out[i].ID = strings.Replace(out[i].ID, "opencode-", provider+"-", 1)
+		}
+		return out
+	}
 	switch provider {
 	case ProviderRiver:
 		return rules.DefaultRiverRetryRules()
@@ -312,7 +342,7 @@ func (c *Config) GroupPool(group string) string {
 // be moved into another pool by a typo.
 func (c *Config) keyProvider(declared, group string) (string, error) {
 	if declared != "" && !KnownProvider(declared) {
-		return "", fmt.Errorf("provider must be opendesign, river, ollama, modal or perch")
+		return "", fmt.Errorf("provider must be one of %v", Providers)
 	}
 	// a group an account already holds is that pool's, full stop
 	if pool := c.GroupProvider(group); pool != "" {
@@ -337,6 +367,10 @@ func (c *Config) keyProvider(declared, group string) (string, error) {
 // RuntimeBase is the inference endpoint account a is served from.
 func (c *Config) RuntimeBase(a Account) string {
 	switch a.Provider {
+	case ProviderOpenCodeZen:
+		return c.OpenCode.ZenBase
+	case ProviderOpenCodeGo:
+		return c.OpenCode.GoBase
 	case ProviderRiver:
 		return c.Upstream.RiverBase
 	case ProviderOllama:
@@ -770,6 +804,7 @@ type Config struct {
 	PerchErrorRules  []rules.ErrorRule `json:"perchErrorRules"`
 	PerchRetryRules  []rules.RetryRule `json:"perchRetryRules"`
 	Perch            Perch             `json:"perch"`
+	OpenCode         OpenCode          `json:"opencode"`
 	Logs             Logs              `json:"logs"`
 	Pricing          pricing.Config    `json:"pricing"`
 }
@@ -811,6 +846,7 @@ func Default() *Config {
 		PerchErrorRules:  rules.DefaultPerchErrorRules(),
 		PerchRetryRules:  rules.DefaultPerchRetryRules(),
 		Perch:            DefaultPerch(),
+		OpenCode:         DefaultOpenCode(),
 		Pricing:          pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
 		Logs:             Logs{RetentionDays: 30, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
@@ -1182,6 +1218,9 @@ func (c *Config) Normalize() error {
 	if err := c.Perch.normalize(); err != nil {
 		return err
 	}
+	if err := c.OpenCode.normalize(); err != nil {
+		return err
+	}
 	if err := rules.ValidateErrorRules(c.ErrorRules); err != nil {
 		return err
 	}
@@ -1273,6 +1312,9 @@ func (c *Config) Normalize() error {
 		// swapped key can never leave a stale provider behind; otherwise the
 		// stored provider stands (an Ollama key carries no prefix)
 		a.Provider = ResolveProvider(a.Provider, a.RuntimeKey)
+		if !KnownProvider(a.Provider) {
+			return fmt.Errorf("accounts[%s]: unknown provider", a.ID)
+		}
 		if !ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, runtimeKeyError(a.Provider))
 		}
@@ -1302,6 +1344,13 @@ func (c *Config) Normalize() error {
 		}
 		if !groupRe.MatchString(a.Group) {
 			return fmt.Errorf("accounts[%s]: invalid group", a.ID)
+		}
+		if IsOpenCode(a.Provider) {
+			for _, p := range Providers {
+				if p != a.Provider && GroupForProvider(p) == a.Group {
+					return fmt.Errorf("accounts[%s]: OpenCode requires its own provider group", a.ID)
+				}
+			}
 		}
 		if p, ok := groupProvider[a.Group]; ok && p != a.Provider {
 			return fmt.Errorf("accounts[%s]: group %q already holds %s accounts; each pool needs its own group", a.ID, a.Group, p)
@@ -1346,6 +1395,18 @@ func (c *Config) Normalize() error {
 		kept = append(kept, a)
 	}
 	c.Accounts = kept
+	for provider, group := range map[string]string{ProviderOpenCodeZen: c.OpenCode.ZenFallbackGroup, ProviderOpenCodeGo: c.OpenCode.GoFallbackGroup} {
+		if group == "" {
+			continue
+		}
+		other := ProviderOpenCodeGo
+		if provider == ProviderOpenCodeGo {
+			other = ProviderOpenCodeZen
+		}
+		if !groupRe.MatchString(group) || c.GroupPool(group) != other {
+			return fmt.Errorf("opencode: fallback group must belong to the other OpenCode tier")
+		}
+	}
 	// A key belongs to the pool of its group; that pool's accounts (if any)
 	// decide, so a key can't be routed into another pool by a stale field.
 	for i := range c.ClientKeys {
@@ -1484,6 +1545,18 @@ func (c *Config) Normalize() error {
 	}
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
+	}
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting} {
+		if r == nil {
+			continue
+		}
+		nested := c.Clone()
+		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
+		nested.Routing = *r
+		if err := nested.Normalize(); err != nil {
+			return fmt.Errorf("opencode routing: %w", err)
+		}
+		*r = nested.Routing
 	}
 	return nil
 }

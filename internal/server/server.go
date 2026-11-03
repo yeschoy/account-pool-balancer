@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,8 +43,18 @@ type Server struct {
 	stats   *stats.Stats
 	secret  []byte
 
-	tmu        sync.Mutex
-	transports map[string]*http.Transport
+	requestMu      sync.Mutex
+	draining       bool
+	requests       sync.WaitGroup
+	requestContext context.Context
+	cancelRequests context.CancelFunc
+
+	tmu         sync.Mutex
+	transports  map[string]*http.Transport
+	proxyHealth struct {
+		sync.Mutex
+		states map[string]proxyHealthView
+	}
 
 	models struct {
 		sync.Mutex
@@ -102,8 +113,14 @@ func New(dataDir string, opt Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now()}
+	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
-	s.quota.OnUpdate = func(string) { s.metaDirty.Store(true) }
+	s.quota.OnUpdate = func(id string) {
+		s.metaDirty.Store(true)
+		if a, ok := s.cfg.Get().Account(id); ok && config.IsOpenCode(a.Provider) {
+			s.resetModels()
+		}
+	}
 	s.pool = pool.New(s.quota.View)
 
 	valid := map[string]bool{}
@@ -186,8 +203,27 @@ func New(dataDir string, opt Options) (*Server, error) {
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
 	s.rebindPerch(next)
+	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+		s.resetModels()
+	}
+	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
+		s.tmu.Lock()
+		for _, t := range s.transports {
+			t.CloseIdleConnections()
+		}
+		s.transports = map[string]*http.Transport{}
+		s.tmu.Unlock()
+	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
+		capabilitiesChanged := old.OpenCode.CapabilitiesURL != next.OpenCode.CapabilitiesURL || old.OpenCode.ZenDocsURL != next.OpenCode.ZenDocsURL || old.OpenCode.GoDocsURL != next.OpenCode.GoDocsURL || !reflect.DeepEqual(old.OpenCode.ProtocolBases(a.Provider), next.OpenCode.ProtocolBases(n.Provider))
+		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {
+			s.quota.Forget(a.ID)
+			s.pool.Invalidate(a.ID, false)
+		}
+		if config.IsOpenCode(a.Provider) && ok && !reflect.DeepEqual(old.OpenCode, next.OpenCode) {
+			s.quota.RefreshSession(a.ID)
+		}
 		switch {
 		case !ok:
 			s.pool.Invalidate(a.ID, true)
@@ -205,6 +241,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 		}
 	}
 	for _, a := range next.Accounts {
+		if config.IsOpenCode(a.Provider) && next.OpenCode.Enabled {
+			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.RuntimeBase(o) != next.RuntimeBase(a) {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
 		if _, ok := old.Account(a.ID); !ok && a.ControlKey != "" {
 			s.quota.Refresh(a.ID)
 		} else if o, _ := old.Account(a.ID); o.ControlKey != a.ControlKey && a.ControlKey != "" {
@@ -248,7 +289,8 @@ func (s *Server) saveCounters(force bool) error {
 
 // Run starts the background loops until ctx ends, then flushes state.
 func (s *Server) Run(ctx context.Context) {
-	go s.quota.Run(ctx)
+	quotaDone := make(chan struct{})
+	go func() { defer close(quotaDone); s.quota.Run(ctx) }()
 	s.RunPerch(ctx)
 	autoDone := make(chan struct{})
 	go func() { defer close(autoDone); s.runPerchAuto(ctx) }()
@@ -259,6 +301,8 @@ func (s *Server) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.drainRequests() // cancel inference, release leases, then persist and close logs
+			<-quotaDone
 			<-autoDone
 			if err := s.saveCounters(true); err != nil {
 				log.Printf("save counters: %v", err)
@@ -331,5 +375,34 @@ func (s *Server) Handler() http.Handler {
 	// rather than an API key, so it has its own endpoint.
 	mux.HandleFunc("POST /open/v1/perch/import", s.apiPerchOpenImport)
 	s.registerAdmin(mux)
-	return mux
+	return s.trackRequests(mux)
+}
+
+func (s *Server) trackRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.requestMu.Lock()
+		if s.draining {
+			s.requestMu.Unlock()
+			writeLocalError(w, "openai", http.StatusServiceUnavailable, "api_error", "server_draining", "server is shutting down", 1)
+			return
+		}
+		s.requests.Add(1)
+		s.requestMu.Unlock()
+		defer s.requests.Done()
+		ctx, cancel := context.WithCancel(r.Context())
+		stop := context.AfterFunc(s.requestContext, cancel)
+		defer stop()
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) drainRequests() {
+	// The admission lock makes Add/Wait safe: no new handler can register once
+	// draining becomes visible. Callers already running retain their snapshot.
+	s.requestMu.Lock()
+	s.draining = true
+	s.requestMu.Unlock()
+	s.cancelRequests()
+	s.requests.Wait()
 }
