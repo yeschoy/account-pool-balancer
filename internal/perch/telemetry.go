@@ -219,7 +219,7 @@ func RedactTurn(t CLITurn) CLITurn {
 // HTTPClientForProxy exposes the same per-proxy transport used by account calls.
 // An empty proxy retains the client's configured transport; its route is unknown.
 func (c *Client) HTTPClientForProxy(proxyURL string) (*http.Client, error) {
-	return c.clientFor(proxyURL)
+	return c.clientFor("", proxyURL)
 }
 
 // Sink receives what the pool would report. The production sink audits and, if

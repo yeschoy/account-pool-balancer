@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 const (
@@ -282,7 +284,11 @@ type Client struct {
 	Now func() time.Time
 
 	mu      sync.Mutex
-	proxies map[string]*http.Client // per proxy URL
+	proxies map[string]*http.Client // per egress scope (see EgressKey)
+
+	// fingerprint is the TLS handshake account calls present. Nil selects the
+	// measured Node handshake (NodeClientHelloSpec); tests may set their own.
+	fingerprint *utls.ClientHelloSpec
 
 	// tickets holds one issued turn ticket per account (see ticket.go).
 	tickets ticketCache
@@ -296,10 +302,41 @@ type Client struct {
 
 type proxyContextKey struct{}
 
+type accountContextKey struct{}
+
 // WithProxy routes account-scoped JSON requests through proxyURL. An empty
 // URL keeps the client's existing HTTP transport, including test injection.
 func WithProxy(ctx context.Context, proxyURL string) context.Context {
 	return context.WithValue(ctx, proxyContextKey{}, proxyURL)
+}
+
+// WithAccount scopes the connection pool to one account.
+//
+// Two accounts that share a proxy URL still must not share connections. A
+// pooled connection is a TLS session and an HTTP/2 connection; when two
+// identities multiplex over it, the server can see them together, and on
+// HTTP/2 it can also see them in one stream. The published CLI is one account
+// one process one connection pool, so a pool reproduces that per account
+// rather than per egress address: the second account cannot reuse the first's
+// connection even though both leave through the same proxy.
+//
+// An empty account id means "no account scope": such a call shares the pool
+// keyed by proxy alone, which is what pre-scoped code and tests expect.
+func WithAccount(ctx context.Context, accountID string) context.Context {
+	return context.WithValue(ctx, accountContextKey{}, accountID)
+}
+
+// egressScope names the connection pool a request belongs to.
+//
+// The account id, not the proxy URL, is the key. A proxy is how a pool makes
+// one account look like one location; a shared pool would undo exactly that
+// by letting the second account ride the first one's TLS session. Accounts
+// without an id fall back to the proxy-only key so existing callers keep
+// their behaviour.
+func egressScope(ctx context.Context) (account, proxy string) {
+	account, _ = ctx.Value(accountContextKey{}).(string)
+	proxy, _ = ctx.Value(proxyContextKey{}).(string)
+	return account, proxy
 }
 
 // NewClient returns a client with a transport sized for a pool of accounts
@@ -333,8 +370,8 @@ func (c *Client) now() time.Time {
 // do sends one request and decodes a JSON answer into out (which may be nil).
 // limit caps the answer's size so a captive portal page can't flood memory.
 func (c *Client) do(ctx context.Context, req *http.Request, out any) error {
-	proxyURL, _ := ctx.Value(proxyContextKey{}).(string)
-	hc, err := c.clientFor(proxyURL)
+	account, proxyURL := egressScope(ctx)
+	hc, err := c.clientFor(account, proxyURL)
 	if err != nil {
 		return &Error{Kind: KindTransient, Message: err.Error(), Err: err}
 	}

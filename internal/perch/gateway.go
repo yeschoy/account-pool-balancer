@@ -31,10 +31,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // ModelCallPath is where a hosted-model call goes on the CLI surface.
@@ -440,7 +443,7 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, body 
 		}
 	}
 
-	httpc, cerr := c.clientFor(call.ProxyURL)
+	httpc, cerr := c.clientFor(call.AccountKey, call.ProxyURL)
 	if cerr != nil {
 		return CallResult{}, &ModelError{Status: 502, Code: "bad_proxy", Err: cerr.Error()}
 	}
@@ -458,7 +461,7 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, body 
 	// prefix and the caller must resend the whole request.
 	if plan != nil {
 		hdr := map[string]string{
-			DeltaHeader:     res.Header.Get(DeltaHeader),
+			DeltaHeader:      res.Header.Get(DeltaHeader),
 			HeldLengthHeader: res.Header.Get(HeldLengthHeader),
 			HeldDigestHeader: res.Header.Get(HeldDigestHeader),
 			HeldToolsHeader:  res.Header.Get(HeldToolsHeader),
@@ -639,27 +642,41 @@ func refusal(status int, body []byte) *ModelError {
 	return e
 }
 
-// clientFor returns the HTTP client for a call: a cached per-proxy client, or
-// the shared direct one. An unparsable proxy URL is an error rather than a
-// silent direct connection.
-func (c *Client) clientFor(proxyURL string) (*http.Client, error) {
-	if proxyURL == "" {
+// clientFor returns the HTTP client for a call.
+//
+// The pool is keyed by account, not by egress address, and every transport it
+// builds presents the measured Node handshake. Both halves matter for the same
+// reason: the published client is one account in one process, so its TLS
+// session, its HTTP/2 connection and its ClientHello belong to exactly one
+// identity. Sharing any of them between accounts is a correlation the server
+// gets for free.
+//
+// An empty account id keeps the old proxy-keyed behaviour so callers that do
+// not scope a request still work; an unparsable proxy URL is an error rather
+// than a silent direct connection.
+func (c *Client) clientFor(accountID, proxyURL string) (*http.Client, error) {
+	var proxy *url.URL
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil || u.Host == "" {
+			return nil, errors.New("invalid proxy URL")
+		}
+		proxy = u
+	}
+	// No account and no proxy: the caller's own client (tests inject one).
+	if accountID == "" && proxy == nil {
 		return c.HTTP, nil
 	}
+	key := EgressKey(accountID, proxyURL)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.proxies == nil {
 		c.proxies = map[string]*http.Client{}
 	}
-	if hc, ok := c.proxies[proxyURL]; ok {
+	if hc, ok := c.proxies[key]; ok {
 		return hc, nil
 	}
-	u, err := url.Parse(proxyURL)
-	if err != nil || u.Host == "" {
-		return nil, errors.New("invalid proxy URL")
-	}
 	t := &http.Transport{
-		Proxy:                 http.ProxyURL(u),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
@@ -667,9 +684,83 @@ func (c *Client) clientFor(proxyURL string) (*http.Client, error) {
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
+	if proxy != nil {
+		t.Proxy = http.ProxyURL(proxy)
+	}
+	// The fingerprint rides on DialTLSContext, whose contract is to return a
+	// connection that has already completed its handshake. That is only
+	// reachable on direct egress: behind a proxy the transport performs TLS
+	// itself after its own CONNECT, so installing a hook here would hand back
+	// an unfinished connection and break the route. Proxied calls therefore
+	// keep Go's own handshake; see the note on dialFingerprinted.
+	if spec := c.fingerprintOr(NodeClientHelloSpec()); spec != nil && proxy == nil {
+		t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialFingerprinted(ctx, network, addr, spec)
+		}
+	}
 	hc := &http.Client{Transport: t}
-	c.proxies[proxyURL] = hc
+	c.proxies[key] = hc
 	return hc, nil
+}
+
+// EgressKey names one connection pool.
+//
+// The account id leads so two accounts never meet even when they share a proxy
+// URL. An empty id degrades to the proxy-only key, which is what an unscoped
+// caller means by "wherever this proxy goes".
+func EgressKey(accountID, proxyURL string) string {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if accountID == "" {
+		return "proxy:" + proxyURL
+	}
+	return accountID + "\x00" + proxyURL
+}
+
+// fingerprintOr returns the ClientHello to present, defaulting to the measured
+// Node handshake.
+func (c *Client) fingerprintOr(fallback *utls.ClientHelloSpec) *utls.ClientHelloSpec {
+	if c.fingerprint != nil {
+		return c.fingerprint
+	}
+	return fallback
+}
+
+// dialFingerprinted opens a direct connection that presents spec as its
+// ClientHello, completing the handshake before it returns.
+//
+// It is only wired up for direct egress. Behind a proxy the transport runs its
+// own TLS after its own CONNECT tunnel, and a DialTLSContext that returned an
+// unfinished connection would break that path outright — the request would be
+// sent in the clear to a proxy expecting a tunnel. Reshaping the handshake
+// inside a CONNECT would mean owning the tunnel here, which is a larger change
+// than the fingerprint and is not attempted.
+//
+// Verification stays on: the certificate is the one the real host presents, and
+// accepting it unchecked would trade a fingerprint for a silent MITM hole.
+func dialFingerprinted(ctx context.Context, network, addr string, spec *utls.ClientHelloSpec) (net.Conn, error) {
+	d := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	raw, err := d.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	host, _, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		host = addr
+	}
+	u := utls.UClient(raw, &utls.Config{
+		ServerName: host,
+		NextProtos: []string{"http/1.1", "h2"},
+		MinVersion: utls.VersionTLS12,
+	}, utls.HelloCustom)
+	if err := u.ApplyPreset(spec); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	if err := u.HandshakeContext(ctx); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	return u, nil
 }
 
 // isCapacityCode reports Perch's "I am full" answer, which is not this
@@ -740,7 +831,7 @@ func (c *Client) ensureThread(ctx context.Context, call *ModelCall) (string, err
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Origin", ChatURL)
 	req.Header.Set("Referer", ChatURL+"/perchai")
-	httpc, cerr := c.clientFor(call.ProxyURL)
+	httpc, cerr := c.clientFor(call.AccountKey, call.ProxyURL)
 	if cerr != nil {
 		return "", &ModelError{Status: 502, Code: "bad_proxy", Err: cerr.Error()}
 	}

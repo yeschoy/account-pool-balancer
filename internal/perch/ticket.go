@@ -451,7 +451,7 @@ func (c *Client) exchangeTicket(ctx context.Context, req TicketRequest, body any
 	hreq.Header.Set("User-Agent", req.ticketUA())
 	hreq.Header.Set(LocaleHeader, req.ticketLocale())
 
-	hc, cerr := c.clientFor(req.ProxyURL)
+	hc, cerr := c.clientFor(req.Key, req.ProxyURL)
 	if cerr != nil {
 		return nil, errTicketSoft
 	}

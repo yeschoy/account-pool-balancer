@@ -68,7 +68,7 @@ func newFakeTicketServer(t *testing.T) *fakeTicketServer {
 		}
 		raw, _ := json.Marshal(map[string]any{
 			"ok": true, "ticket": "tk_" + f.ticketID, "ticketId": f.ticketID,
-			"runId": "cli-turn-1700000000000-" + f.ticketID,
+			"runId":     "cli-turn-1700000000000-" + f.ticketID,
 			"expiresAt": exp, "profile": "standard", "enforced": f.enforced,
 		})
 		_, _ = w.Write(raw)

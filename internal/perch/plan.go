@@ -68,12 +68,12 @@ func (p PlanStatus) Detail() string {
 // GET carries planRequired and the Starter notice; a refusal carries ok=false
 // with an error and errorCode.
 type planResponse struct {
-	OK           bool   `json:"ok"`
-	PlanRequired bool   `json:"planRequired"`
-	AlreadyChosen bool  `json:"alreadyChosen"`
-	Error        string `json:"error"`
-	ErrorCode    string `json:"errorCode"`
-	Starter      struct {
+	OK            bool   `json:"ok"`
+	PlanRequired  bool   `json:"planRequired"`
+	AlreadyChosen bool   `json:"alreadyChosen"`
+	Error         string `json:"error"`
+	ErrorCode     string `json:"errorCode"`
+	Starter       struct {
 		NoticeVersion string `json:"noticeVersion"`
 	} `json:"starter"`
 }
