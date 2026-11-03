@@ -220,7 +220,11 @@ func TestProxiedTransportKeepsGoHandshake(t *testing.T) {
 	if tr.DialTLSContext != nil {
 		t.Fatal("a proxied transport must not install DialTLSContext")
 	}
-	// Direct egress is where the fingerprint lives.
+	// Direct egress is where the fingerprint would live, but it is currently
+	// switched off: the measured ClientHello negotiates h2 while
+	// *http.Transport keeps speaking HTTP/1.1 into that connection. While
+	// isFingerprintingEnabled is false, direct egress must keep Go's own
+	// handshake so HTTP/2 negotiation stays consistent with the wire format.
 	direct, err := c.clientFor("acct-a", "")
 	if err != nil {
 		t.Fatalf("clientFor direct: %v", err)
@@ -229,8 +233,12 @@ func TestProxiedTransportKeepsGoHandshake(t *testing.T) {
 	if !ok {
 		t.Fatalf("direct transport is %T, want *http.Transport", direct.Transport)
 	}
-	if dtr.DialTLSContext == nil {
-		t.Fatal("a direct transport must install the fingerprinting DialTLSContext")
+	if isFingerprintingEnabled() {
+		if dtr.DialTLSContext == nil {
+			t.Fatal("fingerprinting is enabled but the direct transport has no DialTLSContext")
+		}
+	} else if dtr.DialTLSContext != nil {
+		t.Fatal("fingerprinting is disabled but the direct transport still overrides the handshake")
 	}
 }
 

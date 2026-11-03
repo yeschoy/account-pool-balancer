@@ -693,9 +693,25 @@ func (c *Client) clientFor(accountID, proxyURL string) (*http.Client, error) {
 	// itself after its own CONNECT, so installing a hook here would hand back
 	// an unfinished connection and break the route. Proxied calls therefore
 	// keep Go's own handshake; see the note on dialFingerprinted.
-	if spec := c.fingerprintOr(NodeClientHelloSpec()); spec != nil && proxy == nil {
-		t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialFingerprinted(ctx, network, addr, spec)
+	//
+	// DISABLED: the measured Node ClientHello advertises ALPN as
+	// "http/1.1, h2", but the server picks h2 anyway. DialTLSContext hands
+	// back a connection that already negotiated h2, while *http.Transport
+	// still writes an HTTP/1.1 request line into it, so every direct call
+	// fails with "bogus greeting GET / HTTP/1.1" on the server and
+	// "malformed HTTP response" (an h2 SETTINGS frame) on the client. That
+	// failure surfaces as a TLS-looking transport error, then exhausts the
+	// accounts and ends as a local pool_cooling_down 429.
+	//
+	// Restoring it needs the h2 side to agree, not a different ALPN string:
+	// either carry the connection on http2.Transport, or let uTLS own ALPN
+	// so ConnectionState reports the protocol Go then actually speaks.
+	// isFingerprintingEnabled is the single switch for that work.
+	if isFingerprintingEnabled() {
+		if spec := c.fingerprintOr(NodeClientHelloSpec()); spec != nil && proxy == nil {
+			t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialFingerprinted(ctx, network, addr, spec)
+			}
 		}
 	}
 	hc := &http.Client{Transport: t}
@@ -715,6 +731,19 @@ func EgressKey(accountID, proxyURL string) string {
 	}
 	return accountID + "\x00" + proxyURL
 }
+
+// isFingerprintingEnabled reports whether the uTLS ClientHello replaces Go's
+// own handshake on direct egress.
+//
+// It is off while the ALPN/HTTP2 mismatch described in clientFor is open. The
+// code below is kept intact rather than deleted: the ClientHello itself was
+// measured correctly (1640 bytes, matching perchai-cli on Node v26), and only
+// the protocol Go speaks afterwards is wrong, so restoring this is a
+// transport change and not a re-measurement.
+//
+// Tests that pin the spec shape and the negotiated length call the helpers
+// directly and are unaffected by this switch.
+func isFingerprintingEnabled() bool { return false }
 
 // fingerprintOr returns the ClientHello to present, defaulting to the measured
 // Node handshake.
