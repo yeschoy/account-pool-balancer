@@ -73,28 +73,57 @@ func (s *Server) apiPerchAuto(w http.ResponseWriter, r *http.Request) {
 	settings, status, pendingID := a.settings, a.status, a.pendingID
 	a.mu.Unlock()
 	type candidate struct {
-		ID            string                  `json:"id"`
-		Login         string                  `json:"login"`
-		Status        perchsignupstore.Status `json:"status"`
+		ID     string                  `json:"id"`
+		Login  string                  `json:"login"`
+		Status perchsignupstore.Status `json:"status"`
+		// Proxy is the redacted endpoint; HasProxy says whether the candidate
+		// runs behind a proxy at all, which an empty Proxy cannot express for
+		// an unreadable URL.
 		Proxy         string                  `json:"proxy"`
+		HasProxy      bool                    `json:"hasProxy"`
 		Detail        string                  `json:"detail"`
 		CanRetrySave  bool                    `json:"canRetrySave"`
 		CanRevalidate bool                    `json:"canRevalidate"`
 		// CanRegister marks a candidate the operator can register ahead of time.
 		CanRegister bool `json:"canRegister"`
+		// CanEditProxy marks a candidate whose proxy the operator may still
+		// change: every state except running and completed.
+		CanEditProxy bool `json:"canEditProxy"`
 	}
 	list := make([]candidate, 0)
 	for _, x := range a.store.List() {
-		item := candidate{ID: x.ID, Login: x.Login, Status: x.Status, Proxy: x.Proxy, Detail: autoCandidateDetail(x.Status),
+		item := candidate{ID: x.ID, Login: x.Login, Status: x.Status, Proxy: autoProxyLabel(x.Proxy),
+			HasProxy: x.Proxy != "", Detail: autoCandidateDetail(x.Status),
 			CanRevalidate: x.Status == perchsignupstore.Uncertain && x.HasSession, CanRegister: x.Status == perchsignupstore.Queued}
+		// CanEditProxy mirrors the store's rule: a candidate that is mid-run has
+		// already handed its proxy to the worker, and a completed one became a
+		// pool account whose own proxy is the one that matters.
+		item.CanEditProxy = x.Status != perchsignupstore.Running && x.Status != perchsignupstore.Completed
 		if x.ID == pendingID {
 			item.Status = "save-failed"
 			item.Detail = "会话仅存于内存，重启将丢失，请立即重试保存"
 			item.CanRetrySave = true
+			// The in-memory session still has to be written back first; a proxy
+			// edit here would race that write.
+			item.CanEditProxy = false
 		}
 		list = append(list, item)
 	}
 	writeJSON(w, 200, map[string]any{"settings": settings, "candidates": list, "proxies": a.store.ListProxies(), "status": status})
+}
+
+// autoProxyLabel exposes a proxy endpoint without credentials, the way the
+// candidate list shows it. An unparseable stored value is reported as such
+// rather than shown raw.
+func autoProxyLabel(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "代理地址无效"
+	}
+	return u.Scheme + "://" + u.Host
 }
 func autoCandidateDetail(st perchsignupstore.Status) string {
 	switch st {
@@ -192,6 +221,92 @@ func (s *Server) apiPerchAutoDeleteProxy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+// apiPerchAutoUpdateProxy rewrites one inventory entry in place.
+//
+// It keeps the entry's ID, so the operator edits the row instead of deleting and
+// re-adding it, and it never touches candidates already bound to the old
+// address: their proxy is what their registration actually ran behind. Use the
+// candidate endpoint for those.
+func (s *Server) apiPerchAutoUpdateProxy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var in struct {
+		URL string `json:"url"`
+	}
+	if readBody(r, &in) != nil {
+		apiError(w, 400, errors.New("请求格式无效"))
+		return
+	}
+	proxy, err := normalizeRegistrationProxy(in.URL)
+	if err != nil || proxy == "" {
+		apiError(w, 400, errors.New("代理地址无效"))
+		return
+	}
+	out, err := s.perchAuto.store.UpdateProxy(r.PathValue("id"), proxy)
+	if errors.Is(err, perchsignupstore.ErrNotFound) {
+		apiError(w, 404, errors.New("代理不存在"))
+		return
+	}
+	if errors.Is(err, perchsignupstore.ErrInvalid) {
+		apiError(w, 409, errors.New("代理地址与库存中的另一条重复"))
+		return
+	}
+	if err != nil {
+		apiError(w, 500, errors.New("保存代理失败"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"proxy": out})
+}
+
+// apiPerchAutoCandidateProxy rewrites one candidate's proxy, or clears it so the
+// candidate runs on the direct path (an empty proxy is the direct path here, not
+// a missing one).
+func (s *Server) apiPerchAutoCandidateProxy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var in struct {
+		ProxyURL *string `json:"proxyUrl"`
+	}
+	if readBody(r, &in) != nil || in.ProxyURL == nil {
+		apiError(w, 400, errors.New("请提供代理地址；直连请传空字符串"))
+		return
+	}
+	proxy, err := normalizeRegistrationProxy(*in.ProxyURL)
+	if err != nil {
+		apiError(w, 400, err)
+		return
+	}
+	id := r.PathValue("id")
+	a := s.perchAuto
+	a.mu.Lock()
+	busy := a.workingID == id || a.pendingID == id
+	a.mu.Unlock()
+	if busy {
+		apiError(w, 409, errors.New("候选账号正在处理，无法修改代理"))
+		return
+	}
+	out, err := a.store.UpdateCandidateProxy(id, proxy)
+	if errors.Is(err, perchsignupstore.ErrNotFound) {
+		apiError(w, 404, errors.New("候选账号不存在"))
+		return
+	}
+	if errors.Is(err, perchsignupstore.ErrInvalid) {
+		apiError(w, 409, errors.New("运行中或已入池的候选账号不能修改代理"))
+		return
+	}
+	if err != nil {
+		apiError(w, 500, errors.New("保存代理失败"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"candidate": candidateView(out)})
+}
+
+// candidateView is the redacted shape shared with the candidate list.
+func candidateView(x perchsignupstore.Summary) map[string]any {
+	return map[string]any{
+		"id": x.ID, "login": x.Login, "status": x.Status,
+		"proxy": autoProxyLabel(x.Proxy), "hasProxy": x.Proxy != "",
+	}
 }
 func (s *Server) apiPerchAutoDeleteCandidate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

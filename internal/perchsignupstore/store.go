@@ -208,10 +208,11 @@ func validProxies(ps []diskProxy) bool {
 	ids, urls := map[string]bool{}, map[string]bool{}
 	for _, p := range ps {
 		_, ok := proxyAddress(p.URL)
-		if !ok || p.ID == "" || ids[p.ID] || urls[p.URL] || strings.TrimSpace(p.URL) != p.URL {
+		key := uniqueProxyURL(p.URL)
+		if !ok || p.ID == "" || ids[p.ID] || urls[key] || strings.TrimSpace(p.URL) != p.URL {
 			return false
 		}
-		ids[p.ID], urls[p.URL] = true, true
+		ids[p.ID], urls[key] = true, true
 	}
 	return true
 }
@@ -331,9 +332,11 @@ func (s *Store) ImportProxies(rawURLs []string) ([]ProxySummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ps := append([]diskProxy(nil), s.proxies...)
+	// Deduplicate by endpoint, the identity UpdateProxy also checks against, so
+	// the same host and port behind two credentials cannot become two rows.
 	seen := make(map[string]bool, len(ps))
 	for _, p := range ps {
-		seen[p.URL] = true
+		seen[uniqueProxyURL(p.URL)] = true
 	}
 	var added []ProxySummary
 	for _, raw := range rawURLs {
@@ -342,10 +345,10 @@ func (s *Store) ImportProxies(rawURLs []string) ([]ProxySummary, error) {
 		if !ok {
 			return nil, ErrInvalid
 		}
-		if seen[raw] {
+		if seen[uniqueProxyURL(raw)] {
 			continue
 		}
-		seen[raw] = true
+		seen[uniqueProxyURL(raw)] = true
 		id := make([]byte, 16)
 		if _, err := io.ReadFull(rand.Reader, id); err != nil {
 			return nil, err
@@ -385,6 +388,99 @@ func (s *Store) GetProxy(id string) (ProxyRecord, error) {
 		}
 	}
 	return ProxyRecord{}, ErrNotFound
+}
+
+// UpdateProxy replaces one inventory entry's address, keeping its ID so the
+// operator edits the row in place instead of deleting and re-adding it.
+//
+// Candidates already bound to the old address keep it: their proxy was chosen
+// when they were claimed and is what the registration ran behind, so a change
+// here only affects assignment from now on. Clearing a bound candidate's proxy
+// is UpdateCandidateProxy's job, done deliberately per candidate.
+//
+// The new address is validated like an import and must not collide with another
+// entry: uniqueProxyURL ignores the userinfo, so the same host and port behind
+// two different credentials cannot be stored twice under two IDs.
+func (s *Store) UpdateProxy(id, rawURL string) (ProxySummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx := -1
+	for i, p := range s.proxies {
+		if p.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ProxySummary{}, ErrNotFound
+	}
+	raw := strings.TrimSpace(rawURL)
+	address, ok := proxyAddress(raw)
+	if !ok {
+		return ProxySummary{}, ErrInvalid
+	}
+	for i, p := range s.proxies {
+		if i != idx && uniqueProxyURL(p.URL) == uniqueProxyURL(raw) {
+			return ProxySummary{}, ErrInvalid
+		}
+	}
+	ps := append([]diskProxy(nil), s.proxies...)
+	ps[idx].URL = raw
+	if err := s.save(s.records, ps); err != nil {
+		return ProxySummary{}, err
+	}
+	s.proxies = ps
+	return ProxySummary{ID: ps[idx].ID, Proxy: address}, nil
+}
+
+// UpdateCandidateProxy replaces one candidate's proxy, or clears it to the
+// direct path when rawURL is empty.
+//
+// Refused while the candidate is running: the update is a durable write of the
+// whole store, and a claim that is mid-registration already sent its proxy to
+// the worker. Completed candidates are refused too — their credentials are gone
+// and the account is in the pool, where the account's own proxy is the one that
+// matters.
+func (s *Store) UpdateCandidateProxy(id, rawURL string) (Summary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.records {
+		if r.ID != id {
+			continue
+		}
+		if r.Status == Running || r.Status == Completed {
+			return Summary{}, ErrInvalid
+		}
+		// The stored value is the endpoint exactly as proxyAddress normalises
+		// it, the same contract inventory entries follow. Credentials are not
+		// carried over from the previous value: silently keeping an old password
+		// in front of a new host or port is worse than making the operator paste
+		// the whole URL again, which is what the UI asks for.
+		proxy := ""
+		if strings.TrimSpace(rawURL) != "" {
+			address, ok := proxyAddress(strings.TrimSpace(rawURL))
+			if !ok {
+				return Summary{}, ErrInvalid
+			}
+			proxy = address
+		}
+		rs := append([]diskRecord(nil), s.records...)
+		rs[i].Candidate.ProxyURL = proxy
+		if err := s.save(rs, s.proxies); err != nil {
+			return Summary{}, err
+		}
+		s.records = rs
+		return summary(rs[i]), nil
+	}
+	return Summary{}, ErrNotFound
+}
+
+// uniqueProxyURL is the identity an inventory entry is deduplicated by.
+func uniqueProxyURL(raw string) string {
+	if address, ok := proxyAddress(raw); ok {
+		return address
+	}
+	return raw
 }
 
 // DeleteProxy removes inventory without changing previously assigned candidates.

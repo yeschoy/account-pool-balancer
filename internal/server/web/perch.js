@@ -500,14 +500,14 @@ async function loadPerchAutosignup() {
     $('#pc-auto-cards').innerHTML = cards.map(([label, value, sub]) => `<div class="card"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`).join('');
     $('#pc-auto-last-error').textContent = status.lastError ? '最近错误：' + pcRegistrationSafe(status.lastError) : '';
     const proxies = Array.isArray(data.proxies) ? data.proxies : [];
-    $('#pc-auto-proxy-rows').innerHTML = proxies.map((proxy) => `<tr><td>${esc(pcAutoProxy(proxy.proxy))}</td><td>${proxy.id ? `<button type="button" class="btn small danger pc-auto-proxy-delete" data-id="${esc(proxy.id)}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">暂无代理库存</td></tr>';
+    $('#pc-auto-proxy-rows').innerHTML = proxies.map((proxy) => `<tr><td>${esc(pcAutoProxy(proxy.proxy))}</td><td>${proxy.id ? `<button type="button" class="btn small pc-auto-proxy-edit" data-id="${esc(proxy.id)}" data-proxy="${esc(proxy.proxy)}">修改</button> <button type="button" class="btn small danger pc-auto-proxy-delete" data-id="${esc(proxy.id)}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">暂无代理库存</td></tr>';
     const eligible = new Set(rows.filter(pcAutoRegisterable).map((row) => row.id));
     pcAuto.rows = rows;
     pcAuto.picked.forEach((id) => { if (!eligible.has(id)) pcAuto.picked.delete(id); });
     pcAutoUpdateRegisterButtons();
     $('#pc-auto-pick-all').checked = eligible.size > 0 && pcAuto.picked.size === eligible.size;
     $('#pc-auto-register-message').textContent = status.registered ? `${num(status.registered)} 个已注册待入池` : '';
-    $('#pc-auto-rows').innerHTML = rows.map((row) => `<tr><td class="pick">${pcAutoRegisterable(row) ? `<input type="checkbox" class="pc-auto-pick" value="${esc(row.id)}" ${pcAuto.picked.has(row.id) ? 'checked' : ''} aria-label="选择 ${esc(row.login || '')}">` : ''}</td><td>${esc(row.login || '—')}</td><td><span class="badge ${row.status === 'failed' ? 'bad' : row.status === 'uncertain' ? 'warn' : row.status === 'completed' ? 'ok' : 'accent'}">${esc(pcAutoLabels[row.status] || row.status || '未知')}</span></td><td>${esc(pcAutoProxy(row.proxy))}</td><td>${esc(pcRegistrationSafe(row.detail))}${row.canRetrySave === true ? '<div class="error small">唯一会话仅保存在内存中，服务重启后将丢失。</div>' : ''}</td><td>${row.id && row.canRetrySave === true ? `<button type="button" class="btn small primary pc-auto-retry-save" data-id="${esc(row.id)}">重试保存</button> ` : ''}${row.id && row.status === 'uncertain' && row.canRevalidate === true ? `<button type="button" class="btn small pc-auto-activate" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">验证激活</button> ` : ''}${row.id && row.status === 'ready' ? `<button type="button" class="btn small primary pc-auto-import" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">确认入池</button> ` : ''}${row.id && row.status !== 'running' ? `<button type="button" class="btn small danger pc-auto-delete" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无候选账号</td></tr>';
+    $('#pc-auto-rows').innerHTML = rows.map((row) => `<tr><td class="pick">${pcAutoRegisterable(row) ? `<input type="checkbox" class="pc-auto-pick" value="${esc(row.id)}" ${pcAuto.picked.has(row.id) ? 'checked' : ''} aria-label="选择 ${esc(row.login || '')}">` : ''}</td><td>${esc(row.login || '—')}</td><td><span class="badge ${row.status === 'failed' ? 'bad' : row.status === 'uncertain' ? 'warn' : row.status === 'completed' ? 'ok' : 'accent'}">${esc(pcAutoLabels[row.status] || row.status || '未知')}</span></td><td>${esc(pcAutoProxy(row.proxy))}</td><td>${esc(pcRegistrationSafe(row.detail))}${row.canRetrySave === true ? '<div class="error small">唯一会话仅保存在内存中，服务重启后将丢失。</div>' : ''}</td><td>${row.id && row.canRetrySave === true ? `<button type="button" class="btn small primary pc-auto-retry-save" data-id="${esc(row.id)}">重试保存</button> ` : ''}${row.id && row.status === 'uncertain' && row.canRevalidate === true ? `<button type="button" class="btn small pc-auto-activate" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">验证激活</button> ` : ''}${row.id && row.canEditProxy === true ? `<button type="button" class="btn small pc-auto-candidate-proxy" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}" data-hasproxy="${row.hasProxy === true ? '1' : '0'}">修改代理</button> ` : ''}${row.id && row.status === 'ready' ? `<button type="button" class="btn small primary pc-auto-import" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">确认入池</button> ` : ''}${row.id && row.status !== 'running' ? `<button type="button" class="btn small danger pc-auto-delete" data-id="${esc(row.id)}" data-login="${esc(row.login || '')}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无候选账号</td></tr>';
     $('#pc-auto-error').textContent = '';
   } catch (e) {
     if (generation === pcAuto.generation) $('#pc-auto-error').textContent = '获取自动补号状态失败：' + pcRegistrationSafe(e.message);
@@ -636,6 +636,45 @@ async function pcAutoAddProxies(event) {
     pcAutoUpdateRunButton();
     $$('#pc-auto-proxy-form textarea, #pc-auto-proxy-add').forEach((el) => { el.disabled = false; });
   }
+}
+
+// pcAutoEditProxy rewrites one inventory entry in place. Candidates already
+// bound to the old address keep it: their proxy is what their registration ran
+// behind, so the dialog says so and points at the candidate row's own button.
+async function pcAutoEditProxy(id, current) {
+  if (pcAuto.busy) return;
+  await modal({ title: '修改库存代理', body: `<div class="form">
+    <label>当前</label><span>${esc(pcAutoProxy(current))}</span>
+    <label for="pc-auto-proxy-edit-url">新的代理地址</label>
+    <input id="pc-auto-proxy-edit-url" type="password" autocomplete="off" placeholder="socks5://用户:密码@主机:端口">
+    <span class="hint">只改库存这一条，ID 不变。已经绑定旧地址的候选账号不受影响；要换某个候选的出口，请在该候选行点「修改代理」。新地址会用于之后领取任务的候选账号。</span>
+  </div>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '保存', value: 'save', primary: true, action: async () => {
+    const url = $('#pc-auto-proxy-edit-url').value.trim();
+    if (!url) throw new Error('请填写完整代理地址');
+    await api('PUT', '/api/perch/autosignup/proxies/' + encodeURIComponent(id), { url });
+    $('#pc-auto-proxy-edit-url').value = '';
+  } }] });
+  await loadPerchAutosignup();
+}
+
+// pcAutoEditCandidateProxy changes one candidate's proxy, including clearing it
+// to the direct path.
+async function pcAutoEditCandidateProxy(id, login, hasProxy) {
+  if (pcAuto.busy) return;
+  await modal({ title: '修改候选账号代理' + (login ? ' — ' + login : ''), body: `<div class="form">
+    <label>当前</label><span>${hasProxy ? '已配置代理' : '直连（未使用代理）'}</span>
+    <label for="pc-auto-candidate-proxy">新的代理地址</label>
+    <input id="pc-auto-candidate-proxy" type="password" autocomplete="off" placeholder="socks5://用户:密码@主机:端口">
+    <label class="check"><input type="checkbox" id="pc-auto-candidate-direct"> 清除代理，改为直连</label>
+    <span class="hint">只影响这个候选之后的注册与激活请求；已经完成的注册和激活不会重放。运行中的候选需要等本轮结束。</span>
+  </div>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '保存', value: 'save', primary: true, action: async () => {
+    const direct = $('#pc-auto-candidate-direct').checked;
+    const proxy = $('#pc-auto-candidate-proxy').value.trim();
+    if (!direct && !proxy) throw new Error('请填写完整代理地址，或勾选改为直连');
+    await api('PUT', '/api/perch/autosignup/candidates/' + encodeURIComponent(id) + '/proxy', { proxyUrl: direct ? '' : proxy });
+    $('#pc-auto-candidate-proxy').value = '';
+  } }] });
+  await loadPerchAutosignup();
 }
 
 async function pcAutoDeleteProxy(id) {
@@ -825,6 +864,29 @@ async function pcShowImportResult(data) {
 }
 
 // ---- 批量 ----
+// pcBatchProxyDialog collects one proxy for a whole batch. It resolves to the
+// URL to set, an empty string to clear (direct), or null when cancelled — an
+// empty string is a real choice here, so it must not read as "cancelled".
+function pcBatchProxyDialog() {
+  return modal({
+    title: '批量修改代理',
+    body: `<div class="form">
+      <label for="pc-batch-proxy-url">新的代理地址</label>
+      <input id="pc-batch-proxy-url" type="password" autocomplete="off" placeholder="http:// 或 socks5://用户:密码@主机:端口">
+      <label class="check"><input type="checkbox" id="pc-batch-proxy-direct"> 清除代理，改为直连</label>
+      <span class="hint">所选账号会统一使用这一个代理（包括按状态筛选出的账号）。只影响之后的请求，已在途的请求不会中断；原凭据不会回填。</span>
+    </div>`,
+    buttons: [{ label: '取消', value: 'cancel' }, { label: '执行', value: 'save', primary: true, action: async () => {
+      if ($('#pc-batch-proxy-direct').checked) return;
+      if (!$('#pc-batch-proxy-url').value.trim()) throw new Error('请填写完整代理地址，或勾选改为直连');
+    } }],
+  }).then((v) => {
+    if (v !== 'save') return null;
+    if ($('#pc-batch-proxy-direct').checked) return '';
+    return $('#pc-batch-proxy-url').value.trim();
+  });
+}
+
 async function pcBatch() {
   const action = $('#pc-batch-action').value;
   if (!action) { toast('先选择要执行的批量操作'); return; }
@@ -841,12 +903,18 @@ async function pcBatch() {
     if (t === null) return;
     extra.tags = t.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
   }
+  if (action === 'proxy') {
+    const proxy = await pcBatchProxyDialog();
+    if (proxy === null) return;
+    extra.proxyUrl = proxy;
+  }
   const ids = Array.from(pcState.selected);
   if (scope === 'selected' && !ids.length) { toast('先勾选账号'); return; }
   const body = { action, filter: scope === 'selected' ? '' : scope, ids: scope === 'selected' ? ids : [], ...extra };
   const res = await api('POST', '/api/perch/batch', body);
+  const label = action === 'proxy' ? '修改代理' : action;
   const rows = (res.results || []).map((r) => `<tr><td class="small">${esc(r.email || r.id)}</td><td>${r.ok ? '<span class="badge ok">成功</span>' : '<span class="badge bad">失败</span>'}</td><td class="small">${esc(r.detail || '')}</td></tr>`).join('');
-  modal({ title: `批量${action}：成功 ${res.ok} · 失败 ${res.failed}`, wide: true,
+  modal({ title: `批量${label}：成功 ${res.ok} · 失败 ${res.failed}`, wide: true,
     body: `<div class="table-wrap"><table class="table"><thead><tr><th>账号</th><th>结果</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div>` });
   await loadPerchAccounts(true);
 }
@@ -1138,6 +1206,8 @@ document.addEventListener('DOMContentLoaded', () => {
   on('#pc-auto-candidates', 'submit', pcAutoSubmit);
   on('#pc-auto-proxy-form', 'submit', pcAutoAddProxies);
   on('#pc-auto-proxy-rows', 'click', (e) => {
+    const edit = e.target.closest('.pc-auto-proxy-edit');
+    if (edit) { pcAutoEditProxy(edit.dataset.id, edit.dataset.proxy).catch((err) => toast(err.message)); return; }
     const button = e.target.closest('.pc-auto-proxy-delete');
     if (button) pcAutoDeleteProxy(button.dataset.id);
   });
@@ -1150,6 +1220,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const remove = e.target.closest('.pc-auto-delete');
     if (remove) pcAutoDelete(remove.dataset.id, remove.dataset.login);
+    const proxy = e.target.closest('.pc-auto-candidate-proxy');
+    if (proxy) pcAutoEditCandidateProxy(proxy.dataset.id, proxy.dataset.login, proxy.dataset.hasproxy === '1').catch((err) => toast(err.message));
     const importButton = e.target.closest('.pc-auto-import');
     if (importButton) pcAutoImport(importButton.dataset.id, importButton.dataset.login);
     const retry = e.target.closest('.pc-auto-retry-save');

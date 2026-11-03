@@ -44,7 +44,9 @@ func (s *Server) registerPerch(mux *http.ServeMux, a func(string, http.HandlerFu
 	a("PUT /api/perch/autosignup/settings", s.apiPerchAutoSettings)
 	a("POST /api/perch/autosignup/candidates", s.apiPerchAutoCandidates)
 	a("POST /api/perch/autosignup/proxies", s.apiPerchAutoProxies)
+	a("PUT /api/perch/autosignup/proxies/{id}", s.apiPerchAutoUpdateProxy)
 	a("DELETE /api/perch/autosignup/proxies/{id}", s.apiPerchAutoDeleteProxy)
+	a("PUT /api/perch/autosignup/candidates/{id}/proxy", s.apiPerchAutoCandidateProxy)
 	a("DELETE /api/perch/autosignup/candidates/{id}", s.apiPerchAutoDeleteCandidate)
 	a("POST /api/perch/autosignup/candidates/{id}/import", s.apiPerchAutoImportCandidate)
 	a("POST /api/perch/autosignup/candidates/{id}/retry-save", s.apiPerchAutoRetrySave)
@@ -868,6 +870,9 @@ func (s *Server) apiPerchBatch(w http.ResponseWriter, r *http.Request) {
 			AccessToken  string `json:"accessToken"`
 			RefreshToken string `json:"refreshToken"`
 		} `json:"session"`
+		// ProxyURL is used by the proxy action: an address replaces each
+		// selected account's proxy, an empty string clears it to direct.
+		ProxyURL *string `json:"proxyUrl"`
 	}
 	if err := readBody(r, &in); err != nil {
 		apiError(w, http.StatusBadRequest, err)
@@ -914,6 +919,15 @@ func (s *Server) apiPerchBatch(w http.ResponseWriter, r *http.Request) {
 		s.batchSetTags(targets, in.Tags, &results)
 	case "session":
 		s.batchSetSession(targets, in.Session, &results)
+	case "proxy":
+		if in.ProxyURL == nil {
+			apiError(w, http.StatusBadRequest, errors.New("proxyUrl is required; send an empty string for direct"))
+			return
+		}
+		if err := s.batchSetProxy(targets, strings.TrimSpace(*in.ProxyURL), &results); err != nil {
+			apiError(w, http.StatusBadRequest, err)
+			return
+		}
 	default:
 		apiError(w, http.StatusBadRequest, fmt.Errorf("unknown action %q", in.Action))
 		return
@@ -1187,6 +1201,55 @@ func (s *Server) batchSetTags(ids []string, tags []string, out *[]perchBatchResu
 		}
 		*out = append(*out, r)
 	}
+}
+
+// batchSetProxy points every selected account at one proxy, or clears them to
+// direct when proxy is empty.
+//
+// The address is validated once, up front, so an invalid URL fails the whole
+// batch instead of writing to some accounts and then erroring. The change takes
+// effect for subsequent requests only: the transport is keyed by proxy URL, so a
+// request already in flight keeps the connection it opened with.
+func (s *Server) batchSetProxy(ids []string, proxy string, out *[]perchBatchResult) error {
+	if err := config.ValidateProxyURL(proxy); err != nil {
+		// The validation error names the offending character or scheme, never a
+		// credential: config.ValidateProxyURL does not echo userinfo.
+		return errors.New("代理地址无效：" + err.Error())
+	}
+	known := map[string]bool{}
+	for _, v := range s.perchAccountViews(s.cfg.Get()) {
+		known[v.ID] = true
+	}
+	set := map[string]bool{}
+	for _, id := range ids {
+		// An id that names no Perch account is reported as a failure rather
+		// than counted as a silent success.
+		if known[id] {
+			set[id] = true
+		}
+	}
+	_, err := s.cfg.Update(-1, func(c *config.Config) error {
+		for i := range c.Accounts {
+			a := &c.Accounts[i]
+			if a.Provider == config.ProviderPerch && set[a.ID] {
+				a.ProxyURL = proxy
+			}
+		}
+		return nil
+	})
+	for _, id := range ids {
+		r := perchBatchResult{ID: id, OK: err == nil && set[id]}
+		if err != nil {
+			r.Detail = err.Error()
+		} else if !set[id] {
+			r.Detail = "账号不存在或不是 Perch 账号"
+		}
+		if v, ok := s.perchViewOf(id); ok {
+			r.Email = v.Email
+		}
+		*out = append(*out, r)
+	}
+	return nil
 }
 
 func (s *Server) batchSetSession(ids []string, sess *struct {
