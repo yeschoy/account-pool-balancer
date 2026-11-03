@@ -755,3 +755,4 @@ func digestTools(tools []Tool) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+

@@ -431,15 +431,21 @@ func (c *Client) callOnce(ctx context.Context, url string, call ModelCall, body 
 			// The CLI attaches the ticket to every model call of the turn.
 			req.Header.Set(TicketHeader, call.Ticket.Token)
 		}
-		if plan != nil && plan.IsDelta {
-			// x-perch-call-delta only ever accompanies a body that actually
-			// carries messagesDelta. Sending it with a whole request is a
-			// combination the published client never produces, and the server
-			// answers 400 without echoing the header — which is how a refusal
-			// is detected below.
-			for k, v := range plan.Headers {
-				req.Header.Set(k, v)
-			}
+		if plan != nil && plan.key != "" {
+			// x-perch-call-delta is sent on EVERY model call, whole or delta,
+			// which is what the published client does: perchai-cli sets it
+			// unconditionally in its request builder (MYt's headers) and only
+			// the BODY differs between the two modes. Measured against
+			// perchai-cli@2.4.120: a whole request carries the header and the
+			// server answers with x-perch-call-held-*, which is how the client
+			// learns its first baseline.
+			//
+			// Withholding it on whole requests (the previous behaviour) meant
+			// the server never reported what it held, SettleDelta never
+			// confirmed a prefix, the cache stayed empty and every call went
+			// out whole — confirmedPrefixes=0 against a wholeRequests count
+			// that only grew.
+			req.Header.Set(DeltaHeader, "1")
 		}
 	}
 

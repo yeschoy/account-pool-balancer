@@ -155,8 +155,10 @@ func TestDeltaFirstCallIsWhole(t *testing.T) {
 	if len(msgs) != 3 {
 		t.Fatalf("whole request must carry all 3 messages, got %v", len(msgs))
 	}
-	if hdr.Get(DeltaHeader) != "" {
-		t.Fatal("a whole request must not carry x-perch-call-delta")
+	// A whole request still claims the header (that is what makes the server
+	// report held-*); what must be absent is the delta BODY.
+	if hdr.Get(DeltaHeader) != "1" {
+		t.Fatalf("whole request should claim the delta header, got %q", hdr.Get(DeltaHeader))
 	}
 }
 
@@ -234,8 +236,8 @@ func TestDeltaIsPerRun(t *testing.T) {
 		t.Fatalf("second call: %v", err)
 	}
 	body, hdr := f.last()
-	if hdr.Get(DeltaHeader) != "" {
-		t.Fatal("a different run must send the whole request")
+	if hdr.Get(DeltaHeader) != "1" {
+		t.Fatal("every run claims the delta header; the body is what must be whole")
 	}
 	if _, has := body["messagesDelta"]; has {
 		t.Fatal("a different run must not claim a delta")
@@ -272,8 +274,10 @@ func TestDeltaRefusalFallsBackToWhole(t *testing.T) {
 	}
 	// The last request is the whole one.
 	body, hdr := f.last()
+	// The fallback is a plain whole resend with no plan attached, so it makes
+	// no delta claim at all — the header is absent rather than "1".
 	if hdr.Get(DeltaHeader) != "" {
-		t.Fatal("the fallback request must be whole")
+		t.Fatalf("the fallback resend must make no delta claim, got %q", hdr.Get(DeltaHeader))
 	}
 	req, _ := body["request"].(map[string]any)
 	msgs, _ := req["messages"].([]any)
@@ -359,8 +363,8 @@ func TestDeltaExpires(t *testing.T) {
 		t.Fatalf("second: %v", err)
 	}
 	body, hdr := f.last()
-	if hdr.Get(DeltaHeader) != "" {
-		t.Fatal("an expired snapshot must not produce a delta")
+	if hdr.Get(DeltaHeader) != "1" {
+		t.Fatal("an expired snapshot still claims the header; its body is whole")
 	}
 	if _, has := body["messagesDelta"]; has {
 		t.Fatal("no messagesDelta after expiry")
@@ -386,7 +390,9 @@ func TestDeltaShrunkPrefixIsWhole(t *testing.T) {
 	}, 5*time.Second, nil); err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if _, hdr := f.last(); hdr.Get(DeltaHeader) != "" {
+	if body, hdr := f.last(); hdr.Get(DeltaHeader) != "1" {
+		t.Fatal("a shorter request still claims the header; its body is whole")
+	} else if _, has := body["messagesDelta"]; has {
 		t.Fatal("a shorter request must be sent whole")
 	}
 }
@@ -452,7 +458,9 @@ func TestDeltaTTLIsConfigurable(t *testing.T) {
 	}, 5*time.Second, nil); err != nil {
 		t.Fatalf("third: %v", err)
 	}
-	if _, hdr := f.last(); hdr.Get(DeltaHeader) != "" {
+	if body, hdr := f.last(); hdr.Get(DeltaHeader) != "1" {
+		t.Fatal("past-TTL request still claims the header; its body is whole")
+	} else if _, has := body["messagesDelta"]; has {
 		t.Fatal("a snapshot past the configured TTL must not produce a delta")
 	}
 }

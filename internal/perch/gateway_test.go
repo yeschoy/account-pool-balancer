@@ -96,16 +96,18 @@ func TestCallModelStreamsEvents(t *testing.T) {
 	if got[1] != "answer_delta:Hel" {
 		t.Fatalf("events = %v", got)
 	}
-	// The CLI headers the surface depends on. x-perch-call-delta is NOT one of
-	// them: that header belongs to the client's held-context delta mode, where
-	// the body carries messagesDelta and omits messages the server already
-	// holds. This envelope is always complete, so claiming delta mode would put
-	// "incremental" on the wire next to a full request — a combination the
-	// published client never produces. See
-	// .analysis/perch-cli-fidelity-report.md §4B.
+	// The CLI headers the surface depends on.
+	//
+	// x-perch-call-delta is deliberately absent here, but not because a whole
+	// request must omit it — the published client sends it on every call and
+	// the server answers with x-perch-call-held-*, which is how the first
+	// baseline is learned. It is absent because THIS envelope names no run id
+	// (`{}`), so there is no delta session to claim; see the guard in
+	// callOnce on plan.key. A call that does name a run sends the header even
+	// when its body is whole (TestDeltaFirstCallIsWhole pins that).
 	hdr := f.lastHdr.Load().(map[string]string)
 	if hdr["X-Perch-Call-Delta"] != "" {
-		t.Fatal("x-perch-call-delta must not be sent with a complete envelope")
+		t.Fatal("a call with no run id must not claim the delta header")
 	}
 	if hdr["Accept"] != "text/event-stream" {
 		t.Fatal("Accept must be text/event-stream")
@@ -290,5 +292,37 @@ func TestCallModelKeepsTokensApart(t *testing.T) {
 	_ = seen
 	if !got["token=tok-A"] || !got["token=tok-B"] {
 		t.Fatalf("answers = %v", got)
+	}
+}
+
+// A whole request must still carry x-perch-call-delta: 1.
+//
+// The published client sends the header on every model call and only the body
+// differs between whole and delta. It is the header that makes the server
+// report x-perch-call-held-length/-digest/-tools, and that report is the only
+// way this process can learn a first baseline: SettleDelta confirms a prefix
+// from the held headers of a WHOLE call. Omitting the header on whole requests
+// left the delta cache permanently empty, so no call could ever be a delta.
+func TestWholeRequestClaimsDeltaHeader(t *testing.T) {
+	f := newFakeModelCall(t)
+	f.script = sseDone("ok")
+	// A run id is what makes this a delta-capable session.
+	env := `{"runId":"run-1","request":{"messages":[{"role":"user","content":"hi"}]}}`
+	c := NewClient(f.srv.Client())
+
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "tok", Body: []byte(env),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+
+	hdr := f.lastHdr.Load().(map[string]string)
+	if got := hdr["X-Perch-Call-Delta"]; got != "1" {
+		t.Fatalf("x-perch-call-delta = %q on a whole request, want 1", got)
+	}
+	// And the body must NOT carry messagesDelta: it is whole.
+	body := f.lastBody.Load().(map[string]any)
+	if _, has := body["messagesDelta"]; has {
+		t.Fatal("a whole request must not carry messagesDelta")
 	}
 }

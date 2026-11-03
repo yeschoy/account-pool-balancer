@@ -1243,9 +1243,12 @@ func TestPerchTurnTicketIssuedThenPresented(t *testing.T) {
 	if got := env["runId"]; got != "cli-turn-1700000000000-abc123" {
 		t.Fatalf("envelope runId = %v, want the ticket's", got)
 	}
-	// A complete envelope must not claim the CLI's delta mode.
-	if got := hdr.Get("X-Perch-Call-Delta"); got != "" {
-		t.Fatalf("x-perch-call-delta = %q, want none", got)
+	// The delta header rides on every call that names a run, whole or delta:
+	// it is what makes the server report x-perch-call-held-*, the only way a
+	// first prefix baseline can be learned. Only the BODY differs between the
+	// two modes.
+	if got := hdr.Get("X-Perch-Call-Delta"); got != "1" {
+		t.Fatalf("x-perch-call-delta = %q, want 1", got)
 	}
 }
 
