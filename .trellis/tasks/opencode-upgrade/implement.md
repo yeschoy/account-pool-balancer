@@ -26,6 +26,7 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 
 ## Confirmed follow-up scope
 
+- Subsequent hardening and acceptance are limited to the paid Go subscription. Zen, anonymous lanes and free-tier models (including those advertised in Go catalogs) are out of scope for this round. Do not add cross-tier/free fallback, change existing other-pool behavior, or treat this scope confirmation as permission to mutate production. Retain free-tier fingerprint analysis as background only.
 - Gemini/Google protocol adaptation is deferred by explicit user instruction. Keep unknown protocols unroutable; do not guess Chat to increase model counts.
 - Recommended Go hardening and the six discouraged approaches, with reasons and legitimate alternatives, are recorded in docs/opencode-go-risk-audit.md section 10. This is analysis, not authorization to implement, mutate production, or run paid inference.
 
