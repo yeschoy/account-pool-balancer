@@ -24,6 +24,7 @@ import (
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/stats"
+	"account-pool-balancer/internal/thsignupstore"
 )
 
 type metadata struct {
@@ -76,6 +77,12 @@ type Server struct {
 	perch              *perchRuntime
 	perchRegistrations registrationManager
 	perchAuto          *perchAutoManager
+	// Token Harbor: the registration machine's store and its concurrency
+	// budget (both created on first use).
+	thStoreMu sync.Mutex
+	thSignups *thsignupstore.Store
+	thRegMu   sync.Mutex
+	thReg     *thRegistrar
 	// The surface-gate preamble is derived once and cached: it comes from a
 	// Perch client installed on this machine, or from settings.
 	perchPrefixMu     sync.Mutex
@@ -167,7 +174,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.logs, err = logstore.Open(filepath.Join(dataDir, "logs"), func() logstore.Limits {
 		l := s.cfg.Get().Logs
 		return logstore.Limits{RetentionDays: l.RetentionDays, MaxTotalBytes: int64(l.MaxTotalMB) << 20,
-			MaxRecords: map[string]int{"requests": l.MaxRequests, "errors": l.MaxErrors, "details": l.MaxDetails, "perch": 20000}}
+			MaxRecords: map[string]int{"requests": l.MaxRequests, "errors": l.MaxErrors, "details": l.MaxDetails, "perch": 20000, "tokenharbor": 20000}}
 	})
 	if err != nil {
 		return nil, err

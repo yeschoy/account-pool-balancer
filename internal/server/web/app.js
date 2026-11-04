@@ -10,11 +10,11 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'perch', 'opencode-zen', 'opencode-go'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'perch', 'tokenharbor', 'opencode-zen', 'opencode-go'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', perch: 'Perch', tokenharbor: 'TokenHarbor', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', perch: 'perch', tokenharbor: 'tokenharbor', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
@@ -199,12 +199,17 @@ function showApp() {
 // `pkeys` is Perch's own page for them rather than the proxy pools' `keys`.
 const PROXY_PAGES = ['overview', 'accounts', 'keys', 'routing', 'requests', 'errors', 'details'];
 const PERCH_PAGES = ['perch', 'paccounts', 'prequests', 'pregister', 'pautosignup', 'pkeys', 'psettings'];
+// Token Harbor is a plain key pool with a registration machine of its own;
+// its pages live in tokenharbor.js.
+const TH_PAGES = ['thoverview', 'thregister', 'thsettings'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
-  perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings() };
+  perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
+  thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings() };
 function go(page) {
   if (!pages[page]) page = 'overview';
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
+  if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
@@ -218,13 +223,20 @@ function go(page) {
 function renderPoolTabs() {
   $$('#pool-tabs .pool-tab').forEach((b) => b.classList.toggle('active', b.dataset.pool === pool));
   const isPerch = pool === 'perch';
+  const isTH = pool === 'tokenharbor';
   // the sidebar shows one pool's pages at a time. The `hidden` attribute is
   // what the markup uses, and .side nav a overrides it, so the class is what
   // actually toggles visibility.
   $$('#nav a[data-page]').forEach((a) => {
-    const own = PERCH_PAGES.includes(a.dataset.page);
-    a.classList.toggle('hidden', isPerch ? !own : own);
+    const page = a.dataset.page;
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page);
+    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page));
+    a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="tokenharbor"]').forEach((el) => {
+    el.classList.toggle('hidden', !isTH);
+    el.removeAttribute('hidden');
   });
   $$('#nav [data-pool-nav="perch"]').forEach((el) => {
     el.classList.toggle('hidden', !isPerch);
@@ -235,13 +247,14 @@ function renderPoolTabs() {
   $('#btn-add-device').classList.toggle('hidden', pool !== 'opendesign');
   $('#oc-batch').classList.toggle('hidden', !isOpenCode());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
-    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', tokenharbor: '余额 / 窗口（未知）', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', tokenharbor: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
     river: '还没有 River 账号。点「批量导入」粘贴 rv_ 开头的 key，每行一个。',
     ollama: '还没有 Ollama 账号。点「批量导入」一行一个 key（ollama.com/settings/keys 签发，本池的 key 不要求前缀），或「手动添加」。',
     modal: '还没有 Modal 账号。点「批量导入」一行一个 Proxy Token（wk-<id>.ws-<secret>，modal.com/settings/proxy-auth-tokens 创建），或「手动添加」。',
+    tokenharbor: '还没有 Token Harbor 账号。可用「TokenHarbor 注册机」批量注册，或点「批量导入」粘贴 thk_live_ 开头的 Key（每行一个，天/周/月花费上限可留空）。Token Harbor 按出口地区鉴权，请给每个账号配代理。',
     'opencode-zen': '添加 Zen API Key；独立分组，不会推断或混入 Go 池。请先在设置启用 OpenCode。',
     'opencode-go': '添加 Go API Key；额度是订阅共享百分比，不对多个 Key 求和。请先在设置启用 OpenCode。',
   }[pool] || '还没有账号。点「设备授权添加」，在已登录该账号的浏览器里批准即可。';
@@ -257,7 +270,7 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   $('#acc-group-filter').value = '';
   renderPoolTabs();
   // switching pools lands on that pool's first page
-  const valid = pool === 'perch' ? PERCH_PAGES : PROXY_PAGES;
+  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? TH_PAGES : PROXY_PAGES;
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });

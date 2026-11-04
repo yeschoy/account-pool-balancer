@@ -405,6 +405,12 @@ func (c *Config) RuntimeBase(a Account) string {
 		// Perch is not reached at <base>/v1/...: attemptPerch posts the
 		// envelope to PerchBase + /api/perch-terminal/model-call instead.
 		return c.Upstream.PerchBase
+	case ProviderTokenHarbor:
+		// Token Harbor is OpenAI-compatible at <base>/v1.
+		if strings.TrimSpace(c.TokenHarbor.BaseURL) != "" {
+			return strings.TrimRight(strings.TrimSpace(c.TokenHarbor.BaseURL), "/")
+		}
+		return "https://tokenharbor.ai/v1"
 	}
 	return c.Upstream.RuntimeBase
 }
@@ -599,6 +605,8 @@ type TokenHarbor struct {
 	MailTimeoutSec int `json:"mailTimeoutSec"`
 	// ModelSyncSec re-reads /v1/models this often; 0 disables.
 	ModelSyncSec int `json:"modelSyncSec"`
+	// Group is the pool group registrations join when a task names none.
+	Group string `json:"group"`
 }
 
 // TokenHarborDefaults returns the non-zero defaults the admin form shows.
@@ -612,6 +620,7 @@ func TokenHarborDefaults() TokenHarbor {
 		RegisterConcurrency: 2,
 		MailTimeoutSec:      240,
 		ModelSyncSec:        1800,
+		Group:               TokenHarborGroup,
 	}
 }
 
@@ -1411,6 +1420,11 @@ func (c *Config) Normalize() error {
 			}
 		} else if a.PerchUserID != "" {
 			return fmt.Errorf("accounts[%s]: only perch accounts carry a Supabase user id", a.ID)
+		}
+		if a.Provider == ProviderTokenHarbor && a.ProxyURL == "" && c.TokenHarbor.ProxyURL == "" {
+			// Not an error: a self-hosted deployment in a served region is
+			// legitimate. The console warns instead (see the pool tab).
+			_ = a
 		}
 		if a.ControlKey != "" && !strings.HasPrefix(a.ControlKey, "vela_ctrl_") {
 			return fmt.Errorf("accounts[%s]: control key must start with vela_ctrl_", a.ID)

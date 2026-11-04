@@ -150,6 +150,10 @@ var Filters = map[string][]string{
 	// records are written by internal/server/perch_log.go and only name
 	// accounts and outcomes.
 	"perch": {"provider", "accountId", "event", "userId", "outcome", "kind"},
+	// tokenharbor is the Token Harbor pool's registration log: one line per
+	// stage per mailbox. Written by internal/server/tokenharbor_log.go; no
+	// record carries a password, a key or a session cookie.
+	"tokenharbor": {"provider", "email", "event", "kind", "outcome"},
 }
 
 func recordLimit(kindName string) int {
