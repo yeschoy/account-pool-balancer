@@ -4,6 +4,10 @@
 
 源码对照和许可证决策：[opencode-audit.md](opencode-audit.md)。
 
+后续状态：已获用户授权在生产开启 Go 并验证真实模型/额度读取，仍未做真实推理。
+Go 设置、指纹与风险控制的专项对照及当前配置见
+[opencode-go-risk-audit.md](opencode-go-risk-audit.md)；下文原轮次的“无真实凭证/未验证 usage”记录是历史边界，不代表这次后续核验未进行。
+
 ## 1. 实际完成
 
 - 在原有 config/account/group/client-key/import-key/pool 链路中加入 `opencode-zen`、`opencode-go`，不是第二套系统。

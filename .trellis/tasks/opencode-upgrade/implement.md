@@ -20,6 +20,8 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 - [x] Subsequent user-authorized OVH deployment: actual Docker build, offline data-copy preflight, original data mount live restart, credentials/settings preservation and public browser asset verification passed. Local Docker daemon remains untouched. See docs/ovh-deployment.md.
 - [ ] Exhaustive reading/review of every source file in both repositories.
 - [ ] Low-latency, full-fidelity cross-protocol streaming and unsupported advanced field/content combinations.
-- [ ] Real credentials, usage endpoint verification, five official client flows, sustained scale and production upgrade/rollback qualification.
+- [x] Subsequent user-authorized production Go enablement and real model/usage query: current account ok, 28 catalog / 27 protocol-routable models, fresh rolling/weekly/monthly windows; no inference. See docs/ovh-deployment.md.
+- [x] Read-only Go settings/fingerprint/risk comparison against pinned reference and current official policy; findings and unimplemented recommendations in docs/opencode-go-risk-audit.md and research/go-settings-fingerprint-risk.md.
+- [ ] Real keyed inference, five official client flows, sustained scale and production upgrade/rollback qualification.
 
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.
