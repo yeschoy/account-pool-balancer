@@ -117,7 +117,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.OnUpdate = func(id string) {
 		s.metaDirty.Store(true)
-		if a, ok := s.cfg.Get().Account(id); ok && config.IsOpenCode(a.Provider) {
+		if a, ok := s.cfg.Get().Account(id); ok && config.StrictResponses(a.Provider) {
 			s.resetModels()
 		}
 	}
@@ -147,6 +147,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
+			if a, ok := store.Get().Account(id); ok && a.Provider == config.ProviderTokenHarbor && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
+				continue
+			}
 			quotas[id] = q
 		}
 	}
@@ -203,7 +206,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
 	s.rebindPerch(next)
-	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -216,6 +219,10 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
+		if a.Provider == config.ProviderTokenHarbor && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+			s.quota.Forget(a.ID)
+			s.pool.Invalidate(a.ID, false)
+		}
 		capabilitiesChanged := old.OpenCode.CapabilitiesURL != next.OpenCode.CapabilitiesURL || old.OpenCode.ZenDocsURL != next.OpenCode.ZenDocsURL || old.OpenCode.GoDocsURL != next.OpenCode.GoDocsURL || !reflect.DeepEqual(old.OpenCode.ProtocolBases(a.Provider), next.OpenCode.ProtocolBases(n.Provider))
 		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {
 			s.quota.Forget(a.ID)

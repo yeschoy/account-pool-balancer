@@ -21,6 +21,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/logstore"
+	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/perchstore"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/pricing"
@@ -337,6 +338,8 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				}
 			case config.ProviderOllama:
 				v.QuotaFresh = q.FreshOllama(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
+			case config.ProviderTokenHarbor:
+				v.QuotaFresh = q.FreshCatalog(now, time.Duration(max(cfg.Quota.StaleSec, cfg.TokenHarbor.ModelSyncSec*2))*time.Second)
 			case config.ProviderModal:
 				// no quota endpoint: the Endpoint catalogue is all that is read
 				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
@@ -594,7 +597,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, a := range added {
 			key := a.Provider + "\x00" + a.RuntimeKey
-			if config.IsOpenCode(a.Provider) && seen[key] {
+			if config.StrictResponses(a.Provider) && seen[key] {
 				continue
 			}
 			c.Accounts = append(c.Accounts, a)
@@ -649,8 +652,8 @@ func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
-	if config.IsOpenCode(a.Provider) {
-		apiError(w, http.StatusForbidden, errors.New("OpenCode upstream credentials are write-only"))
+	if config.StrictResponses(a.Provider) {
+		apiError(w, http.StatusForbidden, errors.New("upstream credentials are write-only"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey})
@@ -676,6 +679,9 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.httpClient(a.ProxyURL)
+	if a.Provider == config.ProviderTokenHarbor {
+		client = opencode.NoRedirect(client)
+	}
 	out := map[string]any{}
 
 	if a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey) {
@@ -727,12 +733,17 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 				model = "deepseek-ai/DeepSeek-V4.1-Flash"
 			case config.ProviderOllama:
 				model = "gpt-oss:20b"
-			case config.ProviderModal:
+			case config.ProviderModal, config.ProviderTokenHarbor:
+				// Use the account catalog, never guess a model for these pools.
 				// a Modal model is an Endpoint hostname that differs per
 				// workspace: the account's own catalogue is the only source
 				model = s.firstCatalogModel(a)
 				if model == "" {
-					out["inference"] = map[string]any{"ok": false, "error": "没有读到该 token 的 Endpoint 列表（/v1/models）：Modal 的模型名就是 Endpoint 的 hostname，无法猜默认值，请手动填写"}
+					message := "没有读到该 token 的 Endpoint 列表（/v1/models）：Modal 的模型名就是 Endpoint 的 hostname，无法猜默认值，请手动填写"
+					if a.Provider == config.ProviderTokenHarbor {
+						message = "没有读到该账号的模型目录（/v1/models），不能猜默认模型，请刷新目录或手动填写"
+					}
+					out["inference"] = map[string]any{"ok": false, "error": message}
 					writeJSON(w, http.StatusOK, out)
 					return
 				}
@@ -1101,15 +1112,16 @@ func (s *Server) apiDeleteClientKey(w http.ResponseWriter, r *http.Request) {
 // ---- settings ----
 
 type settingsDoc struct {
-	Revision   int64             `json:"revision"`
-	Upstream   config.Upstream   `json:"upstream"`
-	Routing    config.Routing    `json:"routing"`
-	Quota      config.Quota      `json:"quota"`
-	Logs       config.Logs       `json:"logs"`
-	Pricing    pricing.Config    `json:"pricing"`
-	ErrorRules []rules.ErrorRule `json:"errorRules"`
-	RetryRules []rules.RetryRule `json:"retryRules"`
-	OpenCode   *config.OpenCode  `json:"opencode,omitempty"`
+	Revision    int64                `json:"revision"`
+	Upstream    config.Upstream      `json:"upstream"`
+	Routing     config.Routing       `json:"routing"`
+	Quota       config.Quota         `json:"quota"`
+	Logs        config.Logs          `json:"logs"`
+	Pricing     pricing.Config       `json:"pricing"`
+	ErrorRules  []rules.ErrorRule    `json:"errorRules"`
+	RetryRules  []rules.RetryRule    `json:"retryRules"`
+	OpenCode    *config.OpenCode     `json:"opencode,omitempty"`
+	TokenHarbor *tokenHarborSettings `json:"tokenHarbor,omitempty"`
 }
 
 func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
@@ -1118,7 +1130,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1134,14 +1146,20 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
 		c.Upstream, c.Quota, c.Logs = in.Upstream, in.Quota, in.Logs
-		if !config.IsOpenCode(prov) {
+		if !config.StrictResponses(prov) {
 			c.Routing = in.Routing
 		}
 		c.Pricing = in.Pricing
 		if in.OpenCode != nil {
 			c.OpenCode = *in.OpenCode
 		}
+		if in.TokenHarbor != nil && prov == config.ProviderTokenHarbor {
+			c.TokenHarbor.BaseURL, c.TokenHarbor.ModelSyncSec = in.TokenHarbor.BaseURL, in.TokenHarbor.ModelSyncSec
+		}
 		switch prov {
+		case config.ProviderTokenHarbor:
+			c.TokenHarbor.Routing = &in.Routing
+			c.TokenHarborErrorRules, c.TokenHarborRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderOpenCodeZen:
 			c.OpenCode.ZenRouting = &in.Routing
 			c.OpenCode.ZenErrorRules, c.OpenCode.ZenRetryRules = in.ErrorRules, in.RetryRules
@@ -1368,7 +1386,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	seenWS := map[string]bool{}
 	windows := map[int64]*windowTotal{}
 	wallet, walletKnown := 0.0, 0
-	authFailed := 0
+	authFailed, bindings := 0, 0
 	// Ollama credits are per key (a team shares one balance, which this can't
 	// dedupe), so they are summed per account and reported apart
 	ollamaCredits, ollamaKnown := 0.0, 0
@@ -1376,6 +1394,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	modalEndpoints, modalKnown := 0, 0
 	for _, v := range views {
 		statusCount[v.Runtime.Status]++
+		bindings += v.Runtime.Bindings
 		groups[v.Group]++
 		q := v.Quota
 		if q == nil {
@@ -1464,13 +1483,13 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		"modalAccounts":  modalKnown,
 		"authFailed":     authFailed,
 		"workspaces":     len(seenWS),
-		"bindings":       s.pool.BindingCount(),
+		"bindings":       bindings,
 		"stats":          s.stats.SummaryFor(want),
 		"logsDropped":    s.logs.Dropped(),
 		"clientKeys":     len(cfg.ClientKeys),
 		"provider":       want,
 		"uptimeSec":      int64(time.Since(s.started).Seconds()),
-		"strategy":       cfg.Routing.Strategy,
+		"strategy":       cfg.ForProvider(want).Routing.Strategy,
 	})
 }
 

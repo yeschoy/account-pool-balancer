@@ -171,6 +171,14 @@ func (c *Config) ForProvider(provider string) *Config {
 		r = c.OpenCode.ZenRouting
 	case ProviderOpenCodeGo:
 		r = c.OpenCode.GoRouting
+	case ProviderTokenHarbor:
+		r = c.TokenHarbor.Routing
+		if r == nil {
+			out := *c
+			out.Routing.Sticky = true
+			out.Routing.OnBindingBusy = "reject"
+			return &out
+		}
 	}
 	if r == nil {
 		return c

@@ -8,15 +8,16 @@ import (
 )
 
 type Bucket struct {
-	Minute    int64 `json:"m"`
-	Requests  int64 `json:"r"`
-	Success   int64 `json:"s"`
-	Failed    int64 `json:"f"`
-	Cancelled int64 `json:"c"`
-	Input     int64 `json:"i"`
-	Output    int64 `json:"o"`
-	Cached    int64 `json:"k"`
-	Prompt    int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
+	Minute        int64 `json:"m"`
+	Requests      int64 `json:"r"`
+	Success       int64 `json:"s"`
+	Failed        int64 `json:"f"`
+	Cancelled     int64 `json:"c"`
+	Input         int64 `json:"i"`
+	Output        int64 `json:"o"`
+	Cached        int64 `json:"k"`
+	CacheCreation int64 `json:"kw,omitempty"`
+	Prompt        int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
 	// CachePrompt and CacheCached cover only requests with both input and cache usage.
 	CachePrompt        int64   `json:"cp,omitempty"`
 	CacheCached        int64   `json:"ck,omitempty"`
@@ -33,6 +34,7 @@ func (b *Bucket) add(o Bucket) {
 	b.Input += o.Input
 	b.Output += o.Output
 	b.Cached += o.Cached
+	b.CacheCreation += o.CacheCreation
 	b.Prompt += o.Prompt
 	b.CachePrompt += o.CachePrompt
 	b.CacheCached += o.CacheCached
@@ -88,6 +90,7 @@ type Sample struct {
 	Result           string // success | failed | client_cancelled
 	Input, Output    *int64
 	Cached           *int64
+	CacheCreation    *int64
 	Prompt           int64 // total prompt tokens, cache hits included
 	Currency         string
 	Cost             float64
@@ -142,7 +145,7 @@ func (s *Stats) Record(x Sample) {
 	for _, y := range []struct {
 		p   *int64
 		dst *int64
-	}{{x.Input, &d.Input}, {x.Output, &d.Output}, {x.Cached, &d.Cached}} {
+	}{{x.Input, &d.Input}, {x.Output, &d.Output}, {x.Cached, &d.Cached}, {x.CacheCreation, &d.CacheCreation}} {
 		if y.p != nil {
 			*y.dst = *y.p
 		}

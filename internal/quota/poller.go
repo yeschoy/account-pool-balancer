@@ -44,9 +44,10 @@ type Snapshot struct {
 	// Catalog is the runtime key's own /v1/models: model id → enabled.
 	// Which models a plan may use is read here, not from the pricing page,
 	// whose display names don't match the API ids.
-	Catalog      map[string]bool `json:"catalog,omitempty"`
-	CatalogAt    time.Time       `json:"catalogAt,omitzero"`
-	CatalogError string          `json:"catalogError,omitempty"`
+	Catalog       map[string]bool `json:"catalog,omitempty"`
+	CatalogAt     time.Time       `json:"catalogAt,omitzero"`
+	CatalogError  string          `json:"catalogError,omitempty"`
+	CatalogSource string          `json:"catalogSource,omitempty"`
 
 	// Aliases maps a model id this account was asked for that it serves by
 	// another name, asked id → the id to send upstream. Modal's Shared
@@ -784,6 +785,9 @@ func (p *Poller) dispatch(ctx context.Context) {
 		if config.IsOpenCode(a.Provider) && !cfg.OpenCode.Enabled {
 			continue
 		}
+		if a.Provider == config.ProviderTokenHarbor && cfg.TokenHarbor.ModelSyncSec == 0 && !p.urgent[a.ID] {
+			continue
+		}
 		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && !p.urgent[a.ID]) {
 			continue
 		}
@@ -833,6 +837,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 	defer p.finish(a.ID)
 	if config.IsOpenCode(a.Provider) {
 		return p.fetchOpenCodeForce(ctx, p.Cfg(), a, true)
+	}
+	if a.Provider == config.ProviderTokenHarbor {
+		return p.fetchTokenHarbor(ctx, p.Cfg(), a)
 	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
@@ -919,6 +926,8 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
 	switch a.Provider {
+	case config.ProviderTokenHarbor:
+		return p.fetchTokenHarbor(ctx, cfg, a)
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 		return p.fetchOpenCode(ctx, cfg, a)
 	case config.ProviderOllama:
@@ -1183,6 +1192,14 @@ func (p *Poller) store(id string, s *Snapshot) { // an account deleted while it 
 		return
 	}
 	p.mu.Lock()
+	if s.CatalogSource != "" {
+		cfg := p.Cfg()
+		a, ok := cfg.Account(id)
+		if !ok || ResponseBindingSource(cfg, a) != s.CatalogSource {
+			p.mu.Unlock()
+			return
+		}
+	}
 	p.snaps[id] = s
 	p.mu.Unlock()
 	if p.OnUpdate != nil {

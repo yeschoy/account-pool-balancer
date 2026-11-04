@@ -10,6 +10,8 @@
 
 新增 **OpenCode Zen / Go 授权 Key 号池**，在原有后台、分组和调度器上增量接入，默认关闭。支持套餐独立目录/设置、原生三协议、显式回退及 Go usage；受限跨协议转换另行开关，流为缓冲输出，不承诺完整客户端能力。详见 [使用、配置与验收边界](docs/opencode.md) 和 [源码对比审计 / GPL 处理](docs/opencode-audit.md)。真实上游及五种客户端尚未实机验收。
 
+新增 **Token Harbor 号池**：原生 Chat Completions / Responses（Codex）/ Messages（Claude Code），按会话与缓存标识尽量固定同一 key，独立分组/路由/错误规则，支持概览、请求/错误日志和缓存读取/写入统计。不强制跨协议兼容、不保证上游内部缓存命中；余额未知。见 [接入与边界](docs/tokenharbor.md)。
+
 单个 Go 二进制，无外部依赖，无数据库。
 
 ## 快速开始

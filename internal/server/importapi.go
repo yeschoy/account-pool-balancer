@@ -338,8 +338,8 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 		declared = ik.Provider
 	}
 	provider := config.ResolveProvider(declared, runtimeKey)
-	if (config.IsOpenCode(ik.Provider) || config.IsOpenCode(provider)) && provider != ik.Provider {
-		return importResult{Status: "error", Name: name, Error: "OpenCode import key cannot import into a different provider/tier"}
+	if (config.StrictResponses(ik.Provider) || config.StrictResponses(provider)) && provider != ik.Provider {
+		return importResult{Status: "error", Name: name, Error: "import key cannot import into a different provider/tier"}
 	}
 	if group == "" {
 		group = ik.Group

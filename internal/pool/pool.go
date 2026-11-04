@@ -284,9 +284,9 @@ func (p *Pool) classLocked(cfg *config.Config, model string, now time.Time) stri
 	class := "unknown"
 	inCatalog := false
 	for _, a := range cfg.Accounts {
-		if config.IsOpenCode(a.Provider) {
+		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor {
 			continue
-		} // OpenDesign funding classes must not learn from OpenCode catalogs
+		} // Independent catalogs must not teach OpenDesign funding classes
 		snap := p.quota(a.ID)
 		if c := snap.ModelClass(model); c != "unknown" {
 			class = c
@@ -607,8 +607,8 @@ func (p *Pool) Bind(cfg *config.Config, key, accountID string) {
 	p.deleteBindingLocked(key)
 	p.gen++
 	b := &binding{key: key, accountID: accountID, explicit: true, expiresAt: now.Add(ttl(cfg, true)), confirmed: true, generation: p.gen}
-	if a, ok := cfg.Account(accountID); ok && config.IsOpenCode(a.Provider) {
-		b.source = quota.OpenCodeSource(cfg, a)
+	if a, ok := cfg.Account(accountID); ok && config.StrictResponses(a.Provider) {
+		b.source = quota.ResponseBindingSource(cfg, a)
 		p.dirty = true
 	}
 	p.bindings[key] = p.lru.PushFront(b)
@@ -776,7 +776,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				d.BindingResult = "invalidated"
 			} else {
 				a := cands[idx].a
-				if req.RequireBinding && b.source != "" && b.source != quota.OpenCodeSource(cfg, a) {
+				if req.RequireBinding && b.source != "" && b.source != quota.ResponseBindingSource(cfg, a) {
 					return nil, &BindingError{Reason: "credential or proxy changed"}
 				}
 				ok, by, ra := p.admitLocked(a, now)

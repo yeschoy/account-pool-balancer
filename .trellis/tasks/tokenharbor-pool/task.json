@@ -1,0 +1,9 @@
+{
+  "name": "Token Harbor 号池管理与缓存亲和",
+  "status": "completed",
+  "base_commit": "b586406",
+  "execution": "direct",
+  "authorization": "用户要求完善实现；按项目复杂任务约定使用 Trellis，不启动子代理，不部署",
+  "artifacts": ["prd.md", "design.md", "implement.md", "research.md", "validation.md"],
+  "result": "原生协议、缓存亲和、账号/密钥管理、目录、概览/日志完成；全仓 test/race/vet/build 和本地浏览器验收通过；未部署/未真实推理"
+}

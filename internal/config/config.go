@@ -221,7 +221,7 @@ func ResolveProvider(declared, key string) string {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
-	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal:
+	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor:
 		return inferred
 	}
 	if declared == "" {
@@ -395,6 +395,8 @@ func (c *Config) RuntimeBase(a Account) string {
 		return c.OpenCode.ZenBase
 	case ProviderOpenCodeGo:
 		return c.OpenCode.GoBase
+	case ProviderTokenHarbor:
+		return c.TokenHarbor.BaseURL
 	case ProviderRiver:
 		return c.Upstream.RiverBase
 	case ProviderOllama:
@@ -572,9 +574,10 @@ type Logs struct {
 
 // Perch holds the Perch pool's settings: its session keeper and its monitor.
 // TokenHarbor holds the tokenharbor.ai pool's settings. It is deliberately
-// small: the pool is an OpenAI-compatible key pool, and the only special part
-// is the registration machine that mints those keys.
+// small: native Chat/Responses/Messages share the existing scheduler. Registration
+// credentials are never projected through the inference settings API.
 type TokenHarbor struct {
+	Routing *Routing `json:"routing,omitempty"`
 	// BaseURL is the OpenRouter-style API root ("https://tokenharbor.ai/v1").
 	BaseURL string `json:"baseUrl"`
 	// ProxyURL is the egress registrations use when a task row names none.
@@ -1294,6 +1297,9 @@ func (c *Config) Normalize() error {
 	if err := c.Perch.normalize(); err != nil {
 		return err
 	}
+	if err := c.normalizeTokenHarbor(); err != nil {
+		return err
+	}
 	if err := c.OpenCode.normalize(); err != nil {
 		return err
 	}
@@ -1622,15 +1628,16 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
+		nested.TokenHarbor.Routing = nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
-			return fmt.Errorf("opencode routing: %w", err)
+			return fmt.Errorf("provider routing: %w", err)
 		}
 		*r = nested.Routing
 	}

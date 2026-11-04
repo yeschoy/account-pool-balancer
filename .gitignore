@@ -24,6 +24,7 @@ pnpm-debug.log*
 
 # 压测产物
 /artifacts/
+/.tmp-tokenharbor/
 
 # Go 构建缓存（在仓库内构建时使用）
 /.gocache/

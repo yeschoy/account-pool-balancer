@@ -318,6 +318,8 @@ func poolPathOK(provider, path string) bool {
 	switch provider {
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 		return opencode.FromPath(path) != "" || path == "/v1/models"
+	case config.ProviderTokenHarbor:
+		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
 	case config.ProviderPerch:
 		return perchPath(path)
 	case config.ProviderRiver:
@@ -407,12 +409,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		anthropic := proto == "anthropic"
 		rec.CacheRate = cacheRate(rec.InputTokens, rec.CachedTokens, anthropic)
-		if config.IsOpenCode(rec.Provider) && anthropic && rec.InputTokens != nil && rec.CacheCreationTokens != nil {
+		if config.StrictResponses(rec.Provider) && anthropic && rec.InputTokens != nil && rec.CacheCreationTokens != nil {
 			inputWithWrites := *rec.InputTokens + *rec.CacheCreationTokens
 			rec.CacheRate = cacheRate(&inputWithWrites, rec.CachedTokens, true)
 		}
 		var cost float64
-		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok {
+		// The shared price table has no cache-write price. Do not report an
+		// understated Token Harbor bill when the upstream measured writes.
+		unpricedWrites := rec.Provider == config.ProviderTokenHarbor && rec.CacheCreationTokens != nil && *rec.CacheCreationTokens > 0
+		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok && !unpricedWrites {
 			cost, rec.Cost, rec.Currency = c, &c, cur
 		}
 		s.logs.Append("requests", rec.TS, rec)
@@ -433,12 +438,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			if anthropic && rec.CachedTokens != nil {
 				prompt += *rec.CachedTokens
 			}
-			if config.IsOpenCode(rec.Provider) && anthropic && rec.CacheCreationTokens != nil {
+			if config.StrictResponses(rec.Provider) && anthropic && rec.CacheCreationTokens != nil {
 				prompt += *rec.CacheCreationTokens
 			}
 		}
 		s.stats.Record(stats.Sample{AccountID: rec.AccountID, Provider: rec.Provider, Proxy: rec.Proxy, Model: rec.Model, Result: result, Input: rec.InputTokens, Output: rec.OutputTokens,
-			Cached: rec.CachedTokens, Prompt: prompt, Currency: rec.Currency, Cost: cost})
+			Cached: rec.CachedTokens, CacheCreation: rec.CacheCreationTokens, Prompt: prompt, Currency: rec.Currency, Cost: cost})
 		s.statsDirty.Store(true)
 	}
 
@@ -484,15 +489,18 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Model, _ = obj["model"].(string)
 	rec.Stream, _ = obj["stream"].(bool)
-	if !config.IsOpenCode(rec.Provider) {
+	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
 	identityScope := ck.Group
-	if config.IsOpenCode(rec.Provider) {
+	if config.StrictResponses(rec.Provider) {
 		identityScope += "\x00" + ck.ID
 	}
 	ident := s.identity(cfg, identityScope, r.Header, obj)
-	stateful := config.IsOpenCode(rec.Provider) && lookup(obj, "previous_response_id") != ""
+	if rec.Provider == config.ProviderTokenHarbor {
+		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
+	}
+	stateful := config.StrictResponses(rec.Provider) && lookup(obj, "previous_response_id") != ""
 	routeGroup := ck.Group
 	fallbackGroup := cfg.OpenCode.FallbackGroup(rec.Provider)
 	usedFallback := false
@@ -531,7 +539,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			Group: routeGroup, Model: rec.Model, RequestID: rid,
 			Affinity: ident.Fingerprint, Explicit: ident.Confidence == "explicit",
 			Excluded: excluded, Wait: wait,
-			RequireBinding: stateful, PreserveBinding: config.IsOpenCode(rec.Provider),
+			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider),
 		})
 		if err != nil {
 			if r.Context().Err() != nil {
@@ -659,7 +667,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		att.Action, att.RuleID = ev.action, ev.ruleID
 		rec.Attempts = append(rec.Attempts, att)
 		last = res
-		if !config.IsOpenCode(rec.Provider) && res.status == http.StatusBadRequest && strippedTools < 3 {
+		if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && res.status == http.StatusBadRequest && strippedTools < 3 {
 			// the upstream refuses a hosted tool (e.g. web_search) on this route:
 			// drop that tool type and ask the same account again
 			if nb, ok := stripUnsupportedTool(body, res.body); ok {
@@ -775,6 +783,12 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	switch res.terminal {
 	case "upstream_http", "upstream_envelope":
 		st := res.status
+		if acct.Provider == config.ProviderTokenHarbor && rules.IsTokenHarborSpendConfirmation(st, redacted) {
+			res.ruleID, res.category = "tokenharbor-spend-confirmation", "spend-confirmation"
+			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = res.ruleID, rules.ActionIgnore, "none", "provider-policy", "stop", res.category
+			s.logs.Append("errors", el.TS, el)
+			return ev
+		}
 		if config.IsOpenCode(acct.Provider) && rules.IsOpenCodePolicyRefusal(st, redacted) {
 			res.downstreamStatus, res.ruleID, res.category = 403, acct.Provider+"-policy-refusal", "policy"
 			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = res.ruleID, rules.ActionIgnore, "none", "provider-policy", "stop", "policy"
@@ -889,14 +903,14 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	case "compatibility":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
-		if config.IsOpenCode(acct.Provider) {
+		if config.StrictResponses(acct.Provider) {
 			ev.switchAccount = !res.sent.Load()
 			sample, el.HealthAction = false, "none"
 		}
 	case "proxy", "network":
 		// never sent: another account can take it without double billing
 		ev.switchAccount = !res.sent.Load()
-		if config.IsOpenCode(acct.Provider) && res.category == "proxy" {
+		if config.StrictResponses(acct.Provider) && res.category == "proxy" {
 			sample, el.HealthAction = false, "none"
 		}
 	}
@@ -922,6 +936,9 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 	w.Header().Set("X-Attempts", strconv.Itoa(attempts))
 	st := res.status
 	switch {
+	case res.ruleID == "tokenharbor-spend-confirmation":
+		// The caller must see the actual approval prompt. Do not hide it behind
+		// a generic account-unavailable error or rotate keys to avoid consent.
 	case res.terminal == "timeout":
 		writeLocalError(w, proto, http.StatusGatewayTimeout, "api_error", "upstream_timeout", "upstream timed out", 0)
 		return http.StatusGatewayTimeout
@@ -1037,7 +1054,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	trace := &httptrace.ClientTrace{WroteHeaders: func() {
 		// Partial body writes are uncertain too: once headers left the socket,
 		// OpenCode must not replay a network failure on another account.
-		if config.IsOpenCode(acct.Provider) {
+		if config.StrictResponses(acct.Provider) {
 			markSent()
 		}
 	}, WroteRequest: func(i httptrace.WroteRequestInfo) {
@@ -1063,7 +1080,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// the caller names a model by the pool's public name (a base model when
 	// several accounts serve it under their own ids); this account may only
 	// know it by one of its own, so translate before sending
-	body = s.upstreamBody(cfg, acct.ID, rec.Model, body)
+	if acct.Provider != config.ProviderTokenHarbor {
+		body = s.upstreamBody(cfg, acct.ID, rec.Model, body)
+	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(actx, trace), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "network", "network"
@@ -1080,7 +1099,8 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 				req.Header.Set("Anthropic-Version", "2023-06-01")
 			}
 		}
-	case config.ProviderOllama, config.ProviderModal:
+	case config.ProviderOllama, config.ProviderModal, config.ProviderTokenHarbor:
+		// Token Harbor accepts Bearer on all native protocols.
 		// Ollama's /v1/messages explicitly refuses x-api-key on its own, and
 		// Modal authenticates a proxy token in Authorization only: neither
 		// wants the Anthropic header, so never send it
@@ -1089,7 +1109,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			req.Header.Set("X-Api-Key", acct.RuntimeKey)
 		}
 	}
-	if (acct.Provider == config.ProviderOllama || acct.Provider == config.ProviderModal) && proto == "anthropic" {
+	if (acct.Provider == config.ProviderOllama || acct.Provider == config.ProviderModal || acct.Provider == config.ProviderTokenHarbor) && proto == "anthropic" {
 		// both Messages endpoints require the version header; clients behind
 		// a relay sometimes drop it
 		if req.Header.Get("Anthropic-Version") == "" {
@@ -1109,7 +1129,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	req.ContentLength = int64(len(body))
 
 	client := s.httpClient(acct.ProxyURL)
-	if config.IsOpenCode(acct.Provider) {
+	if config.StrictResponses(acct.Provider) {
 		client = opencode.NoRedirect(client)
 	}
 	resp, err := client.Do(req)
@@ -1767,7 +1787,11 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 		req, _ := http.NewRequestWithContext(c, http.MethodGet, cfg.RuntimeBase(a)+"/models", nil)
 		req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 		req.Header.Set("Accept", "application/json")
-		resp, err := s.httpClient(a.ProxyURL).Do(req)
+		client := s.httpClient(a.ProxyURL)
+		if a.Provider == config.ProviderTokenHarbor {
+			client = opencode.NoRedirect(client)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
 			failed = true
