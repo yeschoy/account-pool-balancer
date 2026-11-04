@@ -3,6 +3,8 @@
 /odb
 /bin/
 *.tmp
+# 本地验证码诊断响应（含账号标识/IP）
+/t.json
 # 账号审计工具与账号数据（50MB，含明文账号/邮箱），不进仓库
 /tools/*
 !/tools/perch-register/
@@ -14,7 +16,10 @@
 node_modules/
 package-lock.json
 pnpm-lock.yaml
+.npm/
 .pnpm-store/
+npm-debug.log*
+pnpm-debug.log*
 .env
 
 # 压测产物

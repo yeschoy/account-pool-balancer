@@ -35,6 +35,9 @@ const (
 	ModalGroup = "modal"
 	// PerchGroup is where Perch accounts land when no group is named.
 	PerchGroup = "perch"
+	// TokenHarborGroup is where Token Harbor accounts land when no group is
+	// named.
+	TokenHarborGroup = "tokenharbor"
 )
 
 // DefaultGroupFor is the group an account of key's provider joins by default.
@@ -53,6 +56,8 @@ func GroupForProvider(provider string) string {
 		return ModalGroup
 	case ProviderPerch:
 		return PerchGroup
+	case ProviderTokenHarbor:
+		return TokenHarborGroup
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
 		return provider
 	}
@@ -120,10 +125,17 @@ const (
 	// with it — but it has to be unique per account (runtime keys are), so it
 	// also carries the account's Supabase user id.
 	PerchKeyMarker = "perch-session:"
+	// ProviderTokenHarbor is the Token Harbor (tokenharbor.ai) pool. Its
+	// credential is an OpenRouter-style API key ("thk_live_…") the
+	// registration machine creates on the dashboard, so unlike Perch it keeps
+	// its key in RuntimeKey and is served through the same /v1 path.
+	ProviderTokenHarbor = "tokenharbor"
+	// TokenHarborKeyPrefix is the prefix tokenharbor.ai issues.
+	TokenHarborKeyPrefix = "thk_"
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderOpenCodeZen, ProviderOpenCodeGo}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
@@ -136,6 +148,8 @@ func ProviderForKey(key string) string {
 		return ProviderOllama
 	case strings.HasPrefix(key, ModalKeyPrefix):
 		return ProviderModal
+	case strings.HasPrefix(key, TokenHarborKeyPrefix):
+		return ProviderTokenHarbor
 	case strings.HasPrefix(key, "sk-"):
 		return ProviderOpenDesign
 	}
@@ -177,6 +191,8 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 		// "an account needs a runtime key" rule that keeps every pool
 		// schedulable through one code path
 		return strings.HasPrefix(key, PerchKeyMarker) && len(key) > len(PerchKeyMarker)
+	case ProviderTokenHarbor:
+		return strings.HasPrefix(key, TokenHarborKeyPrefix) && len(key) > len(TokenHarborKeyPrefix) && openCodeTokenRe.MatchString(key)
 	default:
 		return strings.HasPrefix(key, "sk-")
 	}
@@ -227,6 +243,8 @@ func runtimeKeyError(provider string) string {
 		return "runtime key must be Modal's proxy token wk-<id>.<secret>"
 	case ProviderPerch:
 		return "a Perch account has no API key; import its session JSON instead"
+	case ProviderTokenHarbor:
+		return "runtime key must be a Token Harbor key thk_live_…"
 	default:
 		return "runtime key must start with sk-amr- (or rv_ for River, oll- for Ollama, wk- for Modal)"
 	}
@@ -247,6 +265,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.ModalErrorRules, c.ModalRetryRules
 	case ProviderPerch:
 		return c.PerchErrorRules, c.PerchRetryRules
+	case ProviderTokenHarbor:
+		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
 	}
 	return c.ErrorRules, c.RetryRules
 }
@@ -270,6 +290,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultModalErrorRules()
 	case ProviderPerch:
 		return rules.DefaultPerchErrorRules()
+	case ProviderTokenHarbor:
+		return rules.DefaultTokenHarborErrorRules()
 	}
 	return rules.DefaultErrorRules()
 }
@@ -292,6 +314,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultModalRetryRules()
 	case ProviderPerch:
 		return rules.DefaultPerchRetryRules()
+	case ProviderTokenHarbor:
+		return rules.DefaultTokenHarborRetryRules()
 	}
 	return rules.DefaultRetryRules()
 }
@@ -547,6 +571,50 @@ type Logs struct {
 }
 
 // Perch holds the Perch pool's settings: its session keeper and its monitor.
+// TokenHarbor holds the tokenharbor.ai pool's settings. It is deliberately
+// small: the pool is an OpenAI-compatible key pool, and the only special part
+// is the registration machine that mints those keys.
+type TokenHarbor struct {
+	// BaseURL is the OpenRouter-style API root ("https://tokenharbor.ai/v1").
+	BaseURL string `json:"baseUrl"`
+	// ProxyURL is the egress registrations use when a task row names none.
+	// Empty means direct, which only works from a region the API serves.
+	ProxyURL string `json:"proxyUrl"`
+	// CaptchaKey is the captcha-run.com token that buys Turnstile solutions.
+	// Write-only: the admin API never returns it.
+	CaptchaKey string `json:"captchaKey"`
+	// CaptchaBase / SolverPollMs tune the solver; empty/zero keep the
+	// documented defaults.
+	CaptchaBase  string `json:"captchaBase"`
+	SolverPollMs int    `json:"solverPollMs"`
+	// SolveTimeoutSec bounds one Turnstile solve.
+	SolveTimeoutSec int `json:"solveTimeoutSec"`
+	// KeyLabel is the label of the API key the machine creates on each
+	// registered account.
+	KeyLabel string `json:"keyLabel"`
+	// RegisterConcurrency bounds simultaneous registrations.
+	RegisterConcurrency int `json:"registerConcurrency"`
+	// MailTimeoutSec bounds the wait for the verification mail beyond which
+	// the account is still imported (its key already works).
+	MailTimeoutSec int `json:"mailTimeoutSec"`
+	// ModelSyncSec re-reads /v1/models this often; 0 disables.
+	ModelSyncSec int `json:"modelSyncSec"`
+}
+
+// TokenHarborDefaults returns the non-zero defaults the admin form shows.
+func TokenHarborDefaults() TokenHarbor {
+	return TokenHarbor{
+		BaseURL:             "https://tokenharbor.ai/v1",
+		CaptchaBase:         "https://api.captcha-run.com",
+		SolverPollMs:        3000,
+		SolveTimeoutSec:     180,
+		KeyLabel:            "pool",
+		RegisterConcurrency: 2,
+		MailTimeoutSec:      240,
+		ModelSyncSec:        1800,
+	}
+}
+
 type Perch struct {
 	// SupabaseKey is the publishable apikey GoTrue demands on every refresh.
 	// An imported account's own auth_context.supabase_anon_key wins over it.
@@ -803,10 +871,14 @@ type Config struct {
 	ModalRetryRules  []rules.RetryRule `json:"modalRetryRules"`
 	PerchErrorRules  []rules.ErrorRule `json:"perchErrorRules"`
 	PerchRetryRules  []rules.RetryRule `json:"perchRetryRules"`
-	Perch            Perch             `json:"perch"`
-	OpenCode         OpenCode          `json:"opencode"`
-	Logs             Logs              `json:"logs"`
-	Pricing          pricing.Config    `json:"pricing"`
+	// TokenHarbor* are the Token Harbor pool's own rules.
+	TokenHarborErrorRules []rules.ErrorRule `json:"tokenHarborErrorRules"`
+	TokenHarborRetryRules []rules.RetryRule `json:"tokenHarborRetryRules"`
+	Perch                 Perch             `json:"perch"`
+	TokenHarbor           TokenHarbor       `json:"tokenHarbor"`
+	OpenCode              OpenCode          `json:"opencode"`
+	Logs                  Logs              `json:"logs"`
+	Pricing               pricing.Config    `json:"pricing"`
 }
 
 func Default() *Config {
@@ -846,9 +918,13 @@ func Default() *Config {
 		PerchErrorRules:  rules.DefaultPerchErrorRules(),
 		PerchRetryRules:  rules.DefaultPerchRetryRules(),
 		Perch:            DefaultPerch(),
-		OpenCode:         DefaultOpenCode(),
-		Pricing:          pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
-		Logs:             Logs{RetentionDays: 30, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
+
+		TokenHarborErrorRules: rules.DefaultTokenHarborErrorRules(),
+		TokenHarborRetryRules: rules.DefaultTokenHarborRetryRules(),
+		TokenHarbor:           TokenHarborDefaults(),
+		OpenCode:              DefaultOpenCode(),
+		Pricing:               pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
+		Logs:                  Logs{RetentionDays: 30, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
 }
 

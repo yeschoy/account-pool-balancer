@@ -647,3 +647,36 @@ func ParseDuration(s string) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// DefaultTokenHarborErrorRules is the Token Harbor pool's stock rules.
+//
+// Token Harbor answers "invalid_api_key" when a key was revoked, rotated or
+// never persisted, and "region_blocked" when the egress address is in a region
+// it does not serve. The second one is not the account's fault — it means the
+// configured proxy is unusable — so it cools the account down rather than
+// quarantining it: a working proxy brings the account straight back.
+func DefaultTokenHarborErrorRules() []ErrorRule {
+	return []ErrorRule{
+		{ID: "tokenharbor-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 401,
+			When: Match{Statuses: []int{401}, BodyCodes: []string{"invalid_api_key"}},
+			Note: "Token Harbor 判定 API Key 无效或已吊销：需要重新注册或换 Key"},
+		{ID: "tokenharbor-region-blocked", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 403,
+			When: Match{Statuses: []int{403}, BodyCodes: []string{"region_blocked"}},
+			Note: "出口所在地区不被 Token Harbor 服务：应换代理（中国大陆直连必现）"},
+		{ID: "tokenharbor-insufficient-credits", Scope: ScopeAccount, Action: ActionDegrade, DownstreamStatus: 402,
+			When: Match{Statuses: []int{402}},
+			Note: "Token Harbor 余额不足或免费额度用尽"},
+	}
+}
+
+// DefaultTokenHarborRetryRules is the Token Harbor pool's stock retry rules.
+func DefaultTokenHarborRetryRules() []RetryRule {
+	return []RetryRule{
+		{ID: "tokenharbor-bad-request", Decision: DecisionStop,
+			When: Match{Statuses: []int{400, 413, 422}},
+			Note: "Token Harbor 认为请求本身有错，换号没有意义"},
+		{ID: "tokenharbor-model-unavailable", Decision: DecisionStop,
+			When: Match{Statuses: []int{404}, BodyContains: []string{"model"}},
+			Note: "模型 ID 不被 Token Harbor 目录支持：换号不解决，先核对模型名"},
+	}
+}
