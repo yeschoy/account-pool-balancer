@@ -6,7 +6,7 @@
   "execution": "direct",
   "artifacts": ["prd.md", "design.md", "implement.md", "research/public-contract.md"],
   "this_round": "Validated incremental backend/UI delivery; not full task completion",
-  "gates": ["gofmt", "go test ./...", "go test -race ./...", "go vet ./...", "native build", "linux amd64/arm64 cross-build", "JS syntax", "Compose config", "local browser smoke"],
-  "remaining": ["exhaustive source audit", "full low-latency cross-protocol fidelity", "real keyed upstream and five-client validation", "Docker image/runtime gate", "sustained scale and production migration qualification"],
-  "notes": "User requested immediate audit/development and incremental commits. Inherited specs reviewed; scripts live outside this repository. Local task/spec records are tracked in this repository. No delegation launched, no production data accessed, no live inference credentials used."
+  "gates": ["gofmt", "go test ./...", "go test -race ./...", "go vet ./...", "native build", "linux amd64/arm64 cross-build", "JS syntax", "Compose config", "local browser smoke", "OVH Docker build/runtime", "production data preservation", "public browser asset verification"],
+  "remaining": ["exhaustive source audit", "full low-latency cross-protocol fidelity", "real keyed upstream and five-client validation", "sustained scale and production migration qualification"],
+  "notes": "User requested immediate audit/development and incremental commits. Inherited specs reviewed; scripts live outside this repository. Local task/spec records are tracked in this repository. No delegation launched. Implementation used mocks; later user-authorized OVH deployment used remote-only backups/preflight data copies. No production key material emitted or copied locally, no live Zen/Go inference performed."
 }

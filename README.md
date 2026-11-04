@@ -49,6 +49,7 @@ docker compose up -d --build
 - 管理台只绑定宿主机 `127.0.0.1:8790`，远程访问用 SSH 隧道 `ssh -L 8790:127.0.0.1:8790 主机`，或通过反向代理加 HTTPS。
 - 数据在 `./data`，升级：`git pull && docker compose up -d --build`；回滚：切回旧版本后同样重建。
 - 停止时会等待在途请求最多 30 秒（`stop_grace_period: 35s`）。
+- **OVH 现有实例例外**：当前从固定版本快照构建镜像，旧工作树因历史缓存提交而保留，不能直接在旧目录 `up --build`。升级入口、部署验收和备份回滚见 [OVH 部署记录](docs/ovh-deployment.md)。
 
 ## River 号池（docs.river.ai）
 

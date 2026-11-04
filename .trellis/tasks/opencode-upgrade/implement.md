@@ -17,7 +17,7 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 - [x] Go usage, fixed proxy health, scoped sticky state, checkpoint restoration and graceful drain tested.
 - [x] Existing UI extended; real local browser verified settings, dedupe, bulk disable, provider separation, write-only key projections and protocol Base overrides.
 - [x] gofmt, go test ./..., go test -race ./..., go vet ./..., native build, Linux amd64/arm64 cross-build, JS syntax and Compose config gates passed.
-- [ ] Actual Docker image build/runtime: daemon unavailable; do not start or reconfigure it implicitly.
+- [x] Subsequent user-authorized OVH deployment: actual Docker build, offline data-copy preflight, original data mount live restart, credentials/settings preservation and public browser asset verification passed. Local Docker daemon remains untouched. See docs/ovh-deployment.md.
 - [ ] Exhaustive reading/review of every source file in both repositories.
 - [ ] Low-latency, full-fidelity cross-protocol streaming and unsupported advanced field/content combinations.
 - [ ] Real credentials, usage endpoint verification, five official client flows, sustained scale and production upgrade/rollback qualification.

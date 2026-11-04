@@ -10,8 +10,9 @@ README/operational delivery guide, frontend contract and this journal.
 
 Overall task remains `in_progress`; do not archive as a full P0 completion.
 Full source-by-source review, real-time/full-fidelity protocol conversion,
-real keyed upstream calls, five-client tests, Docker image/runtime, sustained
-scale and production migration qualification remain open.
+real keyed upstream calls, five-client tests, sustained scale and full production
+migration qualification remain open. Docker image/runtime was subsequently
+verified during the user-authorized OVH deployment below.
 
 ## Evidence
 
@@ -24,8 +25,9 @@ scale and production migration qualification remain open.
 - Final gates: gofmt clean, git diff --check, go test ./..., go test -race ./...,
   go vet ./..., native build, CGO-disabled linux amd64/arm64 cross-build,
   node --check and docker compose config --quiet passed.
-- Docker daemon unavailable at the local Unix socket; no image build/run claimed,
-  no Docker service started or production deployment modified.
+- Initial local Docker daemon was unavailable. A subsequent explicitly authorized
+  OVH deployment supplied actual image build/runtime evidence; local Docker was
+  not started or reconfigured.
 - Real browser on disposable local data: tabs/settings, independent strategies,
   dedupe (3 lines -> 2 accounts), bulk disable 2/2, tier separation, upstream key
   not in account JSON, independent Go protocol Base override persisted. OpenCode
@@ -34,6 +36,30 @@ scale and production migration qualification remain open.
   writers; test helpers close writers and join poller workers. Existing Perch
   behavior was not rewritten, and no tests were deleted. Three pre-existing
   formatting defects were fixed by gofmt only.
+
+## Subsequent OVH deployment
+
+User explicitly requested deployment after push. Built image from a clean archive
+of `1c7a3b8` on OVH, with OCI revision label and a preserved rollback image.
+Remote old master has three divergent commits containing accidental Go caches;
+its business tree matches GitHub f10fa53 excluding caches. Preserved that tree
+and history; did not reset, rebase or delete pre-existing caches. Runtime source
+snapshot, not old checkout, is the authoritative build context.
+
+A network-none container with remote-only copied data passed startup/health and
+normal shutdown. Then stopped old service, archived the entire quiescent data
+tree, validated gzip, and recreated only the target container with original
+Compose, bind mount, user and network/legacy alias. Health passed, restartCount
+zero. Preserved 47 account IDs/credentials/routing, 8 client keys, 2 import keys,
+admin password and existing routing/quota/provider/error/retry settings. Metadata
+and session JSON readable. OpenCode and compatibility stayed off. Real public
+browser fetched the new 95375-byte JS with matching SHA-256 and Zen/Go tab DOM;
+no production admin login or actual Zen/Go inference was attempted.
+
+Full path, image IDs and recovery cautions: docs/ovh-deployment.md. Sensitive
+backup/preflight data stayed under the remote 0700 backup directory, never local
+or Git. Temporary preflight container is stopped and retained pending cleanup
+consent. Do not automatically restore old data over post-deployment writes.
 
 ## Operational entry points
 

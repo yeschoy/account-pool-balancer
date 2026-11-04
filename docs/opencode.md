@@ -223,7 +223,7 @@ wire_api = "responses"
 | `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ...` | 通过，交叉构建，未在 Linux 执行 |
 | `node --check internal/server/web/app.js` | 通过 |
 | `docker compose config --quiet` | 通过 |
-| Docker 镜像构建/运行 | **未完成**：Docker daemon 不可连接，未启动或改动 Docker 服务 |
+| Docker 镜像构建/运行 | 本地 daemon 不可连接；后续已在 OVH 实际构建、隔离预检并上线验证（Linux amd64），见 [部署记录](ovh-deployment.md) |
 
 测试输出存放在被忽略的 `.analysis/upgrade-*.log`，不会把测试凭证或参考克隆提交到 Git。
 - `node --check internal/server/web/app.js`：语法校验。
@@ -233,7 +233,8 @@ wire_api = "responses"
 - 已有 Perch 两个日志目录清理竞态场景及 OpenCode 测试重复运行三轮通过；不是删除或降低断言。
 - 真浏览器在独立本地临时数据目录验证：登录、Zen/Go 标签、Zen 独立 ordered 设置保存而 Go 保持 smart、重复三行导入得到两个账号、批量禁用 2/2、Go 列表为空、API 响应不含上游 Key；重启临时服务后又验证 Go 协议 Base JSON 覆盖保存、Zen 覆盖仍为空。只使用假 Key，接入开关保持关闭，没有联系真实推理或额度接口。
 - 另用无凭证真实浏览器读取公开能力目录，验证 SDK/逐模型元数据和 family 路径声明；这不等于授权推理测试。原始 GitHub 文档三链接的 404 也已在浏览器重新确认。
-- 无真实凭证，未实测 opencode.ai 推理/usage；官方 raw 文档链接本次返回 404。未实测五种客户端、付费授权、持续高负载、生产代理或带载 Docker 重启。
+- 后续用户授权的 OVH 部署已验证真实 Docker 构建、断网数据副本启动预检、原 data 挂载上线和公网资源更新；47 个账号、8 把下游 Key、2 把导入 Key 及既有设置保持，OpenCode 仍关闭。
+- 无真实 Zen/Go 凭证，未实测其推理/usage；官方 raw 文档链接本次返回 404。未实测五种客户端、付费授权、持续高负载、生产代理或带载推理请求级验收；Linux arm64 仍仅交叉构建。
 
 ## 8. 修改文件地图
 
@@ -260,7 +261,7 @@ wire_api = "responses"
 ## 9. 升级与回滚
 
 1. **停服并备份完整 DATA_DIR**（含 config.json、metadata.json、selection-counters.json、logs、所有 Perch secrets/device/registration 数据），备份目录权限应为 0700。不要只备份 config。
-2. 替换新构建或执行 `docker compose build && docker compose up -d`。本轮不新增依赖/外部数据库、不更改现有卷、端口、网络别名和 Compose 密钥环境变量。
+2. 替换新构建或在确认是新版本源码的目录执行 `docker compose build && docker compose up -d`。OVH 旧工作树须按 [固定版本快照部署记录](ovh-deployment.md) 操作，不能直接在旧目录重建。本轮不新增依赖/外部数据库、不更改现有卷、端口、网络别名和 Compose 密钥环境变量。
 3. 旧账号与下游 Key 继续沿旧路径运行。OpenCode 默认关闭；逐组启用、同步、验证、再接客户端。设置保存与 SIGHUP 都先校验；验证失败保留当前内存配置。
 4. 快速逻辑回滚：`opencode.enabled=false`，关闭新调用/查询，原供应商不停用。正在处理的请求保留其已加载配置，不在中途改写。
 5. 二进制降级：停止新版，恢复升级前的**完整数据备份**再启动旧版。旧二进制不认识新的 provider，带 OpenCode 账号/Key 的 config 不能直接交给旧版；旧版重写文件也会丢掉新增字段。若需要保留升级后的旧供应商增量，请先离线导出、明确迁移，只删除新 provider 的账号/Key/独立字段，不能盲目覆盖。
