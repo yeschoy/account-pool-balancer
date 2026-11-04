@@ -24,4 +24,9 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 - [x] Read-only Go settings/fingerprint/risk comparison against pinned reference and current official policy; findings and unimplemented recommendations in docs/opencode-go-risk-audit.md and research/go-settings-fingerprint-risk.md.
 - [ ] Real keyed inference, five official client flows, sustained scale and production upgrade/rollback qualification.
 
+## Confirmed follow-up scope
+
+- Gemini/Google protocol adaptation is deferred by explicit user instruction. Keep unknown protocols unroutable; do not guess Chat to increase model counts.
+- Recommended Go hardening and the six discouraged approaches, with reasons and legitimate alternatives, are recorded in docs/opencode-go-risk-audit.md section 10. This is analysis, not authorization to implement, mutate production, or run paid inference.
+
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.
