@@ -31,10 +31,21 @@ type perchAutoStatus struct {
 	Available int `json:"available"`
 	// Registered counts candidates that are registered and activated but not yet
 	// imported: a pool refill draws from these before registering anything.
-	Registered int       `json:"registered"`
-	Running    bool      `json:"running"`
-	LastCheck  time.Time `json:"lastCheck"`
-	LastError  string    `json:"lastError"`
+	Registered int `json:"registered"`
+	// Uncertain counts candidates whose last signup or activation never
+	// reported an outcome. They are skipped, not fatal: the loop keeps working
+	// on the other candidates and names the count here.
+	Uncertain int `json:"uncertainCandidates"`
+	// TierPending counts healthy accounts with no plan chosen. They cannot
+	// serve a turn, so they are not available, but they are not a fault either.
+	TierPending int       `json:"tierPending"`
+	Running     bool      `json:"running"`
+	LastCheck   time.Time `json:"lastCheck"`
+	// LastError is a fault that stopped the loop. Notice is information the
+	// loop kept working through: the console shows them differently, because a
+	// red "error" on a healthy run trains an operator to ignore the line.
+	LastError string `json:"lastError"`
+	Notice    string `json:"notice"`
 }
 type perchAutoManager struct {
 	mu             sync.Mutex
@@ -422,7 +433,7 @@ func (s *Server) renewAutoSession(ctx context.Context, rec perchsignupstore.Reco
 	creds := perch.Creds{SupabaseURL: parsed.SupabaseURL, SupabaseKey: parsed.SupabaseKey, ProxyURL: rec.Candidate.ProxyURL}
 	started := time.Now()
 	sess, err := s.perchRenew(ctx, creds, parsed.RefreshToken)
-	s.logPerchDiagnostic("", "refresh", autoPerchProxySource(rec.Candidate.ProxyURL), "", started, err)
+	s.logPerchDiagnostic("", "refresh", autoPerchProxySource(rec.Candidate.ProxyURL), "", started, err, nil)
 	if err != nil {
 		// KindTransient covers a transport error, a timeout, a cancelled
 		// request and a 5xx alike, and those need different answers: a 5xx is
@@ -706,6 +717,7 @@ func (s *Server) perchAutoCheck(ctx context.Context) {
 	a.status.LastError = ""
 	a.mu.Unlock()
 	available := 0
+	tierPending := 0
 	blocked := false
 	cfg := s.cfg.Get()
 	poolViews := s.pool.Views(cfg)
@@ -726,27 +738,59 @@ func (s *Server) perchAutoCheck(ctx context.Context) {
 			blocked = true
 		}
 		switch v.Status {
-		case "service-down", "refresh-failed", "rate-limited", "pending", "restricted", "tier-pending":
+		case "service-down", "refresh-failed", "rate-limited", "pending", "restricted":
 			blocked = true
+		case "tier-pending":
+			// Deliberately NOT a blocker. A tier-pending account is healthy and
+			// reachable; it simply has no plan chosen yet, which no replenish
+			// can change - a replacement candidate lands in the same state
+			// until its owner picks one on the website. Treating it as an
+			// unknown account state stopped the whole replenish loop on an
+			// account that needed the operator, not more accounts. Counted as
+			// unavailable (it cannot serve a turn), reported separately so the
+			// reason is not mistaken for a service fault.
+			tierPending++
 		}
 	}
 	// Ready means the candidate was registered ahead of time and is waiting to
 	// be imported: that is the normal path here, not a reason to stop.
 	registered := 0
+	// An uncertain candidate is an interrupted signup: its outcome has to be
+	// reconciled by hand before it can be claimed again. It only blocks the
+	// loop when there is nothing else to claim - if ready or queued candidates
+	// exist, replenishing them is exactly what the operator asked for, and
+	// stalling on the one broken row would make that impossible.
+	var uncertain int
 	for _, x := range a.store.List() {
-		if x.Status == perchsignupstore.Failed || x.Status == perchsignupstore.Uncertain || x.Status == perchsignupstore.Running {
+		switch x.Status {
+		case perchsignupstore.Uncertain:
+			uncertain++
+		case perchsignupstore.Failed, perchsignupstore.Running:
 			blocked = true
-			break
 		}
 		if x.Status == perchsignupstore.Ready {
 			registered++
 		}
 	}
+	if !a.store.HasClaimable() && uncertain > 0 {
+		blocked = true
+	}
 	a.mu.Lock()
 	a.status.Available = available
 	a.status.Registered = registered
+	a.status.Uncertain = uncertain
+	a.status.TierPending = tierPending
+	a.status.Notice = ""
 	if blocked {
+		// The cause is checked before the count: an operator who sees this line
+		// must be able to tell a broken account from a stalled candidate.
 		a.status.LastError = "账号状态不确定，请人工核查后再补号"
+	} else if uncertain > 0 {
+		// Replenishing continues, but the stuck rows are still named: silence
+		// here is how they stay broken for days.
+		a.status.Notice = fmt.Sprintf("%d 个候选结果不确定，已跳过并继续补号；这些候选需人工确认后才会计入", uncertain)
+	} else if tierPending > 0 {
+		a.status.Notice = fmt.Sprintf("%d 个账号尚未选择套餐（待选套餐），不计入可用；需在 chat.perchai.app 选择后才能使用", tierPending)
 	}
 	a.mu.Unlock()
 	if blocked || available >= settings.MinAvailable || ctx.Err() != nil {
@@ -844,7 +888,7 @@ func (s *Server) perchAutoRegisterOne(parent context.Context, rec perchsignupsto
 	}
 	started := time.Now()
 	doc, err := worker(ctx, input)
-	s.logPerchDiagnostic("", "register", autoPerchProxySource(c.ProxyURL), "", started, err)
+	s.logPerchDiagnostic("", "register", autoPerchProxySource(c.ProxyURL), "", started, err, nil)
 	if err != nil || ctx.Err() != nil {
 		// "结果不确定" is the verdict, not the reason. A registration can stop
 		// at input validation, at GitHub sign-in, or at the session check, and
@@ -1022,7 +1066,7 @@ func trimForStatus(s string) string {
 func (s *Server) activateAutoSession(ctx context.Context, proxy string, doc []byte) (resultErr error) {
 	started := time.Now()
 	defer func() {
-		s.logPerchDiagnostic("", "activate", autoPerchProxySource(proxy), "", started, resultErr)
+		s.logPerchDiagnostic("", "activate", autoPerchProxySource(proxy), "", started, resultErr, nil)
 	}()
 	if s.perchRegistrations.activate != nil {
 		return s.perchRegistrations.activate(ctx, proxy, doc)

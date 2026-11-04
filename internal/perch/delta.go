@@ -138,6 +138,91 @@ type DeltaPlan struct {
 	status int
 	held   *heldInfo
 	acked  bool
+	// reason records WHY this plan came out whole, so the diagnostic log can
+	// say it instead of only recording that the pool sent a whole request.
+	reason string
+}
+
+// DeltaOutcome is one call's delta decision as the diagnostic log records it.
+//
+// It exists because the counters in DeltaReport are cumulative: they say the
+// pool sent N deltas and M whole requests, not WHICH request was which or why.
+// An operator asking "why was this turn whole?" previously had to read the code.
+// Every field is an observation of what this client did: Sent is the body it
+// posted, not what the server accepted, and Reason is this client's own verdict.
+type DeltaOutcome struct {
+	// Sent is "delta" or "whole": the body actually posted.
+	Sent string
+	// Reason is one of the DeltaReason* values.
+	Reason string
+	// Parked reports the server confirming a held prefix; Held is that length.
+	Parked bool
+	Held   int
+	// Refused reports the server rejecting the claimed prefix (409, or 400
+	// without the delta ack).
+	Refused bool
+}
+
+// Reason values. Stable strings, short because every model-call record carries
+// one, and closed because a diagnostic that invents labels per request cannot
+// be aggregated.
+const (
+	// DeltaReasonHit: a confirmed prefix was found and only the tail was sent.
+	DeltaReasonHit = "hit"
+	// DeltaReasonNoPrefix: a run id was present but nothing confirmed matched it
+	// — a new run, an expired snapshot, or a conversation whose earlier
+	// messages changed.
+	DeltaReasonNoPrefix = "no-prefix"
+	// DeltaReasonShrunk: the request is shorter than what is held, so it is not
+	// a continuation of that prefix.
+	DeltaReasonShrunk = "shrunk"
+	// DeltaReasonUnscoped: no account scope, which can never match an entry.
+	DeltaReasonUnscoped = "unscoped"
+	// DeltaReasonWeb: the web surface carries no delta at all.
+	DeltaReasonWeb = "web"
+	// DeltaReasonNoRun: the envelope carried no run id, so no entry could ever
+	// be keyed. On the CLI surface this is a caller-side defect of the pool.
+	DeltaReasonNoRun = "no-run"
+	// DeltaReasonRefused: the prefix was claimed and the server rejected it.
+	DeltaReasonRefused = "refused"
+	// DeltaReasonPending: nothing has answered yet (transport failure, timeout
+	// or cancellation), so no verdict exists.
+	DeltaReasonPending = "pending"
+)
+
+// Observation renders this call for the diagnostic log. It never contacts the
+// server and never changes the plan.
+func (p *DeltaPlan) Observation(web bool) DeltaOutcome {
+	if web {
+		return DeltaOutcome{Sent: "whole", Reason: DeltaReasonWeb}
+	}
+	// A nil plan, or one whose reason was never set (the envelope carried no run
+	// id, so PlanDelta was never called), is a whole request with nothing to key
+	// on. Saying "pending" there would blame the network for a decision already
+	// made, so no-run is the honest answer for both.
+	if p == nil || p.key == "" {
+		out := DeltaOutcome{Sent: "whole", Reason: DeltaReasonNoRun}
+		if p != nil && p.reason != "" {
+			out.Reason = p.reason
+		}
+		return out
+	}
+	out := DeltaOutcome{Sent: "whole", Reason: p.reason, Parked: p.held != nil}
+	if p.held != nil {
+		out.Held = p.held.length
+	}
+	if p.IsDelta {
+		out.Sent, out.Reason = "delta", DeltaReasonHit
+		// A delta the server turned down was sent AS a delta; saying "whole"
+		// would hide the wasted round trip this counter exists to expose.
+		if p.status == 409 || (p.status == 400 && !p.acked) {
+			out.Refused, out.Reason = true, DeltaReasonRefused
+		}
+	}
+	if out.Reason == "" {
+		out.Reason = DeltaReasonPending
+	}
+	return out
 }
 
 // deltaCache holds confirmed prefixes per endpoint+run, plus the counters the
@@ -370,7 +455,7 @@ func isSHA256Hex(s string) bool {
 //
 // Empty runId never produces a delta.
 func (c *Client) PlanDelta(endpoint, scope, runID string, env Envelope) *DeltaPlan {
-	plan := &DeltaPlan{}
+	plan := &DeltaPlan{reason: DeltaReasonNoRun}
 	run := strings.TrimSpace(runID)
 	if run == "" {
 		return plan
@@ -383,19 +468,25 @@ func (c *Client) PlanDelta(endpoint, scope, runID string, env Envelope) *DeltaPl
 	// hits quietly drop to zero with nothing to point at. Counting it makes
 	// the degradation visible in the delta report.
 	if strings.TrimSpace(scope) == "" {
+		plan.reason = DeltaReasonUnscoped
 		c.deltas.mu.Lock()
 		c.deltas.statUnscoped++
 		c.deltas.mu.Unlock()
+	} else {
+		plan.reason = DeltaReasonNoPrefix
 	}
 	plan.digests = digestMessages(env.Request.Messages)
 	plan.toolsDigest = digestTools(env.Request.Tools)
 
-	base := c.deltas.find(key, plan.digests, c.now())
+	base, longer := c.deltas.find(key, plan.digests, c.now())
 	if base == nil || len(base.digests) == 0 {
-		return plan
-	}
-	if len(base.digests) > len(plan.digests) {
-		// The request is shorter than what the server holds: not a continuation.
+		// Nothing matched. A cache entry LONGER than this request means the
+		// caller went backwards in the conversation, which is a different
+		// story from "never seen"; find() skips those entries, so it has to
+		// report them separately for the reason to be right.
+		if longer {
+			plan.reason = DeltaReasonShrunk
+		}
 		return plan
 	}
 	plan.IsDelta = true
@@ -411,12 +502,16 @@ func deltaKey(endpoint, scope, runID string) string {
 
 // find returns the newest confirmed snapshot whose digests are a prefix of
 // digests, preferring the longest, and only within the trust window.
-func (c *deltaCache) find(key string, digests []string, now time.Time) *deltaEntry {
+//
+// longer reports that a live entry was skipped only because it is longer than
+// the request: the caller is behind what the server already holds, which is
+// worth naming in the diagnostic rather than folding into "no prefix".
+func (c *deltaCache) find(key string, digests []string, now time.Time) (entry *deltaEntry, longer bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entries := c.byK[key]
 	if len(entries) == 0 {
-		return nil
+		return nil, false
 	}
 	ttl := c.limits.Resolved().TTL
 	var best *deltaEntry
@@ -424,14 +519,18 @@ func (c *deltaCache) find(key string, digests []string, now time.Time) *deltaEnt
 		if now.Sub(e.confirmedAt) > ttl {
 			continue
 		}
-		if len(e.digests) > len(digests) || !hasPrefix(digests, e.digests) {
+		if len(e.digests) > len(digests) {
+			longer = true
+			continue
+		}
+		if !hasPrefix(digests, e.digests) {
 			continue
 		}
 		if best == nil || len(e.digests) > len(best.digests) {
 			best = e
 		}
 	}
-	return best
+	return best, longer
 }
 
 // put stores a confirmed snapshot, keeping the newest few per key and capping

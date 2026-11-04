@@ -498,7 +498,10 @@ async function loadPerchAutosignup() {
       ['最近检查', fmtTime(status.lastCheck), '北京时间'],
     ];
     $('#pc-auto-cards').innerHTML = cards.map(([label, value, sub]) => `<div class="card"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`).join('');
+    // An error stopped the loop; a notice is something it worked through. They
+    // are shown apart so a persistent red line keeps meaning "go look".
     $('#pc-auto-last-error').textContent = status.lastError ? '最近错误：' + pcRegistrationSafe(status.lastError) : '';
+    $('#pc-auto-notice').textContent = status.notice ? '提示：' + pcRegistrationSafe(status.notice) : '';
     const proxies = Array.isArray(data.proxies) ? data.proxies : [];
     $('#pc-auto-proxy-rows').innerHTML = proxies.map((proxy) => `<tr><td>${esc(pcAutoProxy(proxy.proxy))}</td><td>${proxy.id ? `<button type="button" class="btn small pc-auto-proxy-edit" data-id="${esc(proxy.id)}" data-proxy="${esc(proxy.proxy)}">修改</button> <button type="button" class="btn small danger pc-auto-proxy-delete" data-id="${esc(proxy.id)}">删除</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">暂无代理库存</td></tr>';
     const eligible = new Set(rows.filter(pcAutoRegisterable).map((row) => row.id));
@@ -981,7 +984,8 @@ function pcDeltaLive(report) {
     已缓存对话 <b>${esc(d.cachedKeys ?? 0)}</b> / 快照 <b>${esc(d.cachedSnapshots ?? 0)}</b> · 跟踪中的 runId <b>${esc(d.trackedConversations ?? 0)}</b><br>
     增量 <b>${esc(d.deltaRequests ?? 0)}</b> · 全量 <b>${esc(d.wholeRequests ?? 0)}</b> · 命中率 <b>${pct(d.hitRate)}</b>（共 ${esc(total)} 次）<br>
     被拒 <b>${esc(d.refusedDeltas ?? 0)}</b> · 少发 <b>${esc(d.messagesOmitted ?? 0)}</b> 条消息 / <b>${esc(d.bytesOmitted ?? 0)}</b> 字节<br>
-    <span class="hint">被拒持续增长说明服务端不再持有该前缀——调大信任窗口会让这个数字变高，因为它声称了服务端已经丢掉的前缀。</span>`;
+    <span class="hint">被拒持续增长说明服务端不再持有该前缀——调大信任窗口会让这个数字变高，因为它声称了服务端已经丢掉的前缀。</span><br>
+    <span class="hint">上面是累计计数，只看得到"发了多少"，看不到"哪一条为什么是全量"。每次模型调用的具体判定在 perch 日志的 <code>deltaSent</code> / <code>deltaReason</code> / <code>deltaHeld</code> / <code>deltaRefused</code> 字段里，按 <code>deltaReason</code> 分组统计即可。</span>`;
 }
 
 function pcFingerprintProxyReport(report) {

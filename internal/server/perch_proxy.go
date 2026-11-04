@@ -394,7 +394,7 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 			firstEvent.Store(true)
 			return onEvent(ev)
 		})
-		s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err)
+		s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err, &result.Delta)
 		if err != nil {
 			if terminalBanned {
 				err = &perch.ModelError{Status: http.StatusForbidden, Code: "banned", Err: err.Error()}
@@ -512,7 +512,7 @@ func (s *Server) attemptPerch(w http.ResponseWriter, r *http.Request, cfg *confi
 
 	started := time.Now()
 	result, err := s.perchClient().CallModel(ctx, call, timeout, onStreamEvent)
-	s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err)
+	s.logPerchDiagnostic(acct.ID, "model", diagnosticProxy, diagnosticTarget, started, err, &result.Delta)
 	if err != nil {
 		if terminalBanned {
 			err = &perch.ModelError{Status: http.StatusForbidden, Code: "banned", Err: err.Error()}

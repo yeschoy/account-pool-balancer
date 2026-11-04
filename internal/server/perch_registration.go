@@ -396,7 +396,7 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 			if parseErr != nil || parsed.AccessToken == "" || parsed.RefreshToken == "" || parsed.ExpiresAt <= time.Now().Unix() || json.Unmarshal(doc, &envelope) != nil || len(envelope.Session) == 0 {
 				err = errors.New("注册返回的会话不完整")
 			}
-			s.logPerchDiagnostic("", "register", proxySource, "", started, err)
+			s.logPerchDiagnostic("", "register", proxySource, "", started, err, nil)
 			if err == nil {
 				stage = "Starter 激活"
 				m.mu.Lock()
@@ -431,7 +431,7 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 				}
 				started := time.Now()
 				err = activate(ctx, a.ProxyURL, doc)
-				s.logPerchDiagnostic("", "activate", proxySource, "", started, err)
+				s.logPerchDiagnostic("", "activate", proxySource, "", started, err, nil)
 			}
 			if err == nil {
 				// The account is usable from here on, so closing its data
@@ -445,7 +445,7 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 				privacyErr = privacy(ctx, a.ProxyURL, doc)
 			}
 		} else {
-			s.logPerchDiagnostic("", "register", proxySource, "", started, err)
+			s.logPerchDiagnostic("", "register", proxySource, "", started, err, nil)
 		}
 		cancel()
 		m.mu.Lock()

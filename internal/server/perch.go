@@ -275,7 +275,7 @@ func (s *Server) fetchPerchMeter(ctx context.Context, a config.Account) (meter *
 	}
 	started := time.Now()
 	defer func() {
-		s.logPerchDiagnostic(a.ID, "quota", perchFingerprintProxySource(a.ProxyURL), "", started, resultErr)
+		s.logPerchDiagnostic(a.ID, "quota", perchFingerprintProxySource(a.ProxyURL), "", started, resultErr, nil)
 	}()
 	// renew on the way in, exactly as the CLI does
 	if res := s.perch.keeper.Refresh(ctx, a.ID, false); res.NeedLogin {
@@ -324,7 +324,7 @@ func (s *Server) fetchPerchModels(ctx context.Context, a config.Account) (catalo
 	cfg := s.cfg.Get()
 	started := time.Now()
 	defer func() {
-		s.logPerchDiagnostic(a.ID, "models", perchFingerprintProxySource(a.ProxyURL), cfg.Perch.AppURL, started, resultErr)
+		s.logPerchDiagnostic(a.ID, "models", perchFingerprintProxySource(a.ProxyURL), cfg.Perch.AppURL, started, resultErr, nil)
 	}()
 	cat, err := s.perchClient().Models(perch.WithProxy(ctx, a.ProxyURL), cfg.Perch.AppURL, sec.AccessToken, cfg.Perch.Lane)
 	if err != nil {

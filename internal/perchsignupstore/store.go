@@ -562,6 +562,29 @@ func (s *Store) ClaimByID(id string) (Record, error) {
 	return Record{}, ErrNotFound
 }
 
+// HasClaimable reports whether any candidate could be worked on right now:
+// a registered one waiting to be imported, or a queued one to register.
+//
+// It exists so a caller can tell "nothing to do" from "nothing to do BECAUSE a
+// row is stuck". The replenish loop uses it to keep working past an uncertain
+// candidate when real work is available, and to stop (saying so) when it is not.
+func (s *Store) HasClaimable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.records {
+		if r.Status == Ready {
+			if len(r.Session) > 0 {
+				return true
+			}
+			continue
+		}
+		if r.Status == Queued {
+			return true
+		}
+	}
+	return false
+}
+
 // ClaimReady atomically persists ready -> running for the oldest candidate that
 // was already registered and activated, so it can be imported without registering
 // again. Registration and import are separate steps precisely so a batch can be

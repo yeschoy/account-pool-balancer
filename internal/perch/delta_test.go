@@ -609,3 +609,100 @@ func TestDigestToolsUsesUnescapedJSON(t *testing.T) {
 	}
 	_ = raw
 }
+
+// The observation must name WHY a call stayed whole, because that is the only
+// thing the diagnostic log can record per request.
+func TestDeltaObservationReasons(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	call := func(env Envelope) DeltaOutcome {
+		t.Helper()
+		res, err := c.CallModel(context.Background(), ModelCall{
+			Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", AccountKey: "acc-1", Body: envJSON(t, env),
+		}, 5*time.Second, nil)
+		if err != nil {
+			t.Fatalf("CallModel: %v", err)
+		}
+		return res.Delta
+	}
+
+	// No run id at all: nothing can be keyed, so no entry can ever match.
+	env := envelopeFor("", 3, nil)
+	if got := call(env); got.Sent != "whole" || got.Reason != DeltaReasonNoRun {
+		t.Fatalf("empty run id: %+v", got)
+	}
+
+	// A run id with nothing confirmed yet: no prefix to claim.
+	env = envelopeFor("run-obs", 3, nil)
+	dig := digestMessages(env.Request.Messages)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 3, prefixDigest(dig, 3)
+	f.mu.Unlock()
+	if got := call(env); got.Sent != "whole" || got.Reason != DeltaReasonNoPrefix || !got.Parked || got.Held != 3 {
+		t.Fatalf("first call: %+v", got)
+	}
+
+	// The same run grown by two messages is now a delta.
+	env2 := envelopeFor("run-obs", 5, nil)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 5, prefixDigest(digestMessages(env2.Request.Messages), 5)
+	f.mu.Unlock()
+	if got := call(env2); got.Sent != "delta" || got.Reason != DeltaReasonHit {
+		t.Fatalf("second call: %+v", got)
+	}
+
+	// A request SHORTER than what is held is not a continuation. This needs its
+	// own run: on the previous one the cache already holds a longer prefix, and
+	// re-sending a shorter list there would teach it the shorter one instead.
+	short := envelopeFor("run-shrunk", 5, nil)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 5, prefixDigest(digestMessages(short.Request.Messages), 5)
+	f.mu.Unlock()
+	if got := call(short); got.Sent != "whole" || got.Reason != DeltaReasonNoPrefix {
+		t.Fatalf("baseline: %+v", got)
+	}
+	f.mu.Lock()
+	f.holdLen = 0
+	f.mu.Unlock()
+	if got := call(envelopeFor("run-shrunk", 2, nil)); got.Sent != "whole" || got.Reason != DeltaReasonShrunk {
+		t.Fatalf("shrunk: %+v", got)
+	}
+
+	// The web lane never carries a delta. It is asserted on the plan rather
+	// than through CallModel: the web surface first resolves a thread, which
+	// this fake does not serve, so the call never reaches the delta layer.
+	if got := (&DeltaPlan{IsDelta: true}).Observation(true); got.Sent != "whole" || got.Reason != DeltaReasonWeb {
+		t.Fatalf("web: %+v", got)
+	}
+}
+
+// A refused prefix was still sent AS a delta; the record must not report it as
+// a whole request, or the wasted round trip disappears from the log.
+func TestDeltaObservationRefusal(t *testing.T) {
+	f := newDeltaFake(t)
+	c := NewClient(nil)
+	env1 := envelopeFor("run-ref", 3, nil)
+	dig := digestMessages(env1.Request.Messages)
+	f.mu.Lock()
+	f.holdLen, f.holdDigest = 3, prefixDigest(dig, 3)
+	f.mu.Unlock()
+	if _, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", AccountKey: "acc-1", Body: envJSON(t, env1),
+	}, 5*time.Second, nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	env2 := envelopeFor("run-ref", 5, nil)
+	f.mu.Lock()
+	f.refuse = true
+	f.mu.Unlock()
+	res, err := c.CallModel(context.Background(), ModelCall{
+		Surface: SurfaceCLI, Base: f.srv.URL, Token: "t", AccountKey: "acc-1", Body: envJSON(t, env2),
+	}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if res.Delta.Sent != "delta" || res.Delta.Reason != DeltaReasonRefused || !res.Delta.Refused {
+		t.Fatalf("refused delta: %+v", res.Delta)
+	}
+}

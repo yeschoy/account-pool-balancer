@@ -284,6 +284,9 @@ type CallResult struct {
 	// Reasoning is the reasoning text accumulated across the turn, when the
 	// stream carried any.
 	Reasoning string
+	// Delta is this call's held-context decision, for the diagnostic log. It
+	// reads "pending" when the call never reached an answer.
+	Delta DeltaOutcome
 }
 
 // CallModel performs one model call, handing every non-terminal frame to
@@ -361,10 +364,25 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 
 	attempts := 0
 	sawEvent := false
+	// outcome is settled on every return path so the diagnostic log can say
+	// what this call actually sent and why, not just how it ended.
+	outcome := DeltaOutcome{Sent: "whole", Reason: DeltaReasonPending}
+	if !web {
+		outcome = plan.Observation(false)
+	}
 	for {
 		res, err := c.callOnce(ctx, url, call, body, timeout, onEvent, &sawEvent, web, plan)
+		// Observe the answer before anything below can reset the plan: Refused
+		// and the held confirmation are facts about THIS attempt's response.
+		if !web && err == nil {
+			outcome = plan.Observation(false)
+		}
 		if err == nil {
 			c.SettleDelta(plan, true)
+			if !web {
+				outcome = plan.Observation(false)
+			}
+			res.Delta = outcome
 			return res, nil
 		}
 		var me *ModelError
@@ -377,20 +395,33 @@ func (c *Client) CallModel(ctx context.Context, call ModelCall, timeout time.Dur
 			plan.IsDelta = false
 			body = call.Body
 			res, err = c.callOnce(ctx, url, call, body, timeout, onEvent, &sawEvent, web, nil)
+			// The refusal verdict is known here, before the resend clears it:
+			// plan.IsDelta is about to be reset, so a later Observation would
+			// read the resend's state and call this a delta hit.
+			if !web {
+				outcome = plan.Observation(false)
+				outcome.Sent, outcome.Reason, outcome.Refused = "delta", DeltaReasonRefused, true
+			}
 			if err == nil {
+				res.Delta = outcome
 				return res, nil
 			}
 		} else {
 			c.SettleDelta(plan, false)
 			plan.IsDelta = false
+			if !web {
+				outcome = plan.Observation(false)
+			}
 		}
 		retryable := errors.As(err, &me) && me.Retryable
 		if !retryable || sawEvent || attempts >= 2 || ctx.Err() != nil {
+			res.Delta = outcome
 			return res, err
 		}
 		attempts++
 		select {
 		case <-ctx.Done():
+			res.Delta = outcome
 			return res, ctx.Err()
 		case <-time.After(time.Duration(400<<attempts) * time.Millisecond):
 		}

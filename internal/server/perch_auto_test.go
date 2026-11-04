@@ -16,6 +16,7 @@ import (
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/perch"
 	"account-pool-balancer/internal/perchsignupstore"
+	"account-pool-balancer/internal/quota"
 )
 
 func autoImportCandidate(t *testing.T, s *Server) {
@@ -652,5 +653,178 @@ func TestRegisterFailureDetailReachesTheList(t *testing.T) {
 				t.Fatal("detail did not carry the reason")
 			}
 		})
+	}
+}
+
+// An uncertain candidate is a stuck row, not a stopped loop: as long as some
+// other candidate can be claimed, replenishing must continue past it. Before
+// this, one interrupted signup froze the whole pool refill.
+func TestPerchAutoUncertainDoesNotStopReplenish(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	if _, err := s.perchAuto.store.Import([]perchsignupstore.Candidate{
+		{Login: "stuck", Password: "p", TOTPSecret: "t", MailboxURL: "m", ProxyURL: "http://proxy.example:8080"},
+		{Login: "fresh", Password: "p", TOTPSecret: "t", MailboxURL: "m", ProxyURL: "http://proxy.example:8080"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Make the first one uncertain the way an interrupted signup looks: it has
+	// to be claimed first, because only a running attempt can go uncertain.
+	first := s.perchAuto.store.List()[0]
+	if _, err := s.perchAuto.store.ClaimByID(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.perchAuto.store.Update(first.ID, perchsignupstore.Uncertain, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.perchAuto.settings.Enabled = true
+	s.perchAuto.settings.MinAvailable = 1
+	s.perchAuto.notBefore = time.Time{}
+	calls := 0
+	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) {
+		calls++
+		return nil, errors.New("test")
+	}
+	s.perchAutoCheck(context.Background())
+	if calls != 1 {
+		t.Fatalf("replenish stopped on an uncertain candidate: worker calls=%d", calls)
+	}
+	status := s.perchAuto.status
+	// The count must be visible so the stuck row is not forgotten, and the loop
+	// must have kept going. (The worker above fails on purpose, so LastError
+	// carries THAT failure - what matters here is that the uncertain row did
+	// not prevent the dispatch.)
+	if status.Uncertain != 1 || !strings.Contains(status.Notice, "结果不确定") {
+		t.Fatalf("the stuck row must still be named: %+v", status)
+	}
+}
+
+// With nothing else claimable, an uncertain candidate IS the reason the loop
+// has nothing to do, and saying so is the whole point of the block.
+func TestPerchAutoUncertainBlocksWhenNothingClaimable(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	autoImportCandidate(t, s)
+	rec := s.perchAuto.store.List()[0]
+	if _, err := s.perchAuto.store.ClaimByID(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.perchAuto.store.Update(rec.ID, perchsignupstore.Uncertain, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.perchAuto.settings.Enabled = true
+	s.perchAuto.settings.MinAvailable = 1
+	s.perchAuto.notBefore = time.Time{}
+	calls := 0
+	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) { calls++; return nil, errors.New("test") }
+	s.perchAutoCheck(context.Background())
+	if calls != 0 {
+		t.Fatalf("nothing was claimable, yet the worker ran %d times", calls)
+	}
+	if s.perchAuto.status.LastError == "" {
+		t.Fatal("an unclaimable uncertain candidate must be reported")
+	}
+}
+
+// A tier-pending account cannot serve a turn, so it is not available - but it
+// is healthy and needs its owner, not a replenish. It must not read as an
+// unknown account state, and must not stop the loop.
+func TestPerchAutoTierPendingIsNotABlocker(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	autoImportCandidate(t, s)
+	rec0, _ := e.post(map[string]any{"accounts": []any{exportDocAsMap("existing")}, "group": "perch"}, "")
+	if rec0.Code != 200 {
+		t.Fatal(rec0.Body.String())
+	}
+	// Put the pool's account in the state this test is about: Perch answered
+	// "tier selection required", which is what the console calls 待选套餐.
+	var id string
+	for _, a := range s.cfg.Get().Accounts {
+		if a.Group == "perch" {
+			id = a.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no perch account in the fixture")
+	}
+	s.quota.Load(map[string]*quota.Snapshot{id: {Perch: &quota.PerchMeter{TierSelectionRequired: true}, PerchAt: time.Now()}})
+	s.perchAuto.settings.Enabled = true
+	s.perchAuto.settings.MinAvailable = 1
+	s.perchAuto.notBefore = time.Time{}
+	calls := 0
+	s.perchRegistrations.worker = func(context.Context, registrationInput) ([]byte, error) { calls++; return nil, errors.New("test") }
+	s.perchAutoCheck(context.Background())
+	status := s.perchAuto.status
+	if status.TierPending != 1 {
+		t.Fatalf("the tier-pending account must be counted: %+v", status)
+	}
+	// The worker fails on purpose, so LastError carries that failure. What must
+	// not appear is the old "inconsistent account state" verdict, which used to
+	// stop the loop before it ever dispatched.
+	if strings.Contains(status.LastError, "账号状态不确定") {
+		t.Fatalf("tier-pending must not read as an inconsistent account state: %q", status.LastError)
+	}
+	if calls != 1 {
+		t.Fatalf("a tier-pending pool must still replenish: calls=%d", calls)
+	}
+}
+
+// HasClaimable is the distinction the loop leans on: a stuck row is only
+// "nothing to do" when nothing else is waiting.
+func TestSignupStoreHasClaimable(t *testing.T) {
+	dir := t.TempDir()
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	s, err := perchsignupstore.Open(filepath.Join(dir, "signup.enc"), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.HasClaimable() {
+		t.Fatal("an empty store claims to have work")
+	}
+	if _, err := s.Import([]perchsignupstore.Candidate{{Login: "q", Password: "p", TOTPSecret: "t", MailboxURL: "m"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasClaimable() {
+		t.Fatal("a queued candidate is work")
+	}
+	rec := s.List()[0]
+	if _, err := s.ClaimByID(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(rec.ID, perchsignupstore.Uncertain, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasClaimable() {
+		t.Fatal("an uncertain candidate with no session is not claimable")
+	}
+}
+
+// The console separates a fault from a notice, so both must reach the API.
+func TestPerchAutoStatusExposesCountsAndNotice(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	s := e.srv
+	s.perchAuto.mu.Lock()
+	s.perchAuto.status.Notice = "2 个候选结果不确定"
+	s.perchAuto.status.Uncertain = 2
+	s.perchAuto.status.TierPending = 1
+	s.perchAuto.mu.Unlock()
+	rec := httptest.NewRecorder()
+	s.apiPerchAuto(rec, httptest.NewRequest("GET", "/", nil))
+	var body struct {
+		Status struct {
+			Notice      string `json:"notice"`
+			Uncertain   int    `json:"uncertainCandidates"`
+			TierPending int    `json:"tierPending"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status.Notice != "2 个候选结果不确定" || body.Status.Uncertain != 2 || body.Status.TierPending != 1 {
+		t.Fatalf("status not exposed: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-") {
+		t.Fatal("response leaked candidate material")
 	}
 }

@@ -26,6 +26,15 @@ type perchDiagnostic struct {
 	Status      int       `json:"status,omitempty"`
 	DurationMs  int64     `json:"durationMs"`
 	ErrorClass  string    `json:"errorClass,omitempty"`
+
+	// Held-context delta, on model calls only. The counters in
+	// /api/perch/fingerprint are cumulative and live in memory; these say what
+	// THIS call sent, so "why was this turn whole?" is answerable from the log
+	// instead of from the code. Omitted on every other stage.
+	DeltaSent    string `json:"deltaSent,omitempty"`
+	DeltaReason  string `json:"deltaReason,omitempty"`
+	DeltaHeld    int    `json:"deltaHeld,omitempty"`
+	DeltaRefused bool   `json:"deltaRefused,omitempty"`
 }
 
 func (r *perchDiagnostic) LogKeys() map[string]string {
@@ -118,7 +127,11 @@ func perchDiagnosticStatusClass(status int) string {
 
 // logPerchDiagnostic describes one completed high-level call, not HTTP attempts.
 // proxySource is configuration provenance, not a claim about the actual route.
-func (s *Server) logPerchDiagnostic(accountID, stage, proxySource, target string, started time.Time, err error) {
+//
+// delta carries the held-context decision for a model call and is ignored for
+// every other stage: those calls never build a delta plan, and writing an empty
+// decision there would read like "whole request" instead of "not applicable".
+func (s *Server) logPerchDiagnostic(accountID, stage, proxySource, target string, started time.Time, err error, delta *perch.DeltaOutcome) {
 	if s.logs == nil {
 		return
 	}
@@ -144,5 +157,9 @@ func (s *Server) logPerchDiagnostic(accountID, stage, proxySource, target string
 	rec := &perchDiagnostic{TS: time.Now(), Provider: config.ProviderPerch, AccountID: accountID,
 		Event: "egress", Kind: stage, Outcome: outcome, ProxySource: proxySource,
 		Target: perchDiagnosticTarget(target), Status: status, DurationMs: duration, ErrorClass: class}
+	if stage == "model" && delta != nil {
+		rec.DeltaSent, rec.DeltaReason = delta.Sent, delta.Reason
+		rec.DeltaHeld, rec.DeltaRefused = delta.Held, delta.Refused
+	}
 	s.logs.Append("perch", rec.TS, rec)
 }

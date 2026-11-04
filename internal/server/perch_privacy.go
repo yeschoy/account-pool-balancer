@@ -65,7 +65,7 @@ func (s *Server) disablePerchDataProgram(ctx context.Context, proxyURL string, d
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	defer func() {
-		s.logPerchDiagnostic("", "privacy", autoPerchProxySource(proxyURL), perch.AppURL, started, resultErr)
+		s.logPerchDiagnostic("", "privacy", autoPerchProxySource(proxyURL), perch.AppURL, started, resultErr, nil)
 	}()
 	_, resultErr = s.perchClient().SetDataProgram(perch.WithProxy(ctx, proxyURL), appURL, token, perch.PrivacyOff())
 	return resultErr

@@ -37,7 +37,7 @@ func diagnosticRecords(t *testing.T, s *Server, kind string) []perchDiagnostic {
 func TestPerchDiagnosticProjection(t *testing.T) {
 	e := newPerchOpenEnv(t)
 	err := &perch.ModelError{Status: 429, Code: "secret-password", Err: "secret-refresh secret-proxy"}
-	e.srv.logPerchDiagnostic("internal-id", "model", "secret-proxy", "https://secret-password.example/path?token=secret-refresh", time.Now(), err)
+	e.srv.logPerchDiagnostic("internal-id", "model", "secret-proxy", "https://secret-password.example/path?token=secret-refresh", time.Now(), err, nil)
 	rows := diagnosticRecords(t, e.srv, "model")
 	if len(rows) != 1 || rows[0].AccountID != "internal-id" || rows[0].Outcome != "failure" || rows[0].Status != 429 || rows[0].ErrorClass != "rate_limited" || rows[0].ProxySource != "unconfigured_unknown" || rows[0].Target != "unknown" {
 		t.Fatalf("unexpected diagnostic: %+v", rows)
@@ -104,5 +104,74 @@ func TestPerchModelDiagnostics(t *testing.T) {
 				t.Fatalf("model: %+v", rows)
 			}
 		})
+	}
+}
+
+// TestPerchDeltaDiagnostic pins the delta fields onto the model-call record: a
+// whole request must say WHY it was whole, and a stage that has no delta plan
+// must not claim one.
+func TestPerchDeltaDiagnostic(t *testing.T) {
+	e := newPerchOpenEnv(t)
+	cases := []struct {
+		name   string
+		stage  string
+		delta  *perch.DeltaOutcome
+		expect perchDiagnostic
+	}{
+		{
+			name:  "delta hit",
+			stage: "model",
+			delta: &perch.DeltaOutcome{Sent: "delta", Reason: perch.DeltaReasonHit, Parked: true, Held: 12},
+			expect: perchDiagnostic{
+				DeltaSent: "delta", DeltaReason: "hit", DeltaHeld: 12,
+			},
+		},
+		{
+			name:  "whole without run id",
+			stage: "model",
+			delta: &perch.DeltaOutcome{Sent: "whole", Reason: perch.DeltaReasonNoRun},
+			expect: perchDiagnostic{
+				DeltaSent: "whole", DeltaReason: "no-run",
+			},
+		},
+		{
+			name:  "refused delta",
+			stage: "model",
+			delta: &perch.DeltaOutcome{Sent: "delta", Reason: perch.DeltaReasonRefused, Refused: true},
+			expect: perchDiagnostic{
+				DeltaSent: "delta", DeltaReason: "refused", DeltaRefused: true,
+			},
+		},
+		{
+			name:  "web surface carries no delta",
+			stage: "model",
+			delta: &perch.DeltaOutcome{Sent: "whole", Reason: perch.DeltaReasonWeb},
+			expect: perchDiagnostic{
+				DeltaSent: "whole", DeltaReason: "web",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e.srv.logPerchDiagnostic("acc-delta", tc.stage, "direct", "", time.Now(), nil, tc.delta)
+			// The environment's log is shared by the subtests, so the record
+			// this call wrote is the newest one, not the only one.
+			rows := diagnosticRecords(t, e.srv, tc.stage)
+			if len(rows) == 0 {
+				t.Fatal("no diagnostic written")
+			}
+			got := rows[0]
+			if got.DeltaSent != tc.expect.DeltaSent || got.DeltaReason != tc.expect.DeltaReason ||
+				got.DeltaHeld != tc.expect.DeltaHeld || got.DeltaRefused != tc.expect.DeltaRefused {
+				t.Fatalf("delta fields: %+v want %+v", got, tc.expect)
+			}
+		})
+	}
+
+	// A quota read never builds a delta plan; it must not report one.
+	e.srv.logPerchDiagnostic("acc-delta", "quota", "direct", "", time.Now(), nil, &perch.DeltaOutcome{Sent: "delta", Reason: perch.DeltaReasonHit})
+	quota := diagnosticRecords(t, e.srv, "quota")
+	if len(quota) == 0 || quota[0].DeltaSent != "" || quota[0].DeltaReason != "" {
+		t.Fatalf("quota must carry no delta fields: %+v", quota)
 	}
 }
