@@ -133,3 +133,25 @@ screenshot and four owned browser snapshots are recorded in ignored
 `_tmp_artifacts.md`; retain pending consent. Earlier reference/debug artifacts,
 Trellis records and unrelated pre-existing `.worktrees/` were not deleted or
 included in the work commit.
+
+## IPv6 proxy follow-up — 2026-11-05
+
+User requested OpenCode IPv6 support and IPv6 proxy compatibility. Public
+opencode.ai AAAA records exist; forced native AAAA connection failed locally.
+A curl -6 HTTP 200 used IPv4-mapped addresses, so it is not native IPv6 evidence.
+No actual proxy address supplied, no production change/deployment/keyed inference.
+
+The existing standard Transport already supports bracketed IPv6 HTTP/HTTPS and
+SOCKS5/SOCKS5H. Added safe malformed-literal validation, Go form examples and
+local authenticated IPv6 proxy + IPv6 HTTPS target tests covering metadata,
+usage, no-credential probe, native inference, IPv6 log/pin canonicalization,
+IPv4 mismatch blocking and no direct fallback after proxy loss. All four IPv6
+protocol subtests ran, none skipped. Operator guide distinguishes proxy ingress
+from actual static egress and host/container routing prerequisites. No custom
+network stack, global tcp6 forcing or exit rotation. Overall task stays in_progress.
+
+Final gates passed: full Go tests (server 43.285s), full race tests (server
+66.236s), go vet, native and CGO-disabled Linux amd64/arm64 builds, JS syntax,
+JSON and diff checks. Form changes are help text only, not a new UI flow.
+Temporary public issue-read spill was registered in _tmp_artifacts.md and retained
+pending consent; no new persistent Mock process or third-party dependency.

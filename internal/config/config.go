@@ -1124,8 +1124,17 @@ func ValidateProxyURL(raw string) error {
 	default:
 		return errors.New("proxyUrl scheme must be http, https, socks5 or socks5h")
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return errors.New("proxyUrl needs a host")
+	}
+	if strings.Contains(u.Hostname(), ":") || strings.HasPrefix(u.Host, "[") {
+		if !strings.HasPrefix(u.Host, "[") {
+			return errors.New("proxyUrl IPv6 host must be enclosed in square brackets: [IPv6]:port")
+		}
+		ip, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !ip.Is6() {
+			return errors.New("proxyUrl has an invalid IPv6 host")
+		}
 	}
 	return nil
 }

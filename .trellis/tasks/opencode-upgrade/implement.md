@@ -42,4 +42,11 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 
 Local delivery guide: docs/opencode-go-gateway.md. Full Go test and race runs passed (server 98.922s / 119.020s during parallel gates); these are test durations, not deployment or downtime. Subsequent import grouping was formatting-only and pool race tests remained cached/passing; final frontend-only filter isolation was verified with Node behavioral checks and syntax validation.
 
+## IPv6 proxy follow-up (2026-11-05)
+
+- User requested checking OpenCode IPv6 and supporting such proxies. No actual proxy address was supplied; no production changes or paid inference authorized.
+- Public DNS exposes AAAA records; forced native AAAA connection failed locally. A normal curl -6 returned IPv4-mapped endpoints and is not counted as native IPv6 acceptance.
+- Existing standard Transport retained. Added strict bracket/literal validation, Go form guidance and four-protocol authenticated IPv6 loopback/TLS regression for metadata, usage, probe, inference, IPv4-vs-IPv6 pin failure and no direct fallback. Configuration and operations: docs/opencode-go-gateway.md.
+- Actual user-proxy egress and keyed external IPv6 inference remain unverified; local quality gate results are recorded in the session journal.
+
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.

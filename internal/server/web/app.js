@@ -649,8 +649,9 @@ function accountForm(a) {
     <label>优先级</label><input id="f-prio" type="number" min="1" max="100" value="${v('priority', 50)}">
     <span class="hint">数字越小越优先，同优先级内按策略排序</span>
     <label>出站代理</label><input id="f-proxy" placeholder="${a && a.hasProxy ? esc(a.proxyUrl) + '（留空不变）' : 'http:// 或 socks5://（可选）'}">
+  ${pool === 'opencode-go' ? '<span></span><span class="hint">支持 HTTP/HTTPS、SOCKS5/SOCKS5H 的 IPv6 代理，例如 socks5h://[2001:db8::10]:1080（示例地址须替换）。IPv6 主机须带方括号；代理入口地址不代表它的实际出口。</span>' : ''}
     ${a && a.hasProxy ? '<span></span><label class="check"><input type="checkbox" id="f-clear-proxy">移除代理（直连）</label>' : ''}
-    ${pool === 'opencode-go' ? `<label>预期固定出口 IP</label><input id="f-egress-ip" value="${v('egressIp')}" placeholder="可选，允许多账号共享同一固定 IP"><span class="hint">先在 Go 设置配置 IP 校验 URL。留空仅绑定出口，不宣称 IP 已固定；设置后校验失败会阻止推理及额度/目录查询。</span>` : ''}
+    ${pool === 'opencode-go' ? `<label>预期固定出口 IP</label><input id="f-egress-ip" value="${v('egressIp')}" placeholder="IPv4/IPv6，不带方括号；可共享同一固定 IP"><span class="hint">先在 Go 设置配置 IP 校验 URL。留空仅绑定出口，不宣称 IP 已固定；设置后校验失败会阻止推理及额度/目录查询。</span>` : ''}
     <label>备注</label><input id="f-note" value="${v('note')}" maxlength="500">
     <label>启用</label><label class="check"><input type="checkbox" id="f-enabled" ${!a || a.enabled ? 'checked' : ''}>参与调度</label>
   </div>`;
