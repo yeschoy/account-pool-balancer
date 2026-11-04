@@ -17,5 +17,16 @@
 - Request admission/drain context cancels in-flight work before final persistence/log close. Poller worker shutdown is joined; immutable quota copies are made outside the hot-path mutex.
 - No live keyed upstream calls or five-client end-to-end certifications. Detailed public-source observation and remaining scope are in research/public-contract.md and docs/opencode.md.
 
+## Current Go pool-gateway follow-up (planning)
+
+- Preserve the original integration and limit this round to paid Go. Reuse config/account/pool/stats/logstore/admin/web; no second gateway or scheduler.
+- Trace `client session/cache signals → scoped identity → atomic pool lease/binding → account-fixed transport → native upstream → usage/error classification → provider-scoped stats/log projections → existing console`.
+- Separate conversation identity from cache preference: `previous_response_id` is strict state, explicit session/parent signals must not be overridden by a shared/changing cache hint. Preserve original native cache directives; their presence alone is not measured cache usage.
+- Derived upstream Go session IDs must be stable and caller-isolated, with real client UA preserved. No official identity synthesis or prompt/tool shaping.
+- Reuse existing per-account limits and fixed `ProxyURL` across all account network paths. Current proxy health proves reachability only. Public-IP observation/pinning and distinct-IP validation await the PRD G3 decision; do not confuse a fixed proxy URL with a static public IP.
+- Extend existing immutable log/stat contracts and provider-scoped UI. Keep reported cache reads/writes and measurement coverage distinct from account-affinity hits; unknown usage is not a zero hit rate. Audit overview global binding/key/strategy fields before presenting them as Go totals.
+- Existing request/error logs gain explicit local-block versus upstream-error semantics and source enums without raw session/cache secrets. Binding-busy, source changes and safety stops must be visible rather than silently moving conversations.
+- Backend, UI, mocked upstream and configuration rollback tests are one acceptance chain. No live mutations/deployment or paid inference in planning. The product's distinct-IP decision and final plan review precede implementation.
+
 ## Rollback
 No destructive schema migration. Disable OpenCode accounts/remove their keys and revert executable. Back up config/metadata before old executables rewrite additive fields. Existing provider configuration and stats remain intact.

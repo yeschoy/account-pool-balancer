@@ -30,4 +30,14 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 - Gemini/Google protocol adaptation is deferred by explicit user instruction. Keep unknown protocols unroutable; do not guess Chat to increase model counts.
 - Recommended Go hardening and the six discouraged approaches, with reasons and legitimate alternatives, are recorded in docs/opencode-go-risk-audit.md section 10. This is analysis, not authorization to implement, mutate production, or run paid inference.
 
+## Go pool-gateway follow-up checklist (planning, not implemented)
+
+- [x] Trace existing Codex/Claude identity, account limits/proxy, overview, request/error logs and cache stats; record G1–G7 acceptance in prd.md.
+- [ ] Resolve whether Go accounts require distinct public IPs or may share stable egress; finalize observed-IP versus configured-route contract.
+- [ ] Review final scoped design/implementation plan with the user before coding.
+- [ ] Go-only session precedence, separate cache preference, stable upstream identity and parent/child/caller isolation with mocks.
+- [ ] Fixed-egress and per-account concurrency/RPM/wait controls; preserve no-direct-fallback and uncertain-submit/no-replay boundaries.
+- [ ] Provider-correct Go overview, cache measurement coverage and request/error correlation in existing backend/UI.
+- [ ] Focused tests, full Go tests/race/vet/build, JS syntax and local browser verification with disposable fake-key/mock data. Live paid-inference acceptance/deployment needs separate authorization.
+
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.
