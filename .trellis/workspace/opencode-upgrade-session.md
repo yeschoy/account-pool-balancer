@@ -100,3 +100,36 @@ count unchanged; health remained healthy. Cleanup recorded in remote deploy.json
 - `_tmp_artifacts.md`: recreate this ignored manifest when generating new
   temporary artifacts; the completed manifest was removed after user-approved
   cleanup. Never clean Trellis logs or pre-existing analysis/data.
+
+## Paid Go gateway hardening — 2026-11-05
+
+Work commit: `c1adadd` (local only; not pushed or deployed).
+
+User approved local paid-Go-only session/cache affinity, fixed account egress
+with shared static IPs allowed, existing concurrency/RPM controls, and scoped
+overview/request/error logs. Implemented separate source-validated cache
+preference below explicit conversations; opaque upstream sessions and persisted
+Responses continuity; truthful UA fallback; optional credential-free IP pin
+checks through fixed account transport; persistent account/shared-egress policy
+pauses including blocked metadata/diagnostics; scoped metrics and log/privacy
+fields. New Go UI filters do not leak to Zen/other pools. No identity fabrication,
+free-lane shaping, automatic exit rotation or new cross-tier fallback was added.
+
+Full Go tests, race tests, vet, native and CGO-disabled Linux amd64/arm64 builds,
+JS syntax and diff checks passed. Real browser used fake keys and local mocks:
+limits and independent Go settings saved and were verified by API; repeated
+sessions retained an account; cache coverage, scoped key/strategy/bindings,
+observed IP and client/local-error filters rendered correctly. Additional Node
+behavioral checks covered cross-pool filter isolation and failed HTTP-200 stream
+status badges. Mock cache percentages are not production cache-benefit evidence.
+
+No production access/configuration change, deployment or paid inference in this
+implementation stage. Actual client workflows, keyed inference, scale and
+production qualification remain open; the overall task stays `in_progress` and
+is not archived. Delivery/limits: `docs/opencode-go-gateway.md`.
+
+Owned Mock process stopped and test listener verified closed. Mock files,
+screenshot and four owned browser snapshots are recorded in ignored
+`_tmp_artifacts.md`; retain pending consent. Earlier reference/debug artifacts,
+Trellis records and unrelated pre-existing `.worktrees/` were not deleted or
+included in the work commit.
