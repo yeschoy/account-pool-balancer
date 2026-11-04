@@ -61,6 +61,21 @@ backup/preflight data stayed under the remote 0700 backup directory, never local
 or Git. Temporary preflight container is stopped and retained pending cleanup
 consent. Do not automatically restore old data over post-deployment writes.
 
+## User-confirmed deployment retrospective (2026-11-04)
+
+User asked why deployment was slow and explicitly requested durable guardrails.
+Actual build/preflight took about 10 seconds; end-to-end delivery took about
+20 minutes. Avoidable delays were ad hoc script design, repeated inspection,
+wrong static asset path and delayed reporting while writing deployment docs.
+
+New root AGENTS.md makes docs/ovh-deployment.md mandatory before deployment.
+That runbook defines one preflight -> build -> backup/switch -> one acceptance
+pass, conditional compatibility preflight, a 2–5 minute normal-case target,
+proactive blocker updates after 5 minutes, immediate verified-live feedback,
+and separate build/switch/health timestamps. Keep backups and safety boundaries;
+never claim all operation time was downtime. Documentation-only changes do not
+trigger redeployment. No new Trellis task or deployment framework is needed.
+
 ## Operational entry points
 
 - `docs/opencode-audit.md`: evidence, compatibility differences and license review.
