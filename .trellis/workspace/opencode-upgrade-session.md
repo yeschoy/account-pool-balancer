@@ -58,8 +58,10 @@ no production admin login or actual Zen/Go inference was attempted.
 
 Full path, image IDs and recovery cautions: docs/ovh-deployment.md. Sensitive
 backup/preflight data stayed under the remote 0700 backup directory, never local
-or Git. Temporary preflight container is stopped and retained pending cleanup
-consent. Do not automatically restore old data over post-deployment writes.
+or Git. User subsequently approved cleanup of the temporary preflight container,
+data copy and log; these are now removed. Production was not restarted and the
+complete rollback backup/image remain. Do not automatically restore old data
+over post-deployment writes.
 
 ## User-confirmed deployment retrospective (2026-11-04)
 
@@ -76,6 +78,18 @@ and separate build/switch/health timestamps. Keep backups and safety boundaries;
 never claim all operation time was downtime. Documentation-only changes do not
 trigger redeployment. No new Trellis task or deployment framework is needed.
 
+## User-authorized intermediate artifact cleanup
+
+Removed 25 allowlisted local temporary entries: reference clone/symbol index,
+build/test logs, compiled binaries, smoke fixture/data/screenshot and one-off
+deployment scripts/receipt. Removed two owned browser snapshots and one owned
+truncated tool log, plus the consumed ignored temporary manifest. Remote cleanup
+removed only the stopped network-none preflight container, its copied data and
+log. About 50 MiB of measured file payload was removed. Existing unrelated
+analysis/cache, real data, deployed source, images/rollback archives, business
+docs and all Trellis records were retained. Running container ID/image/restart
+count unchanged; health remained healthy. Cleanup recorded in remote deploy.json.
+
 ## Operational entry points
 
 - `docs/opencode-audit.md`: evidence, compatibility differences and license review.
@@ -83,5 +97,6 @@ trigger redeployment. No new Trellis task or deployment framework is needed.
   templates, test results, exact migration and rollback cautions, file map.
 - `.trellis/tasks/opencode-upgrade/`: continuing task artifacts and public-source
   observation; `.trellis/spec/backend/opencode.md`: executable safety contracts.
-- `_tmp_artifacts.md`: ignored local manifest. Ask before deleting this round's
-  temporary artifacts. Never clean Trellis logs or pre-existing analysis/data.
+- `_tmp_artifacts.md`: recreate this ignored manifest when generating new
+  temporary artifacts; the completed manifest was removed after user-approved
+  cleanup. Never clean Trellis logs or pre-existing analysis/data.

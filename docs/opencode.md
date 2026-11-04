@@ -225,7 +225,7 @@ wire_api = "responses"
 | `docker compose config --quiet` | 通过 |
 | Docker 镜像构建/运行 | 本地 daemon 不可连接；后续已在 OVH 实际构建、隔离预检并上线验证（Linux amd64），见 [部署记录](ovh-deployment.md) |
 
-测试输出存放在被忽略的 `.analysis/upgrade-*.log`，不会把测试凭证或参考克隆提交到 Git。
+原始 `.analysis/upgrade-*.log`、研究克隆及构建/冒烟中间产物已获用户批准清理；本节验收结论和 Trellis 记录保留。测试凭证和参考克隆从未提交 Git。
 - `node --check internal/server/web/app.js`：语法校验。
 - 36 组 server Mock 矩阵（两套餐 × 三客户端协议 × 三原生协议 × JSON/SSE），包含工具调用 ID；另有九组请求转换工具历史测试。
 - 401/402/403/429/500、400/422 不误隔离、Retry-After HTTP 日期、SSE 首事件前重试/提交后不重放、请求取消、固定代理断开/显式恢复、未知额度、不污染账号权限、配置校验/热更新、checkpoint 重启与 Responses 绑定恢复、跨套餐协议重编码/粘性、批量导入去重、凭证不回显。

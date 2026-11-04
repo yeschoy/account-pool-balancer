@@ -116,6 +116,7 @@ curl -fsS http://127.0.0.1:8790/healthz
 不能理解新 provider，需另行制定迁移/恢复方案。保留备份及回滚镜像，
 不要无确认清理。
 
-预检容器 `account-pool-balancer-check-20261104t062429z` 已停止；其
-`preflight-data` 位于上述受限备份目录，包含敏感数据副本。仅在用户同意后
-清理这些中间产物；运行版本快照和回滚备份不随临时文件一起删除。
+经用户批准，已删除预检容器 `account-pool-balancer-check-20261104t062429z`、
+受限备份目录中的 `preflight-data` 敏感副本和 `preflight.log`。清理结果已记入
+远程 `deploy.json`；线上容器未重启且保持 healthy。运行数据、版本源码快照、
+回滚镜像、完整数据备份及构建/部署记录均保留，不随临时文件一起删除。
