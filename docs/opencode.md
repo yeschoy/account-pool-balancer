@@ -5,6 +5,8 @@
 源码对照和许可证决策：[opencode-audit.md](opencode-audit.md)。
 
 后续状态：已获用户授权在生产开启 Go 并验证真实模型/额度读取，仍未做真实推理。
+其后的本地 Go 会话/缓存亲和、固定出口校验、限流与概览日志加固见
+[opencode-go-gateway.md](opencode-go-gateway.md)；这些代码尚未部署。
 Go 设置、指纹与风险控制的专项对照及当前配置见
 [opencode-go-risk-audit.md](opencode-go-risk-audit.md)；下文原轮次的“无真实凭证/未验证 usage”记录是历史边界，不代表这次后续核验未进行。
 

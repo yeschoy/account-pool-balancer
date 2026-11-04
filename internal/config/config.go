@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -495,6 +496,7 @@ type Account struct {
 	Weight      int       `json:"weight"`
 	Priority    int       `json:"priority"`
 	ProxyURL    string    `json:"proxyUrl,omitempty"`
+	EgressIP    string    `json:"egressIp,omitempty"` // optional expected static Go egress; sharing is allowed
 	CreatedAt   time.Time `json:"createdAt"`
 
 	// ---- Perch only -------------------------------------------------------
@@ -1464,6 +1466,13 @@ func (c *Config) Normalize() error {
 		}
 		if err := ValidateProxyURL(a.ProxyURL); err != nil {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, err)
+		}
+		if a.EgressIP != "" {
+			ip, err := netip.ParseAddr(strings.TrimSpace(a.EgressIP))
+			if err != nil || ip.Zone() != "" || a.Provider != ProviderOpenCodeGo || c.OpenCode.GoEgressCheckURL == "" {
+				return fmt.Errorf("accounts[%s]: egressIp requires Go, a valid IP and opencode.goEgressCheckUrl", a.ID)
+			}
+			a.EgressIP = ip.Unmap().String()
 		}
 		if a.CreatedAt.IsZero() {
 			a.CreatedAt = time.Now().UTC()

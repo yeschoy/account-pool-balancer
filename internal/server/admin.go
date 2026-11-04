@@ -257,6 +257,8 @@ type accountView struct {
 	HasProxy       bool             `json:"hasProxy"`
 	ProxyURL       string           `json:"proxyUrl"`
 	ProxyHealth    *proxyHealthView `json:"proxyHealth,omitempty"`
+	EgressIP       string           `json:"egressIp,omitempty"`
+	Egress         *goEgressView    `json:"egress,omitempty"`
 	CreatedAt      time.Time        `json:"createdAt"`
 	Runtime        pool.View        `json:"runtime"`
 	Quota          *quota.Snapshot  `json:"quota"`
@@ -303,6 +305,10 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 			ph := s.openCodeProxyView(a.ProxyURL)
 			v.ProxyHealth = &ph
 		}
+		if a.Provider == config.ProviderOpenCodeGo {
+			eg := s.goEgressView(cfg, a)
+			v.EgressIP, v.Egress = a.EgressIP, &eg
+		}
 		if a.Provider == config.ProviderPerch {
 			v.PerchUserID, v.PerchRefreshFailed = a.PerchUserID, a.PerchRefreshFailed
 			v.PerchLastError, v.PerchLastErrorAt = a.PerchLastError, a.PerchLastErrorAt
@@ -342,6 +348,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
 			default:
 				v.QuotaFresh = q.Fresh(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
+			}
+			if a.Provider == config.ProviderOpenCodeGo && a.EgressIP != "" && v.Egress != nil && v.Egress.Status != "verified" {
+				v.QuotaFresh = false
 			}
 			for _, other := range byWS[q.WorkspaceID] {
 				if other != a.ID {
@@ -393,6 +402,7 @@ type accountInput struct {
 	Weight           *int    `json:"weight"`
 	Priority         *int    `json:"priority"`
 	ProxyURL         *string `json:"proxyUrl"`
+	EgressIP         *string `json:"egressIp"`
 	ClearProxy       bool    `json:"clearProxy"`
 }
 
@@ -407,6 +417,7 @@ func (in accountInput) apply(a *config.Account) {
 	set(&a.Email, in.Email)
 	set(&a.Note, in.Note)
 	set(&a.Group, in.Group)
+	set(&a.EgressIP, in.EgressIP)
 	if in.Provider != nil && config.KnownProvider(strings.TrimSpace(*in.Provider)) {
 		a.Provider = strings.TrimSpace(*in.Provider)
 	}
@@ -1451,7 +1462,21 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Strings(groupList)
+	bindings, clientKeys, strategy := s.pool.BindingCount(), len(cfg.ClientKeys), cfg.Routing.Strategy
+	var goView *goOverview
+	if want == config.ProviderOpenCodeGo {
+		goView = s.goOverview(cfg, views)
+		bindings = goView.Bindings.Sessions + goView.Bindings.Responses
+		clientKeys = 0
+		for _, k := range cfg.ClientKeys {
+			if keyPool(cfg, k) == want {
+				clientKeys++
+			}
+		}
+		strategy = cfg.ForProvider(want).Routing.Strategy
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"go":             goView,
 		"accounts":       len(views),
 		"status":         statusCount,
 		"groups":         groupList,
@@ -1464,13 +1489,13 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		"modalAccounts":  modalKnown,
 		"authFailed":     authFailed,
 		"workspaces":     len(seenWS),
-		"bindings":       s.pool.BindingCount(),
+		"bindings":       bindings,
 		"stats":          s.stats.SummaryFor(want),
 		"logsDropped":    s.logs.Dropped(),
-		"clientKeys":     len(cfg.ClientKeys),
+		"clientKeys":     clientKeys,
 		"provider":       want,
 		"uptimeSec":      int64(time.Since(s.started).Seconds()),
-		"strategy":       cfg.Routing.Strategy,
+		"strategy":       strategy,
 	})
 }
 

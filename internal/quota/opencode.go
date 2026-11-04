@@ -11,7 +11,11 @@ import (
 
 func OpenCodeSource(cfg *config.Config, a config.Account) string {
 	bases := cfg.OpenCode.ProtocolBases(a.Provider)
-	return config.HashKey(bases["chat"] + "\x00" + bases["responses"] + "\x00" + bases["messages"] + "\x00" + a.Provider + "\x00" + a.RuntimeKey + "\x00" + a.ProxyURL + "\x00" + cfg.RuntimeBase(a) + "\x00" + cfg.OpenCode.CapabilitiesURL + "\x00" + cfg.OpenCode.ZenDocsURL + "\x00" + cfg.OpenCode.GoDocsURL)
+	extra := ""
+	if a.Provider == config.ProviderOpenCodeGo && a.EgressIP != "" {
+		extra = "\x00" + a.EgressIP + "\x00" + cfg.OpenCode.GoEgressCheckURL
+	}
+	return config.HashKey(extra + bases["chat"] + "\x00" + bases["responses"] + "\x00" + bases["messages"] + "\x00" + a.Provider + "\x00" + a.RuntimeKey + "\x00" + a.ProxyURL + "\x00" + cfg.RuntimeBase(a) + "\x00" + cfg.OpenCode.CapabilitiesURL + "\x00" + cfg.OpenCode.ZenDocsURL + "\x00" + cfg.OpenCode.GoDocsURL)
 }
 
 func (p *Poller) fetchOpenCode(ctx context.Context, cfg *config.Config, a config.Account) error {
@@ -32,6 +36,16 @@ func (p *Poller) fetchOpenCodeForce(ctx context.Context, cfg *config.Config, a c
 		s = &Snapshot{OpenCode: &opencode.State{Source: source}}
 	}
 	state := s.OpenCode
+	if a.Provider == config.ProviderOpenCodeGo && p.GoEgressCheck != nil {
+		if err := p.GoEgressCheck(ctx, cfg, a); err != nil {
+			state.CheckedAt, state.UsageError = now, "Go account network guard blocked queries"
+			s.LastError, s.LastErrorAt = state.UsageError, now
+			s.Failures++
+			s.NextAt = now.Add(time.Minute)
+			p.storeOpenCodeCurrent(cfg, a, source, s)
+			return err
+		}
+	}
 	client := opencode.NoRedirect(p.HTTPFor(a.ProxyURL))
 	ttl := time.Duration(cfg.OpenCode.RefreshSec) * time.Second
 	var partErr error
@@ -71,7 +85,7 @@ func (p *Poller) fetchOpenCodeForce(ctx context.Context, cfg *config.Config, a c
 		}
 	}
 	state.CheckedAt = now
-	if a.Provider == config.ProviderOpenCodeGo && (force || state.UsageAt.IsZero() || now.Sub(state.UsageAt) >= time.Minute) {
+	if a.Provider == config.ProviderOpenCodeGo && (force || state.UsageError != "" || state.UsageAt.IsZero() || now.Sub(state.UsageAt) >= time.Minute) {
 		u, err := opencode.FetchUsage(ctx, client, cfg.RuntimeBase(a), a.RuntimeKey)
 		if err != nil {
 			state.UsageError = err.Error()
@@ -94,10 +108,14 @@ func (p *Poller) fetchOpenCodeForce(ctx context.Context, cfg *config.Config, a c
 		}
 		s.NextAt = now.Add(interval)
 	}
+	p.storeOpenCodeCurrent(cfg, a, source, s)
+	return partErr
+}
+
+func (p *Poller) storeOpenCodeCurrent(cfg *config.Config, a config.Account, source string, s *Snapshot) {
 	// A late result for an old key/proxy/base must never revive its permissions.
 	current := p.Cfg()
 	if next, ok := current.Account(a.ID); ok && current.Revision == cfg.Revision && OpenCodeSource(current, next) == source {
 		p.store(a.ID, s)
 	}
-	return partErr
 }

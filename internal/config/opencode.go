@@ -19,32 +19,36 @@ func IsOpenCode(p string) bool { return p == ProviderOpenCodeZen || p == Provide
 // OpenCode is additive to version 1. Anonymous access is deliberately absent.
 // Bases include /v1, like every other API-key provider in this application.
 type OpenCode struct {
-	Enabled          bool              `json:"enabled"`
-	Compatibility    bool              `json:"compatibility"`
-	ZenBase          string            `json:"zenBase"`
-	GoBase           string            `json:"goBase"`
-	CapabilitiesURL  string            `json:"capabilitiesUrl"`
-	ZenDocsURL       string            `json:"zenDocsUrl"`
-	GoDocsURL        string            `json:"goDocsUrl"`
-	RefreshSec       int               `json:"refreshSec"`
-	ZenRouting       *Routing          `json:"zenRouting,omitempty"`
-	GoRouting        *Routing          `json:"goRouting,omitempty"`
-	ZenFallbackGroup string            `json:"zenFallbackGroup,omitempty"`
-	GoFallbackGroup  string            `json:"goFallbackGroup,omitempty"`
-	ZenProtocols     map[string]string `json:"zenProtocols"`
-	GoProtocols      map[string]string `json:"goProtocols"`
-	ZenProtocolBases map[string]string `json:"zenProtocolBases"`
-	GoProtocolBases  map[string]string `json:"goProtocolBases"`
-	ZenErrorRules    []rules.ErrorRule `json:"zenErrorRules"`
-	ZenRetryRules    []rules.RetryRule `json:"zenRetryRules"`
-	GoErrorRules     []rules.ErrorRule `json:"goErrorRules"`
-	GoRetryRules     []rules.RetryRule `json:"goRetryRules"`
+	Enabled             bool              `json:"enabled"`
+	Compatibility       bool              `json:"compatibility"`
+	ZenBase             string            `json:"zenBase"`
+	GoBase              string            `json:"goBase"`
+	GoEgressCheckURL    string            `json:"goEgressCheckUrl"`
+	GoEgressCheckSec    int               `json:"goEgressCheckSec"`
+	GoPolicyCooldownSec int               `json:"goPolicyCooldownSec"`
+	CapabilitiesURL     string            `json:"capabilitiesUrl"`
+	ZenDocsURL          string            `json:"zenDocsUrl"`
+	GoDocsURL           string            `json:"goDocsUrl"`
+	RefreshSec          int               `json:"refreshSec"`
+	ZenRouting          *Routing          `json:"zenRouting,omitempty"`
+	GoRouting           *Routing          `json:"goRouting,omitempty"`
+	ZenFallbackGroup    string            `json:"zenFallbackGroup,omitempty"`
+	GoFallbackGroup     string            `json:"goFallbackGroup,omitempty"`
+	ZenProtocols        map[string]string `json:"zenProtocols"`
+	GoProtocols         map[string]string `json:"goProtocols"`
+	ZenProtocolBases    map[string]string `json:"zenProtocolBases"`
+	GoProtocolBases     map[string]string `json:"goProtocolBases"`
+	ZenErrorRules       []rules.ErrorRule `json:"zenErrorRules"`
+	ZenRetryRules       []rules.RetryRule `json:"zenRetryRules"`
+	GoErrorRules        []rules.ErrorRule `json:"goErrorRules"`
+	GoRetryRules        []rules.RetryRule `json:"goRetryRules"`
 }
 
 func DefaultOpenCode() OpenCode {
 	return OpenCode{
 		ZenBase: "https://opencode.ai/zen/v1", GoBase: "https://opencode.ai/zen/go/v1",
 		CapabilitiesURL: "https://models.opencode.ai/api.json", RefreshSec: 600,
+		GoEgressCheckSec: 60, GoPolicyCooldownSec: 300,
 		ZenProtocols: map[string]string{}, GoProtocols: map[string]string{},
 		ZenProtocolBases: map[string]string{}, GoProtocolBases: map[string]string{},
 		ZenErrorRules: DefaultErrorRulesFor(ProviderOpenCodeZen), GoErrorRules: DefaultErrorRulesFor(ProviderOpenCodeGo),
@@ -62,6 +66,7 @@ func (o *OpenCode) normalize() error {
 		{&o.ZenBase, d.ZenBase, "zenBase"}, {&o.GoBase, d.GoBase, "goBase"},
 		{&o.CapabilitiesURL, d.CapabilitiesURL, "capabilitiesUrl"},
 		{&o.ZenDocsURL, "", "zenDocsUrl"}, {&o.GoDocsURL, "", "goDocsUrl"},
+		{&o.GoEgressCheckURL, "", "goEgressCheckUrl"},
 	} {
 		if *f.p == "" {
 			*f.p = f.def
@@ -73,6 +78,18 @@ func (o *OpenCode) normalize() error {
 		if err := validateOpenCodeURL(*f.p, f.name); err != nil {
 			return err
 		}
+	}
+	if o.GoEgressCheckSec == 0 {
+		o.GoEgressCheckSec = d.GoEgressCheckSec
+	}
+	if o.GoPolicyCooldownSec == 0 {
+		o.GoPolicyCooldownSec = d.GoPolicyCooldownSec
+	}
+	if err := clampInt(&o.GoEgressCheckSec, 5, 3600, "opencode.goEgressCheckSec"); err != nil {
+		return err
+	}
+	if err := clampInt(&o.GoPolicyCooldownSec, 1, 86400, "opencode.goPolicyCooldownSec"); err != nil {
+		return err
 	}
 	for _, bases := range []*map[string]string{&o.ZenProtocolBases, &o.GoProtocolBases} {
 		if *bases == nil {

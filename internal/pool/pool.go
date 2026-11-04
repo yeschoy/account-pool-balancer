@@ -8,10 +8,12 @@ package pool
 import (
 	"container/list"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,7 +108,10 @@ type binding struct {
 	generation uint64
 	owner      string
 	// source is set only for persisted OpenCode Responses bindings.
-	source string
+	source      string
+	session     string // opaque gateway session, never a raw client identifier
+	cache       bool   // model-scoped preference, not a conversation/response chain
+	cacheSource string
 }
 
 type healthSlot struct {
@@ -214,16 +219,18 @@ type Request struct {
 	Model           string
 	RequestID       string
 	// Affinity is the session fingerprint; "" when the request has none.
-	Affinity string
-	Explicit bool
-	Excluded map[string]bool
-	Wait     time.Duration
+	Affinity      string
+	CacheAffinity string // optional secondary preference; never overrides a session
+	Explicit      bool
+	Excluded      map[string]bool
+	Wait          time.Duration
 }
 
 type Decision struct {
 	AccountID     string   `json:"accountId"`
 	Reason        string   `json:"reason"`
 	BindingResult string   `json:"bindingResult"`
+	CacheResult   string   `json:"cacheAffinityResult,omitempty"`
 	Overflow      bool     `json:"overflow"`
 	Candidates    int      `json:"candidates"`
 	Order         []string `json:"order,omitempty"`
@@ -398,6 +405,9 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 			return "quarantined"
 		}
 		if !st.CooldownUntil.IsZero() {
+			if a.Provider == config.ProviderOpenCodeGo && st.RuleID == "opencode-go-policy-refusal" {
+				return "policy-paused"
+			}
 			return "cooldown"
 		}
 		if model != "" {
@@ -601,12 +611,16 @@ func (p *Pool) putProvisionalLocked(cfg *config.Config, req Request, accountID s
 // account answered, so a follow-up naming it as previous_response_id lands
 // on the same account.
 func (p *Pool) Bind(cfg *config.Config, key, accountID string) {
+	p.BindWithSession(cfg, key, accountID, "")
+}
+
+func (p *Pool) BindWithSession(cfg *config.Config, key, accountID, session string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := p.now()
 	p.deleteBindingLocked(key)
 	p.gen++
-	b := &binding{key: key, accountID: accountID, explicit: true, expiresAt: now.Add(ttl(cfg, true)), confirmed: true, generation: p.gen}
+	b := &binding{key: key, accountID: accountID, explicit: true, expiresAt: now.Add(ttl(cfg, true)), confirmed: true, generation: p.gen, session: session}
 	if a, ok := cfg.Account(accountID); ok && config.IsOpenCode(a.Provider) {
 		b.source = quota.OpenCodeSource(cfg, a)
 		p.dirty = true
@@ -721,7 +735,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		}
 		ue := &UnavailableError{Reason: "all-unavailable", Details: details}
 		// some are only cooling down: say when the soonest is back
-		if details["cooldown"]+details["model-cooldown"]+details["funding-cooldown"] > 0 {
+		if details["cooldown"]+details["model-cooldown"]+details["funding-cooldown"]+details["policy-paused"] > 0 {
 			var soonest time.Time
 			for _, a := range cfg.Accounts {
 				if a.Group != req.Group || req.Excluded[a.ID] {
@@ -754,6 +768,9 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	}
 
 	d := Decision{BindingResult: "not-applicable", Candidates: len(cands)}
+	if req.CacheAffinity != "" {
+		d.CacheResult = "miss"
+	}
 	sticky := (cfg.Routing.Sticky || req.RequireBinding) && req.Affinity != ""
 	overflow := false
 	blocked := map[string]bool{}
@@ -768,6 +785,11 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				}
 			}
 			if idx < 0 {
+				if a, ok := cfg.Account(b.accountID); ok && a.Provider == config.ProviderOpenCodeGo {
+					if st := p.stateLocked(a.ID, now); st != nil && st.RuleID == "opencode-go-policy-refusal" && now.Before(st.CooldownUntil) {
+						return nil, &UnavailableError{Reason: "policy-paused", Details: map[string]int{"policy": 1}, RetryAfter: st.CooldownUntil.Sub(now)}
+					}
+				}
 				if req.RequireBinding {
 					return nil, &BindingError{Reason: "account unavailable"}
 				}
@@ -787,6 +809,9 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 					}
 					p.lru.MoveToFront(p.bindings[req.Affinity])
 					d.AccountID, d.Reason = a.ID, "binding"
+					if req.CacheAffinity != "" {
+						d.CacheResult = "session-preferred"
+					}
 					d.BindingResult = "hit"
 					if !b.confirmed {
 						d.BindingResult = "provisional"
@@ -816,6 +841,25 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	order := routes.Order(cfg.Routing.Strategy, req.Group, seats, routes.Params{
 		LowShare: cfg.Routing.LowShare, SpentShare: cfg.Routing.SpentShare, Cursor: p.cursor,
 	})
+	preferred := ""
+	if req.CacheAffinity != "" {
+		if b := p.getBindingLocked(req.CacheAffinity, now); b != nil && b.cache {
+			d.CacheResult = "unavailable"
+			for pos, i := range order {
+				if cands[i].a.ID == b.accountID && b.cacheSource != quota.OpenCodeSource(cfg, cands[i].a) {
+					p.deleteBindingLocked(req.CacheAffinity)
+					d.CacheResult = "invalidated"
+					break
+				}
+				if cands[i].a.ID == b.accountID {
+					preferred, d.CacheResult = b.accountID, "hit"
+					copy(order[1:pos+1], order[:pos])
+					order[0] = i
+					break
+				}
+			}
+		}
+	}
 	for _, i := range order {
 		d.Order = append(d.Order, cands[i].a.ID)
 		if len(d.Order) >= 8 {
@@ -826,6 +870,9 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		a := cands[i].a
 		ok, by, ra := p.admitLocked(a, now)
 		if !ok {
+			if a.ID == preferred {
+				d.CacheResult = "busy-fallback"
+			}
 			blocked[by] = true
 			if retry == 0 || ra < retry {
 				retry = ra
@@ -834,6 +881,9 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		}
 		d.AccountID, d.Overflow = a.ID, overflow
 		d.Reason = "strategy:" + cfg.Routing.Strategy
+		if a.ID == preferred {
+			d.Reason = "cache-affinity"
+		}
 		if overflow {
 			d.Reason = "overflow"
 		}
@@ -1153,7 +1203,7 @@ func (p *Pool) Views(cfg *config.Config) map[string]View {
 	perAccount := map[string]int{}
 	for _, el := range p.bindings {
 		b := el.Value.(*binding)
-		if now.Before(b.expiresAt) {
+		if now.Before(b.expiresAt) && !b.cache {
 			perAccount[b.accountID]++
 		}
 	}
@@ -1212,6 +1262,7 @@ type PersistedBinding struct {
 	AccountID string    `json:"accountId"`
 	Source    string    `json:"source"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	Session   string    `json:"session,omitempty"`
 }
 
 type Export struct {
@@ -1239,7 +1290,7 @@ func (p *Pool) ExportState() (Export, bool) {
 	for el := p.lru.Front(); el != nil; el = el.Next() {
 		b := el.Value.(*binding)
 		if b.confirmed && b.source != "" && p.now().Before(b.expiresAt) {
-			e.Bindings = append(e.Bindings, PersistedBinding{Key: b.key, AccountID: b.accountID, Source: b.source, ExpiresAt: b.expiresAt})
+			e.Bindings = append(e.Bindings, PersistedBinding{Key: b.key, AccountID: b.accountID, Source: b.source, ExpiresAt: b.expiresAt, Session: b.session})
 		}
 	}
 	for id, st := range p.states {
@@ -1271,7 +1322,13 @@ func (p *Pool) ImportState(e Export, valid map[string]bool) {
 			continue
 		}
 		p.gen++
-		v := &binding{key: b.Key, accountID: b.AccountID, source: b.Source, expiresAt: b.ExpiresAt, explicit: true, confirmed: true, generation: p.gen}
+		session := b.Session
+		if len(session) != 68 || !strings.HasPrefix(session, "apb-") {
+			session = ""
+		} else if _, err := hex.DecodeString(session[4:]); err != nil {
+			session = ""
+		}
+		v := &binding{key: b.Key, accountID: b.AccountID, source: b.Source, expiresAt: b.ExpiresAt, explicit: true, confirmed: true, generation: p.gen, session: session}
 		p.bindings[b.Key] = p.lru.PushBack(v)
 	}
 	for id, st := range e.States {

@@ -17,10 +17,11 @@ import (
 // Identity is the conversation a request belongs to. Only the enum fields
 // are ever logged; the raw value and the fingerprint never are.
 type Identity struct {
-	Source      string // header | body | message_hmac | none
-	KeyType     string // session_id, parent_session, prompt_cache_key, previous_response_id, …
-	Confidence  string // explicit | fallback | none
-	Fingerprint string
+	Source          string // header | body | message_hmac | none
+	KeyType         string // session_id, parent_session, prompt_cache_key, previous_response_id, …
+	Confidence      string // explicit | fallback | none
+	Fingerprint     string
+	UpstreamSession string // Go-only opaque session; never logged
 }
 
 // Headers new-api passes through, in priority order: parents first so a

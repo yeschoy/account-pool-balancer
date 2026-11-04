@@ -18,11 +18,22 @@ type Bucket struct {
 	Cached    int64 `json:"k"`
 	Prompt    int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
 	// CachePrompt and CacheCached cover only requests with both input and cache usage.
-	CachePrompt        int64   `json:"cp,omitempty"`
-	CacheCached        int64   `json:"ck,omitempty"`
-	CacheKnownRequests int64   `json:"ckr,omitempty"`
-	CostCNY            float64 `json:"cc,omitempty"`
-	CostUSD            float64 `json:"cu,omitempty"`
+	CachePrompt             int64   `json:"cp,omitempty"`
+	CacheCached             int64   `json:"ck,omitempty"`
+	CacheKnownRequests      int64   `json:"ckr,omitempty"`
+	CacheWrite              int64   `json:"cw,omitempty"`
+	CacheWriteKnownRequests int64   `json:"cwkr,omitempty"`
+	InputKnownRequests      int64   `json:"ikr,omitempty"`
+	OutputKnownRequests     int64   `json:"okr,omitempty"`
+	DurationCount           int64   `json:"dn,omitempty"`
+	BindingHits             int64   `json:"bh,omitempty"`
+	AffinityRequests        int64   `json:"ar,omitempty"`
+	CacheAffinityHits       int64   `json:"cah,omitempty"`
+	DurationMs              int64   `json:"dm,omitempty"`
+	TTFTMs                  int64   `json:"tm,omitempty"`
+	TTFTCount               int64   `json:"tn,omitempty"`
+	CostCNY                 float64 `json:"cc,omitempty"`
+	CostUSD                 float64 `json:"cu,omitempty"`
 }
 
 func (b *Bucket) add(o Bucket) {
@@ -37,6 +48,17 @@ func (b *Bucket) add(o Bucket) {
 	b.CachePrompt += o.CachePrompt
 	b.CacheCached += o.CacheCached
 	b.CacheKnownRequests += o.CacheKnownRequests
+	b.CacheWrite += o.CacheWrite
+	b.CacheWriteKnownRequests += o.CacheWriteKnownRequests
+	b.InputKnownRequests += o.InputKnownRequests
+	b.OutputKnownRequests += o.OutputKnownRequests
+	b.DurationCount += o.DurationCount
+	b.BindingHits += o.BindingHits
+	b.AffinityRequests += o.AffinityRequests
+	b.CacheAffinityHits += o.CacheAffinityHits
+	b.DurationMs += o.DurationMs
+	b.TTFTMs += o.TTFTMs
+	b.TTFTCount += o.TTFTCount
 	b.CostCNY += o.CostCNY
 	b.CostUSD += o.CostUSD
 }
@@ -82,15 +104,20 @@ const maxProxies = 200
 
 // Sample is one finished request.
 type Sample struct {
-	AccountID, Model string
-	Provider         string // opendesign | river; "" counts only in the overall view
-	Proxy            string // egress label: proxy host:port, or "direct"
-	Result           string // success | failed | client_cancelled
-	Input, Output    *int64
-	Cached           *int64
-	Prompt           int64 // total prompt tokens, cache hits included
-	Currency         string
-	Cost             float64
+	AccountID, Model    string
+	Provider            string // opendesign | river; "" counts only in the overall view
+	Proxy               string // egress label: proxy host:port, or "direct"
+	Result              string // success | failed | client_cancelled
+	Input, Output       *int64
+	Cached              *int64
+	CacheWrite          *int64
+	BindingResult       string
+	CacheAffinityResult string
+	DurationMs          int64
+	TTFTMs              *int64
+	Prompt              int64 // total prompt tokens, cache hits included
+	Currency            string
+	Cost                float64
 }
 
 func slotOf(m map[string]*ring, key string, limit int) *ring {
@@ -124,7 +151,29 @@ func (s *Stats) Record(x Sample) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := s.now().Unix() / 60
-	d := Bucket{Requests: 1, Prompt: x.Prompt}
+	d := Bucket{Requests: 1, Prompt: x.Prompt, DurationMs: x.DurationMs, DurationCount: 1}
+	if x.Input != nil {
+		d.InputKnownRequests = 1
+	}
+	if x.Output != nil {
+		d.OutputKnownRequests = 1
+	}
+	if x.CacheWrite != nil {
+		d.CacheWrite = *x.CacheWrite
+		d.CacheWriteKnownRequests = 1
+	}
+	if x.BindingResult != "" && x.BindingResult != "not-applicable" {
+		d.AffinityRequests = 1
+	}
+	if x.BindingResult == "hit" {
+		d.BindingHits = 1
+	}
+	if x.CacheAffinityResult == "hit" {
+		d.CacheAffinityHits = 1
+	}
+	if x.TTFTMs != nil {
+		d.TTFTMs, d.TTFTCount = *x.TTFTMs, 1
+	}
 	switch x.Result {
 	case "success":
 		d.Success = 1

@@ -49,6 +49,17 @@
 - No reference GPL implementation/assets/prompts are copied or bundled. Keep
   research checkouts, credentials and caches out of Git and Docker contexts.
 
+## Paid Go gateway refinements
+
+- Go explicit conversation/parent identity outranks `prompt_cache_key`; model-scoped cache preference is separate from response-chain state and caller-isolated. Other providers keep their existing identity order.
+- Cache preference is optional bounded in-memory LRU, source-validated, and must not evict session/response bindings or take ownership merely because a preferred account was busy. Ordinary session/cache bindings do not persist; confirmed Responses bindings persist their opaque `apb-` session for continuity.
+- Preserve real client UA; only absent/recognized generic library UA uses the gateway's honest product name. Native cache-control/body bytes stay unchanged. Do not log raw session/cache IDs, including optional Go detail capture.
+- `Account.egressIp` is optional and Go-only. Shared static IPs are allowed. A configured proxy URL is not proof of a fixed public IP. Pinned inference and metadata require a fresh successful no-credential IP check through the same fixed account transport; failures block without direct fallback or inference RPM/health charges. Empty pin is configured-only/unverified. Checks detect drift and cannot make a dynamic network static.
+- Go IP check URL is admin-validated and opt-in; no implicit external reflector. Coalesce checks outside pool locks, bound cache/response size/time, refuse redirects and discard stale-source quota writes. Changing check freshness must expire the corresponding check identity.
+- Go known policy refusal pauses persisted account state; explicit network abuse also pauses Go peers on the same configured route or expected IP, even when one peer has no pin. Do not affect Zen/other pools or replay after committed output.
+- Go overview must scope binding/key/strategy values correctly. Cache token reads, cache affinity, session-binding hits and measurement coverage are different metrics; missing cache writes/input/output/timing remain unknown and historical data is not backfilled as measured zero. Price-table estimates are not Go subscription bills.
+- Request/error records distinguish local/upstream/transport, correlate client/selection/cache/egress outcomes without raw identities, and preserve original HTTP status for errors occurring inside a committed stream.
+
 ## Executable cross-layer contract
 
 ### 1. Scope / Trigger

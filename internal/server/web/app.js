@@ -263,9 +263,32 @@ $('#pool-tabs').addEventListener('click', (ev) => {
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });
 
 // ---- overview ----
+const GO_CACHE_LABEL = { hit: '命中缓存偏好', miss: '暂无缓存偏好', 'session-preferred': '优先原会话', 'busy-fallback': '缓存账号忙，另选', unavailable: '缓存账号不可用', invalidated: '来源变化，偏好失效' };
+const GO_EGRESS_LABEL = { 'configured-only': '仅绑定出口，IP 未验证', unverified: '待验证', checking: '验证中', verified: 'IP 校验通过', observed: '已观测，未固定 IP', expired: '校验已过期', mismatch: '出口 IP 不符', failed: 'IP 校验失败' };
+function goOverviewCards(o) {
+  const g = o.go; if (!g) return [];
+  return [
+    ['Go 当前并发', num(g.inFlight), `已设限账号容量 ${num(g.capacity)} · ${num(g.unlimitedAccounts)} 个账号未限并发`],
+    ['Go 额度数据', `${num(g.quotaFresh)} / ${num(o.accounts)}`, `新鲜 / 总账号 · 未知 ${num(g.quotaUnknown)} · 已耗尽 ${num(g.quotaExhausted)}（共享订阅不相加）`],
+    ['Go 出口校验', num(g.egress.verified || 0), Object.entries(g.egress).map(([k,v]) => `${GO_EGRESS_LABEL[k] || k} ${num(v)}`).join(' · ')],
+    ['Go 风控暂停', num(g.policyPaused), '政策拒绝后暂停当前账号，不换出口绕过'],
+    ['Go 缓存亲和', num(g.bindings.cache), `当前偏好记录 · 24h 亲和命中 ${num(o.stats.total.cah || 0)} 次；不是实际缓存读取`],
+    ['Go 会话绑定命中率', o.stats.total.ar ? pct((o.stats.total.bh || 0) / o.stats.total.ar) : '—', `会话 ${num(g.bindings.sessions)} · 响应链 ${num(g.bindings.responses)}；仅统计带亲和信号的请求`],
+    ['Go 平均耗时', o.stats.total.dn ? num(Math.round((o.stats.total.dm || 0) / o.stats.total.dn)) + 'ms' : '—', o.stats.total.tn ? `平均首事件 ${num(Math.round(o.stats.total.tm / o.stats.total.tn))}ms · ${num(o.stats.total.tn)} 次测量` : '暂无首事件测量'],
+  ];
+}
+function goQuotaWindows(g) {
+  if (!g?.quotas?.length) return '<p class="muted">暂无 Go 账号；额度按订阅共享窗口展示，不求和。</p>';
+  return g.quotas.map((a) => `<div class="win"><b>${esc(a.name)}</b> <span class="badge ${a.fresh ? '' : 'warn'}">${a.fresh ? '数据新鲜' : '未知 / 旧数据'}</span>${['rolling','weekly','monthly'].map((k) => {
+    const w = a.usage?.[k]; if (!w) return `<div class="acc-sub">${({ rolling:'5 小时', weekly:'周', monthly:'月' })[k]}：未知</div>`;
+    return `<div class="acc-sub">${({ rolling:'5 小时', weekly:'周', monthly:'月' })[k]}已用 ${num(w.usedPercent)}% · 剩余 ${num(w.remainingPercent)}% · 重置 ${esc(fmtTime(w.resetsAt,true))}</div>`;
+  }).join('')}<div class="acc-sub">更新 ${esc(fmtTime(a.usageAt,true))}；多个 Key 可能共享同一订阅，不可相加。</div></div>`).join('');
+}
 async function loadOverview() {
   const o = await api('GET', withPool('/api/overview'));
   const st = o.stats.total;
+  $('#ov-egress-title').textContent = pool === 'opencode-go' ? '各固定出口路由 24 小时成功率（不是实测 IP）' : '各出口 IP 24 小时成功率';
+  $('#ov-quota-title').textContent = pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : '套餐窗口（按工作区去重）';
   const okRate = st.r ? (st.s / Math.max(1, st.r - st.c)) : null;
   const ok = o.status.ok || 0;
   const cards = [
@@ -275,9 +298,10 @@ async function loadOverview() {
     ...(pool === 'ollama' && o.ollamaAccounts ? [['Ollama 额度合计', '$' + o.ollamaCredits.toFixed(2), `${o.ollamaAccounts} 个账号（含赠送额度 + 已购额度，同一团队的 key 会重复计）`]] : []),
     ...(pool === 'modal' && o.modalAccounts ? [['可用 Endpoint', num(o.modalEndpoints), `${o.modalAccounts} 个账号的 token 能访问的 Endpoint 数（同一 Endpoint 会被多个账号各计一次）`]] : []),
     ['24h 请求', num(st.r), `成功率 ${okRate === null ? '—' : pct(okRate)} · 近 1h ${num(o.stats.lastHour.r)}`],
-    ['24h 费用', costSum(st), '按模型价格估算，未配价格的不计'],
-    ['24h 缓存命中率', hitRate(st) === null ? '—' : pct(hitRate(st)), `缓存 ${num(st.k)} / 提示 ${num(st.p)} token`],
-    ['24h Token', num(st.i + st.o), `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
+    ['24h ' + (pool === 'opencode-go' ? '价格表估算' : '费用'), costSum(st), pool === 'opencode-go' ? '不是 Go 订阅账单或额外扣费金额' : '按模型价格估算，未配价格的不计'],
+    ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), pool === 'opencode-go' ? `有测量缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 覆盖 ${num(st.ckr || 0)} / ${num(st.r)} 次；写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : `缓存 ${num(st.k)} / 提示 ${num(st.p)} token`],
+    ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
+    [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 缓存读取 ${st.ckr ? num(st.ck) : '未知'}（测量覆盖见缓存卡片）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
     ['会话绑定', num(o.bindings), `策略 ${o.strategy}`],
   ];
   $('#ov-cards').innerHTML = cards.map(([l, v, s]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
@@ -285,7 +309,7 @@ async function loadOverview() {
   $('#ov-models tbody').innerHTML = models.map(([name, b]) => {
     const done = b.r - b.c;
     const hr = hitRate(b);
-    return `<tr><td>${esc(name)}</td><td class="num">${num(b.r)}</td><td class="num">${done > 0 ? pct(b.s / done) : '—'}</td><td class="num">${num(b.i)}</td><td class="num">${num(b.o)}</td><td class="num">${hr === null ? '—' : pct(hr)}</td><td class="num">${esc(costSum(b))}</td></tr>`;
+    return `<tr><td>${esc(name)}</td><td class="num">${num(b.r)}</td><td class="num">${done > 0 ? pct(b.s / done) : '—'}</td><td class="num">${pool === 'opencode-go' && !b.ikr ? '—' : num(b.i)}</td><td class="num">${pool === 'opencode-go' && !b.okr ? '—' : num(b.o)}</td><td class="num">${hr === null ? '—' : pct(hr)}</td><td class="num">${esc(costSum(b))}</td></tr>`;
   }).join('') || '<tr><td colspan="7" class="empty">暂无请求</td></tr>';
   const proxies = Object.entries(o.stats.proxies || {}).sort((a, b) => b[1].r - a[1].r);
   $('#ov-proxies tbody').innerHTML = proxies.map(([name, b]) => {
@@ -299,7 +323,7 @@ async function loadOverview() {
     return `<div class="col" title="${esc(label)} 请求 ${b.r}，失败 ${b.f}，取消 ${b.c}"><div class="seg ok" data-h="${b.s / peak * 100}"></div><div class="seg bad" data-h="${b.f / peak * 100}"></div><div class="seg cancel" data-h="${b.c / peak * 100}"></div></div>`;
   }).join('');
   applyWidths($('#ov-chart'));
-  $('#ov-windows').innerHTML = o.windows.length ? o.windows.map((w) => {
+  $('#ov-windows').innerHTML = pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
     const used = w.limit ? w.used / w.limit * 100 : 0;
     return `<div class="win"><div class="row"><b>${esc(fmtDur(w.durationSeconds))}</b><span class="muted">剩余 ${num(w.remaining)} / ${num(w.limit)} credits</span></div><div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div></div>`;
   }).join('') : `<p class="muted">${pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
@@ -309,7 +333,7 @@ async function loadOverview() {
 }
 
 // ---- accounts ----
-const STATUS = { ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
+const STATUS = { 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
 const statusLabel = (s) => (STATUS[s] || [s])[0];
 const statusClass = (s) => (STATUS[s] || ['', ''])[1];
 
@@ -419,6 +443,7 @@ function accountRow(a) {
   let status = `<span class="badge ${statusClass(r.status)}">${esc(statusLabel(r.status))}</span>`;
   if (a.tokenIncomplete) status = '<span class="badge bad">Token 不完整</span><div class="acc-sub" title="只填了 wk-<id> 那段。Modal 要的是 wk-<id>.ws-<secret>：到 modal.com/settings/proxy-auth-tokens 复制完整的 Proxy Token；旧 token 的 secret 只在创建时显示一次，看不到就新建一个，然后在这里改运行密钥">只有 wk-&lt;id&gt;，缺少 .ws-&lt;secret&gt;</div>';
   if (a.proxyHealth) status += `<div class="acc-sub">出口 ${esc(a.proxyHealth.status)}${a.proxyHealth.reason ? ' · ' + esc(a.proxyHealth.reason) : ''}</div>`;
+  if (a.egress) status += `<div class="acc-sub" title="${esc('上次校验 ' + fmtTime(a.egress.checkedAt) + '；校验只能发现漂移，固定 IP 需由静态网络保障')}">${esc(GO_EGRESS_LABEL[a.egress.status] || a.egress.status)}${a.egress.observedIp ? ' · ' + esc(a.egress.observedIp) : ''}</div>`;
   if (st.cooldownUntil) status += `<div class="acc-sub">至 ${esc(fmtTime(st.cooldownUntil, true))}</div>`;
   if (st.ruleId) status += `<div class="acc-sub">规则 ${esc(st.ruleId)}${st.statusCode ? ' · ' + st.statusCode : ''}</div>`;
   if (st.learnedConcurrency || st.learnedRpm) status += `<div class="acc-sub" title="网关 tier_limit_exceeded 告知的套餐上限；点「恢复」清除">学到上限：${st.learnedConcurrency ? '并发 ' + st.learnedConcurrency : ''}${st.learnedRpm ? ' RPM ' + st.learnedRpm : ''}</div>`;
@@ -585,7 +610,7 @@ async function accountAction(a, act) {
     switch (act) {
       case 'edit': return editAccount(a);
       case 'test': return testAccount(a);
-      case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? '固定出口可达（不代表账号授权成功）' : r.error); break; }
+      case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
       case 'refresh': await api('POST', `/api/accounts/${a.id}/refresh-quota`); toast('额度已刷新'); break;
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
@@ -617,7 +642,7 @@ function accountForm(a) {
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
     ${a && !isOpenCode() ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
-    <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', 0)}">
+    <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', pool === 'opencode-go' ? 1 : 0)}">
     <span class="hint">0 表示不限</span>
     <label>每分钟请求</label><input id="f-rpm" type="number" min="0" value="${v('maxRpm', 0)}">
     <label>权重</label><input id="f-weight" type="number" min="1" max="100" value="${v('weight', 1)}">
@@ -625,6 +650,7 @@ function accountForm(a) {
     <span class="hint">数字越小越优先，同优先级内按策略排序</span>
     <label>出站代理</label><input id="f-proxy" placeholder="${a && a.hasProxy ? esc(a.proxyUrl) + '（留空不变）' : 'http:// 或 socks5://（可选）'}">
     ${a && a.hasProxy ? '<span></span><label class="check"><input type="checkbox" id="f-clear-proxy">移除代理（直连）</label>' : ''}
+    ${pool === 'opencode-go' ? `<label>预期固定出口 IP</label><input id="f-egress-ip" value="${v('egressIp')}" placeholder="可选，允许多账号共享同一固定 IP"><span class="hint">先在 Go 设置配置 IP 校验 URL。留空仅绑定出口，不宣称 IP 已固定；设置后校验失败会阻止推理及额度/目录查询。</span>` : ''}
     <label>备注</label><input id="f-note" value="${v('note')}" maxlength="500">
     <label>启用</label><label class="check"><input type="checkbox" id="f-enabled" ${!a || a.enabled ? 'checked' : ''}>参与调度</label>
   </div>`;
@@ -633,6 +659,7 @@ function readAccountForm() {
   const n = (id) => Number($(id).value || 0);
   const out = { name: $('#f-name').value, email: $('#f-email').value, group: $('#f-group').value, note: $('#f-note').value,
     maxConcurrent: n('#f-conc'), maxRpm: n('#f-rpm'), weight: n('#f-weight'), priority: n('#f-prio'), enabled: $('#f-enabled').checked };
+  if ($('#f-egress-ip')) out.egressIp = $('#f-egress-ip').value.trim();
   if ($('#f-rt').value.trim()) out.runtimeKey = $('#f-rt').value.trim();
   if ($('#f-ctrl') && $('#f-ctrl').value.trim()) out.controlKey = $('#f-ctrl').value.trim();
   if (keyNeedsProvider()) out.provider = pool; // an Ollama key has no prefix to read this from
@@ -885,7 +912,12 @@ const OPENCODE_FIELDS = [
   ['capabilitiesUrl', '公开能力目录 URL', 'text'], ['refreshSec', '模型刷新间隔（秒）', 'int'],
   ['zenDocsUrl', 'Zen 端点文档 URL（可选）', 'text'], ['goDocsUrl', 'Go 端点文档 URL（可选）', 'text'],
   ['zenFallbackGroup', 'Zen 回退的 Go 分组（默认不回退）', 'text'], ['goFallbackGroup', 'Go 回退的 Zen 分组（默认不回退）', 'text'],
+  ['goEgressCheckUrl', 'Go 出口 IP 校验 URL（可选）', 'text', '返回纯 IP 或 {"ip":"…"}；请求不带凭证，走账号固定出口；空值不联系第三方'],
+  ['goEgressCheckSec', 'Go IP 校验新鲜度（秒）', 'int', '5–3600；不能让动态代理变成静态出口'],
+  ['goPolicyCooldownSec', 'Go 政策拒绝暂停（秒）', 'int', '1–86400；不换号/出口，不清空订阅额度，可人工恢复'],
 ];
+const openCodeFields = () => OPENCODE_FIELDS.filter(([k]) => pool === 'opencode-go' ? !k.startsWith('zen') && k !== 'goFallbackGroup' : !['goEgressCheckUrl','goEgressCheckSec','goPolicyCooldownSec'].includes(k));
+const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1076,10 +1108,11 @@ async function loadSettings() {
   settingsCache = await api('GET', withPool('/api/settings'));
   const s = settingsCache.settings;
   $('#opencode-settings').classList.toggle('hidden', !isOpenCode());
-  renderForm($('#form-opencode'), OPENCODE_FIELDS, s.opencode || {}, 'oc');
+  renderForm($('#form-opencode'), openCodeFields(), s.opencode || {}, 'oc');
   $('#oc-protocols').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocols : s.opencode?.zenProtocols) || {}, null, 2);
   $('#oc-bases').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocolBases : s.opencode?.zenProtocolBases) || {}, null, 2);
-  renderForm($('#form-routing'), ROUTING_FIELDS, s.routing, 'rt');
+  renderForm($('#form-routing'), routingFields(), s.routing, 'rt');
+  if (pool === 'opencode-go') $('#form-routing').insertAdjacentHTML('beforeend', '<span></span><span class="hint">Go 已绑定会话满载时有界等待后返回 429，不临时借号；最大并发/RPM 在账号编辑中配置。缓存亲和为尽量复用，不保证上游缓存命中。</span>');
   renderForm($('#form-quota'), QUOTA_FIELDS, s.quota, 'qt');
   renderForm($('#form-logs'), LOG_FIELDS, s.logs, 'lg');
   $('#rt-strategy').addEventListener('change', (e) => { $('#rt-strategy-hint').textContent = STRATEGY_HINTS[e.target.value] || ''; });
@@ -1097,9 +1130,9 @@ async function loadSettings() {
 $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
-  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(ROUTING_FIELDS, 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
   if (isOpenCode()) {
-    body.opencode = readForm(OPENCODE_FIELDS, 'oc', s.opencode || {});
+    body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});
     try {
       body.opencode[pool === 'opencode-go' ? 'goProtocols' : 'zenProtocols'] = JSON.parse($('#oc-protocols').value || '{}');
       body.opencode[pool === 'opencode-go' ? 'goProtocolBases' : 'zenProtocolBases'] = JSON.parse($('#oc-bases').value || '{}');
@@ -1135,7 +1168,8 @@ function accountOptions(sel) {
   sel.innerHTML = '<option value="">全部账号</option>' + accountsCache.map((a) => `<option value="${esc(a.id)}" ${a.id === cur ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
 }
 function statusBadge(st, result) {
-  const cls = result === 'success' || (st >= 200 && st < 300) ? 'ok' : result === 'client_cancelled' || st === 499 ? '' : st === 429 ? 'warn' : 'bad';
+  const committedFailure = pool === 'opencode-go' && result === 'failed' && st >= 200 && st < 300;
+  const cls = committedFailure ? 'bad' : result === 'success' || (st >= 200 && st < 300) ? 'ok' : result === 'client_cancelled' || st === 499 ? '' : st === 429 ? 'warn' : 'bad';
   return `<span class="badge ${cls}">${esc(st)}</span>`;
 }
 const BIND = { hit: '命中', miss: '新绑定', provisional: '待确认', invalidated: '失效改派', 'temporary-overflow': '临时溢出', 'not-applicable': '—' };
@@ -1152,18 +1186,18 @@ const CUR = { CNY: '¥', USD: '$' };
 function money(v, cur) { return (CUR[cur] || '') + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(4) : v.toFixed(6)); }
 function costSum(b) { return [b.cc ? money(b.cc, 'CNY') : '', b.cu ? money(b.cu, 'USD') : ''].filter(Boolean).join(' + ') || '—'; }
 // cached share of the prompt (b.p, backfilled from input for old buckets on load)
-function hitRate(b) { return b.p ? Math.min(b.k / b.p, 1) : null; }
+function hitRate(b) { if (pool === 'opencode-go') return b.ckr && b.cp ? Math.min(b.ck / b.cp, 1) : null; return b.p ? Math.min(b.k / b.p, 1) : null; }
 function costCell(r) { return r.cost === undefined || r.cost === null ? '—' : esc(money(r.cost, r.currency)); }
 function keyCell(r) { return esc(r.clientKeyName || r.clientKeyId || '—'); }
 function requestRow(r) {
   const tok = [r.inputTokens, r.outputTokens, r.cachedTokens].map((v) => v === null || v === undefined ? '—' : num(v)).join(' / ');
-  return `<tr data-rid="${esc(r.requestId)}"><td class="num">${esc(fmtTime(r.ts))}</td><td><span class="acc-sub">${esc(r.protocol || r.inboundProtocol || '—')}</span></td><td>${esc(r.model)}${r.stream ? ' <span class="badge">流</span>' : ''}</td>
+  return `<tr data-rid="${esc(r.requestId)}"><td class="num">${esc(fmtTime(r.ts))}</td><td><span class="acc-sub">${esc(r.protocol || r.inboundProtocol || '—')}</span>${r.clientFamily ? `<div class="acc-sub">${esc(r.clientFamily)}</div>` : ''}</td><td>${esc(r.model)}${r.stream ? ' <span class="badge">流</span>' : ''}</td>
     <td>${keyCell(r)}</td>
     <td>${esc(r.accountName || '—')}${r.switched ? ' <span class="badge warn">换号</span>' : ''}${r.overflow ? ' <span class="badge warn">溢出</span>' : ''}</td>
     <td>${statusBadge(r.status, r.result)}${r.upstreamStatus && r.upstreamStatus !== r.status ? `<div class="acc-sub">上游 ${esc(r.upstreamStatus)}</div>` : ''}${r.errorCategory ? `<div class="acc-sub">${esc(r.errorCategory)}${r.blockedBy ? '/' + esc(r.blockedBy) : ''}</div>` : ''}</td>
-    <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div></td>
+    <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
     <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div class="acc-sub">${costCell(r)}</div></td>
-    <td class="num">${tok}<div>${cacheRateCell(r)}</div></td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
+    <td class="num">${tok}<div>${cacheRateCell(r)}</div>${r.cacheCreationTokens != null ? `<div class="acc-sub">缓存写入 ${num(r.cacheCreationTokens)}</div>` : ''}${r.egressStatus ? `<div class="acc-sub">${esc(r.proxy)}${r.egressIp ? ' / ' + esc(r.egressIp) : ''} · ${esc(GO_EGRESS_LABEL[r.egressStatus] || r.egressStatus)}</div>` : ''}</td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
     <td class="act"><button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }
 function detailRow(d) {
@@ -1181,7 +1215,7 @@ function showDetail(d) {
 function errorRow(e) {
   return `<tr><td class="num">${esc(fmtTime(e.ts))}</td><td>${keyCell(e)}</td><td>${esc(e.accountName)}</td><td>${esc(e.model)}</td>
     <td>${statusBadge(e.status)}${e.upstreamStatus && e.upstreamStatus !== e.status ? `<div class="acc-sub">上游 ${esc(e.upstreamStatus)}</div>` : ''}</td>
-    <td>${esc(e.category)}<div class="acc-sub">${esc(e.terminal)}</div></td>
+    <td>${esc(e.category)}<div class="acc-sub">${esc(e.terminal)}${e.origin ? ' · ' + esc(e.origin) : ''}</div>${e.egress ? `<div class="acc-sub">${esc(e.egress)}${e.egressIp ? ' / ' + esc(e.egressIp) : ''}</div>` : ''}</td>
     <td>${e.ruleId ? `${esc(e.ruleId)}<div class="acc-sub">${esc(e.ruleAction)}${e.switched ? ' · 换号' : ''}</div>` : `<span class="muted">${esc(e.matchedBy)}</span>`}${e.retryRuleId ? `<div class="acc-sub">停止重试：${esc(e.retryRuleId)}</div>` : ''}</td>
     <td class="small">${esc(String(e.reason).slice(0, 160))}</td></tr>`;
 }
@@ -1195,6 +1229,10 @@ async function deleteRequestLog(requestId) {
 }
 
 async function loadLogs(kind, reset) {
+  $('#rq-client').classList.toggle('hidden', pool !== 'opencode-go');
+  $('#er-origin').classList.toggle('hidden', pool !== 'opencode-go');
+  $('#rq-first-label').textContent = pool === 'opencode-go' ? '首事件' : '首字';
+  $('#rq-cost-label').textContent = pool === 'opencode-go' ? '耗时 / 计价估算' : '耗时 / 费用';
   if (!accountsCache.length) { try { accountsCache = (await api('GET', withPool('/api/accounts'))).accounts; } catch { /* ignore */ } }
   const p = LOG_PREFIX[kind];
   if (kind !== 'details') accountOptions($(`#${p}-account`));
@@ -1208,7 +1246,8 @@ async function loadLogs(kind, reset) {
   if (kind === 'requests') { add('result', $('#rq-result').value); add('protocol', $('#rq-protocol').value);
     const af = $('#rq-affinity').value;
     if (af.startsWith('c:')) add('affinityConfidence', af.slice(2)); else add('affinityKeyType', af);
-    add('model', $('#rq-model').value.trim()); } else if (kind === 'details') add('requestId', $('#dt-rid').value.trim()); else add('ruleId', $('#er-rule').value.trim());
+    if (pool === 'opencode-go') add('clientFamily', $('#rq-client').value);
+    add('model', $('#rq-model').value.trim()); } else if (kind === 'details') add('requestId', $('#dt-rid').value.trim()); else { add('ruleId', $('#er-rule').value.trim()); add('origin', pool === 'opencode-go' ? $('#er-origin').value : ''); }
   const d = await api('GET', `/api/logs/${kind}?${q}`);
   st.items = st.items.concat(d.items);
   st.cursor = d.nextCursor || '';

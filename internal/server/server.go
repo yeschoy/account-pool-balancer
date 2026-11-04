@@ -56,6 +56,11 @@ type Server struct {
 		states map[string]proxyHealthView
 	}
 
+	goEgress struct {
+		sync.Mutex
+		entries map[string]*goEgressEntry
+	}
+
 	models struct {
 		sync.Mutex
 		byGroup  map[string]modelsEntry
@@ -115,6 +120,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now()}
 	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
+	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
+		return s.ensureGoEgress(ctx, cfg, a, false)
+	}
 	s.quota.OnUpdate = func(id string) {
 		s.metaDirty.Store(true)
 		if a, ok := s.cfg.Get().Account(id); ok && config.IsOpenCode(a.Provider) {
@@ -217,7 +225,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
 		capabilitiesChanged := old.OpenCode.CapabilitiesURL != next.OpenCode.CapabilitiesURL || old.OpenCode.ZenDocsURL != next.OpenCode.ZenDocsURL || old.OpenCode.GoDocsURL != next.OpenCode.GoDocsURL || !reflect.DeepEqual(old.OpenCode.ProtocolBases(a.Provider), next.OpenCode.ProtocolBases(n.Provider))
-		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {
+		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.EgressIP != n.EgressIP || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}

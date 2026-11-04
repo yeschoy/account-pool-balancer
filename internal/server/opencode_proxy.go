@@ -89,8 +89,14 @@ func (s *Server) apiOpenCodeProxyTest(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusConflict, errors.New("OpenCode is disabled; no upstream was contacted"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	if a.Provider == config.ProviderOpenCodeGo {
+		if err := s.ensureGoEgress(ctx, cfg, a, true); err != nil {
+			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "egress": s.goEgressView(cfg, a), "proxyHealth": s.openCodeProxyView(a.ProxyURL)})
+			return
+		}
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.RuntimeBase(a)+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 	resp, err := opencode.NoRedirect(s.httpClient(a.ProxyURL)).Do(req)
@@ -108,5 +114,5 @@ func (s *Server) apiOpenCodeProxyTest(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode == http.StatusProxyAuthRequired {
 		message = "fixed proxy authentication required"
 	}
-	writeJSON(w, 200, map[string]any{"ok": resp.StatusCode != http.StatusProxyAuthRequired, "error": message, "upstreamStatus": resp.StatusCode, "note": "reachable egress is not proof of key authorization", "proxyHealth": s.openCodeProxyView(a.ProxyURL)})
+	writeJSON(w, 200, map[string]any{"ok": resp.StatusCode != http.StatusProxyAuthRequired, "error": message, "upstreamStatus": resp.StatusCode, "note": "reachable egress is not proof of key authorization or static IP; optional pin checks are bounded by freshness", "egress": s.goEgressView(cfg, a), "proxyHealth": s.openCodeProxyView(a.ProxyURL)})
 }

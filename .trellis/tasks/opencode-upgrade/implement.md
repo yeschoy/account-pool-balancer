@@ -30,14 +30,16 @@ Do not claim full-repository exhaustive human review from symbol indexing. Track
 - Gemini/Google protocol adaptation is deferred by explicit user instruction. Keep unknown protocols unroutable; do not guess Chat to increase model counts.
 - Recommended Go hardening and the six discouraged approaches, with reasons and legitimate alternatives, are recorded in docs/opencode-go-risk-audit.md section 10. This is analysis, not authorization to implement, mutate production, or run paid inference.
 
-## Go pool-gateway follow-up checklist (planning, not implemented)
+## Go pool-gateway follow-up checklist (locally implemented; not deployed)
 
 - [x] Trace existing Codex/Claude identity, account limits/proxy, overview, request/error logs and cache stats; record G1–G7 acceptance in prd.md.
-- [ ] Resolve whether Go accounts require distinct public IPs or may share stable egress; finalize observed-IP versus configured-route contract.
-- [ ] Review final scoped design/implementation plan with the user before coding.
-- [ ] Go-only session precedence, separate cache preference, stable upstream identity and parent/child/caller isolation with mocks.
-- [ ] Fixed-egress and per-account concurrency/RPM/wait controls; preserve no-direct-fallback and uncertain-submit/no-replay boundaries.
-- [ ] Provider-correct Go overview, cache measurement coverage and request/error correlation in existing backend/UI.
-- [ ] Focused tests, full Go tests/race/vet/build, JS syntax and local browser verification with disposable fake-key/mock data. Live paid-inference acceptance/deployment needs separate authorization.
+- [x] User approved per-account fixed egress with shared stable IPs allowed. Optional expected-IP checking distinguishes verified IP from configured-only route; no auto-rotation/direct fallback.
+- [x] User approved local implementation of the scoped plan; production changes, deployment and paid inference remain unauthorized.
+- [x] Go-only session precedence, separate cache preference, stable upstream identity and parent/child/caller isolation with mocks; response-session checkpoint continuity verified.
+- [x] Optional IP pin checks through fixed account transport, shared static egress allowed, existing account concurrency/RPM/wait controls; no-direct-fallback and uncertain-submit/no-replay boundaries retained. Known shared-egress policy pauses and post-commit stream errors covered.
+- [x] Provider-correct Go overview, measured cache coverage and request/error correlation in existing backend/UI. Browser verified account limits, independent Go settings, same-account repeated mock requests and log filters.
+- [x] Focused tests, full Go tests/race/vet/native build, Linux amd64/arm64 cross-build, JS syntax and local browser verification with disposable fake-key/mock data passed. Additional Node behavioral checks verify Go-only filters never leak to Zen/other pools and committed Go stream failures render as failed. Mock process stopped, temporary files registered for consent-based cleanup. Live paid-inference acceptance/deployment still needs separate authorization.
+
+Local delivery guide: docs/opencode-go-gateway.md. Full Go test and race runs passed (server 98.922s / 119.020s during parallel gates); these are test durations, not deployment or downtime. Subsequent import grouping was formatting-only and pool race tests remained cached/passing; final frontend-only filter isolation was verified with Node behavioral checks and syntax validation.
 
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.

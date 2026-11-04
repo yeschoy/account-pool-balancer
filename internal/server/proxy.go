@@ -40,6 +40,7 @@ type attemptLog struct {
 	Action         string `json:"action,omitempty"`
 	RuleID         string `json:"ruleId,omitempty"`
 	Egress         string `json:"egress"`
+	EgressIP       string `json:"egressIp,omitempty"`
 	Terminal       string `json:"terminal"`
 }
 
@@ -70,6 +71,12 @@ type requestLog struct {
 	Selector            string    `json:"selector"`
 	Overflow            bool      `json:"overflow"`
 	Switched            bool      `json:"switched"`
+	ClientFamily        string    `json:"clientFamily,omitempty"`
+	CacheHintSource     string    `json:"cacheHintSource,omitempty"`
+	CacheAffinityResult string    `json:"cacheAffinityResult,omitempty"`
+	CacheControl        bool      `json:"cacheControl,omitempty"`
+	EgressStatus        string    `json:"egressStatus,omitempty"`
+	EgressIP            string    `json:"egressIp,omitempty"`
 	SessionSource       string    `json:"sessionSource"`
 	AffinityKeyType     string    `json:"affinityKeyType"`
 	AffinityConfidence  string    `json:"affinityConfidence"`
@@ -119,6 +126,9 @@ type errorLog struct {
 	Model               string    `json:"model"`
 	Status              int       `json:"status"`
 	UpstreamStatus      *int      `json:"upstreamStatus"`
+	Origin              string    `json:"origin,omitempty"`
+	Egress              string    `json:"egress,omitempty"`
+	EgressIP            string    `json:"egressIp,omitempty"`
 	Category            string    `json:"category"`
 	Terminal            string    `json:"terminal"`
 	Reason              string    `json:"reason"`
@@ -159,7 +169,7 @@ func (r *requestLog) LogKeys() map[string]string {
 	keys := map[string]string{"requestId": r.RequestID, "accountId": r.AccountID, "status": strconv.Itoa(r.Status),
 		"result": r.Result, "model": r.Model, "errorCategory": r.ErrorCategory, "bindingResult": r.BindingResult,
 		"provider": r.Provider, "clientKeyId": r.ClientKeyID, "stream": strconv.FormatBool(r.Stream), "protocol": r.Protocol,
-		"affinityKeyType": r.AffinityKeyType, "affinityConfidence": r.AffinityConfidence}
+		"affinityKeyType": r.AffinityKeyType, "affinityConfidence": r.AffinityConfidence, "clientFamily": r.ClientFamily, "cacheAffinityResult": r.CacheAffinityResult}
 	// Only present when true, so the filter does not gain a column that is
 	// "false" for almost every request.
 	if r.CrossAccount {
@@ -170,7 +180,7 @@ func (r *requestLog) LogKeys() map[string]string {
 
 func (e errorLog) LogKeys() map[string]string {
 	return map[string]string{"requestId": e.RequestID, "accountId": e.AccountID, "status": strconv.Itoa(e.Status),
-		"category": e.Category, "ruleId": e.RuleID, "model": e.Model, "clientKeyId": e.ClientKeyID, "provider": e.Provider}
+		"category": e.Category, "ruleId": e.RuleID, "model": e.Model, "clientKeyId": e.ClientKeyID, "provider": e.Provider, "origin": e.Origin}
 }
 
 // ---- attempt results ----
@@ -189,20 +199,23 @@ type usage struct {
 }
 
 type attemptResult struct {
-	kind           outcome
-	result         string // success | failed, for delivered
-	status         int
-	upstreamStatus int
-	category       string // upstream | network | timeout | proxy
-	terminal       string // success | upstream_http | upstream_envelope | timeout | proxy | network
-	body           []byte
-	header         http.Header
-	contentType    string
-	sent           atomic.Bool
-	wrapped        bool
-	accountScoped  bool
-	evaluated      bool
-	retryAfter     time.Duration
+	kind            outcome
+	result          string // success | failed, for delivered
+	status          int
+	upstreamStatus  int
+	category        string // upstream | network | timeout | proxy
+	terminal        string // success | upstream_http | upstream_envelope | timeout | proxy | network
+	body            []byte
+	header          http.Header
+	contentType     string
+	sent            atomic.Bool
+	upstreamSession string
+	egressIP        string
+	goRecord        *requestLog
+	wrapped         bool
+	accountScoped   bool
+	evaluated       bool
+	retryAfter      time.Duration
 	// downstreamStatus / ruleID come from the matched error rule
 	downstreamStatus int
 	ruleID           string
@@ -415,14 +428,33 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok {
 			cost, rec.Cost, rec.Currency = c, &c, cur
 		}
+		if rec.Provider == config.ProviderOpenCodeGo && result == "failed" && len(rec.Attempts) == 0 {
+			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: "Go gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
+		}
 		s.logs.Append("requests", rec.TS, rec)
 		if cw != nil {
 			max := cw.max
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
 				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
 				ResponseHeaders: maskHeaders(cfg, cw.Header()), ResponseBodyBytes: cw.n}
-			d.RequestBody, d.RequestBodyTruncated = maskBody(cfg, reqBody, max)
+			capturedBody := reqBody
+			if rec.Provider == config.ProviderOpenCodeGo {
+				d.RequestHeaders = maskHeaders(cfg, goPrivateHeaders(reqHeader))
+				for _, name := range cfg.Routing.SessionHeaders {
+					for key := range d.RequestHeaders {
+						if strings.EqualFold(key, name) {
+							d.RequestHeaders[key] = []string{"[REDACTED]"}
+						}
+					}
+				}
+				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
+				capturedBody = goPrivateBody(reqBody)
+			}
+			d.RequestBody, d.RequestBodyTruncated = maskBody(cfg, capturedBody, max)
 			respBody, cut := cw.body()
+			if rec.Provider == config.ProviderOpenCodeGo {
+				respBody = goPrivateBody(respBody)
+			}
 			d.ResponseBody, _ = maskBody(cfg, respBody, len(respBody))
 			d.ResponseBodyTruncated = cut
 			s.logs.Append("details", rec.TS, d)
@@ -438,7 +470,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.stats.Record(stats.Sample{AccountID: rec.AccountID, Provider: rec.Provider, Proxy: rec.Proxy, Model: rec.Model, Result: result, Input: rec.InputTokens, Output: rec.OutputTokens,
-			Cached: rec.CachedTokens, Prompt: prompt, Currency: rec.Currency, Cost: cost})
+			Cached: rec.CachedTokens, CacheWrite: rec.CacheCreationTokens, Prompt: prompt, Currency: rec.Currency, Cost: cost, BindingResult: rec.BindingResult, CacheAffinityResult: rec.CacheAffinityResult, DurationMs: rec.DurationMs, TTFTMs: rec.TTFTMs})
 		s.statsDirty.Store(true)
 	}
 
@@ -454,6 +486,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rootCfg := cfg
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
+	if rec.Provider == config.ProviderOpenCodeGo {
+		rec.ClientFamily = goClientFamily(r.Header, nil)
+	}
 	if !poolPathOK(rec.Provider, r.URL.Path) {
 		// River serves only OpenAI Chat Completions and Responses
 		rec.ErrorCategory = "request"
@@ -492,6 +527,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		identityScope += "\x00" + ck.ID
 	}
 	ident := s.identity(cfg, identityScope, r.Header, obj)
+	cacheAffinity := ""
+	if rec.Provider == config.ProviderOpenCodeGo {
+		ident, cacheAffinity, rec.CacheHintSource = s.goIdentity(cfg, identityScope, r.Header, obj)
+		ident.UpstreamSession = s.goUpstreamSession(cfg, identityScope, r.Header, obj, ident)
+		rec.ClientFamily = goClientFamily(r.Header, obj)
+		rec.CacheControl = bytes.Contains(body, []byte(`"cache_control"`))
+	}
 	stateful := config.IsOpenCode(rec.Provider) && lookup(obj, "previous_response_id") != ""
 	routeGroup := ck.Group
 	fallbackGroup := cfg.OpenCode.FallbackGroup(rec.Provider)
@@ -529,7 +571,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
 			Group: routeGroup, Model: rec.Model, RequestID: rid,
-			Affinity: ident.Fingerprint, Explicit: ident.Confidence == "explicit",
+			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit",
 			Excluded: excluded, Wait: wait,
 			RequireBinding: stateful, PreserveBinding: config.IsOpenCode(rec.Provider),
 		})
@@ -566,6 +608,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				// every account is only cooling down: a retryable 429, not a 503
 				ra := ceilSeconds(ue.RetryAfter)
 				rec.ErrorCategory, rec.BlockedBy, rec.RetryAfter = "unavailable", "cooldown", &ra
+				if rec.Provider == config.ProviderOpenCodeGo && (ue.Reason == "policy-paused" || ue.Details["policy-paused"] == sumCounts(ue.Details)) {
+					rec.ErrorCategory, rec.BlockedBy = "policy", "policy"
+				}
 				writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", "pool_cooling_down", "all upstream accounts are cooling down for this model, retry later", ra)
 				finish(http.StatusTooManyRequests, "failed")
 			case errors.As(err, &ue) && ue.Details["not-entitled"] > 0 && ue.Details["not-entitled"] == sumCounts(ue.Details):
@@ -590,6 +635,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if i == 0 {
 			rec.BindingResult = d.BindingResult
+			rec.CacheAffinityResult = d.CacheResult
 		}
 		// Conversation continuity: a request that names a conversation and then
 		// switches accounts splits that one conversation across two Perch
@@ -619,7 +665,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident)
 		lease.Release()
-		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", Terminal: res.terminal}
+		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", EgressIP: res.egressIP, Terminal: res.terminal}
 		if acct.ProxyURL != "" {
 			att.Egress = "proxy"
 		}
@@ -632,6 +678,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			rec.UpstreamRequestID = res.header.Get("X-Request-Id")
 			rec.Attempts = append(rec.Attempts, att)
 			if res.result == "success" {
+				if acct.Provider == config.ProviderOpenCodeGo {
+					s.pool.RememberCache(cfg, cacheAffinity, acct.ID, rec.Model)
+				}
 				s.pool.Sample(acct.ID, true)
 				s.pool.Succeeded(cfg, acct.ID, rec.Model)
 			} else {
@@ -770,14 +819,31 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 			el.Reason = "proxy connection failed"
 		}
 	}
+	if acct.Provider == config.ProviderOpenCodeGo {
+		el.Egress = egressLabel(acct.ProxyURL)
+		el.EgressIP = res.egressIP
+		el.Origin = "transport"
+		if res.upstreamStatus != 0 {
+			el.Origin = "upstream"
+		}
+		if res.terminal == "egress" || res.terminal == "policy_pause" || res.terminal == "compatibility" {
+			el.Origin = "local"
+		}
+	}
 	ev := evaluation{}
 	sample := true
 	switch res.terminal {
 	case "upstream_http", "upstream_envelope":
 		st := res.status
-		if config.IsOpenCode(acct.Provider) && rules.IsOpenCodePolicyRefusal(st, redacted) {
+		if config.IsOpenCode(acct.Provider) && (rules.IsOpenCodePolicyRefusal(st, redacted) || acct.Provider == config.ProviderOpenCodeGo && goPolicyRefusal(st, redacted)) {
 			res.downstreamStatus, res.ruleID, res.category = 403, acct.Provider+"-policy-refusal", "policy"
 			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = res.ruleID, rules.ActionIgnore, "none", "provider-policy", "stop", "policy"
+			if acct.Provider == config.ProviderOpenCodeGo && cfg.OpenCode.GoPolicyCooldownSec > 0 {
+				d := s.pauseGoPolicy(cfg, acct, redacted, res.ruleID)
+				el.RuleAction = rules.ActionCooldown
+				ms := d.Milliseconds()
+				el.RetryAfterMs = &ms
+			}
 			s.logs.Append("errors", el.TS, el)
 			return ev
 		}
@@ -886,7 +952,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"
 		}
-	case "compatibility":
+	case "compatibility", "egress", "policy_pause":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
 		if config.IsOpenCode(acct.Provider) {
@@ -999,7 +1065,7 @@ func isProxyError(err error, proxyURL string) bool {
 
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, body []byte, proto string, rec *requestLog, attemptNo int, start time.Time, group string, ident Identity) *attemptResult {
 	acct := lease.Account
-	res := &attemptResult{}
+	res := &attemptResult{goRecord: rec}
 	t0 := time.Now()
 	defer func() { res.ms = time.Since(t0).Milliseconds() }()
 
@@ -1022,6 +1088,25 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 
 	var ocFrom, ocTo opencode.Protocol
+	if acct.Provider == config.ProviderOpenCodeGo {
+		res.upstreamSession = ident.UpstreamSession
+		err := s.ensureGoEgress(actx, cfg, acct, false)
+		eg := s.goEgressView(cfg, acct)
+		rec.EgressStatus, rec.EgressIP, res.egressIP = eg.Status, eg.ObservedIP, eg.ObservedIP
+		if err != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, 503, "egress", "egress"
+			if errors.Is(err, errGoPolicyPause) {
+				res.status, res.terminal, res.category = 429, "policy_pause", "policy"
+				res.retryAfter = time.Until(s.pool.PauseUntil(acct.ID, "opencode-go-policy-refusal"))
+			}
+			res.contentType = "application/json"
+			res.body = []byte(`{"error":{"message":"fixed egress could not be verified; no direct fallback"}}`)
+			if res.category == "policy" {
+				res.body = []byte(`{"error":{"message":"Go policy pause active; no upstream was contacted"}}`)
+			}
+			return res
+		}
+	}
 	if config.IsOpenCode(acct.Provider) {
 		var err error
 		ocFrom, ocTo, body, err = s.prepareOpenCode(cfg, acct, r.URL.Path, rec.Model, body)
@@ -1070,6 +1155,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return res
 	}
 	copyRequestHeaders(req.Header, r.Header)
+	if acct.Provider == config.ProviderOpenCodeGo {
+		req.Header.Set("User-Agent", goUserAgent(req.Header.Get("User-Agent")))
+		if ident.UpstreamSession != "" {
+			req.Header.Set("X-Opencode-Session", ident.UpstreamSession)
+		}
+	}
 	req.Header.Set("Authorization", "Bearer "+acct.RuntimeKey)
 	switch acct.Provider {
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
@@ -1185,7 +1276,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		scanUsage(m, &res.usage)
 		if isResponses {
 			if id, _ := m["id"].(string); id != "" {
-				s.pool.Bind(cfg, s.responseFingerprint(group, id), acct.ID)
+				s.pool.BindWithSession(cfg, s.responseFingerprint(group, id), acct.ID, res.upstreamSession)
 			}
 		}
 	}
@@ -1508,7 +1599,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			if t, _ := m["type"].(string); t == "response.created" || event == "response.created" {
 				if rr, ok := m["response"].(map[string]any); ok {
 					if id, _ := rr["id"].(string); id != "" {
-						s.pool.Bind(cfg, s.responseFingerprint(group, id), lease.Account.ID)
+						s.pool.BindWithSession(cfg, s.responseFingerprint(group, id), lease.Account.ID, res.upstreamSession)
 					}
 				}
 			}
@@ -1550,8 +1641,15 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 					return clientGone()
 				}
 				scan(event, data)
-				if isErr, _, _ := sseError(event, data); isErr {
+				if isErr, st, payload := sseError(event, data); isErr {
 					res.result, res.category = "failed", "upstream"
+					if lease.Account.Provider == config.ProviderOpenCodeGo && !res.evaluated && res.goRecord != nil {
+						failure := &attemptResult{status: st, upstreamStatus: resp.StatusCode, egressIP: res.egressIP, body: payload, contentType: "application/json", header: resp.Header, terminal: "upstream_envelope", category: "upstream"}
+						rc := res.goRecord
+						s.evaluate(cfg, lease.Account, rc.Model, failure, rc.RequestID, attemptNo-1, rc.ClientKeyID, rc.ClientKeyName)
+						res.evaluated = true
+						res.category = failure.category
+					}
 				}
 				if done {
 					// Clients close as soon as they see the last event; don't wait

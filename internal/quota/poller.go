@@ -576,9 +576,10 @@ func (s *Snapshot) Pace(now time.Time) float64 {
 }
 
 type Poller struct {
-	Cfg      func() *config.Config
-	HTTPFor  func(proxyURL string) *http.Client
-	OnUpdate func(accountID string)
+	Cfg           func() *config.Config
+	HTTPFor       func(proxyURL string) *http.Client
+	OnUpdate      func(accountID string)
+	GoEgressCheck func(context.Context, *config.Config, config.Account) error
 	// PerchFetch reads a Perch account's usage meter. It is a hook so this
 	// package needs no knowledge of Perch's session handling (which lives in
 	// internal/perchstore): given an account it returns the meter, or an

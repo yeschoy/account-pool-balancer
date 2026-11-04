@@ -60,11 +60,11 @@
       <div id="ov-cards" class="cards"></div>
       <div class="panel"><h2>各模型 24 小时概况</h2>
         <div class="table-wrap"><table class="table" id="ov-models"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>费用</th></tr></thead><tbody></tbody></table></div></div>
-      <div class="panel"><h2>各出口 IP 24 小时成功率</h2>
+      <div class="panel"><h2 id="ov-egress-title">各出口 IP 24 小时成功率</h2>
         <div class="table-wrap"><table class="table" id="ov-proxies"><thead><tr><th>出口</th><th>请求</th><th>成功率</th><th>成功</th><th>失败</th><th>取消</th></tr></thead><tbody></tbody></table></div></div>
       <div class="grid2">
         <div class="panel"><h2>最近 24 小时请求</h2><div id="ov-chart" class="chart"></div><div class="legend"><span class="sw ok"></span>成功 <span class="sw bad"></span>失败 <span class="sw cancel"></span>取消</div></div>
-        <div class="panel"><h2>套餐窗口（按工作区去重）</h2><div id="ov-windows"></div><h2 class="mt">账号状态</h2><div id="ov-status" class="chips"></div></div>
+        <div class="panel"><h2 id="ov-quota-title">套餐窗口（按工作区去重）</h2><div id="ov-windows"></div><h2 class="mt">账号状态</h2><div id="ov-status" class="chips"></div></div>
       </div>
     </section>
 
@@ -478,6 +478,7 @@
           <select id="rq-protocol"><option value="">全部协议</option><option value="openai-chat">openai-chat</option><option value="openai-responses">openai-responses</option><option value="anthropic-messages">anthropic-messages</option><option value="openai-completions">openai-completions</option><option value="openai-embeddings">openai-embeddings</option></select>
           <select id="rq-affinity"><option value="">全部粘性依据</option><option value="c:explicit">强粘性（会话头/字段）</option><option value="c:fallback">弱粘性（首条消息）</option><option value="c:none">无粘性</option>
             <option value="session_id">session_id</option><option value="parent_session">parent_session</option><option value="prompt_cache_key">prompt_cache_key</option><option value="previous_response_id">previous_response_id</option><option value="claude_user_session">claude_user_session</option><option value="conversation_id">conversation_id</option><option value="thread_id">thread_id</option><option value="task_id">task_id</option><option value="custom_header">custom_header</option></select>
+          <select id="rq-client"><option value="">全部客户端</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="opencode">OpenCode</option><option value="pi">Pi</option><option value="other">其他</option></select>
           <input id="rq-model" placeholder="模型" size="14">
           <input id="rq-status" placeholder="状态码" size="6">
           <button class="btn" id="btn-rq-search">查询</button>
@@ -485,7 +486,7 @@
         </div>
       </header>
       <div class="panel flush"><div class="table-wrap"><table class="table click" id="rq-table">
-        <thead><tr><th>时间</th><th>协议</th><th>模型</th><th>密钥</th><th>账号</th><th>状态</th><th>会话</th><th>首字</th><th>耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+        <thead><tr><th>时间</th><th>协议</th><th>模型</th><th>密钥</th><th>账号</th><th>状态</th><th>会话</th><th id="rq-first-label">首字</th><th id="rq-cost-label">耗时 / 费用</th><th>输入/输出/缓存 · 缓存率</th><th>尝试</th><th>操作</th></tr></thead><tbody></tbody></table></div>
         <div class="more"><button class="btn ghost hidden" id="rq-more">加载更多</button></div>
       </div>
     </section>
@@ -494,6 +495,7 @@
       <header class="page-head"><h1>错误日志</h1>
         <div class="actions">
           <select id="er-account"><option value="">全部账号</option></select>
+          <select id="er-origin"><option value="">全部错误来源</option><option value="local">本地拦截</option><option value="upstream">上游响应</option><option value="transport">传输故障</option></select>
           <input id="er-rule" placeholder="规则 ID" size="14">
           <input id="er-status" placeholder="状态码" size="6">
           <button class="btn" id="btn-er-search">查询</button>

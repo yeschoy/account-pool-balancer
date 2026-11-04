@@ -142,8 +142,8 @@ type Store struct {
 
 // Filters are the query parameters each kind accepts besides limit/cursor/since/until.
 var Filters = map[string][]string{
-	"requests": {"provider", "requestId", "accountId", "status", "result", "model", "errorCategory", "bindingResult", "clientKeyId", "stream", "protocol", "affinityKeyType", "affinityConfidence"},
-	"errors":   {"provider", "requestId", "accountId", "status", "category", "ruleId", "model", "clientKeyId"},
+	"requests": {"provider", "requestId", "accountId", "status", "result", "model", "errorCategory", "bindingResult", "clientKeyId", "stream", "protocol", "affinityKeyType", "affinityConfidence", "clientFamily", "cacheAffinityResult"},
+	"errors":   {"provider", "requestId", "accountId", "status", "category", "ruleId", "model", "clientKeyId", "origin"},
 	"details":  {"provider", "requestId", "accountId", "status", "model", "protocol", "clientKeyId"},
 	// perch is the Perch pool's own event log: imports, renewals, session
 	// expiry, status changes and usage reads. It carries no token: the
