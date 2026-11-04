@@ -39,7 +39,26 @@
 - 现有数据绑定不变：`/home/ubuntu/project/account-pool-balancer/data:/data`。
 - `ai-internal` 网络和 `opendesign-balancer` 兼容别名保留。
 - 部署切换时 OpenCode 总开关、兼容转换开关保持关闭，未调用其推理接口。
-- 后续已按用户要求通过管理 API 导入 6 个 OpenCode Go 账号，开关仍关闭，未做真实上游推理验证；当前数据已包含旧版不认识的新 provider。
+- 后续曾按用户要求通过管理 API 导入 6 个 OpenCode Go 账号，当时开关仍关闭，未做真实上游推理验证；数据已包含旧版不认识的新 provider。后续开关状态见下节。
+
+## OpenCode 开关调整（2026-11-04 18:26 UTC）
+
+用户报告新导入 Go Key 显示 `provider-disabled`、额度未知。确认账号本身
+已启用，但 `opencode.enabled=false`；没有额度缓存，不代表 Key 已失效。
+经用户明确同意，通过现有管理员 API 开启 OpenCode，再对当前唯一的 Go
+账号同步模型和额度。配置 revision 为 5084，核对配置差异仅有
+`opencode.enabled` 和 `revision`；兼容转换仍关闭，其他账号池设置不变。
+
+- 账号状态变为 `ok`，模型目录 28 个，可路由 27 个。
+- 5 小时、周、月额度查询均成功，已用 0%、剩余 100%，数据新鲜。
+- `/healthz` 通过；没有重建、重启服务，无部署切换停机。
+- 未发起推理请求，账号 24h 请求/Token 计数仍为 0；目录和额度读取成功
+  不代表真实推理权限已验收。
+- 修改前配置备份位于远程受限目录
+  `/home/ubuntu/backups/account-pool-balancer/20261104T182614Z-enable-opencode/config.json`
+  （目录 0700、文件 0600）。这是必要的业务回滚备份，不是待清理临时产物；
+  未下载到本地或提交 Git。需撤销时应通过设置 API 仅关闭 OpenCode，
+  不用整份旧配置覆盖后续在线写入。
 
 ## 重要：旧工作树不是当前镜像的构建源码
 
