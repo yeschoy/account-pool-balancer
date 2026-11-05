@@ -461,6 +461,13 @@ func TestPerchAutoBatchRegisterSelected(t *testing.T) {
 		return raw, nil
 	}
 	s.perchRegistrations.activate = func(context.Context, string, []byte) error { return nil }
+	// Keep this unit test offline: the production privacy hook calls Perch
+	// after activation, before the candidate can become ready.
+	privacy := &privacyRecorder{}
+	s.perchRegistrations.privacy = func(_ context.Context, _ string, doc []byte) error {
+		privacy.record("privacy", doc)
+		return nil
+	}
 	out := httptest.NewRecorder()
 	s.apiPerchAutoRegisterBatch(out, httptest.NewRequest("POST", "/", bytes.NewReader(body)))
 	if out.Code != http.StatusAccepted {
@@ -486,6 +493,9 @@ func TestPerchAutoBatchRegisterSelected(t *testing.T) {
 	}
 	if len(registered) != 1 || registered[0] != "batch-a" {
 		t.Fatalf("registered %v, want only batch-a", registered)
+	}
+	if got := privacy.count("privacy"); got != 1 {
+		t.Fatalf("privacy calls = %d, want one for the selected candidate", got)
 	}
 	// Registering ahead of time must not import: that happens on the next refill.
 	if e.count("batch-a") != 0 {
