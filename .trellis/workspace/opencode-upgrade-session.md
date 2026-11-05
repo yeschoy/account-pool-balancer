@@ -184,3 +184,22 @@ and QA browser stopped. New data and two owned snapshot paths are in ignored
 _tmp_artifacts.md; retain until consent. No dependency, separate scheduler or
 new task directory. Overall task remains in_progress; unrelated .worktrees/
 was not changed or staged. Operator guide: docs/opencode-go-gateway.md.
+
+### Eligibility clarification
+
+User explicitly required excluding unhealthy and no-quota accounts, rather than
+choosing them for low recent usage. Existing confirmed fresh-window exhaustion,
+quarantine/cooldown/policy/permissions already preceded ranking. Found that low
+health depended on the optional switch (off by default); made configured minimum
+health mandatory only for least-requests-1h, and shared the predicate with Preview.
+Other strategies keep their old admission switch. Session/cache preference cannot
+override eligibility; unavailable strict/policy owners still block rather than
+migrate. Unknown/stale quota and fewer than20 health samples remain unknown,
+not fabricated zero/poor health. All blocked candidates cause an error.
+
+Added40 Go fixture cases for fresh/session/cache/stateful eligibility, all-blocked,
+threshold boundaries, unknowns and other-strategy regression. Full tests (server
+61.994s), race (server83.857s), vet, native build, JS syntax/diff passed. Only help
+text changed in UI, no new form flow. No production edits, paid inference,
+new temporary artifacts or dependency. Existing temporary files remain untouched
+pending cleanup consent; overall task remains in_progress.

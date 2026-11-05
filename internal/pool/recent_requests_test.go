@@ -3,15 +3,190 @@ package pool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/opencode"
+	"account-pool-balancer/internal/quota"
 )
 
 func recentTestClock() time.Time { return time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC) }
+
+func recentGoEligibilityFixture(t *testing.T) (*Pool, *config.Config, map[string]*quota.Snapshot) {
+	t.Helper()
+	now := recentTestClock()
+	cfg := config.Default()
+	cfg.OpenCode.Enabled = true
+	cfg.Accounts = []config.Account{
+		{ID: "low", Provider: config.ProviderOpenCodeGo, RuntimeKey: "fake-go-low", Enabled: true},
+		{ID: "high", Provider: config.ProviderOpenCodeGo, RuntimeKey: "fake-go-high", Enabled: true},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Routing.Strategy = "least-requests-1h"
+	cfg.Routing.HealthFilter = false // this strategy must enforce health even with the optional switch off
+	cfg.Routing.MinimumHealth = 0.5
+	snaps := map[string]*quota.Snapshot{}
+	for _, a := range cfg.Accounts {
+		usage := opencode.Usage{}
+		for _, name := range []string{"rolling", "weekly", "monthly"} {
+			usage[name] = opencode.Window{Status: "ok", UsedPercent: 10, RemainingPercent: 90, ResetsAt: now.Add(time.Hour)}
+		}
+		snaps[a.ID] = &quota.Snapshot{Catalog: map[string]bool{"m": true}, CatalogAt: now,
+			OpenCode: &opencode.State{Source: quota.OpenCodeSource(cfg, a), UsageAt: now, Usage: usage}}
+	}
+	p := New(func(id string) *quota.Snapshot { return snaps[id] })
+	p.SetClock(func() time.Time { return now })
+	p.counters.Accounts["high"] = &Counter{RecentRequests: []RequestMinute{{Minute: now.Unix() / 60, Requests: 100}}}
+	for range MinHealthSamples {
+		p.Sample("high", true)
+	}
+	return p, cfg, snaps
+}
+
+func TestRecentStrategyFiltersBeforeRankingAndAffinity(t *testing.T) {
+	for _, tc := range []struct{ name, why, window string }{
+		{name: "disabled", why: "disabled"}, {name: "quarantined", why: "quarantined"},
+		{name: "cooldown", why: "cooldown"}, {name: "model-cooldown", why: "model-cooldown"},
+		{name: "policy-paused", why: "policy-paused"}, {name: "not-entitled", why: "not-entitled"},
+		{name: "unhealthy", why: "health"},
+		{name: "rolling-empty", why: "quota-exhausted", window: "rolling"},
+		{name: "weekly-empty", why: "quota-exhausted", window: "weekly"},
+		{name: "monthly-empty", why: "quota-exhausted", window: "monthly"},
+	} {
+		for _, affinity := range []string{"fresh", "session", "cache", "stateful"} {
+			t.Run(tc.name+"/"+affinity, func(t *testing.T) {
+				p, cfg, snaps := recentGoEligibilityFixture(t)
+				now := recentTestClock()
+				req := Request{Group: config.ProviderOpenCodeGo, Model: "m"}
+				switch affinity {
+				case "session", "stateful":
+					p.Bind(cfg, "session", "low")
+					req.Affinity, req.Explicit = "session", true
+					req.RequireBinding = affinity == "stateful"
+				case "cache":
+					p.RememberCache(cfg, "cache", "low", "m")
+					req.CacheAffinity = "cache"
+				}
+				switch tc.name {
+				case "disabled":
+					cfg.Accounts[0].Enabled = false
+				case "quarantined":
+					p.Quarantine("low", 401, "test", "test")
+				case "cooldown":
+					p.Cooldown("low", "", now.Add(time.Minute), 429, "test", "test")
+				case "model-cooldown":
+					p.Cooldown("low", "m", now.Add(time.Minute), 429, "test", "test")
+				case "policy-paused":
+					p.Cooldown("low", "", now.Add(time.Minute), 403, "test", "opencode-go-policy-refusal")
+				case "not-entitled":
+					delete(snaps["low"].Catalog, "m")
+				case "unhealthy":
+					for range MinHealthSamples {
+						p.Sample("low", false)
+					}
+				default:
+					w := snaps["low"].OpenCode.Usage[tc.window]
+					w.UsedPercent, w.RemainingPercent = 100, 0
+					snaps["low"].OpenCode.Usage[tc.window] = w
+				}
+				order, excluded := p.Preview(cfg, req.Group, req.Model)
+				if len(order) != 1 || order[0] != "high" || excluded["low"] != tc.why {
+					t.Fatalf("ineligible low-count account in preview: %v %v", order, excluded)
+				}
+				l, err := p.Acquire(context.Background(), cfg, req)
+				mustBlock := req.RequireBinding || tc.name == "policy-paused" && affinity == "session"
+				if mustBlock {
+					if l != nil {
+						l.Release()
+						t.Fatal("stateful/policy-bound session escaped its unavailable owner")
+					}
+					if err == nil {
+						t.Fatal("unavailable bound account did not block")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Release()
+				if l.Account.ID != "high" || l.Decision.Candidates != 1 {
+					t.Fatalf("low recent count or affinity bypassed eligibility: %+v", l.Decision)
+				}
+			})
+		}
+	}
+}
+
+func TestRecentStrategyNoHealthyFundedAccountDoesNotFailOpen(t *testing.T) {
+	for _, reason := range []string{"health", "quota"} {
+		t.Run(reason, func(t *testing.T) {
+			p, cfg, snaps := recentGoEligibilityFixture(t)
+			for _, a := range cfg.Accounts {
+				if reason == "quota" {
+					w := snaps[a.ID].OpenCode.Usage["rolling"]
+					w.Status = "rate-limited"
+					snaps[a.ID].OpenCode.Usage["rolling"] = w
+				} else {
+					delete(p.health, a.ID)
+					for range MinHealthSamples {
+						p.Sample(a.ID, false)
+					}
+				}
+			}
+			l, err := p.Acquire(context.Background(), cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"})
+			if l != nil {
+				l.Release()
+				t.Fatal("all ineligible accounts fell back to least-used")
+			}
+			var unavailable *UnavailableError
+			if !errors.As(err, &unavailable) {
+				t.Fatalf("want unavailable, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRecentMandatoryHealthDoesNotChangeOtherStrategiesOrUnknowns(t *testing.T) {
+	p, cfg, snaps := recentGoEligibilityFixture(t)
+	for range MinHealthSamples {
+		p.Sample("low", false)
+	}
+	cfg.Routing.Strategy = "least-used"
+	cfg.Accounts = cfg.Accounts[:1] // only the low-health account remains
+	l := acquire(t, p, cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"})
+	l.Release() // other strategies still honor the disabled health-filter switch
+	cfg.Routing.HealthFilter = true
+	if l, err := p.Acquire(context.Background(), cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"}); err == nil {
+		l.Release()
+		t.Fatal("existing opt-in health filtering stopped working")
+	}
+	cfg.Routing.HealthFilter = false
+	cfg.Routing.Strategy = "least-requests-1h"
+	delete(p.health, "low")                     // fewer than 20 samples is unknown, not proven unhealthy
+	snaps["low"].OpenCode.UsageAt = time.Time{} // unknown is not measured exhaustion
+	l = acquire(t, p, cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"})
+	if l.Account.ID != "low" {
+		l.Release()
+		t.Fatal("unknown health/quota silently reclassified as unhealthy/exhausted")
+	}
+	l.Release()
+	for i := range MinHealthSamples {
+		p.Sample("low", i%2 == 0)
+	}
+	l = acquire(t, p, cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"})
+	l.Release() // exactly at the configured 0.5 threshold is allowed
+	cfg.Routing.MinimumHealth = 0.6
+	if l, err := p.Acquire(context.Background(), cfg, Request{Group: config.ProviderOpenCodeGo, Model: "m"}); err == nil {
+		l.Release()
+		t.Fatal("recent strategy did not honor the configured health threshold")
+	}
+}
 
 func TestRecentRequestsIncludeStickyHitsAndExcludeUnsent(t *testing.T) {
 	p := New(nil)

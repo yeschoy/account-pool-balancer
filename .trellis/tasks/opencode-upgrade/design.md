@@ -44,5 +44,15 @@
 - Keep counter version1, optional JSON fields, 5-second/normal-shutdown persistence. Validate <=60 ordered nonnegative minutes/positive counts and overflow; clone mutable slices and discard expired/future entries at restore/export. Legacy snapshots begin empty; no completed-request stats are repurposed as send history.
 - Existing WebUI gets an optional strategy description and Go hourly/pending count hint; browser fake-key API readback and a true Mock restart verify strategy isolation and restored counts. No live configuration changes or upstream paid inference.
 
+### Mandatory eligibility clarification
+
+The recent-hour strategy always applies the configured minimum health, even with
+optional healthFilter=false. Reuse one pool health predicate for admission and
+preview, before session/cache preference; preserve the old switch for other
+strategies. Existing fresh-window exhaustion and quarantine/cooldown/permissions
+remain authoritative. Do not fabricate exhaustion from stale/unknown data or
+infer unhealthy from fewer than20 samples. No eligible account means error;
+strict continuation and policy-bound sessions still cannot migrate.
+
 ## Rollback
 No destructive schema migration. Disable OpenCode accounts/remove their keys and revert executable. Back up config/metadata before old executables rewrite additive fields. Existing provider configuration and stats remain intact.

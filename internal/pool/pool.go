@@ -522,6 +522,16 @@ func (p *Pool) healthLocked(id string, now time.Time) (rate float64, samples int
 	return float64(s) / float64(n), n, true
 }
 
+// Recent-hour balancing always honors the configured health threshold. Other
+// strategies keep their opt-in filter, and insufficient samples remain unknown.
+func (p *Pool) healthExcludedLocked(cfg *config.Config, id string, now time.Time) bool {
+	if !cfg.Routing.HealthFilter && cfg.Routing.Strategy != "least-requests-1h" {
+		return false
+	}
+	rate, _, known := p.healthLocked(id, now)
+	return known && rate < cfg.Routing.MinimumHealth
+}
+
 func (p *Pool) admitLocked(a config.Account, now time.Time) (ok bool, blockedBy string, retry time.Duration) {
 	maxConc, maxRPM := p.limitsLocked(a)
 	if maxConc > 0 && p.active[a.ID] >= maxConc {
@@ -758,21 +768,18 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		}
 		return nil, ue
 	}
-	if cfg.Routing.HealthFilter {
-		kept := cands[:0]
-		for _, c := range cands {
-			// unknown health counts as healthy (optimistic); at the threshold is allowed
-			if rate, _, ok := p.healthLocked(c.a.ID, now); !ok || rate >= cfg.Routing.MinimumHealth {
-				kept = append(kept, c)
-			} else {
-				details["health"]++
-			}
+	kept := cands[:0]
+	for _, c := range cands {
+		if p.healthExcludedLocked(cfg, c.a.ID, now) {
+			details["health"]++
+		} else {
+			kept = append(kept, c)
 		}
-		if len(kept) == 0 {
-			return nil, &UnavailableError{Reason: "health-filter", Details: details}
-		}
-		cands = kept
 	}
+	if len(kept) == 0 {
+		return nil, &UnavailableError{Reason: "health-filter", Details: details}
+	}
+	cands = kept
 
 	d := Decision{BindingResult: "not-applicable", Candidates: len(cands)}
 	if req.CacheAffinity != "" {
@@ -964,6 +971,10 @@ func (p *Pool) Preview(cfg *config.Config, group, model string) (cands []string,
 		}
 		if why := p.unavailableLocked(cfg, a, model, now); why != "" {
 			excluded[a.ID] = why
+			continue
+		}
+		if p.healthExcludedLocked(cfg, a.ID, now) {
+			excluded[a.ID] = "health"
 			continue
 		}
 		accs = append(accs, a)
