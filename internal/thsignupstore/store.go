@@ -55,8 +55,27 @@ var (
 	ErrCorrupt  = errors.New("cannot authenticate Token Harbor signup store")
 )
 
-// Cookie is one session cookie of a registered account.
-type Cookie struct{ Name, Value string }
+// Cookie is one session cookie of a registered account. Old files containing
+// only Name/Value remain readable; new snapshots preserve replay attributes.
+type Cookie struct {
+	Name, Value      string
+	Domain, Path     string
+	Expires          time.Time
+	Secure, HTTPOnly bool
+	SameSite         int
+}
+
+// Checkout is a sensitive hosted payment session, stored only in the encrypted
+// file and revealed through the explicit administrator checkout endpoint.
+type Checkout struct {
+	Kind      string    `json:"kind"`
+	Product   string    `json:"product"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (Checkout) String() string   { return "[REDACTED]" }
+func (Checkout) GoString() string { return "[REDACTED]" }
 
 // Row is one mailbox's attempt. It carries credentials; JSON never shows them.
 type Row struct {
@@ -67,16 +86,17 @@ type Row struct {
 	// MailboxURL is the iCloud HME receive page ("…/messages/<alias>?token=…").
 	MailboxURL string `json:"mailboxUrl,omitempty"`
 	// ProxyURL is the attempt's egress; empty means the settings default.
-	ProxyURL string   `json:"proxyUrl,omitempty"`
-	Status   Status   `json:"status"`
-	Detail   string   `json:"detail,omitempty"`
-	APIKey   string   `json:"apiKey,omitempty"`
-	Account  string   `json:"accountId,omitempty"`
-	Cookies  []Cookie `json:"cookies,omitempty"`
+	ProxyURL string    `json:"proxyUrl,omitempty"`
+	Status   Status    `json:"status"`
+	Detail   string    `json:"detail,omitempty"`
+	APIKey   string    `json:"apiKey,omitempty"`
+	Account  string    `json:"accountId,omitempty"`
+	Cookies  []Cookie  `json:"cookies,omitempty"`
+	Checkout *Checkout `json:"checkout,omitempty"`
 	// Group is the pool group the row joins when it is imported.
 	Group string `json:"group,omitempty"`
-	// Verified records that the confirmation mail was used; the key works
-	// without it, but the site keeps asking for it.
+	// Verified records that the confirmation mail was used. Metadata access
+	// alone does not establish verification or paid inference authorization.
 	Verified   bool      `json:"verified,omitempty"`
 	FreeModels bool      `json:"freeModels,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -89,20 +109,22 @@ func (Row) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // Summary is the console's view: no password, no cookie, a masked key.
 type Summary struct {
-	ID         string    `json:"id"`
-	Attempt    string    `json:"attempt"`
-	Email      string    `json:"email"`
-	Status     Status    `json:"status"`
-	Detail     string    `json:"detail,omitempty"`
-	Proxy      string    `json:"proxy"`
-	Group      string    `json:"group,omitempty"`
-	KeyMasked  string    `json:"keyMasked,omitempty"`
-	HasMailbox bool      `json:"hasMailbox"`
-	Verified   bool      `json:"verified"`
-	FreeModels bool      `json:"freeModels"`
-	AccountID  string    `json:"accountId,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID          string    `json:"id"`
+	Attempt     string    `json:"attempt"`
+	Email       string    `json:"email"`
+	Status      Status    `json:"status"`
+	Detail      string    `json:"detail,omitempty"`
+	Proxy       string    `json:"proxy"`
+	Group       string    `json:"group,omitempty"`
+	KeyMasked   string    `json:"keyMasked,omitempty"`
+	HasMailbox  bool      `json:"hasMailbox"`
+	HasSession  bool      `json:"hasSession"`
+	HasCheckout bool      `json:"hasCheckout"`
+	Verified    bool      `json:"verified"`
+	FreeModels  bool      `json:"freeModels"`
+	AccountID   string    `json:"accountId,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // diskRow is Row's storage shape. Row deliberately marshals to a redacted
@@ -120,6 +142,7 @@ type diskRow struct {
 	APIKey     string    `json:"apiKey,omitempty"`
 	Account    string    `json:"accountId,omitempty"`
 	Cookies    []Cookie  `json:"cookies,omitempty"`
+	Checkout   *Checkout `json:"checkout,omitempty"`
 	Group      string    `json:"group,omitempty"`
 	Verified   bool      `json:"verified,omitempty"`
 	FreeModels bool      `json:"freeModels,omitempty"`
@@ -132,7 +155,7 @@ func (r Row) disk() diskRow {
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Password: r.Password,
 		MailboxURL: r.MailboxURL, ProxyURL: r.ProxyURL, Status: r.Status,
 		Detail: r.Detail, APIKey: r.APIKey, Account: r.Account,
-		Cookies: r.Cookies, Group: r.Group, Verified: r.Verified,
+		Cookies: r.Cookies, Checkout: r.Checkout, Group: r.Group, Verified: r.Verified,
 		FreeModels: r.FreeModels, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
@@ -142,7 +165,7 @@ func (d diskRow) row() Row {
 		ID: d.ID, Attempt: d.Attempt, Email: d.Email, Password: d.Password,
 		MailboxURL: d.MailboxURL, ProxyURL: d.ProxyURL, Status: d.Status,
 		Detail: d.Detail, APIKey: d.APIKey, Account: d.Account,
-		Cookies: d.Cookies, Group: d.Group, Verified: d.Verified,
+		Cookies: d.Cookies, Checkout: d.Checkout, Group: d.Group, Verified: d.Verified,
 		FreeModels: d.FreeModels, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 }
@@ -376,7 +399,8 @@ func (s *Store) Claim(id string) (Row, error) {
 	})
 }
 
-// Retry requeues a finished row so it can be registered again.
+// Retry requeues a finished row. Saved credentials are never erased: the
+// registrar resumes that session instead of submitting another signup.
 func (s *Store) Retry(id string) (Row, error) {
 	return s.Update(id, func(r *Row) error {
 		switch r.Status {
@@ -386,9 +410,6 @@ func (s *Store) Retry(id string) (Row, error) {
 		}
 		r.Status = Queued
 		r.Detail = ""
-		r.APIKey = ""
-		r.Cookies = nil
-		r.Account = ""
 		return nil
 	})
 }
@@ -429,11 +450,13 @@ func (s *Store) Summaries() map[string][]Summary {
 func SummaryOf(r Row) Summary {
 	return Summary{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Status: r.Status, Detail: r.Detail,
-		Proxy:      ProxyLabel(r.ProxyURL),
-		Group:      r.Group,
-		KeyMasked:  MaskKey(r.APIKey),
-		HasMailbox: r.MailboxURL != "",
-		Verified:   r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
+		Proxy:       ProxyLabel(r.ProxyURL),
+		Group:       r.Group,
+		KeyMasked:   MaskKey(r.APIKey),
+		HasMailbox:  r.MailboxURL != "",
+		HasSession:  len(r.Cookies) > 0,
+		HasCheckout: r.Checkout != nil && r.Checkout.URL != "",
+		Verified:    r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
@@ -469,6 +492,10 @@ func (s *Store) save(rows []Row) error {
 
 func cloneRow(r Row) Row {
 	r.Cookies = append([]Cookie(nil), r.Cookies...)
+	if r.Checkout != nil {
+		checkout := *r.Checkout
+		r.Checkout = &checkout
+	}
 	return r
 }
 
