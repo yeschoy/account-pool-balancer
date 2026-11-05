@@ -23,3 +23,16 @@
 - 初次全量测试发现旧Mock使用通用`session`Cookie，已将相关登录会话夹具改为真实命名后全量复验；未放宽生产判断以迁就Mock。
 - 未推送、未部署，未恢复OVH容器，未重注册真实账号或创建Key；不能宣称真实注册已修复成功。
 - 临时测试/构建产物登记`_tmp_artifacts.md`，未经用户同意不删除；公开研究浏览器已关闭。此Trellis记录长期保留。
+
+## 用户授权的单账号注册复测
+
+- 用户明确同意后选择`francs.trifold.9n@icloud.com`，原邮箱/原密码/原固定代理21000，在生产服务网络命名空间执行。仅1次signup POST，0次解验证码、Key创建、付款、入池；未部署或重启服务。
+- 首次只读预检因官网SSR表单不含邮箱input的name而在解析阶段停止，signupPosts=0。只读核对确认表单仍有原server action隐藏字段，按该表单读取后才执行唯一一次提交；没有重复POST。
+- 注册页HTTP200，signup-precheck HTTP200且needCaptcha=false；实际signup同为HTTP200，但Flight返回明确业务error：
+
+> We're receiving an unusually high number of sign-ups right now, so this one couldn't go through. Your details are fine — please wait a minute and try again. If it still doesn't work, email support@tokenharbor.ai and we'll help.
+
+- 没有auth-token、没有NEXT_REDIRECT、没有API Key。确认这次是官网在注册阶段以注册请求过多为由拒绝，不是成功登录后取Key失败。免验证码预检不能替代注册动作本身的业务结果。
+- 提示未公开限制按全站/IP/设备/邮箱哪种维度计算，不能将其升级成确凿的IP封禁/account_cap结论。不自动循环、换出口、重置指纹、解验证码或批量重试；已在收到拒绝后停止，持续问题应联系官网支持。
+- 未写线上注册库或配置；本次未发放有效会话，不需要新增敏感恢复副本，也未生成本地诊断脚本/原始响应文件。原有临时产物保留待用户同意清理。
+- 此证据确认本次明确拒绝原因；旧批次原始注册响应未保留，不能声称已逐个还原当时所有账号的具体拒绝结果。
