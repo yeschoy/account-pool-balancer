@@ -78,8 +78,11 @@
 - 旧镜像 `account-pool-balancer:rollback-20261105T213227Z`（2559c94）保留。
   回退前须检查新配置字段、模型/额度观察及上线后的账号/会话写入兼容性；
   不整体恢复旧数据覆盖新写入，不将旧版启动成功等同于新策略仍受保护。
-- 停止的断网预检容器及preflight-data/preflight.log已登记 `_tmp_artifacts.md`，
-  待用户同意再清理。完整备份、正式源码快照、新旧镜像及部署记录保留。
+- 用户同意后，于21:39:09 UTC定向删除已退出0的断网预检容器
+  `account-pool-balancer-preflight-20261105t213227z` 及本目录preflight-data/preflight.log，
+  均已复核不存在。完整备份及配置/构建/切换记录哈希未变，正式源码快照、新旧镜像
+  和部署记录保留；线上容器ID、启动时间、重启次数未变，仍healthy、healthz HTTP200。
+  清理记录已更新远程deploy.json和 `_tmp_artifacts.md`，不扩大到其他产物或Trellis。
   独立公网浏览器已关闭；不新建Trellis任务、不产生临时部署脚本。
 
 ## 历史部署（2026-11-05，TokenHarbor 归档与退回：2559c94）
