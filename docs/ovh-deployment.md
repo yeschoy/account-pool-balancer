@@ -28,7 +28,69 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署（2026-11-04）
+## 当前部署（2026-11-05，Token Harbor 号池）
+
+- 用户授权提交、推送并部署；`master` 已推送，业务版本为
+  `90630682c07e17fd0dcba270f0ff58ab3e68bf1d`。本节补记录不再次部署。
+- SSH、公网、容器、卷、端口及网络均不变：`ovh-server`、
+  `https://ods.yeschoy.io`、`account-pool-balancer`、
+  `/home/ubuntu/project/account-pool-balancer/data:/data`、`127.0.0.1:8790`、
+  `ai-internal` 与 `opendesign-balancer` 别名。
+- 固定镜像：`account-pool-balancer:release-9063068-20261105T091131Z`；
+  `latest` 指向镜像
+  `sha256:f733236840745f55fae33c4335d08d25c2a17c6fd655885fb498cb260048762e`。
+- 构建源码为明确提交的干净归档：
+  `/home/ubuntu/project/account-pool-balancer-releases/20261105T091131Z-9063068`。
+  旧工作树仍为 `e6f063b`，仅 fetch 更新远程引用；没有 reset/rebase、覆盖配置
+  或在旧目录 `up --build`。
+- 新镜像用现有顶层数据文件副本在 `--network none` 容器启动成功、健康检查
+  通过、停止退出 0 后才切换。切换前停止旧服务，备份完整 data，验证 gzip
+  及 SHA-256；只更新目标服务，不触及其他容器。
+- 验收确认 **52 个账号、9 把下游密钥、2 把导入密钥**及账号凭证/代理/
+  provider/group、原有设置、环境、卷、端口、网络别名均保留；相关状态 JSON
+  可读取。OpenCode 保持启用，兼容转换保持关闭，没有新增功能开关操作。
+- 容器 healthy、restartCount=0，镜像 revision 正确；本机和公网 `/healthz`
+  均为 200。真实浏览器未登录生产管理员账号，确认仅一个 Token Harbor 标签、
+  注册机导航保留，app.js/tokenharbor.js/app.css 均 HTTP 200，哈希与源码快照
+  一致（资源版本 `07f5a2e4de`）。未主动发起真实推理、注册或验证码消费；
+  本节不代表真实 Codex/Claude Code 或 Token Harbor Key 推理已验收。
+
+### 本次时间（UTC）
+
+| 阶段 | 时间 / 时长 |
+|---|---|
+| 构建 | 09:11:32–09:11:39，7 秒 |
+| 断网副本预检 | 09:11:39–09:11:40，通过 |
+| 请求停止 / 旧容器退出 | 09:16:40.245 / 09:16:40.372 |
+| 一致备份及 gzip 校验 | 1.601 秒，19,757,095 字节 |
+| 新容器启动 | 09:16:42.441 |
+| 首次观测 HTTP 恢复 | 09:16:42.751 |
+| Compose healthy 及本机验收 | 09:17:13 |
+| 公网验收登记 | 09:19:03 |
+
+0.25 秒采样观测到不可用窗口约 **2.253 秒**，采样有误差；
+不能把约 33 秒的停止请求至 healthy 等待或整体交付时长当成停机。
+整体超过 5 分钟，已主动说明时间主要花在切换前的数据保留/回退核对，
+并非构建等待。上线验收反馈先于文档收尾。
+
+### 本次备份与回滚
+
+- 受限目录：
+  `/home/ubuntu/backups/account-pool-balancer/20261105T091131Z-pre-9063068`
+  （目录 0700，敏感文件 0600）；含完整 data.tar.gz、校验、Compose/.env
+  副本和脱敏 deploy.json，未下载凭据到本地或提交 Git。
+- 备份 SHA-256：
+  `bc24fb877a0bb745f65967c9d73d4231db940f63657ba715779eed76591f8b68`。
+- 旧镜像：`account-pool-balancer:rollback-20261105T091131Z`，对应原运行
+  `1c7a3b8`。**回滚前必须检查配置兼容性和上线后的新写入**：旧版不认识
+  新注册配置或新增账号的某些字段，不能直接把新配置交给旧镜像，也不能
+  自动覆盖旧数据备份。必要备份、版本快照、镜像和 deploy.json 保留。
+- 本次停止的预检容器
+  `account-pool-balancer-preflight-20261105t091131z` 和上述备份目录内
+  `preflight-data` 临时敏感副本，已登记 `_tmp_artifacts.md`，待用户同意
+  后清理；尚未删除。它们不是在线 data，也不等于完整回滚备份。
+
+## 历史部署（2026-11-04）
 
 - SSH：`ovh-server`；公网：`https://ods.yeschoy.io`。
 - 容器：`account-pool-balancer`；宿主监听仍为 `127.0.0.1:8790`。
