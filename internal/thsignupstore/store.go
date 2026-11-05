@@ -40,6 +40,10 @@ const (
 	Queued     Status = "queued"
 	Running    Status = "running"
 	Registered Status = "registered"
+	// Unverified is a registered account whose confirmation mail has not been
+	// used yet. Its key answers /v1/models but refuses chat with
+	// "email_verification_required", so it must not enter the pool as usable.
+	Unverified Status = "unverified"
 	Imported   Status = "imported"
 	Failed     Status = "failed"
 	Uncertain  Status = "uncertain"
@@ -229,7 +233,7 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 
 func validStatus(s Status) bool {
 	switch s {
-	case Queued, Running, Registered, Imported, Failed, Uncertain:
+	case Queued, Running, Registered, Unverified, Imported, Failed, Uncertain:
 		return true
 	}
 	return false
@@ -376,7 +380,7 @@ func (s *Store) Claim(id string) (Row, error) {
 func (s *Store) Retry(id string) (Row, error) {
 	return s.Update(id, func(r *Row) error {
 		switch r.Status {
-		case Failed, Uncertain, Registered:
+		case Failed, Uncertain, Registered, Unverified:
 		default:
 			return ErrInvalid
 		}

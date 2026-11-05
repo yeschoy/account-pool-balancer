@@ -5,12 +5,15 @@ const TH_STATUS = {
   queued: ['排队中', 'accent'],
   running: ['注册中', 'accent'],
   registered: ['已注册', 'ok'],
+  unverified: ['待验证', 'warn'],
   imported: ['已入池', 'ok'],
   failed: ['失败', 'bad'],
   uncertain: ['中断', 'warn'],
 };
 
 const thState = { job: '', jobs: [], rows: [], busy: false, timer: null, generation: 0 };
+// 右下角注册日志：轮询增量，暂停时只累积不渲染。
+const thLog = { seq: 0, lines: [], timer: null, paused: false, visible: false };
 
 function thLabel(status) {
   const [label, cls] = TH_STATUS[status] || [status || '未知', ''];
@@ -52,6 +55,7 @@ async function loadTHOverview() {
 // ---- 注册机 ----
 async function loadTHRegistrations() {
   stopTHPolling();
+  thLogShow();
   const generation = ++thState.generation;
   const poll = async () => {
     try {
@@ -107,6 +111,9 @@ function renderTHJob(job) {
 
 function thRowActions(r) {
   const out = [];
+  if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) {
+    out.push(`<button type="button" class="btn small th-row-reverify" data-id="${esc(r.id)}">补验证</button>`);
+  }
   if (r.status === 'registered') out.push(`<button type="button" class="btn small primary th-row-import" data-id="${esc(r.id)}">入池</button>`);
   if (r.status === 'failed' || r.status === 'uncertain') out.push(`<button type="button" class="btn small th-row-retry" data-id="${esc(r.id)}">重试</button>`);
   if (r.status !== 'running') out.push(`<button type="button" class="btn small ghost th-row-delete" data-id="${esc(r.id)}">删除</button>`);
@@ -168,11 +175,13 @@ async function thSubmitRegistration(ev) {
       group: $('#th-register-group').value.trim() || 'tokenharbor',
       autoImport: $('#th-register-auto').checked,
       solveCaptcha: $('#th-register-solve').checked,
+      concurrency: Number($('#th-register-conc').value) || 0,
     });
     if (!out || !out.id) throw new Error('后台没有返回任务 ID，请先刷新任务列表确认');
     $('#th-register-accounts').value = '';
     $('#th-register-proxies').value = '';
     thState.job = out.id;
+    thLogShow();
     if (currentPage === 'thregister') loadTHRegistrations();
   } catch (e) {
     error.textContent = thSafe(e.message) + '。请求结果不确定时，请先刷新任务列表确认任务是否已创建。';
@@ -205,6 +214,7 @@ async function thRowProxy(id) {
 async function thRowAction(kind, id) {
   const err = $('#th-register-import-error');
   err.textContent = '';
+  if (kind === 'reverify') err.textContent = '';
   try {
     if (kind === 'import') {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/import', { group: $('#th-register-group').value.trim() || 'tokenharbor' });
@@ -212,6 +222,11 @@ async function thRowAction(kind, id) {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked });
     } else if (kind === 'delete') {
       await api('DELETE', '/api/tokenharbor/registrations/' + encodeURIComponent(id));
+    } else if (kind === 'reverify') {
+      thLogShow();
+      err.textContent = '正在查找验证邮件…';
+      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/reverify', {});
+      err.textContent = '';
     }
   } catch (e) {
     err.textContent = thSafe(e.message);
@@ -231,7 +246,9 @@ async function loadTHSettings() {
   $('#th-set-label').value = th.keyLabel || 'pool';
   $('#th-set-group').value = th.group || 'tokenharbor';
   $('#th-set-conc').value = th.registerConcurrency || 2;
-  $('#th-set-mail').value = th.mailTimeoutSec || 240;
+  $('#th-set-mail').value = th.mailTimeoutSec || 600;
+  const conc = $('#th-register-conc');
+  if (conc) conc.value = th.registerConcurrency || 2;
   $('#th-set-save').dataset.revision = String(out.revision || 0);
   $('#th-set-save').dataset.proxy = th.proxyUrl || '';
 }
@@ -250,9 +267,9 @@ async function thSaveSettings(ev) {
       keyLabel: $('#th-set-label').value.trim() || 'pool',
       group: $('#th-set-group').value.trim() || 'tokenharbor',
       registerConcurrency: Number($('#th-set-conc').value) || 2,
-      mailTimeoutSec: Number($('#th-set-mail').value) || 240,
+      mailTimeoutSec: Number($('#th-set-mail').value) || 600,
     },
-    expectedRevision: Number(btn.dataset.revision || 0) - 1,
+    expectedRevision: Number(btn.dataset.revision || 0),
   };
   btn.disabled = true;
   try {
@@ -267,6 +284,60 @@ async function thSaveSettings(ev) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---- 右下角注册日志 ----
+function thLogShow() {
+  thState.visible = true;
+  $('#th-logbox').classList.remove('hidden');
+  if (!thLog.timer) {
+    thLogPoll();
+    thLog.timer = setTimeout(thLogPoll, 1500);
+  }
+}
+
+function thLogHide() {
+  $('#th-logbox').classList.add('hidden');
+  // 收起不动轮询状态：再打开时从上次的 seq 继续，不丢中间的行。
+}
+
+async function thLogPoll() {
+  thLog.timer = null;
+  try {
+    const out = await api('GET', '/api/tokenharbor/log?after=' + thLog.seq);
+    const entries = (out && out.entries) || [];
+    if (entries.length) {
+      thLog.seq = out.seq || thLog.seq;
+      for (const e of entries) thLog.lines.push(e);
+      if (thLog.lines.length > 400) thLog.lines = thLog.lines.slice(-400);
+      if (!thLog.paused) thLogRender();
+    }
+    thLogStatus(entries.length);
+  } catch (e) {
+    $('#th-log-status').textContent = '日志获取失败：' + thSafe(e.message);
+  } finally {
+    thLog.timer = setTimeout(thLogPoll, 1500);
+  }
+}
+
+function thLogStatus(newLines) {
+  const body = $('#th-log-body');
+  if (body.querySelector('.muted')) { /* 首次渲染前占位 */ }
+  $('#th-log-status').textContent = thLog.paused ? '已暂停（仍在累积）' : (newLines ? '接收中' : '等待新日志');
+  $('#th-log-count').textContent = thLog.lines.length ? `共 ${thLog.lines.length} 行` : '';
+}
+
+function thLogRender() {
+  const body = $('#th-log-body');
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+  body.innerHTML = thLog.lines.map((e) => {
+    const t = new Date(e.ts);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    return `<div class="th-log-line ${esc(e.level || 'info')}"><span class="t">${hh}:${mm}:${ss}</span><span class="e" title="${esc(e.email)}">${esc(e.email)}</span><span class="s">${esc(e.stage)}</span><span class="d">${thSafe(e.detail)}</span></div>`;
+  }).join('') || '<p class="muted small">暂无日志。</p>';
+  if (atBottom) body.scrollTop = body.scrollHeight;
 }
 
 // ---- 事件 ----
@@ -284,10 +355,18 @@ function thInstall() {
     $('#th-register-import-error').textContent = '';
     loadTHRegistrations();
   });
+  on('#th-log-close', 'click', thLogHide);
+  on('#th-log-clear', 'click', () => { thLog.lines = []; thLogRender(); thLogStatus(0); });
+  on('#th-log-pause', 'click', (e) => {
+    thLog.paused = !thLog.paused;
+    e.currentTarget.textContent = thLog.paused ? '继续' : '暂停';
+    if (!thLog.paused) thLogRender();
+    thLogStatus(0);
+  });
   on('#th-register-rows', 'click', (e) => {
     const proxy = e.target.closest('.th-row-proxy');
     if (proxy) { thRowProxy(proxy.dataset.id).catch((err) => toast(err.message)); return; }
-    for (const kind of ['import', 'retry', 'delete']) {
+    for (const kind of ['import', 'retry', 'delete', 'reverify']) {
       const btn = e.target.closest('.th-row-' + kind);
       if (btn) { thRowAction(kind, btn.dataset.id); return; }
     }

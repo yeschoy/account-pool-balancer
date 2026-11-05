@@ -20,8 +20,10 @@ func newTHTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.logs.Close)
-	// Registrations reach the network; the tests here never start one with a
-	// real row, and a queued row's worker is cancelled below.
+	// Registrations are background goroutines that write to the log store;
+	// stop them before the test closes that store. A row that is never worked
+	// on gives up on thStopping, which this closes.
+	t.Cleanup(s.stopTokenHarbor)
 	return s
 }
 
@@ -54,6 +56,20 @@ func postTH(t *testing.T, s *Server, path, body string) *httptest.ResponseRecord
 	return rec
 }
 
+// savedSession creates one admin session and returns its cookie value.
+func savedSession(t *testing.T, s *Server) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.admin.create(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookie {
+			return c.Value
+		}
+	}
+	t.Fatal("no session cookie")
+	return ""
+}
+
 // A batch must be validated before anything is queued: a bad mailbox or a bad
 // proxy line is the operator's typo, not something to discover per row.
 func TestTHRegisterRejectsBadInput(t *testing.T) {
@@ -77,6 +93,16 @@ func TestTHRegisterRejectsBadInput(t *testing.T) {
 // and a row must never fall back to direct egress when proxies were given.
 func TestTHRegisterSpreadsProxies(t *testing.T) {
 	s := newTHTestServer(t)
+	// Every row registers against an unroutable site so the background workers
+	// fail fast instead of reaching the real one.
+	if _, err := s.cfg.Update(-1, func(c *config.Config) error {
+		th := c.TokenHarbor
+		th.BaseURL = "http://127.0.0.1:1/v1"
+		c.TokenHarbor = th
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"accounts":[
 		{"email":"a@x.com","password":"pw"},
 		{"email":"b@x.com","password":"pw"},
@@ -107,8 +133,16 @@ func TestTHRegisterSpreadsProxies(t *testing.T) {
 // cookie or a full key.
 func TestTHRowsNeverLeakCredentials(t *testing.T) {
 	s := newTHTestServer(t)
+	if _, err := s.cfg.Update(-1, func(c *config.Config) error {
+		th := c.TokenHarbor
+		th.BaseURL = "http://127.0.0.1:1/v1"
+		c.TokenHarbor = th
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	rec := postTH(t, s, "/api/tokenharbor/registrations",
-		`{"accounts":[{"email":"a@x.com","password":"SuperSecret123"}]}`)
+		`{"accounts":[{"email":"a@x.com","password":"SuperSecret123"}],"solveCaptcha":false}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d %s", rec.Code, rec.Body.String())
 	}
@@ -195,5 +229,103 @@ func TestTHErrorStagesAreNamed(t *testing.T) {
 	}
 	if thregister.AccountID("A@x.com") != thregister.AccountID("a@x.com") {
 		t.Fatal("account identity must be case-insensitive")
+	}
+}
+
+// A row whose mail arrived after the wait must be importable only after the
+// address is confirmed: its key answers metadata but refuses chat.
+func TestTHImportRefusesUnverified(t *testing.T) {
+	s := newTHTestServer(t)
+	store, _ := s.thStore()
+	rows, _ := store.Add("that_test", []thsignupstore.Row{{Email: "u@x.com", Password: "pw"}})
+	id := rows[0].ID
+	if _, err := store.Update(id, func(r *thsignupstore.Row) error {
+		r.Status = thsignupstore.Unverified
+		r.APIKey = "thk_live_TESTOKENTESTOKENTESTOKENTESTOKENTESTOKEN"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.thImport(id, ""); err == nil {
+		t.Fatal("an unverified account must not enter the pool as usable")
+	}
+	// Once confirmed it imports.
+	if _, err := store.Update(id, func(r *thsignupstore.Row) error {
+		r.Status = thsignupstore.Registered
+		r.Verified = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.thImport(id, ""); err != nil {
+		t.Fatalf("verified account should import: %v", err)
+	}
+}
+
+// The console tails the registration log by sequence number; the API must
+// return only what is new and never a credential.
+func TestTHLogTail(t *testing.T) {
+	s := newTHTestServer(t)
+	s.thLive("x@icloud.com", "开始注册", "", "http://u:p@1.2.3.4:8080", "info")
+	s.thLive("x@icloud.com", "完成", "key=thk_live_TESTOKENTESTOKENTESTOKEN…EN", "http://u:p@1.2.3.4:8080", "success")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/tokenharbor/log?after=0", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: savedSession(t, s)})
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Entries []thLogEntry `json:"entries"`
+		Seq     int64        `json:"seq"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Entries) != 2 || out.Seq != 2 {
+		t.Fatalf("want 2 entries and seq 2, got %d / %d", len(out.Entries), out.Seq)
+	}
+	if strings.Contains(rec.Body.String(), "u:p@") {
+		t.Fatal("the log leaked proxy credentials")
+	}
+	if out.Entries[0].Email != "x@icloud.com" || out.Entries[1].Stage != "完成" {
+		t.Fatalf("unexpected entries: %+v", out.Entries)
+	}
+
+	// Asking again from the latest sequence yields nothing new.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/tokenharbor/log?after=2", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: savedSession(t, s)})
+	s.Handler().ServeHTTP(rec, req)
+	var again struct {
+		Entries []thLogEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Entries) != 0 {
+		t.Fatalf("tail must be incremental, got %d", len(again.Entries))
+	}
+}
+
+// The registration flow talks to the site, not to the /v1 API root: the
+// setting is an API root, so exactly that suffix comes off and nothing else.
+// The regression this guards: a stub URL was once reduced to its host, and the
+// test happily registered against production.
+func TestTHBaseURLKeepsHostAndPath(t *testing.T) {
+	cases := map[string]string{
+		"":                                  thregister.DefaultBase,
+		"https://tokenharbor.ai/v1":         "https://tokenharbor.ai",
+		"https://tokenharbor.ai/v1/":        "https://tokenharbor.ai",
+		"https://tokenharbor.ai":            "https://tokenharbor.ai",
+		"http://127.0.0.1:8080/stub/v1":     "http://127.0.0.1:8080/stub",
+		"https://staging.example.com/th/v1": "https://staging.example.com/th",
+		"http://127.0.0.1:1/v1":             "http://127.0.0.1:1",
+	}
+	for in, want := range cases {
+		if got := thBaseURL(in); got != want {
+			t.Errorf("thBaseURL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

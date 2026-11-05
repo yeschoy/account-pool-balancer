@@ -317,6 +317,9 @@
             <input id="th-register-group" value="tokenharbor" autocomplete="off">
             <label class="check"><input type="checkbox" id="th-register-auto" checked> 注册成功后自动入池</label>
             <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
+            <label for="th-register-conc">本次并发</label>
+            <input id="th-register-conc" type="number" min="1" max="10" step="1" value="2">
+            <span class="hint">同时注册几个号；一次提交内超出的排队，不会丢。默认值来自设置。</span>
             <button type="submit" class="btn primary" id="th-register-submit">启动注册</button>
             <p id="th-register-error" class="error" role="alert"></p>
           </form>
@@ -616,6 +619,18 @@
       </div>
     </section>
   </main>
+  <aside id="th-logbox" class="th-logbox hidden" aria-live="polite" aria-label="注册日志">
+    <header class="th-logbox-head">
+      <span>TokenHarbor 注册日志</span>
+      <span class="th-logbox-actions">
+        <button type="button" class="btn small ghost" id="th-log-pause">暂停</button>
+        <button type="button" class="btn small ghost" id="th-log-clear">清屏</button>
+        <button type="button" class="btn small ghost" id="th-log-close" aria-label="收起">收起</button>
+      </span>
+    </header>
+    <div id="th-log-body" class="th-logbox-body"><p class="muted small">暂无日志。</p></div>
+    <footer class="th-logbox-foot"><span id="th-log-status" class="muted small">空闲</span><span id="th-log-count" class="muted small"></span></footer>
+  </aside>
 </div>
 
 <dialog id="modal"><form method="dialog" id="modal-form"><h3 id="modal-title"></h3><div id="modal-body"></div><p id="modal-error" class="error"></p><div class="modal-actions" id="modal-actions"></div></form></dialog>

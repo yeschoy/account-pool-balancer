@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,15 @@ type thRegisterRequest struct {
 	// SolveCaptcha buys a Turnstile token when the site asks for one. Off by
 	// default: the caller pays for each attempt it enables.
 	SolveCaptcha bool `json:"solveCaptcha"`
+	// Concurrency overrides this task's simultaneous registrations (0 = the
+	// setting). It never exceeds thMaxConcurrency, and the whole server still
+	// shares one budget.
+	Concurrency int `json:"concurrency,omitempty"`
 }
+
+// thMaxConcurrency bounds per-task parallelism: every slot can spend money at
+// the captcha service and one mailbox, so the ceiling is a cost guard.
+const thMaxConcurrency = 10
 
 // thRegistrationView is the console's attempt row: counts plus summaries.
 type thRegistrationView struct {
@@ -103,6 +112,8 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("PUT /api/tokenharbor/registrations/{id}/proxy", s.apiTHRowProxy)
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
 	a("POST /api/tokenharbor/registrations/{id}/retry", s.apiTHRetry)
+	a("POST /api/tokenharbor/registrations/{id}/reverify", s.apiTHReverify)
+	a("GET /api/tokenharbor/log", s.apiTHLog)
 	a("DELETE /api/tokenharbor/registrations/{id}", s.apiTHDeleteRow)
 	a("GET /api/tokenharbor/settings", s.apiTHSettings)
 	a("PUT /api/tokenharbor/settings", s.apiTHSaveSettings)
@@ -208,34 +219,59 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.thRegisterAttempt(attempt, group, in.AutoImport, in.SolveCaptcha, summaries)
+	conc := in.Concurrency
+	if conc > 0 {
+		if conc > thMaxConcurrency {
+			conc = thMaxConcurrency
+		}
+	} else {
+		conc = cfg.RegisterConcurrency
+	}
+	s.thLive("", "任务创建", fmt.Sprintf("%d 个邮箱，并发 %d，代理 %d 个", len(rows), conc, len(proxies)), "", "info")
+	s.thRegisterAttempt(attempt, group, in.AutoImport, in.SolveCaptcha, conc, summaries)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": attempt, "rows": summaries})
 }
 
 // thRegisterAttempt starts the background work for the queued rows.
-func (s *Server) thRegisterAttempt(attempt, group string, autoImport, solve bool, rows []thsignupstore.Summary) {
+func (s *Server) thRegisterAttempt(attempt, group string, autoImport, solve bool, conc int, rows []thsignupstore.Summary) {
 	reg := s.thRegistrar()
+	if conc <= 0 {
+		conc = s.cfg.Get().TokenHarbor.RegisterConcurrency
+	}
 	for _, row := range rows {
 		if row.Status != thsignupstore.Queued || row.Attempt != attempt {
 			continue
 		}
 		id := row.ID
+		// Every row gets its own goroutine; the per-attempt budget below is
+		// what actually limits simultaneity, so a queued row waits instead of
+		// being dropped (and its place in the line is kept).
+		s.thTasks.Add(1)
 		go func() {
-			_ = reg.run(id, group, autoImport, solve)
+			defer s.thTasks.Done()
+			_ = reg.run(id, group, autoImport, solve, conc)
 		}()
 	}
 }
 
 // run registers one row and, when asked, imports it into the pool.
-func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
+func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) error {
 	s := r.srv
 	store, err := s.thStore()
 	if err != nil {
 		return err
 	}
 	cfg := s.cfg.Get().TokenHarbor
-	sem := r.budget(cfg.RegisterConcurrency)
+	if conc <= 0 {
+		conc = cfg.RegisterConcurrency
+	}
+	sem := r.budget(conc)
 
+	select {
+	case <-s.thStopping:
+		return errors.New("服务正在停止")
+	default:
+	}
 	row, err := store.Claim(id)
 	if err != nil {
 		return err
@@ -248,12 +284,15 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
 			return nil
 		})
 		s.logTHDiagnostic(row.Email, stage, row.ProxyURL, err)
+		s.thLive(row.Email, stage, err.Error(), row.ProxyURL, "error")
 		return errors.New(detail)
 	}
 
 	select {
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
+	case <-s.thStopping:
+		return errors.New("服务正在停止")
 	case <-time.After(10 * time.Minute):
 		return fail("排队", errors.New("等待并发名额超时"))
 	}
@@ -269,6 +308,9 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
 		Label:          thLabel(cfg),
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
+		Log: func(stage, detail string) {
+			s.thLive(row.Email, stage, detail, proxy, "info")
+		},
 	}
 	if row.MailboxURL != "" {
 		flowCfg.Mailbox = thmailbox.New(row.MailboxURL, s.thHTTPClient(proxy))
@@ -288,7 +330,9 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
 	}
 	defer flow.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	s.thLive(row.Email, "开始注册", "", proxy, "info")
+	// 12m of work + the mail budget, which the flow spends inside this window.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
 	defer cancel()
 	res, err := flow.Run(ctx, thregister.Credentials{
 		Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,
@@ -309,14 +353,20 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
 	for _, c := range res.Cookies {
 		cookies = append(cookies, thsignupstore.Cookie{Name: c.Name, Value: c.Value})
 	}
+	status := thsignupstore.Registered
+	if res.MailTimedOut {
+		status = thsignupstore.Unverified
+	}
 	_, err = store.Update(id, func(rw *thsignupstore.Row) error {
-		rw.Status = thsignupstore.Registered
+		rw.Status = status
 		rw.APIKey = res.APIKey
 		rw.Cookies = cookies
 		rw.Verified = res.VerifiedEmail
 		rw.FreeModels = res.FreeModelsEnabled
 		rw.Detail = "已注册"
-		if !res.VerifiedEmail {
+		if res.MailTimedOut {
+			rw.Detail = "已注册，待邮箱验证：验证信超过等待时间才到，可点「补验证」"
+		} else if !res.VerifiedEmail {
 			rw.Detail += "（未完成邮箱验证，API 已可用）"
 		}
 		if !res.FreeModelsEnabled && res.FreeModelsError != "" {
@@ -328,6 +378,11 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool) error {
 		return err
 	}
 	s.logTHDiagnostic(row.Email, "register", proxy, nil)
+	level := "success"
+	if status == thsignupstore.Unverified {
+		level = "warn"
+	}
+	s.thLive(row.Email, "注册完成", thsignupstore.MaskKey(res.APIKey), proxy, level)
 	if autoImport {
 		if err := s.thImport(id, group); err != nil {
 			_, _ = store.Update(id, func(rw *thsignupstore.Row) error {
@@ -349,7 +404,12 @@ func (s *Server) thImport(id, group string) error {
 	if err != nil {
 		return err
 	}
-	if row.Status != thsignupstore.Registered && row.Status != thsignupstore.Imported {
+	switch row.Status {
+	case thsignupstore.Imported:
+	case thsignupstore.Registered:
+	case thsignupstore.Unverified:
+		return errors.New("该账号还没完成邮箱验证，现在入池调对话会被拒绝（email_verification_required）；请先「补验证」")
+	default:
 		return errors.New("只有已注册的账号可以入池")
 	}
 	if strings.TrimSpace(row.APIKey) == "" {
@@ -534,8 +594,98 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 		s.thStoreError(w, err)
 		return
 	}
-	go func() { _ = s.thRegistrar().run(id, row.Group, false, in.SolveCaptcha) }()
+	s.thTasks.Add(1)
+	go func() {
+		defer s.thTasks.Done()
+		_ = s.thRegistrar().run(id, row.Group, false, in.SolveCaptcha, 0)
+	}()
 	writeJSON(w, http.StatusAccepted, thsignupstore.SummaryOf(row))
+}
+
+// apiTHReverify finishes the e-mail confirmation of a row that registered but
+// whose mail arrived after the patience budget. It never re-registers.
+func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	store, err := s.thStore()
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err)
+		return
+	}
+	id := r.PathValue("id")
+	row, err := store.Get(id)
+	if err != nil {
+		s.thStoreError(w, err)
+		return
+	}
+	if row.Status != thsignupstore.Unverified && row.Status != thsignupstore.Registered {
+		apiError(w, http.StatusConflict, errors.New("只有已注册的账号需要补验证"))
+		return
+	}
+	cfg := s.cfg.Get().TokenHarbor
+	proxy := row.ProxyURL
+	if proxy == "" {
+		proxy = cfg.ProxyURL
+	}
+	cookies := make([]thregister.NamedCookie, 0, len(row.Cookies))
+	for _, c := range row.Cookies {
+		cookies = append(cookies, thregister.NamedCookie{Name: c.Name, Value: c.Value})
+	}
+	flowCfg := thregister.Config{
+		BaseURL:        thBaseURL(cfg.BaseURL),
+		ProxyURL:       proxy,
+		Timezone:       "UTC",
+		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
+		RequestTimeout: 40 * time.Second,
+		Mailbox:        thmailbox.New(row.MailboxURL, s.thHTTPClient(proxy)),
+		Log: func(stage, detail string) {
+			s.thLive(row.Email, stage, detail, proxy, "info")
+		},
+	}
+	flow, err := thregister.New(flowCfg)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	defer flow.Close()
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cfg.MailTimeoutSec)*time.Second+time.Minute)
+	defer cancel()
+	s.thLive(row.Email, "补验证", "查找验证邮件", proxy, "info")
+	if _, err := flow.Reverify(ctx, row.Email, cookies, row.CreatedAt); err != nil {
+		s.thLive(row.Email, "补验证", err.Error(), proxy, "error")
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := store.Update(id, func(rw *thsignupstore.Row) error {
+		rw.Verified = true
+		if rw.Status == thsignupstore.Unverified {
+			rw.Status = thsignupstore.Registered
+		}
+		rw.Detail = "已注册，邮箱已验证"
+		return nil
+	})
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.thLive(row.Email, "补验证", "成功", proxy, "success")
+	writeJSON(w, http.StatusOK, thsignupstore.SummaryOf(updated))
+}
+
+// apiTHLog returns registration log lines after ?after=<seq>, for the console's
+// bottom-right tail panel (it polls instead of holding a stream open).
+func (s *Server) apiTHLog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var after int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			after = n
+		}
+	}
+	entries, seq := s.thLog().since(after)
+	if entries == nil {
+		entries = []thLogEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "seq": seq})
 }
 
 func (s *Server) apiTHDeleteRow(w http.ResponseWriter, r *http.Request) {
@@ -643,16 +793,28 @@ func (s *Server) thHTTPClient(proxy string) *http.Client {
 	return &http.Client{Transport: s.transport(proxy), Timeout: 45 * time.Second}
 }
 
+// thBaseURL is the SITE root the registration flow talks to.
+//
+// The setting is the API root ("https://tokenharbor.ai/v1") because that is
+// what the pool sends inference to, but registration drives the site's own
+// endpoints (/login, /api/auth/…), so a "/v1" suffix is the one thing that must
+// come off. Anything else is kept verbatim: silently rewriting a configured
+// host is how a test pointed at a stub once ended up hitting production.
 func thBaseURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return thregister.DefaultBase
 	}
-	// The flow builds site URLs itself; the API root only names the host.
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Host != "" {
-		return u.Scheme + "://" + u.Host
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
 	}
-	return raw
+	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/v1")
+	if u.Path == "" {
+		u.Path = ""
+	}
+	u.RawQuery, u.Fragment = "", ""
+	return strings.TrimSuffix(u.String(), "/")
 }
 
 func thLabel(cfg config.TokenHarbor) string {

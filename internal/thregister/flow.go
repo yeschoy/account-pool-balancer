@@ -92,6 +92,10 @@ type Result struct {
 	FreeModelsEnabled bool
 	// FreeModelsError is why it did not, empty when it did or was not tried.
 	FreeModelsError string
+	// MailTimedOut records that the confirmation mail never arrived within
+	// the patience budget. The account is still usable for metadata reads,
+	// and the link can be re-checked later (see Reverify).
+	MailTimedOut bool
 	// UserIDClaim is the Supabase user id the session belongs to. It is read
 	// from the session cookie, which is the only place the site exposes it to
 	// a browser client, and it is the account's stable identity upstream.
@@ -202,6 +206,10 @@ type Config struct {
 	// Solver resolves Turnstile when the site asks for it; nil means "fail
 	// with ErrCaptchaRequired instead of submitting blind".
 	Solver Solver
+	// Log receives one line per step, for the console's live log panel. It
+	// must never receive a credential; the flow only passes stage labels and
+	// short reasons.
+	Log func(stage, detail string)
 	// Mailbox waits for the verification mail; nil skips verification (the
 	// account works for the dashboard but the API stays locked).
 	Mailbox Mailbox
@@ -239,6 +247,13 @@ func (c Config) timezone() string {
 		return defaultTZ
 	}
 	return c.Timezone
+}
+
+// step reports one stage to the logger (nil-safe).
+func (c Config) step(stage, detail string) {
+	if c.Log != nil {
+		c.Log(stage, detail)
+	}
 }
 
 func (c Config) label() string {
@@ -319,6 +334,7 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	if c.Password == "" {
 		return Result{}, errors.New("密码不能为空")
 	}
+	f.cfg.step("打开注册页", "")
 	page, err := f.loadSignupPage(ctx)
 	if err != nil {
 		return Result{}, err
@@ -333,13 +349,16 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	if fingerprint == "" {
 		fingerprint = newUUID()
 	}
+	f.cfg.step("解析注册表单", "action="+form.actionID[:12])
 
 	needCaptcha, err := f.precheck(ctx, fingerprint)
 	if err != nil {
 		return Result{}, err
 	}
+	f.cfg.step("预检", map[bool]string{true: "需要验证码", false: "免验证码"}[needCaptcha])
 	token := ""
 	if needCaptcha {
+		f.cfg.step("解 Turnstile", "captcha-run")
 		if f.cfg.Solver == nil {
 			return Result{}, ErrCaptchaRequired
 		}
@@ -352,6 +371,7 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 		}
 	}
 
+	f.cfg.step("提交注册", email)
 	if err := f.submitSignup(ctx, form, signupFields{
 		Email:       email,
 		Password:    c.Password,
@@ -367,6 +387,7 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	if err := f.enableFreeModels(ctx); err == nil {
 		res.FreeModelsEnabled = true
 	} else {
+		f.cfg.step("免费模型", err.Error())
 		// Not fatal: free routes are a bonus on top of a working key. The
 		// reason travels with the result so the console can say why.
 		res.FreeModelsError = err.Error()
@@ -381,16 +402,29 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	}
 
 	if f.cfg.Mailbox != nil {
+		f.cfg.step("等验证邮件", "最长 "+f.cfg.mailTimeout().String())
 		if link, err := f.waitVerificationLink(ctx, email); err == nil && link != "" {
 			res.VerifiedEmail = f.verifyEmail(ctx, link) == nil
+			if res.VerifiedEmail {
+				f.cfg.step("邮箱验证", "成功")
+			} else {
+				f.cfg.step("邮箱验证", "链接无效")
+			}
+		} else {
+			// Not a failure: the account exists and its key is real. The
+			// mail simply arrived after the patience budget (measured ≈9m).
+			res.MailTimedOut = true
+			f.cfg.step("等验证邮件", "超时，可在任务里补验证")
 		}
 	}
 
+	f.cfg.step("创建 API Key", "")
 	key, err := f.createAPIKey(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	res.APIKey = key
+	f.cfg.step("完成", "key="+MaskKey(key))
 	for _, ck := range f.jar.Cookies(mustURL(f.cfg.base())) {
 		res.Cookies = append(res.Cookies, NamedCookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path,
 			Expires: ck.Expires, Secure: ck.Secure, HTTPOnly: ck.HttpOnly, SameSite: int(ck.SameSite)})
@@ -398,6 +432,58 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	res.UserIDClaim, res.SessionExpiresAt = SessionIdentity(res.Cookies)
 	sort.Slice(res.Cookies, func(i, j int) bool { return res.Cookies[i].Name < res.Cookies[j].Name })
 	return res, nil
+}
+
+// Reverify completes the e-mail confirmation of an account that is already
+// registered, using its stored session instead of signing up again.
+//
+// It exists because the confirmation mail is slow and uneven (measured: about
+// nine minutes on one egress, against a signup response that already succeeded).
+// Without this, a mail that arrived after the wait would strand a perfectly good
+// account: its key answers /v1/models but refuses chat with
+// "email_verification_required" until the link is opened.
+//
+// since limits the mailbox read to mails received after that instant, so an
+// older confirmation link from a previous attempt is never reused.
+func (f *Flow) Reverify(ctx context.Context, email string, session []NamedCookie, since time.Time) (string, error) {
+	if f.cfg.Mailbox == nil {
+		return "", errors.New("没有接码页，无法补验证")
+	}
+	if len(session) > 0 {
+		f.SeedCookies(session)
+	}
+	link, err := f.verificationLinkSince(ctx, since)
+	if err != nil {
+		return "", err
+	}
+	if err := f.verifyEmail(ctx, link); err != nil {
+		return "", err
+	}
+	return link, nil
+}
+
+// SeedCookies restores a stored session into this flow's jar, so a follow-up
+// request is made as the same browser rather than as a stranger.
+func (f *Flow) SeedCookies(cookies []NamedCookie) {
+	base := mustURL(f.cfg.base())
+	out := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		ck := &http.Cookie{
+			Name: c.Name, Value: c.Value, Path: c.Path, Domain: c.Domain,
+			Expires: c.Expires, Secure: c.Secure, HttpOnly: c.HTTPOnly,
+			SameSite: http.SameSite(c.SameSite),
+		}
+		if ck.Path == "" {
+			ck.Path = "/"
+		}
+		if ck.Domain == "" {
+			ck.Domain = base.Hostname()
+		}
+		out = append(out, ck)
+	}
+	if len(out) > 0 {
+		f.jar.SetCookies(base, out)
+	}
 }
 
 // AccountID is the stable, credential-free identity of a mailbox: two runs of
@@ -629,9 +715,16 @@ var verifyLinkRe = regexp.MustCompile(`https://tokenharbor\.ai/verify-email\?tok
 // waitVerificationLink polls the mailbox for the newest verification link,
 // ignoring mails that predate this run.
 func (f *Flow) waitVerificationLink(ctx context.Context, email string) (string, error) {
+	// Tolerate a couple of minutes of clock skew between us and the mailbox.
+	return f.verificationLinkSince(ctx, time.Now().Add(-2*time.Minute))
+}
+
+// verificationLinkSince polls the mailbox for a confirmation link in mail
+// received after `since`, for at most the configured mail timeout.
+func (f *Flow) verificationLinkSince(ctx context.Context, since time.Time) (string, error) {
 	deadline := time.Now().Add(f.cfg.mailTimeout())
 	poll := f.cfg.pollEvery()
-	started := time.Now().Add(-2 * time.Minute) // tolerate clock skew
+	started := since
 	for {
 		msgs, err := f.cfg.Mailbox.Messages(ctx)
 		if err == nil {
@@ -800,6 +893,14 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 // ---- helpers -------------------------------------------------------------------
 
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+
+// MaskKey shows a key's prefix and last four characters.
+func MaskKey(k string) string {
+	if len(k) <= 12 {
+		return "••••"
+	}
+	return k[:14] + "…" + k[len(k)-4:]
+}
 
 func mustURL(raw string) *url.URL {
 	u, err := url.Parse(raw)

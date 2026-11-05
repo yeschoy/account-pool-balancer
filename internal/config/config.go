@@ -600,8 +600,10 @@ type TokenHarbor struct {
 	KeyLabel string `json:"keyLabel"`
 	// RegisterConcurrency bounds simultaneous registrations.
 	RegisterConcurrency int `json:"registerConcurrency"`
-	// MailTimeoutSec bounds the wait for the verification mail beyond which
-	// the account is still imported (its key already works).
+	// MailTimeoutSec bounds the wait for the verification mail. Measured
+	// delivery is uneven (≈9 minutes on one IPv6 egress), so this is a
+	// patience budget, not a failure deadline: a miss leaves the row
+	// "registered, unverified" for a later re-check instead of failing it.
 	MailTimeoutSec int `json:"mailTimeoutSec"`
 	// ModelSyncSec re-reads /v1/models this often; 0 disables.
 	ModelSyncSec int `json:"modelSyncSec"`
@@ -618,7 +620,7 @@ func TokenHarborDefaults() TokenHarbor {
 		SolveTimeoutSec:     180,
 		KeyLabel:            "pool",
 		RegisterConcurrency: 2,
-		MailTimeoutSec:      240,
+		MailTimeoutSec:      600,
 		ModelSyncSec:        1800,
 		Group:               TokenHarborGroup,
 	}

@@ -83,6 +83,17 @@ type Server struct {
 	thSignups *thsignupstore.Store
 	thRegMu   sync.Mutex
 	thReg     *thRegistrar
+	// The registration log, kept live for the console's tail panel.
+	thLogMu sync.Mutex
+	thLogs  *thLogHub
+	// thTasks counts running registration goroutines. They outlive the HTTP
+	// request that queued them, so shutdown must wait for them the same way
+	// it waits for in-flight requests before closing the log store.
+	thTasks sync.WaitGroup
+	// thStopping is closed at shutdown: a task that has not started yet
+	// gives up instead of queueing behind a store that is closing.
+	thStopping chan struct{}
+	thStopOnce sync.Once
 	// The surface-gate preamble is derived once and cached: it comes from a
 	// Perch client installed on this machine, or from settings.
 	perchPrefixMu     sync.Mutex
@@ -121,6 +132,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	}
 	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now()}
 	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
+	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.OnUpdate = func(id string) {
 		s.metaDirty.Store(true)
@@ -318,6 +330,7 @@ func (s *Server) Run(ctx context.Context) {
 				log.Printf("save metadata: %v", err)
 			}
 			s.stopPerch()
+			s.stopTokenHarbor()
 			s.logs.Close()
 			return
 		case <-counters.C:
@@ -402,6 +415,23 @@ func (s *Server) trackRequests(next http.Handler) http.Handler {
 		defer cancel()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// stopTokenHarbor cancels and waits for background registrations, so nothing
+// writes to the log store after it closes.
+func (s *Server) stopTokenHarbor() {
+	s.thStopOnce.Do(func() {
+		if s.thStopping != nil {
+			close(s.thStopping)
+		}
+	})
+	done := make(chan struct{})
+	go func() { s.thTasks.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("tokenharbor: registrations still running after shutdown wait")
+	}
 }
 
 func (s *Server) drainRequests() {

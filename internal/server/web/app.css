@@ -224,3 +224,32 @@ tr[data-id]:hover { background: var(--line2); }
   .pc-log-filters input, .pc-log-filters select { min-width: 0; max-width: 100%; }
   #pc-stats-cards { grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); }
 }
+
+/* ---- TokenHarbor 注册日志（右下角弹窗） ---- */
+.th-logbox {
+  position: fixed; right: 18px; bottom: 18px; width: min(520px, calc(100vw - 36px));
+  max-height: 44vh; display: flex; flex-direction: column;
+  background: var(--card, #fff); border: 1px solid var(--border, #d8d5cd); border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.16); z-index: 60; overflow: hidden;
+}
+.th-logbox-head, .th-logbox-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; font-size: 12.5px; font-weight: 600;
+  border-bottom: 1px solid var(--border, #e6e3db); background: var(--surface, #faf9f6);
+}
+.th-logbox-foot { border-bottom: 0; border-top: 1px solid var(--border, #e6e3db); font-weight: 500; }
+.th-logbox-actions { display: flex; gap: 6px; }
+.th-logbox-body {
+  padding: 6px 10px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.55;
+}
+.th-log-line { display: flex; gap: 8px; padding: 1px 0; border-bottom: 1px dashed rgba(0,0,0,.05); }
+.th-log-line .t { color: var(--muted, #8a877e); flex: 0 0 62px; }
+.th-log-line .e { color: var(--muted, #8a877e); flex: 0 0 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-log-line .s { flex: 0 0 96px; }
+.th-log-line .d { flex: 1; word-break: break-all; }
+.th-log-line.info .s { color: #3d6ea8; }
+.th-log-line.success .s { color: #2f7a4f; }
+.th-log-line.warn .s { color: #a8741c; }
+.th-log-line.error .s { color: #b23b3b; }
+@media (max-width: 720px) { .th-logbox { right: 8px; bottom: 8px; width: calc(100vw - 16px); max-height: 38vh; } }
