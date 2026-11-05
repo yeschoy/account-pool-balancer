@@ -601,7 +601,7 @@ type TokenHarbor struct {
 	// KeyLabel is the label of the API key the machine creates on each
 	// registered account.
 	KeyLabel string `json:"keyLabel"`
-	// RegisterConcurrency bounds simultaneous registrations.
+	// RegisterConcurrency is retained for compatibility; registration uses one global slot.
 	RegisterConcurrency int `json:"registerConcurrency"`
 	// MailTimeoutSec bounds the wait for the verification mail. Measured
 	// delivery is uneven (≈9 minutes on one IPv6 egress), so this is a
@@ -624,7 +624,7 @@ func TokenHarborDefaults() TokenHarbor {
 		SolverPollMs:        3000,
 		SolveTimeoutSec:     180,
 		KeyLabel:            "pool",
-		RegisterConcurrency: 2,
+		RegisterConcurrency: 1,
 		MailTimeoutSec:      600,
 		ModelSyncSec:        1800,
 		Group:               TokenHarborGroup,

@@ -232,6 +232,9 @@ type Config struct {
 	// Checkpoint persists credentials immediately after each irreversible step.
 	// An error stops the flow before it performs any further mutations.
 	Checkpoint func(Result) error
+	// BeforeSignup checks/reserves the shared pacing gate immediately before
+	// the single signup POST. Resume and Login never invoke it.
+	BeforeSignup func(context.Context) error
 	// Enabling free models changes the site's data-use consent. Never opt in
 	// as an incidental side effect of creating an account or a payment link.
 	EnableFreeModels bool
@@ -380,6 +383,11 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 		}
 	}
 
+	if f.cfg.BeforeSignup != nil {
+		if err := f.cfg.BeforeSignup(ctx); err != nil {
+			return res, err
+		}
+	}
 	f.cfg.step("提交注册", email)
 	if err := f.submitAuth(ctx, form, signupFields{
 		Email:       email,
@@ -590,6 +598,9 @@ func (f *Flow) loadSignupPage(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := registrationRateLimit(resp, ""); err != nil {
+		return "", err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("打开注册页失败: HTTP %d", resp.StatusCode)
 	}
@@ -634,16 +645,26 @@ func (f *Flow) precheck(ctx context.Context, fingerprint string) (bool, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	message := jsonError(body)
+	if fingerprint != "" {
+		message = strings.ReplaceAll(message, fingerprint, "[REDACTED]")
+	}
+	if err := registrationRateLimit(resp, message); err != nil {
+		return false, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("注册预检失败: HTTP %d", resp.StatusCode)
 	}
-	var out struct {
-		NeedCaptcha bool `json:"needCaptcha"`
+	if message != "" {
+		return false, fmt.Errorf("%w: %s", ErrSessionRejected, compact([]byte(message)))
 	}
-	if json.Unmarshal(body, &out) != nil {
+	var out struct {
+		NeedCaptcha *bool `json:"needCaptcha"`
+	}
+	if json.Unmarshal(body, &out) != nil || out.NeedCaptcha == nil {
 		return false, errors.New("注册预检返回无法解析")
 	}
-	return out.NeedCaptcha, nil
+	return *out.NeedCaptcha, nil
 }
 
 // ---- step 3: the server action POST -------------------------------------------
@@ -703,12 +724,12 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
+		if limited := registrationRateLimit(resp, ""); limited != nil {
+			return limited
+		}
 		return fmt.Errorf("%w: 认证响应不完整或过大，结果待核对；未自动重试", ErrSessionRejected)
 	}
 	message, needCaptcha := authActionError(body)
-	if needCaptcha {
-		return ErrCaptchaRequired
-	}
 	if message != "" {
 		// Only the structured action error is diagnostic. Never log the whole
 		// Flight/HTML response or let it reflect submitted credentials.
@@ -721,6 +742,14 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 				message = strings.ReplaceAll(message, secret, "[REDACTED]")
 			}
 		}
+	}
+	if err := registrationRateLimit(resp, message); err != nil {
+		return err
+	}
+	if needCaptcha {
+		return ErrCaptchaRequired
+	}
+	if message != "" {
 		return fmt.Errorf("%w: %s", ErrSessionRejected, compact([]byte(message)))
 	}
 	if resp.StatusCode >= 400 {
@@ -886,6 +915,9 @@ func (f *Flow) probeAPIKey(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	if err := registrationRateLimit(resp, ""); err != nil {
+		return err
+	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return nil
@@ -969,6 +1001,9 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err := registrationRateLimit(resp, ""); err != nil {
+		return "", err
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return "", fmt.Errorf("%w: 创建 API Key 返回 HTTP %d；请核对会话及账号权限，未自动重试", ErrKeyRejected, resp.StatusCode)
 	}
@@ -1086,6 +1121,9 @@ func (f *Flow) loadLoginPage(ctx context.Context) (string, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
+		return "", err
+	}
+	if err := registrationRateLimit(resp, ""); err != nil {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {

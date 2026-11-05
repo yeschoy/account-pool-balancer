@@ -1253,6 +1253,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return res
 	}
 	copyRequestHeaders(req.Header, r.Header)
+	if acct.Provider == config.ProviderTokenHarbor {
+		req.Header.Set("User-Agent", gatewayUserAgent(req.Header.Get("User-Agent"), "account-pool-balancer/tokenharbor-gateway"))
+	}
 	if acct.Provider == config.ProviderOpenCodeGo {
 		req.Header.Set("User-Agent", goUserAgent(req.Header.Get("User-Agent")))
 		if ident.UpstreamSession != "" {

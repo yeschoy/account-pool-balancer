@@ -55,15 +55,15 @@ type thRegisterRequest struct {
 	// SolveCaptcha buys a Turnstile token when the site asks for one. Off by
 	// default: the caller pays for each attempt it enables.
 	SolveCaptcha bool `json:"solveCaptcha"`
-	// Concurrency overrides this task's simultaneous registrations (0 = the
-	// setting). It never exceeds thMaxConcurrency, and the whole server still
-	// shares one budget.
+	// Concurrency is accepted for legacy clients (0..thMaxConcurrency), but
+	// the effective global registration budget is always one.
 	Concurrency int `json:"concurrency,omitempty"`
 }
 
-// thMaxConcurrency bounds per-task parallelism: every slot can spend money at
-// the captcha service and one mailbox, so the ceiling is a cost guard.
+// Legacy request bounds stay compatible; no requested value raises the
+// effective global budget above one.
 const thMaxConcurrency = 10
+const thRegistrationConcurrency = 1
 
 // thRegistrationView is the console's attempt row: counts plus summaries.
 type thRegistrationView struct {
@@ -81,6 +81,11 @@ type thRegistrar struct {
 	srv *Server
 	mu  sync.Mutex
 	sem chan struct{}
+	// All scheduling state is process-local; old work never auto-restarts.
+	nextSignup     time.Time
+	pausedUntil    time.Time
+	pauseSequence  uint64
+	signupInterval time.Duration // zero uses the production 60-second floor
 }
 
 func (s *Server) thRegistrar() *thRegistrar {
@@ -92,16 +97,13 @@ func (s *Server) thRegistrar() *thRegistrar {
 	return s.thReg
 }
 
-// budget returns the concurrency limiter, rebuilding it when settings change.
-// A zero or negative setting means one at a time.
-func (r *thRegistrar) budget(n int) chan struct{} {
+// budget is one immutable global slot, even when legacy requests carry
+// different concurrency settings. Rebuilding a channel would bypass the cap.
+func (r *thRegistrar) budget(_ int) chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if n <= 0 {
-		n = 1
-	}
-	if r.sem == nil || cap(r.sem) != n {
-		r.sem = make(chan struct{}, n)
+	if r.sem == nil {
+		r.sem = make(chan struct{}, thRegistrationConcurrency)
 	}
 	return r.sem
 }
@@ -136,6 +138,10 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	var in thRegisterRequest
 	if err := readBody(r, &in); err != nil {
 		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Concurrency < 0 || in.Concurrency > thMaxConcurrency {
+		apiError(w, http.StatusBadRequest, errors.New("注册并发参数必须为 0-10；实际固定单并发"))
 		return
 	}
 	if in.AutoImport {
@@ -221,6 +227,11 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	for i := range rows {
 		rows[i].Group = group
 	}
+	registrar := s.thRegistrar()
+	generation := registrar.generation()
+	if !in.SaveOnly && registrar.rejectPaused(w) {
+		return
+	}
 	attempt := config.NewID("that_")
 	add := store.Add
 	if in.SaveOnly {
@@ -245,21 +256,14 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"id": attempt, "rows": summaries})
 		return
 	}
-	conc := in.Concurrency
-	if conc > 0 {
-		if conc > thMaxConcurrency {
-			conc = thMaxConcurrency
-		}
-	} else {
-		conc = cfg.RegisterConcurrency
-	}
+	conc := thRegistrationConcurrency
 	s.thLive("", "任务创建", fmt.Sprintf("%d 个邮箱，并发 %d，代理 %d 个", len(rows), conc, len(proxies)), "", "info")
-	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries)
+	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries, generation)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": attempt, "rows": summaries})
 }
 
 // thRegisterAttempt starts the background work for the queued rows.
-func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []thsignupstore.Summary) {
+func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []thsignupstore.Summary, generation uint64) {
 	reg := s.thRegistrar()
 	if conc <= 0 {
 		conc = s.cfg.Get().TokenHarbor.RegisterConcurrency
@@ -269,19 +273,22 @@ func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []
 			continue
 		}
 		id := row.ID
-		// Every row gets its own goroutine; the per-attempt budget below is
-		// what actually limits simultaneity, so a queued row waits instead of
-		// being dropped (and its place in the line is kept).
+		// All rows share the fixed global budget, regardless of task settings.
+		// Capture the pause generation at dispatch, not delayed goroutine start.
 		s.thTasks.Add(1)
 		go func() {
 			defer s.thTasks.Done()
-			_ = reg.run(id, solve, conc)
+			_ = reg.runQueued(id, solve, conc, generation)
 		}()
 	}
 }
 
 // run registers one row. Pool import is always a separate explicit action.
 func (r *thRegistrar) run(id string, solve bool, conc int) error {
+	return r.runQueued(id, solve, conc, r.generation())
+}
+
+func (r *thRegistrar) runQueued(id string, solve bool, conc int, generation uint64) error {
 	s := r.srv
 	store, err := s.thStore()
 	if err != nil {
@@ -319,10 +326,13 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		defer func() { <-sem }()
 	case <-s.thStopping:
 		return errors.New("服务正在停止")
-	case <-time.After(10 * time.Minute):
-		return fail("排队", errors.New("等待并发名额超时"))
+	case <-time.After(24 * time.Hour):
+		return fail("排队", errors.New("等待单并发名额超过24小时；未发起注册，请人工核对后重新排队"))
 	}
 
+	if err := r.checkPaused(generation, true); err != nil {
+		return fail("注册暂停", err)
+	}
 	proxy := row.Egress(cfg.ProxyURL)
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
@@ -332,6 +342,9 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		VerificationSince: row.CreatedAt,
 		MailTimeout:       time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout:    40 * time.Second,
+		BeforeSignup: func(ctx context.Context) error {
+			return r.awaitSignup(ctx, true)
+		},
 		Checkpoint: func(res thregister.Result) error {
 			_, err := store.Update(id, func(rw *thsignupstore.Row) error {
 				thSaveResult(rw, res)
@@ -383,12 +396,23 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			res, err = flow.Resume(ctx, res)
 		}
 	} else {
-		res, err = flow.Run(ctx, thregister.Credentials{
-			Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,
-		})
+		s.thLive(row.Email, "注册限速", "固定单并发；新注册提交至少间隔60秒，遇限制停止并等待人工处理", proxy, "info")
+		// Wait before any site/captcha work; the submission hook records the
+		// actual POST timestamp so a slow solver cannot collapse the gap.
+		err = r.awaitSignup(ctx, false)
+		if err == nil {
+			res, err = flow.Run(ctx, thregister.Credentials{
+				Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,
+			})
+		}
 	}
 	if err != nil {
 		stage := "注册"
+		var limited *thregister.RateLimitError
+		if errors.As(err, &limited) {
+			r.pause(limited.RetryAfter)
+			return fail("注册暂停", err)
+		}
 		switch {
 		case errors.Is(err, thregister.ErrCaptchaRequired):
 			stage = "验证码"
@@ -650,6 +674,11 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	registrar := s.thRegistrar()
+	generation := registrar.generation()
+	if registrar.rejectPaused(w) {
+		return
+	}
 	row, err := store.Retry(id)
 	if err != nil {
 		s.thStoreError(w, err)
@@ -658,7 +687,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		_ = s.thRegistrar().run(id, in.SolveCaptcha, in.Concurrency)
+		_ = registrar.runQueued(id, in.SolveCaptcha, in.Concurrency, generation)
 	}()
 	writeJSON(w, http.StatusAccepted, thsignupstore.SummaryOf(row))
 }
@@ -785,6 +814,7 @@ func (s *Server) apiTHSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	cfg := s.cfg.Get()
 	th := cfg.TokenHarbor
+	th.RegisterConcurrency = thRegistrationConcurrency
 	hasCaptcha := strings.TrimSpace(th.CaptchaKey) != ""
 	proxyLabel := thsignupstore.ProxyLabel(th.ProxyURL)
 	th.CaptchaKey, th.ProxyURL = "", ""
@@ -809,6 +839,7 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := *in.TokenHarbor
+	next.RegisterConcurrency = thRegistrationConcurrency
 	if err := thsignupstore.ValidateProxy(next.ProxyURL); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return

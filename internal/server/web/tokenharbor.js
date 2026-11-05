@@ -581,10 +581,10 @@ async function loadTHSettings() {
   $('#th-set-captcha-hint').textContent = out.hasCaptcha ? '已保存一个 Key，页面不会回显；留空表示不修改。' : '还没有保存 captcha-run Key：注册时无法自动解 Turnstile。';
   $('#th-set-label').value = th.keyLabel || 'pool';
   $('#th-set-group').value = th.group || 'tokenharbor';
-  $('#th-set-conc').value = th.registerConcurrency || 2;
+  $('#th-set-conc').value = '1';
   $('#th-set-mail').value = th.mailTimeoutSec || 600;
   const conc = $('#th-register-conc');
-  if (conc) conc.value = th.registerConcurrency || 2;
+  if (conc) conc.value = '1';
   $('#th-set-save').dataset.revision = String(out.revision || 0);
 }
 
@@ -601,7 +601,7 @@ async function thSaveSettings(ev) {
       captchaKey: $('#th-set-captcha').value.trim(),
       keyLabel: $('#th-set-label').value.trim() || 'pool',
       group: $('#th-set-group').value.trim() || 'tokenharbor',
-      registerConcurrency: Number($('#th-set-conc').value) || 2,
+      registerConcurrency: 1,
       mailTimeoutSec: Number($('#th-set-mail').value) || 600,
     },
     expectedRevision: Number(btn.dataset.revision || 0),

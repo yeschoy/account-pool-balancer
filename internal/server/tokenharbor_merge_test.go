@@ -47,7 +47,7 @@ func TestTokenHarborMergeRegistrationSettingsPreservePool(t *testing.T) {
 		t.Fatalf("save %d %s", w.Code, w.Body)
 	}
 	after := e.s.cfg.Get()
-	if after.ForProvider(config.ProviderTokenHarbor).Routing.Strategy != "least-selections" || after.TokenHarbor.ModelSyncSec != 900 || after.TokenHarbor.CaptchaKey != cfg.TokenHarbor.CaptchaKey || after.TokenHarbor.ProxyURL != cfg.TokenHarbor.ProxyURL || after.TokenHarbor.KeyLabel != "merge-label" {
+	if after.ForProvider(config.ProviderTokenHarbor).Routing.Strategy != "least-selections" || after.TokenHarbor.ModelSyncSec != 900 || after.TokenHarbor.CaptchaKey != cfg.TokenHarbor.CaptchaKey || after.TokenHarbor.ProxyURL != cfg.TokenHarbor.ProxyURL || after.TokenHarbor.KeyLabel != "merge-label" || after.TokenHarbor.RegisterConcurrency != 1 {
 		t.Fatal("registration save clobbered pool settings or write-only credentials")
 	}
 	for _, secret := range []string{"mock-solver-write-only", "mockuser", "mockpass"} {

@@ -13,7 +13,7 @@ function environment(api) {
     if (!nodes.has(selector)) {
       const classes = new Set();
       nodes.set(selector, { innerHTML: '', textContent: '', checked: false, value: '2', disabled: false, scrollHeight: 0, scrollTop: 0, clientHeight: 0,
-        listeners: {}, attributes: {}, setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(event, handler) { this.listeners[event] = handler; }, querySelector() { return null; },
+        listeners: {}, attributes: {}, dataset: {}, setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(event, handler) { this.listeners[event] = handler; }, querySelector() { return null; },
         classList: { add(c) { classes.add(c); }, remove(c) { classes.delete(c); }, contains(c) { return classes.has(c); }, toggle(c, yes) { if (yes) classes.add(c); else classes.delete(c); } },
       });
     }
@@ -345,7 +345,21 @@ async function testIndependentProxyEditing() {
   assert.match(app, /case 'th-proxy': await thPoolProxy\(a\)/);
 }
 
+async function testRegistrationPacingControls() {
+  const e = environment(async () => ({ tokenHarbor: { registerConcurrency: 9 }, revision: 1 }));
+  await e.context.loadTHSettings();
+  assert.equal(e.node('#th-set-conc').value, '1');
+  assert.equal(e.node('#th-register-conc').value, '1', 'legacy settings cannot raise the effective concurrency');
+  const html = fs.readFileSync(path.join(__dirname, 'web', 'index.html'), 'utf8');
+  for (const id of ['th-register-conc', 'th-set-conc']) {
+    assert.match(html, new RegExp('<input id="' + id + '"[^>]*max="1"[^>]*value="1"[^>]*readonly'));
+  }
+  assert.match(html, /新注册提交至少间隔60秒/);
+  assert.match(html, /不会自动重试/);
+}
+
 (async () => {
+  await testRegistrationPacingControls();
   await testIndependentProxyEditing();
   await testLogSingleFlightAndSequenceDedupe();
   await testBatchBoundedPartialAndNoRetry();

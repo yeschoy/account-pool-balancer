@@ -58,6 +58,12 @@ func goClientFamily(h http.Header, body map[string]any) string {
 }
 
 func goUserAgent(ua string) string {
+	return gatewayUserAgent(ua, "account-pool-balancer/go-gateway")
+}
+
+// Preserve supplied client identities; generic libraries get this gateway's
+// own honest product name, never an invented browser or official-client UA.
+func gatewayUserAgent(ua, fallback string) string {
 	lower := strings.ToLower(strings.TrimSpace(ua))
 	for _, product := range []string{"codex", "claude", "opencode", "pi-agent"} {
 		if strings.Contains(lower, product) {
@@ -66,11 +72,11 @@ func goUserAgent(ua string) string {
 	}
 	for _, generic := range []string{"go-http-client", "curl/", "python-requests", "python-httpx", "openai/", "anthropic/", "node-fetch", "undici"} {
 		if strings.HasPrefix(lower, generic) {
-			return "account-pool-balancer/go-gateway"
+			return fallback
 		}
 	}
 	if lower == "" {
-		return "account-pool-balancer/go-gateway"
+		return fallback
 	}
 	return ua
 }

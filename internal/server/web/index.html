@@ -324,8 +324,8 @@
             <span class="hint">注册后不会自动入池。需手动付款，检测到有效套餐且邮箱已验证后才能手动入池；支付链接不代表已付款。</span>
             <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
             <label for="th-register-conc">本次并发</label>
-            <input id="th-register-conc" type="number" min="1" max="10" step="1" value="2">
-            <span class="hint">同时注册几个号；一次提交内超出的排队，不会丢。默认值来自设置。</span>
+            <input id="th-register-conc" type="number" min="1" max="1" step="1" value="1" readonly>
+            <span class="hint">固定单并发，新注册提交至少间隔60秒。官网提示注册过多或返回限流时停止后续排队任务，按 Retry-After 等待后需人工重新发起；不会自动重试。</span>
             <div class="actions"><button type="button" class="btn" id="th-register-save">仅保存</button><button type="submit" class="btn primary" id="th-register-submit">启动注册</button></div>
             <span class="hint">仅保存邮箱、密码、接码页与绑定代理，不注册、不解验证码、不付款；之后可在任务中开始注册。</span>
             <p id="th-register-error" class="error" role="alert"></p>
@@ -375,7 +375,7 @@
             <label for="th-set-group">默认入池分组</label>
             <input id="th-set-group" autocomplete="off" placeholder="tokenharbor">
             <label for="th-set-conc">注册并发</label>
-            <input id="th-set-conc" type="number" min="1" max="10" step="1">
+            <input id="th-set-conc" type="number" min="1" max="1" step="1" value="1" readonly>
             <label for="th-set-mail">等验证邮件上限（秒）</label>
             <input id="th-set-mail" type="number" min="30" max="1800" step="30">
             <button type="submit" class="btn primary" id="th-set-save">保存设置</button>
@@ -383,12 +383,12 @@
           </form>
         </section>
         <section class="panel">
-          <h2>关于指纹与封号</h2>
+          <h2>注册限制与安全重试</h2>
           <ul class="muted small">
-            <li>注册全程是纯 HTTP，不启动浏览器：没有 canvas/WebGL/字体枚举这类被动指纹，服务端看到的只有 UA、时区和出口 IP。</li>
-            <li>同一代理上的多个账号会被按 IP 聚合，所以默认按号轮流分配代理，一个出口只放一个号。</li>
-            <li>Turnstile 由 captcha-run 代解，token 约 2 分钟有效，解完立刻提交。</li>
-            <li>同一邮箱不要重复注册：服务端会把新 Key 判定为 <code>invalid_api_key</code>。</li>
+            <li>注册是纯 HTTP 流程，不模拟人工操作，不伪装 IP、设备或浏览器来绕过限制；真实推理客户端标识原样保留，通用库标识使用本项目真实名称。</li>
+            <li>保持账号已绑定出口，不因限流轮换代理。官网未公开限制维度，不能仅凭提示断言 IP 被封或账号不存在。</li>
+            <li>全局单并发，提交至少间隔60秒；收到注册过多、429或服务繁忙即停止，不自动解码应对限制。遵守完整 Retry-After，缺省暂停至少5分钟。</li>
+            <li>冷却到期也不会自动重放旧任务，需要人工确认后重新发起。已有会话优先恢复；注册响应不确定时先核对官网，不重复提交。</li>
           </ul>
         </section>
       </div>
