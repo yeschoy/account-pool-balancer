@@ -719,11 +719,14 @@ func (s *Server) apiTHSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	cfg := s.cfg.Get()
 	th := cfg.TokenHarbor
+	hasCaptcha := strings.TrimSpace(th.CaptchaKey) != ""
+	proxyLabel := thsignupstore.ProxyLabel(th.ProxyURL)
+	th.CaptchaKey, th.ProxyURL = "", ""
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tokenHarbor": th,
-		"hasCaptcha":  strings.TrimSpace(th.CaptchaKey) != "",
+		"hasCaptcha":  hasCaptcha,
 		"revision":    cfg.Revision,
-		"proxyLabel":  thsignupstore.ProxyLabel(th.ProxyURL),
+		"proxyLabel":  proxyLabel,
 	})
 }
 
@@ -733,17 +736,13 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 		TokenHarbor      *config.TokenHarbor `json:"tokenHarbor"`
 		ExpectedRevision *int64              `json:"expectedRevision"`
 		ClearCaptchaKey  bool                `json:"clearCaptchaKey"`
+		ClearProxy       bool                `json:"clearProxy"`
 	}
 	if err := readBody(r, &in); err != nil || in.TokenHarbor == nil {
 		apiError(w, http.StatusBadRequest, errors.New("tokenHarbor 不能为空"))
 		return
 	}
 	next := *in.TokenHarbor
-	// The key is write-only: an empty value keeps the stored one unless the
-	// caller explicitly clears it.
-	if strings.TrimSpace(next.CaptchaKey) == "" && !in.ClearCaptchaKey {
-		next.CaptchaKey = s.cfg.Get().TokenHarbor.CaptchaKey
-	}
 	if err := thsignupstore.ValidateProxy(next.ProxyURL); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return
@@ -760,6 +759,14 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 		rev = *in.ExpectedRevision
 	}
 	cfg, err := s.cfg.Update(rev, func(c *config.Config) error {
+		// Registration settings do not own the pool scheduler or model polling.
+		next.Routing, next.ModelSyncSec = c.TokenHarbor.Routing, c.TokenHarbor.ModelSyncSec
+		if strings.TrimSpace(next.CaptchaKey) == "" && !in.ClearCaptchaKey {
+			next.CaptchaKey = c.TokenHarbor.CaptchaKey
+		}
+		if strings.TrimSpace(next.ProxyURL) == "" && !in.ClearProxy {
+			next.ProxyURL = c.TokenHarbor.ProxyURL
+		}
 		c.TokenHarbor = next
 		return nil
 	})
@@ -767,7 +774,9 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 		s.configError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"revision": cfg.Revision, "tokenHarbor": cfg.TokenHarbor})
+	view := cfg.TokenHarbor
+	view.CaptchaKey, view.ProxyURL = "", ""
+	writeJSON(w, http.StatusOK, map[string]any{"revision": cfg.Revision, "tokenHarbor": view})
 }
 
 // ---- helpers -------------------------------------------------------------------

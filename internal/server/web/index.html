@@ -56,8 +56,8 @@
       <button class="pool-tab" data-pool="river" role="tab">River 号池</button>
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
+      <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
-      <button class="pool-tab" data-pool="tokenharbor" role="tab">TokenHarbor 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
     </div>
@@ -519,6 +519,11 @@
 
     <section id="page-routing" class="page hidden">
       <header class="page-head"><h1>路由设置</h1><div class="actions"><span class="muted" id="set-rev"></span><button class="btn primary" id="btn-save-settings">保存</button></div></header>
+      <div class="panel hidden" id="tokenharbor-settings">
+        <h2>Token Harbor 独立设置</h2>
+        <p class="muted small">原生 Chat Completions / Responses / Messages；不转换协议、不删除工具、不改缓存标记。默认会话亲和且忙碌不溢出；上游缓存命中不保证。余额未知，免费限额按账号/IP共享，付费不限 RPM；不自动添加大额消费确认。</p>
+        <div class="form"><label for="th-base">API Base（含 /v1）</label><input id="th-base" placeholder="https://tokenharbor.ai/v1"><label for="th-sync">模型刷新间隔（秒）</label><input id="th-sync" type="number" min="0" max="86400"><span></span><span class="hint">0 关闭自动刷新；否则 60–86400。还需开启下方额度轮询总开关。手动刷新仍可用。</span></div>
+      </div>
       <div class="panel hidden" id="opencode-settings">
         <h2>OpenCode 独立设置（Zen / Go 共用接入开关，路由与错误规则分别保存）</h2>
         <p class="muted small">仅授权 Key；不提供匿名门禁绕过。原生协议原样转发。兼容转换默认关闭，开启后只支持受限字段，转换流为缓冲输出，不可表达的能力明确报错。Go 额度为订阅共享百分比，不能将多 Key 相加。</p>

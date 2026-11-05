@@ -8,15 +8,16 @@ import (
 )
 
 type Bucket struct {
-	Minute    int64 `json:"m"`
-	Requests  int64 `json:"r"`
-	Success   int64 `json:"s"`
-	Failed    int64 `json:"f"`
-	Cancelled int64 `json:"c"`
-	Input     int64 `json:"i"`
-	Output    int64 `json:"o"`
-	Cached    int64 `json:"k"`
-	Prompt    int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
+	Minute        int64 `json:"m"`
+	Requests      int64 `json:"r"`
+	Success       int64 `json:"s"`
+	Failed        int64 `json:"f"`
+	Cancelled     int64 `json:"c"`
+	Input         int64 `json:"i"`
+	Output        int64 `json:"o"`
+	Cached        int64 `json:"k"`
+	CacheCreation int64 `json:"kw,omitempty"`
+	Prompt        int64 `json:"p,omitempty"` // total prompt tokens (cache hits included)
 	// CachePrompt and CacheCached cover only requests with both input and cache usage.
 	CachePrompt             int64   `json:"cp,omitempty"`
 	CacheCached             int64   `json:"ck,omitempty"`
@@ -44,6 +45,7 @@ func (b *Bucket) add(o Bucket) {
 	b.Input += o.Input
 	b.Output += o.Output
 	b.Cached += o.Cached
+	b.CacheCreation += o.CacheCreation
 	b.Prompt += o.Prompt
 	b.CachePrompt += o.CachePrompt
 	b.CacheCached += o.CacheCached
@@ -111,6 +113,7 @@ type Sample struct {
 	Input, Output       *int64
 	Cached              *int64
 	CacheWrite          *int64
+	CacheCreation       *int64 // legacy Token Harbor alias; CacheWrite takes precedence
 	BindingResult       string
 	CacheAffinityResult string
 	DurationMs          int64
@@ -158,8 +161,13 @@ func (s *Stats) Record(x Sample) {
 	if x.Output != nil {
 		d.OutputKnownRequests = 1
 	}
-	if x.CacheWrite != nil {
-		d.CacheWrite = *x.CacheWrite
+	writes := x.CacheWrite
+	if writes == nil {
+		writes = x.CacheCreation
+	}
+	if writes != nil {
+		// Keep both historical JSON projections without counting two writes.
+		d.CacheWrite, d.CacheCreation = *writes, *writes
 		d.CacheWriteKnownRequests = 1
 	}
 	if x.BindingResult != "" && x.BindingResult != "not-applicable" {

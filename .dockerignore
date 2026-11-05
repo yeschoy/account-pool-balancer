@@ -9,6 +9,7 @@ data
 .gopath
 .gotmp
 artifacts
+.tmp-tokenharbor
 .trellis
 odb
 bin

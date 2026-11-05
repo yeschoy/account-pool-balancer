@@ -30,6 +30,8 @@ var parentHeaders = []string{"X-Opencode-Parent-Session-Id", "X-Parent-Session-I
 
 var sessionHeaders = []struct{ name, keyType string }{
 	{"X-Claude-Code-Session-Id", "session_id"},
+	{"X-Codex-Session-Id", "session_id"},
+	{"X-Codex-Thread-Id", "thread_id"},
 	{"Session-Id", "session_id"},
 	{"Session_id", "session_id"},
 	{"X-Session-Id", "session_id"},

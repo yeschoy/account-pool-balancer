@@ -46,7 +46,7 @@ async function loadTHOverview() {
     ['账号总数', total, 'TokenHarbor'],
     ['已启用', enabled, '可调度'],
     ['配了代理', withProxy, withProxy < total ? '其余的直连会被地区拦' : '全部按出口调度'],
-    ['24h 请求', (overview && overview.stats && overview.stats.requests) || 0, '最近 24 小时'],
+    ['24h 请求', overview?.stats?.total?.r || 0, '最近 24 小时'],
   ];
   $('#th-cards').innerHTML = cards.map(([k, v, s]) =>
     `<div class="card"><div class="card-k">${esc(k)}</div><div class="card-v">${esc(String(v))}</div><div class="card-s">${esc(s)}</div></div>`).join('');
@@ -250,7 +250,6 @@ async function loadTHSettings() {
   const conc = $('#th-register-conc');
   if (conc) conc.value = th.registerConcurrency || 2;
   $('#th-set-save').dataset.revision = String(out.revision || 0);
-  $('#th-set-save').dataset.proxy = th.proxyUrl || '';
 }
 
 async function thSaveSettings(ev) {
@@ -262,7 +261,7 @@ async function thSaveSettings(ev) {
   const body = {
     tokenHarbor: {
       baseUrl: $('#th-set-base').value.trim() || 'https://tokenharbor.ai/v1',
-      proxyUrl: proxyRaw || btn.dataset.proxy || '',
+      proxyUrl: proxyRaw,
       captchaKey: $('#th-set-captcha').value.trim(),
       keyLabel: $('#th-set-label').value.trim() || 'pool',
       group: $('#th-set-group').value.trim() || 'tokenharbor',

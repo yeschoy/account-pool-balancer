@@ -657,24 +657,46 @@ func ParseDuration(s string) (time.Duration, error) {
 // quarantining it: a working proxy brings the account straight back.
 func DefaultTokenHarborErrorRules() []ErrorRule {
 	return []ErrorRule{
-		{ID: "tokenharbor-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 401,
-			When: Match{Statuses: []int{401}, BodyCodes: []string{"invalid_api_key"}},
-			Note: "Token Harbor 判定 API Key 无效或已吊销：需要重新注册或换 Key"},
-		{ID: "tokenharbor-region-blocked", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 403,
-			When: Match{Statuses: []int{403}, BodyCodes: []string{"region_blocked"}},
-			Note: "出口所在地区不被 Token Harbor 服务：应换代理（中国大陆直连必现）"},
-		{ID: "tokenharbor-insufficient-credits", Scope: ScopeAccount, Action: ActionDegrade, DownstreamStatus: 402,
-			When: Match{Statuses: []int{402}},
-			Note: "Token Harbor 余额不足或免费额度用尽"},
+		{ID: "tokenharbor-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 502,
+			When: Match{Statuses: []int{401}},
+			Note: "Token Harbor 拒绝 API Key：核对或更换 Key"},
+		{ID: "tokenharbor-region-blocked", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
+			When:  Match{Statuses: []int{403}, BodyContains: []string{"region_blocked"}},
+			Reset: &Reset{Fallback: "5m"},
+			Note:  "出口地区不被服务，检查配置的出口；不判为 Key 吊销"},
+		{ID: "tokenharbor-spend-confirmation", Scope: ScopeAccount, Action: ActionIgnore,
+			When: Match{Statuses: []int{400, 402, 403}, BodyContains: []string{"more than half", "confirm_spend", "confirmation_required"}},
+			Note: "需用户确认大额支出，不自动确认或换号"},
+		{ID: "tokenharbor-insufficient-credits", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
+			When:  Match{Statuses: []int{402}},
+			Reset: &Reset{Fallback: "10m", Max: "6h", Escalate: true},
+			Note:  "Token Harbor 余额不足或 Key 支出上限，冷却换号"},
+		{ID: "tokenharbor-rate-limit", Scope: ScopeAccount, Action: ActionCooldown,
+			When:  Match{Statuses: []int{429}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "30s"},
+			Note:  "遵守完整 Retry-After；账号/IP 限额可能由多个 Key 共享"},
+		{ID: "tokenharbor-server-error", Scope: ScopeAccount, Action: ActionCooldown,
+			When:  Match{Statuses: []int{500, 502, 503, 504}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "5s"},
+			Note:  "上游临时故障，短暂冷却后恢复"},
 	}
+}
+
+// IsTokenHarborSpendConfirmation is a hard stop, independent of editable rules.
+func IsTokenHarborSpendConfirmation(status int, body string) bool {
+	if status != 400 && status != 402 && status != 403 {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "more than half") || strings.Contains(lower, "confirm_spend") || strings.Contains(lower, "confirmation_required")
 }
 
 // DefaultTokenHarborRetryRules is the Token Harbor pool's stock retry rules.
 func DefaultTokenHarborRetryRules() []RetryRule {
 	return []RetryRule{
 		{ID: "tokenharbor-bad-request", Decision: DecisionStop,
-			When: Match{Statuses: []int{400, 413, 422}},
-			Note: "Token Harbor 认为请求本身有错，换号没有意义"},
+			When: Match{Statuses: []int{400, 402, 403, 404, 405, 409, 413, 422}},
+			Note: "请求/确认/权限错误默认停止；明确的余额/地区冷却规则可覆盖"},
 		{ID: "tokenharbor-model-unavailable", Decision: DecisionStop,
 			When: Match{Statuses: []int{404}, BodyContains: []string{"model"}},
 			Note: "模型 ID 不被 Token Harbor 目录支持：换号不解决，先核对模型名"},
