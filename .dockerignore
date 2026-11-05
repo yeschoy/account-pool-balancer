@@ -1,5 +1,6 @@
 .env
 .git
+.private
 _tmp_artifacts.md
 data
 # Never ship research checkouts, credentials/fixtures, caches or build output.

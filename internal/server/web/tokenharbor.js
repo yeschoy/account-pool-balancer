@@ -96,6 +96,7 @@ function renderTHJobs() {
 }
 
 function renderTHJob(job) {
+  thState.rows = job.rows || [];
   $('#th-register-detail').classList.remove('hidden');
   $('#th-register-job-title').textContent = '任务 ' + job.id;
   $('#th-register-job-status').textContent = job.running ? '进行中' : '已结束';
@@ -114,8 +115,9 @@ function thRowActions(r) {
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) {
     out.push(`<button type="button" class="btn small th-row-reverify" data-id="${esc(r.id)}">补验证</button>`);
   }
+  if (r.hasSession && r.status !== 'running' && r.status !== 'queued') out.push(`<button type="button" class="btn small th-row-checkout" data-id="${esc(r.id)}">Agent Pass 链接</button>`);
   if (r.status === 'registered') out.push(`<button type="button" class="btn small primary th-row-import" data-id="${esc(r.id)}">入池</button>`);
-  if (r.status === 'failed' || r.status === 'uncertain') out.push(`<button type="button" class="btn small th-row-retry" data-id="${esc(r.id)}">重试</button>`);
+  if (r.status === 'failed' || r.status === 'uncertain') out.push(`<button type="button" class="btn small th-row-retry" data-id="${esc(r.id)}">${r.hasSession ? '继续（保留会话）' : '重试'}</button>`);
   if (r.status !== 'running') out.push(`<button type="button" class="btn small ghost th-row-delete" data-id="${esc(r.id)}">删除</button>`);
   return out.join(' ');
 }
@@ -138,7 +140,10 @@ function thParseAccounts(text) {
     if (parts.length > 3) throw new Error('每行最多三段：邮箱----密码----接码页');
     const email = (parts[0] || '').trim();
     if (!email.includes('@')) throw new Error(`邮箱格式有误：${line.slice(0, 40)}`);
-    out.push({ email, password: (parts[1] || '').trim() || thRandomPassword(), mailboxUrl: (parts[2] || '').trim() });
+    const twoPartMailbox = parts.length === 2 && parts[1].trim().startsWith('https://');
+    out.push({ email,
+      password: (twoPartMailbox ? '' : (parts[1] || '').trim()) || thRandomPassword(),
+      mailboxUrl: (twoPartMailbox ? parts[1] : (parts[2] || '')).trim() });
   }
   return out;
 }
@@ -221,6 +226,7 @@ async function thRowAction(kind, id) {
     } else if (kind === 'retry') {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked });
     } else if (kind === 'delete') {
+      if (!window.confirm('确认删除此注册记录及已保存的会话、API Key、支付链接？此操作不删除已入池账号。')) return;
       await api('DELETE', '/api/tokenharbor/registrations/' + encodeURIComponent(id));
     } else if (kind === 'reverify') {
       thLogShow();
@@ -231,6 +237,45 @@ async function thRowAction(kind, id) {
   } catch (e) {
     err.textContent = thSafe(e.message);
   }
+  if (currentPage === 'thregister') loadTHRegistrations();
+}
+
+// 支付链接只在显式打开的弹窗中读取，不进入列表或实时日志。
+function thCheckoutLink(out, root) {
+  const u = new URL(out.url);
+  if (u.protocol !== 'https:' || u.host !== 'checkout.stripe.com' || u.username || u.password || !u.pathname.startsWith('/c/pay/')) throw new Error('支付链接不可信');
+  root.replaceChildren();
+  const note = document.createElement('p');
+  note.textContent = '链接已加密保存。未付款；金额、优惠及有效期以 Stripe 收银台显示为准。';
+  const link = document.createElement('a');
+  link.href = u.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
+  link.textContent = '打开 Stripe 支付页面（需手动付款）';
+  const copy = document.createElement('button');
+  copy.type = 'button'; copy.className = 'btn small'; copy.textContent = '复制链接';
+  copy.onclick = () => copyText(u.href);
+  root.append(note, link, document.createTextNode(' '), copy);
+}
+
+async function thRowCheckout(id) {
+  const row = thState.rows.find((r) => r.id === id);
+  const path = '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/checkout';
+  if (row?.hasCheckout) {
+    const out = await api('GET', path);
+    await modal({ title: '已保存的支付链接', body: '<div id="th-checkout-result"></div>', onOpen: () => thCheckoutLink(out, $('#th-checkout-result')) });
+    return;
+  }
+  let created = false;
+  await modal({ title: 'Agent Pass 支付链接（不会付款）', body: `<div class="form">
+    <p class="muted small">${esc(row?.email || id)}</p>
+    <p>Agent Pass · Monthly (one-time)，官网首月优惠以收银台显示为准。</p>
+    <p class="muted small">仅支持 Free 账号新购。不开启自动续费、不记住银行卡；遇到地区确认或订阅升级报价即停止。结果不确定时请先核对官网账单，不重复创建。</p>
+    <div id="th-checkout-result"></div></div>`, buttons: [{ label: '关闭', value: 'close' }, { label: '获取链接', value: 'create', primary: true, action: async () => {
+      if (created) return false;
+      const out = await api('POST', path, { kind: 'pass', product: 'starter_pass_monthly' });
+      created = true;
+      thCheckoutLink(out, $('#th-checkout-result'));
+      return false;
+    } }] });
   if (currentPage === 'thregister') loadTHRegistrations();
 }
 
@@ -365,6 +410,8 @@ function thInstall() {
   on('#th-register-rows', 'click', (e) => {
     const proxy = e.target.closest('.th-row-proxy');
     if (proxy) { thRowProxy(proxy.dataset.id).catch((err) => toast(err.message)); return; }
+    const checkout = e.target.closest('.th-row-checkout');
+    if (checkout) { thRowCheckout(checkout.dataset.id).catch((err) => toast(err.message)); return; }
     for (const kind of ['import', 'retry', 'delete', 'reverify']) {
       const btn = e.target.closest('.th-row-' + kind);
       if (btn) { thRowAction(kind, btn.dataset.id); return; }

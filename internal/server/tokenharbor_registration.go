@@ -113,6 +113,8 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
 	a("POST /api/tokenharbor/registrations/{id}/retry", s.apiTHRetry)
 	a("POST /api/tokenharbor/registrations/{id}/reverify", s.apiTHReverify)
+	a("POST /api/tokenharbor/registrations/{id}/checkout", s.apiTHCheckout)
+	a("GET /api/tokenharbor/registrations/{id}/checkout", s.apiTHSavedCheckout)
 	a("GET /api/tokenharbor/log", s.apiTHLog)
 	a("DELETE /api/tokenharbor/registrations/{id}", s.apiTHDeleteRow)
 	a("GET /api/tokenharbor/settings", s.apiTHSettings)
@@ -152,9 +154,10 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	rows := make([]thsignupstore.Row, 0, len(in.Accounts))
 	seen := map[string]bool{}
 	for _, acct := range in.Accounts {
-		email, mailbox := thmailbox.ParseLine(strings.TrimSpace(acct.Email))
-		if acct.MailboxURL != "" {
-			mailbox = strings.TrimSpace(acct.MailboxURL)
+		email, password, mailbox, err := thParseRegisterInput(acct)
+		if err != nil {
+			apiError(w, http.StatusBadRequest, err)
+			return
 		}
 		email = strings.ToLower(email)
 		if !strings.Contains(email, "@") || strings.ContainsAny(email, " \t") {
@@ -166,14 +169,6 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[email] = true
-		if strings.TrimSpace(acct.Password) == "" && strings.TrimSpace(acct.ProxyURL) == "" && mailbox == "" {
-			// thRegisterInput may also carry one raw "邮箱----密码----接码页" line.
-			parts := strings.Split(strings.TrimSpace(acct.Email), "----")
-			if len(parts) >= 2 {
-				email, mailbox = thmailbox.ParseLine(strings.TrimSpace(acct.Email))
-				_ = parts
-			}
-		}
 		if err := thmailbox.Validate(mailbox); err != nil {
 			apiError(w, http.StatusBadRequest, fmt.Errorf("%s: %v", email, err))
 			return
@@ -186,7 +181,7 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, thsignupstore.Row{
 			Email:      email,
-			Password:   strings.TrimSpace(acct.Password),
+			Password:   password,
 			MailboxURL: mailbox,
 			ProxyURL:   strings.TrimSpace(acct.ProxyURL),
 		})
@@ -302,18 +297,28 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) er
 		proxy = cfg.ProxyURL
 	}
 	flowCfg := thregister.Config{
-		BaseURL:        thBaseURL(cfg.BaseURL),
-		ProxyURL:       proxy,
-		Timezone:       "UTC",
-		Label:          thLabel(cfg),
-		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
-		RequestTimeout: 40 * time.Second,
+		BaseURL:           thBaseURL(cfg.BaseURL),
+		ProxyURL:          proxy,
+		Timezone:          "UTC",
+		Label:             thLabel(cfg),
+		VerificationSince: row.CreatedAt,
+		MailTimeout:       time.Duration(cfg.MailTimeoutSec) * time.Second,
+		RequestTimeout:    40 * time.Second,
+		Checkpoint: func(res thregister.Result) error {
+			_, err := store.Update(id, func(rw *thsignupstore.Row) error {
+				thSaveResult(rw, res)
+				return nil
+			})
+			return err
+		},
 		Log: func(stage, detail string) {
 			s.thLive(row.Email, stage, detail, proxy, "info")
 		},
 	}
 	if row.MailboxURL != "" {
-		flowCfg.Mailbox = thmailbox.New(row.MailboxURL, s.thHTTPClient(proxy))
+		// The mailbox is a separate HTTPS service, not the account's upstream.
+		// Select direct delivery explicitly; never fall back after proxy failure.
+		flowCfg.Mailbox = thmailbox.New(row.MailboxURL, s.thHTTPClient(""))
 	}
 	if solve {
 		flowCfg.Solver = thcaptcha.New(thcaptcha.Config{
@@ -334,9 +339,15 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) er
 	// 12m of work + the mail budget, which the flow spends inside this window.
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
 	defer cancel()
-	res, err := flow.Run(ctx, thregister.Credentials{
-		Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,
-	})
+	var res thregister.Result
+	if len(row.Cookies) > 0 {
+		s.thLive(row.Email, "恢复会话", "继续已注册账号，不重复注册", proxy, "info")
+		res, err = flow.Resume(ctx, thStoredResult(row))
+	} else {
+		res, err = flow.Run(ctx, thregister.Credentials{
+			Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,
+		})
+	}
 	if err != nil {
 		stage := "注册"
 		switch {
@@ -349,25 +360,18 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) er
 		}
 		return fail(stage, err)
 	}
-	cookies := make([]thsignupstore.Cookie, 0, len(res.Cookies))
-	for _, c := range res.Cookies {
-		cookies = append(cookies, thsignupstore.Cookie{Name: c.Name, Value: c.Value})
-	}
 	status := thsignupstore.Registered
-	if res.MailTimedOut {
+	if !res.VerifiedEmail {
 		status = thsignupstore.Unverified
 	}
 	_, err = store.Update(id, func(rw *thsignupstore.Row) error {
 		rw.Status = status
-		rw.APIKey = res.APIKey
-		rw.Cookies = cookies
-		rw.Verified = res.VerifiedEmail
-		rw.FreeModels = res.FreeModelsEnabled
+		thSaveResult(rw, res)
 		rw.Detail = "已注册"
 		if res.MailTimedOut {
 			rw.Detail = "已注册，待邮箱验证：验证信超过等待时间才到，可点「补验证」"
 		} else if !res.VerifiedEmail {
-			rw.Detail += "（未完成邮箱验证，API 已可用）"
+			rw.Detail += "（待邮箱验证，尚未确认推理权限）"
 		}
 		if !res.FreeModelsEnabled && res.FreeModelsError != "" {
 			rw.Detail += "；免费模型未开启：" + thRedact(res.FreeModelsError)
@@ -628,7 +632,8 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 	}
 	cookies := make([]thregister.NamedCookie, 0, len(row.Cookies))
 	for _, c := range row.Cookies {
-		cookies = append(cookies, thregister.NamedCookie{Name: c.Name, Value: c.Value})
+		cookies = append(cookies, thregister.NamedCookie{Name: c.Name, Value: c.Value,
+			Domain: c.Domain, Path: c.Path, Expires: c.Expires, Secure: c.Secure, HTTPOnly: c.HTTPOnly, SameSite: c.SameSite})
 	}
 	flowCfg := thregister.Config{
 		BaseURL:        thBaseURL(cfg.BaseURL),
@@ -636,7 +641,7 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		Timezone:       "UTC",
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
-		Mailbox:        thmailbox.New(row.MailboxURL, s.thHTTPClient(proxy)),
+		Mailbox:        thmailbox.New(row.MailboxURL, s.thHTTPClient("")),
 		Log: func(stage, detail string) {
 			s.thLive(row.Email, stage, detail, proxy, "info")
 		},
@@ -656,7 +661,8 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated, err := store.Update(id, func(rw *thsignupstore.Row) error {
-		rw.Verified = true
+		thSaveResult(rw, thregister.Result{APIKey: rw.APIKey, VerifiedEmail: true,
+			FreeModelsEnabled: rw.FreeModels, Cookies: flow.Session()})
 		if rw.Status == thsignupstore.Unverified {
 			rw.Status = thsignupstore.Registered
 		}

@@ -12,9 +12,9 @@
 //  3. POST /login?mode=signup (Next server action)  -> Set-Cookie auth session
 //     multipart fields: _1_email, _1_password, _1_cf-turnstile-response,
 //     _1_device_fingerprint, _1_timezone, _1_invite_code, _1_next
-//  4. POST /api/me/privacy  {"free_models_enabled":true}  (free-tier routes)
-//  5. GET  /verify-email?token=…                    (link arrives by mail)
-//  6. POST /api/keys {"label":…}                     -> thk_live_…
+//  4. Optional explicit privacy consent (disabled by default)
+//  5. POST /api/keys {"label":…}                     -> save thk_live_… immediately
+//  6. GET  /verify-email?token=…                    (link arrives by mail)
 //
 // Registration returns a logged-in browser session; email verification only
 // unlocks API access. The API key is shown once, so it is captured here and
@@ -226,6 +226,15 @@ type Config struct {
 	MailTimeout time.Duration
 	// PollEvery is the mailbox polling interval; zero means 5s.
 	PollEvery time.Duration
+	// VerificationSince pins mail selection to the original registration,
+	// including when a saved session is resumed much later.
+	VerificationSince time.Time
+	// Checkpoint persists credentials immediately after each irreversible step.
+	// An error stops the flow before it performs any further mutations.
+	Checkpoint func(Result) error
+	// Enabling free models changes the site's data-use consent. Never opt in
+	// as an incidental side effect of creating an account or a payment link.
+	EnableFreeModels bool
 }
 
 func (c Config) base() string {
@@ -379,18 +388,68 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 		Fingerprint: fingerprint,
 		Timezone:    f.cfg.timezone(),
 	}); err != nil {
-		return Result{}, err
+		// A redirect/network failure can follow a successful Set-Cookie.
+		// Preserve that partial session instead of encouraging a fresh signup.
+		if len(f.Session()) > 0 {
+			if saveErr := f.checkpoint(&res); saveErr != nil {
+				return res, saveErr
+			}
+		}
+		return res, err
 	}
 
-	// Free models are a per-account switch; without it the key works but only
-	// paid routes answer.
-	if err := f.enableFreeModels(ctx); err == nil {
-		res.FreeModelsEnabled = true
-	} else {
-		f.cfg.step("免费模型", err.Error())
-		// Not fatal: free routes are a bonus on top of a working key. The
-		// reason travels with the result so the console can say why.
-		res.FreeModelsError = err.Error()
+	return f.finish(ctx, res)
+}
+
+// Session returns current values (including refresh cookies), normalized to
+// this site's root. cookiejar intentionally omits original cookie attributes;
+// use a secure, HTTP-only host scope rather than inventing their expiry.
+func (f *Flow) Session() []NamedCookie {
+	var cookies []NamedCookie
+	base := mustURL(f.cfg.base())
+	for _, ck := range f.jar.Cookies(base) {
+		cookies = append(cookies, NamedCookie{Name: ck.Name, Value: ck.Value,
+			Domain: base.Hostname(), Path: "/", Secure: base.Scheme == "https", HTTPOnly: true})
+	}
+	sort.Slice(cookies, func(i, j int) bool { return cookies[i].Name < cookies[j].Name })
+	return cookies
+}
+
+func (f *Flow) checkpoint(res *Result) error {
+	res.Cookies = f.Session()
+	res.UserIDClaim, res.SessionExpiresAt = SessionIdentity(res.Cookies)
+	if f.cfg.Checkpoint != nil {
+		if err := f.cfg.Checkpoint(*res); err != nil {
+			return fmt.Errorf("保存账号凭证失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// Resume continues a registered account using its saved session and key. It
+// never submits a signup or replaces an existing API key.
+func (f *Flow) Resume(ctx context.Context, res Result) (Result, error) {
+	if len(res.Cookies) == 0 {
+		return res, errors.New("没有已保存会话，不能继续注册")
+	}
+	f.SeedCookies(res.Cookies)
+	return f.finish(ctx, res)
+}
+
+func (f *Flow) finish(ctx context.Context, res Result) (Result, error) {
+	// Persist the session BEFORE any further request can fail.
+	if err := f.checkpoint(&res); err != nil {
+		return res, err
+	}
+	if f.cfg.EnableFreeModels && !res.FreeModelsEnabled {
+		if err := f.enableFreeModels(ctx); err == nil {
+			res.FreeModelsEnabled = true
+		} else {
+			f.cfg.step("免费模型", err.Error())
+			// Not fatal: free routes are a bonus on top of a working key. The
+			// reason travels with the result so the console can say why.
+			res.FreeModelsError = err.Error()
+		}
 	}
 
 	// The site decides at signup whether a new address is usable for API
@@ -398,12 +457,25 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	// of a bare 401 on the key call, and it tells a revoked key apart from a
 	// key this flow built wrong.
 	if err := f.probeAPIKey(ctx); err != nil {
-		return Result{}, err
+		return res, err
+	}
+	// A key is revealed once. Save it before waiting for mail or doing any
+	// optional work; a later failure must not strand that credential.
+	if res.APIKey == "" {
+		f.cfg.step("创建 API Key", "")
+		key, err := f.createAPIKey(ctx)
+		if err != nil {
+			return res, err
+		}
+		res.APIKey = key
+		if err := f.checkpoint(&res); err != nil {
+			return res, err
+		}
 	}
 
-	if f.cfg.Mailbox != nil {
+	if f.cfg.Mailbox != nil && !res.VerifiedEmail {
 		f.cfg.step("等验证邮件", "最长 "+f.cfg.mailTimeout().String())
-		if link, err := f.waitVerificationLink(ctx, email); err == nil && link != "" {
+		if link, err := f.waitVerificationLink(ctx, res.Email); err == nil && link != "" {
 			res.VerifiedEmail = f.verifyEmail(ctx, link) == nil
 			if res.VerifiedEmail {
 				f.cfg.step("邮箱验证", "成功")
@@ -418,19 +490,10 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 		}
 	}
 
-	f.cfg.step("创建 API Key", "")
-	key, err := f.createAPIKey(ctx)
-	if err != nil {
-		return Result{}, err
+	if err := f.checkpoint(&res); err != nil {
+		return res, err
 	}
-	res.APIKey = key
-	f.cfg.step("完成", "key="+MaskKey(key))
-	for _, ck := range f.jar.Cookies(mustURL(f.cfg.base())) {
-		res.Cookies = append(res.Cookies, NamedCookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path,
-			Expires: ck.Expires, Secure: ck.Secure, HTTPOnly: ck.HttpOnly, SameSite: int(ck.SameSite)})
-	}
-	res.UserIDClaim, res.SessionExpiresAt = SessionIdentity(res.Cookies)
-	sort.Slice(res.Cookies, func(i, j int) bool { return res.Cookies[i].Name < res.Cookies[j].Name })
+	f.cfg.step("完成", "key="+MaskKey(res.APIKey))
 	return res, nil
 }
 
@@ -715,8 +778,12 @@ var verifyLinkRe = regexp.MustCompile(`https://tokenharbor\.ai/verify-email\?tok
 // waitVerificationLink polls the mailbox for the newest verification link,
 // ignoring mails that predate this run.
 func (f *Flow) waitVerificationLink(ctx context.Context, email string) (string, error) {
-	// Tolerate a couple of minutes of clock skew between us and the mailbox.
-	return f.verificationLinkSince(ctx, time.Now().Add(-2*time.Minute))
+	// Tolerate clock skew, but never move the cutoff forward on resume.
+	since := f.cfg.VerificationSince
+	if since.IsZero() {
+		since = time.Now()
+	}
+	return f.verificationLinkSince(ctx, since.Add(-2*time.Minute))
 }
 
 // verificationLinkSince polls the mailbox for a confirmation link in mail
@@ -763,6 +830,9 @@ func (f *Flow) verifyEmail(ctx context.Context, link string) error {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("邮箱验证返回 HTTP %d", resp.StatusCode)
+	}
 	// A used or stale token lands on ?verify=invalid; the redirect target is
 	// the only honest signal, so it is checked rather than the status code.
 	if strings.Contains(resp.Request.URL.RawQuery, "verify=invalid") {
@@ -802,7 +872,7 @@ func (f *Flow) probeAPIKey(ctx context.Context) error {
 		// next call. That is its network-or-device signup cap, not a bad
 		// password: the same address registers fine later or from another
 		// egress (the page body carries {"error":"account_cap"}).
-		return fmt.Errorf("%w: 注册后会话立即失效，命中服务端注册限流（account_cap），换出口或稍后重试", ErrKeyRejected)
+		return fmt.Errorf("%w: 注册后会话被拒绝，可能命中服务端注册限制；请人工核对，不自动重试或更换出口", ErrKeyRejected)
 	default:
 		return fmt.Errorf("%w: HTTP %d", ErrKeyRejected, resp.StatusCode)
 	}

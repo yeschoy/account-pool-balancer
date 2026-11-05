@@ -1,0 +1,8 @@
+{
+  "name": "tokenharbor-payment",
+  "status": "completed",
+  "branch": "tokenharbor-payment",
+  "base": "fe5fd940beb92879c67bc942b23da38401d830f8",
+  "description": "仅一个账号：注册阶段持久化、Agent Pass 单次支付链接与 OVH 待付款入池",
+  "validation": "validation.md"
+}

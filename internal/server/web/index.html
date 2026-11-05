@@ -308,8 +308,8 @@
           <h2>新建注册任务</h2>
           <form id="th-registration-form" autocomplete="off">
             <label for="th-register-accounts">iCloud 邮箱</label>
-            <textarea id="th-register-accounts" class="pc-secret-input" rows="7" autocomplete="off" spellcheck="false" placeholder="邮箱----密码----接码页（每行一个，密码留空则自动生成）"></textarea>
-            <span class="hint">每行 <code>邮箱----密码----https://icloud.mida.vip/messages/…?token=…</code>。密码可留空，会生成 16 位随机密码。</span>
+            <textarea id="th-register-accounts" class="pc-secret-input" rows="7" autocomplete="off" spellcheck="false" placeholder="邮箱----接码页，或邮箱----密码----接码页（每行一个）"></textarea>
+            <span class="hint">每行 <code>邮箱----接码页</code> 或 <code>邮箱----密码----接码页</code>。未提供密码时自动生成并加密保存。会话和 API Key 分阶段保存；不会自动同意免费模型的数据使用条款。</span>
             <label for="th-register-proxies">代理池（可选）</label>
             <textarea id="th-register-proxies" class="pc-secret-input" rows="5" autocomplete="off" spellcheck="false" placeholder="每行一个代理：http://user:pass@host:port 或 socks5://user:pass@host:port"></textarea>
             <span class="hint">按账号顺序轮流分配，一个出口只放一个号；留空则用设置里的默认代理，再没有就直连（大陆直连注册会被地区拦）。</span>
