@@ -93,7 +93,7 @@ func TestKeyIsCheckpointedBeforeAnyLaterWorkAndResumeDoesNotSignup(t *testing.T)
 		return nil
 	}})
 	defer f.Close()
-	res, err := f.Resume(context.Background(), Result{Email: "test@example.com", Cookies: []NamedCookie{{Name: "session", Value: "saved"}}})
+	res, err := f.Resume(context.Background(), Result{Email: "test@example.com", Cookies: []NamedCookie{{Name: "sb-test-auth-token", Value: "saved"}}})
 	if err == nil || saved.APIKey != realKey || res.APIKey != realKey || creates != 1 {
 		t.Fatal("key must reach persistence callback and partial result immediately")
 	}

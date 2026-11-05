@@ -369,8 +369,19 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	defer cancel()
 	var res thregister.Result
 	if len(row.Cookies) > 0 {
-		s.thLive(row.Email, "恢复会话", "继续已注册账号，不重复注册", proxy, "info")
-		res, err = flow.Resume(ctx, thStoredResult(row))
+		res = thStoredResult(row)
+		if thregister.HasSession(res.Cookies) {
+			s.thLive(row.Email, "恢复会话", "继续已保存登录会话，不重复注册", proxy, "info")
+		} else {
+			s.thLive(row.Email, "登录恢复", "仅有注册中间 Cookie；尝试原账号登录，不重新注册", proxy, "info")
+			err = flow.Login(ctx, row.Email, row.Password)
+			if err == nil {
+				res.Cookies = flow.Session()
+			}
+		}
+		if err == nil {
+			res, err = flow.Resume(ctx, res)
+		}
 	} else {
 		res, err = flow.Run(ctx, thregister.Credentials{
 			Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,

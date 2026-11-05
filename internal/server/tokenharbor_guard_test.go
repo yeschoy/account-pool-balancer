@@ -237,7 +237,7 @@ func TestTHRegistrationCompletionChecksPlanButNeverImports(t *testing.T) {
 			rows, _ := store.Add("test", []thsignupstore.Row{{Email: "complete@x.com"}})
 			store.Update(rows[0].ID, func(r *thsignupstore.Row) error {
 				r.APIKey, r.Verified = "thk_live_existing_key", true
-				r.Cookies = []thsignupstore.Cookie{{Name: "session", Value: "saved"}}
+				r.Cookies = []thsignupstore.Cookie{{Name: "sb-test-auth-token", Value: "saved"}}
 				return nil
 			})
 			if err := s.thRegistrar().run(rows[0].ID, false, 1); err != nil {

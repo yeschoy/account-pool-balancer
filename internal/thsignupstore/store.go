@@ -515,13 +515,20 @@ func (s *Store) Summaries() map[string][]Summary {
 
 // SummaryOf is the credential-free view of one row.
 func SummaryOf(r Row) Summary {
+	hasSession := false
+	for _, c := range r.Cookies {
+		if c.Value != "" && thregister.IsSessionCookie(c.Name) {
+			hasSession = true
+			break
+		}
+	}
 	return Summary{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Status: r.Status, Detail: r.Detail,
 		Proxy:        ProxyLabel(r.ProxyURL),
 		Group:        r.Group,
 		KeyMasked:    MaskKey(r.APIKey),
 		HasMailbox:   r.MailboxURL != "",
-		HasSession:   len(r.Cookies) > 0,
+		HasSession:   hasSession,
 		HasCheckout:  r.Checkout != nil && r.Checkout.URL != "",
 		Subscription: r.Subscription,
 		Verified:     r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,

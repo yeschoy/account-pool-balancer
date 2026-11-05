@@ -138,7 +138,7 @@ func SessionIdentity(cookies []NamedCookie) (userID string, expires time.Time) {
 				name = name[:i]
 			}
 		}
-		if !strings.Contains(name, "auth-token") {
+		if !IsSessionCookie(name) {
 			continue
 		}
 		chunks = append(chunks, struct {
@@ -381,13 +381,13 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	}
 
 	f.cfg.step("提交注册", email)
-	if err := f.submitSignup(ctx, form, signupFields{
+	if err := f.submitAuth(ctx, form, signupFields{
 		Email:       email,
 		Password:    c.Password,
 		Token:       token,
 		Fingerprint: fingerprint,
 		Timezone:    f.cfg.timezone(),
-	}); err != nil {
+	}, "signup"); err != nil {
 		// A redirect/network failure can follow a successful Set-Cookie.
 		// Preserve that partial session instead of encouraging a fresh signup.
 		if len(f.Session()) > 0 {
@@ -429,8 +429,8 @@ func (f *Flow) checkpoint(res *Result) error {
 // Resume continues a registered account using its saved session and key. It
 // never submits a signup or replaces an existing API key.
 func (f *Flow) Resume(ctx context.Context, res Result) (Result, error) {
-	if len(res.Cookies) == 0 {
-		return res, errors.New("没有已保存会话，不能继续注册")
+	if !HasSession(res.Cookies) {
+		return res, fmt.Errorf("%w: 没有登录会话（注册中间 Cookie 不算登录），请先登录恢复；未重新注册", ErrSessionRejected)
 	}
 	f.SeedCookies(res.Cookies)
 	return f.finish(ctx, res)
@@ -652,9 +652,9 @@ type signupFields struct {
 	Email, Password, Token, Fingerprint, Timezone string
 }
 
-// submitSignup posts the signup server action as multipart/form-data, exactly
-// as the browser's FormData would.
-func (f *Flow) submitSignup(ctx context.Context, form signupForm, in signupFields) error {
+// submitAuth posts the selected signup/signin action. HTTP 200 can carry a
+// rejected React action result, so it is not itself proof of authentication.
+func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields, mode string) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	writeField := func(name, value string) error { return mw.WriteField(name, value) }
@@ -685,7 +685,8 @@ func (f *Flow) submitSignup(ctx context.Context, form signupForm, in signupField
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.cfg.base()+"/login?mode=signup", &buf)
+	pageURL := f.cfg.base() + "/login?mode=" + mode
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pageURL, &buf)
 	if err != nil {
 		return err
 	}
@@ -693,19 +694,43 @@ func (f *Flow) submitSignup(ctx context.Context, form signupForm, in signupField
 	req.Header.Set("accept", "text/x-component")
 	req.Header.Set("next-action", form.actionID)
 	req.Header.Set("origin", f.cfg.base())
-	req.Header.Set("referer", f.cfg.base()+"/login?mode=signup")
+	req.Header.Set("referer", pageURL)
 	req.Header.Set("user-agent", userAgent)
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("提交注册失败: %v", err)
+		return fmt.Errorf("提交认证失败（结果待核对，未自动重试）: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if resp.StatusCode == http.StatusOK && !bytes.Contains(body, []byte("NEXT_REDIRECT")) && len(body) == 0 {
-		return fmt.Errorf("%w: HTTP 200 但无响应内容", ErrSessionRejected)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil || len(body) > maxBody {
+		return fmt.Errorf("%w: 认证响应不完整或过大，结果待核对；未自动重试", ErrSessionRejected)
+	}
+	message, needCaptcha := authActionError(body)
+	if needCaptcha {
+		return ErrCaptchaRequired
+	}
+	if message != "" {
+		// Only the structured action error is diagnostic. Never log the whole
+		// Flight/HTML response or let it reflect submitted credentials.
+		secrets := []string{in.Password, in.Token, form.actionKey, in.Fingerprint}
+		for _, c := range f.Session() {
+			secrets = append(secrets, c.Value)
+		}
+		for _, secret := range secrets {
+			if secret != "" {
+				message = strings.ReplaceAll(message, secret, "[REDACTED]")
+			}
+		}
+		return fmt.Errorf("%w: %s", ErrSessionRejected, compact([]byte(message)))
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%w: HTTP %d %s", ErrSessionRejected, resp.StatusCode, compact(body))
+		return fmt.Errorf("%w: HTTP %d", ErrSessionRejected, resp.StatusCode)
+	}
+	if len(body) == 0 && resp.StatusCode == http.StatusOK {
+		return fmt.Errorf("%w: HTTP 200 但无响应内容", ErrSessionRejected)
+	}
+	if !HasSession(f.Session()) {
+		return fmt.Errorf("%w: 官网未发放登录会话，不能创建 API Key；请核对注册结果或重新登录", ErrSessionRejected)
 	}
 	return nil
 }
@@ -841,15 +866,12 @@ func (f *Flow) verifyEmail(ctx context.Context, link string) error {
 	return nil
 }
 
-// ErrKeyRejected means the account was created but cannot be used: the site
-// answers "Sign in first" to the session's own next request. Observed cause is
-// the network-or-device signup cap it applies to fresh accounts; the address is
-// usually reusable later or from a different egress.
-var ErrKeyRejected = errors.New("账号被判为不可用（Key 无效或已吊销）")
+// ErrKeyRejected is kept for callers' error matching. It reports rejected
+// session authentication, not proof that an API key was revoked or an account
+// was capped: the key may not even have been created yet.
+var ErrKeyRejected = errors.New("账号会话鉴权失败")
 
-// probeAPIKey calls /v1/models with the session's own key fetch. The dashboard
-// key is created later, so the probe uses the account's session cookie against
-// the key list endpoint, which 401s only when the session itself is refused.
+// probeAPIKey reads /api/keys using the session cookie, before key creation.
 func (f *Flow) probeAPIKey(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.cfg.base()+"/api/keys", nil)
 	if err != nil {
@@ -868,11 +890,7 @@ func (f *Flow) probeAPIKey(ctx context.Context) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusUnauthorized, http.StatusForbidden:
-		// The site signs a signup up but answers "Sign in first" for the very
-		// next call. That is its network-or-device signup cap, not a bad
-		// password: the same address registers fine later or from another
-		// egress (the page body carries {"error":"account_cap"}).
-		return fmt.Errorf("%w: 注册后会话被拒绝，可能命中服务端注册限制；请人工核对，不自动重试或更换出口", ErrKeyRejected)
+		return fmt.Errorf("%w: 读取 API Key 列表返回 HTTP %d；请核对登录状态，不能据此判定 Key 吊销或注册风控；未自动重试或更换出口", ErrKeyRejected, resp.StatusCode)
 	default:
 		return fmt.Errorf("%w: HTTP %d", ErrKeyRejected, resp.StatusCode)
 	}
@@ -952,7 +970,7 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("%w: 创建 API Key 返回 HTTP %d（该邮箱的注册不被接受，常见于重复注册）", ErrKeyRejected, resp.StatusCode)
+		return "", fmt.Errorf("%w: 创建 API Key 返回 HTTP %d；请核对会话及账号权限，未自动重试", ErrKeyRejected, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("创建 API Key 失败: HTTP %d", resp.StatusCode)
@@ -1039,12 +1057,12 @@ func (f *Flow) Login(ctx context.Context, email, password string) error {
 	if err != nil {
 		return errors.New("登录页没有可用的表单（可能已改版）")
 	}
-	if err := f.submitSignup(ctx, form, signupFields{
+	if err := f.submitAuth(ctx, form, signupFields{
 		Email:       email,
 		Password:    password,
-		Fingerprint: newUUID(),
+		Fingerprint: form.fingerprint,
 		Timezone:    f.cfg.timezone(),
-	}); err != nil {
+	}, "signin"); err != nil {
 		return err
 	}
 	// A refused sign-in returns no session cookie; the call is the check.
