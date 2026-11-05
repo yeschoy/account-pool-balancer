@@ -4,7 +4,7 @@
 - API base `tokenHarbor.baseUrl` includes `/v1`, no userinfo/query/fragment. Only native Chat, Responses, Messages POSTs + models GET; unknown paths rejected locally. No tool stripping, protocol conversion, model aliases, cache mark injection or automatic spend approval.
 - Session first, cache key second. HMAC scope includes group and downstream-key ID. `cache_control.type=ephemeral` is not an identity. Default sticky/reject-busy; explicit binding cannot overflow. Full-history requests can fail over within group; stateful Responses cannot.
 - `config.StrictResponses` selects the native-key pools' strict state/replay safeguards. `quota.ResponseBindingSource` preserves existing OpenCode source hashes and adds Token Harbor credential/base/proxy hashes. Confirmed Responses bindings persist; ordinary session bindings do not. Missing/expired/wrong-source continuation fails 409, busy fails 429.
-- Metadata reads only `/v1/models`, never private dashboard balance/session APIs. `CatalogSource` binds data to credential/base/proxy. Manual refresh failures retain prior timestamps/data. Late stores recheck source under poller mutex; restart drops mismatched source. Token Harbor catalogs never teach OpenDesign funding classification.
+- Inference metadata reads only `/v1/models`, never private dashboard balance/session APIs. `CatalogSource` binds data to credential/base/proxy. Manual refresh failures retain prior timestamps/data. Late stores recheck source under poller mutex; restart drops mismatched source. Token Harbor catalogs never teach OpenDesign funding classification.
 - No credential redirects, proxy-to-direct fallback or uncertain/post-commit replay. Recognized spend-confirmation responses hard-stop before editable rules and retain the upstream approval prompt.
 - Settings API projects only inference base/sync interval; do not serialize registration captcha credentials. Inference saves preserve registration settings and other pools' routing/rules. Registration saves preserve pool routing/model polling; both settings endpoints hide captcha credentials and proxy authentication. Upstream keys write-only in admin API.
 - Cache usage stays nullable. Messages prompt includes cache reads AND writes; request/overview ratio uses that denominator. Token Harbor overview rates use measured-only cp/ck/ckr counters. cw/CacheWrite is the shared reported-write counter; kw/CacheCreation is a compatibility alias. Update both from one measurement without double-counting known-write requests. Price table has no write price: requests with measured writes have unknown cost, not understated bills.
@@ -13,3 +13,44 @@
 - Existing vanilla console: provider tab/filter, account controls, key management, overview/logs, masked secrets. Local browser smoke uses disposable mock data; never claim real client/inference validation without evidence.
 
 Required tests: native request/response/SSE bytes + headers, body/header/Claude metadata identity, busy no-overflow, stateful source/client isolation and restore, errors/Retry-After, spend consent even custom rules, no redirect/uncertain replay, unknown usage, catalog failure/source change, settings/import/group isolation and secret projection.
+
+## Registration save / subscription admission contract
+
+### 1. Scope / Trigger
+Registration persistence, proxy assignment and explicit admission are separate. Successful signup, verified email, visible models and hosted checkout do NOT prove a paid subscription. No automatic registration-to-pool transition.
+
+### 2. Signatures
+- `POST /api/tokenharbor/registrations`: existing accounts/proxies/group plus `saveOnly:bool`, `proxyMode:"sequential"|"random"`; legacy `autoImport:true` rejected.
+- `GET/PUT /api/tokenharbor/proxies`: PUT requires `{proxies:string[]}`; explicit `[]` clears; GET/PUT respond `{count,labels}` with credential-free labels only. Max1000 entries, validated before atomic persistence.
+- `POST /api/tokenharbor/registrations/{rowId}/retry`: explicitly starts a saved row or resumes an eligible existing row.
+- `POST /api/tokenharbor/registrations/{rowId}/subscription`: only checks current plan; summary contains `subscription.{status,tier,name,cycle,checkedAt,error}`.
+- `Flow.CheckSubscription(ctx) (Subscription,error)`; `Server.thImport(ctx,id,group)` always rechecks before config mutation.
+
+### 3. Contracts
+- `saveOnly=true` creates encrypted `saved` rows with bound proxy/password/mailbox/group; no workers, HTTP, captcha or import. Duplicate email preserves original credentials/status/job, never implicitly starts a saved row.
+- Proxy priority: per-account override > current input pool > encrypted saved pool > registration default > direct. Sequential wraps; random draws with replacement. Changing/clearing pool does not alter existing bindings. New rows persist proxyBound=true, including direct routes; clearing a saved row proxy binds direct even when the default later changes. Only legacy rows without proxyBound inherit an empty-URL default. Passwords and proxy authentication are never projected into summaries/settings; no localStorage proxy secrets.
+- Existing AES-GCM v1 envelope adds `proxies`; row/disk/summary preserve the plan observation. `saved` survives reopen and transitions only on explicit retry. Older binaries reject the new status: preserve a pre-upgrade backup before rollback.
+- Subscription check uses saved same-account cookies and fixed egress, GET `/pricing`, no redirects/retries/mutations/inference. Decode Flight JSON strings and the unique `signedIn/free/plans/currentCycle` component; require signedIn=true, known tier/slug/name, exactly one current plan. Paid current with monthly/yearly grants current active observation; current Free denies admission. No invented expiry timestamp or inference funding claim. UI labels active as last observed, not permanently valid.
+- Check failure records unknown without erasing registration/key. Source/account changes during check discard the result. Manual import requires Verified=true + key + fresh active paid result; old summary/checkout never bypasses gate. APIs retain admin auth/CSRF and no-store. Existing enabled accounts and generic manual Key import are not silently modified.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| saveOnly valid | 201, saved rows, no external calls |
+| duplicate existing emails only | 200, original job/credentials, no worker |
+| autoImport=true / invalid proxyMode / missing proxies PUT | 400 before work or pool replacement |
+| free/expired/unsubscribed / missing session / schema drift / HTTP failure | no import; free or unknown observation |
+| stale source during check | discard late result, no config mutation |
+| verified + current paid + explicit import | original pool dedupe, one enabled account |
+
+### 5. Good / Base / Bad Cases
+- Good: save3 accounts against2 saved proxies, explicitly register later, pay manually, check plan, explicitly import.
+- Base: old encrypted rows without subscription/proxies remain readable and unknown; no implicit migration/enablement.
+- Bad: treating Checkout.URL, /models, wallet balance, paid badge or cached active summary as an entitlement.
+
+### 6. Tests Required
+Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overrides; encrypted reopen/clones/no secret projection; explicit start/duplicate no restart; proxy auth+CSRF/no-store; all known paid tiers/Free, expired-to-Free, unauth/ambiguous/drift/redirect/oversize/error; source-change discard; registration completion never imports even paid; manual admission rechecks against cached paid/checkout. Local browser uses fake data and mocks only.
+
+### 7. Wrong vs Correct
+Wrong: register → verified → enabled pool account, or create checkout → mark paid.
+Correct: save/register → separate current-plan observation → user payment → fresh active-plan check on explicit import; failures deny admission without deleting credentials.

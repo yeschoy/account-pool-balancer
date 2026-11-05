@@ -2,6 +2,7 @@
 // 账号凭证是 thk_live_ Key；页面只显示掩码，从不回显密码、Cookie 或完整 Key。
 
 const TH_STATUS = {
+  saved: ['已保存（未注册）', 'warn'],
   queued: ['排队中', 'accent'],
   running: ['注册中', 'accent'],
   registered: ['已注册', 'ok'],
@@ -56,6 +57,7 @@ async function loadTHOverview() {
 async function loadTHRegistrations() {
   stopTHPolling();
   thLogShow();
+  loadTHProxies().catch(() => { $('#th-proxies-status').textContent = '已保存代理池读取失败，请刷新重试'; });
   const generation = ++thState.generation;
   const poll = async () => {
     try {
@@ -103,20 +105,29 @@ function renderTHJob(job) {
   $('#th-register-rows').innerHTML = job.rows.map((r) => `<tr>
     <td>${esc(r.email)}</td>
     <td>${thLabel(r.status)}</td>
-    <td><span class="small">${esc(r.proxy || '直连')}</span> ${r.status === 'queued' ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}">改代理</button>` : ''}</td>
+    <td><span class="small">${esc(r.proxy || '直连')}</span> ${['saved', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}">改代理</button>` : ''}</td>
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
-    <td class="small">${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
+    <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
     <td>${thRowActions(r)}</td>
   </tr>`).join('') || '<tr><td colspan="6" class="empty">暂无账号</td></tr>';
 }
 
+function thSubscriptionLabel(r) {
+  const p = r.subscription || {};
+  if (r.status === 'saved') return '<span class="muted">未注册，尚未检测套餐</span>';
+  const label = p.status === 'active' ? `${p.name || p.tier}（上次检测有效）` : p.status === 'free' ? 'Free · 未订阅或已到期，待付款' : '套餐未知';
+  return `<span class="badge ${p.status === 'active' ? 'ok' : 'warn'}">${esc(label)}</span>${p.checkedAt && !p.checkedAt.startsWith('0001-') ? ` <span class="muted">${esc(fmtTime(p.checkedAt, true))}</span>` : ''}${p.error ? `<br>${thSafe(p.error)}` : ''}`;
+}
+
 function thRowActions(r) {
   const out = [];
+  if (r.status === 'saved') out.push(`<button type="button" class="btn small primary th-row-retry" data-id="${esc(r.id)}">开始注册</button>`);
+  if (r.hasSession && !['running', 'queued', 'saved'].includes(r.status)) out.push(`<button type="button" class="btn small th-row-subscription" data-id="${esc(r.id)}">检测套餐</button>`);
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) {
     out.push(`<button type="button" class="btn small th-row-reverify" data-id="${esc(r.id)}">补验证</button>`);
   }
   if (r.hasSession && r.status !== 'running' && r.status !== 'queued') out.push(`<button type="button" class="btn small th-row-checkout" data-id="${esc(r.id)}">Agent Pass 链接</button>`);
-  if (r.status === 'registered') out.push(`<button type="button" class="btn small primary th-row-import" data-id="${esc(r.id)}">入池</button>`);
+  if (r.status === 'registered' && r.verified && r.subscription?.status === 'active') out.push(`<button type="button" class="btn small primary th-row-import" data-id="${esc(r.id)}">校验并入池</button>`);
   if (r.status === 'failed' || r.status === 'uncertain') out.push(`<button type="button" class="btn small th-row-retry" data-id="${esc(r.id)}">${r.hasSession ? '继续（保留会话）' : '重试'}</button>`);
   if (r.status !== 'running') out.push(`<button type="button" class="btn small ghost th-row-delete" data-id="${esc(r.id)}">删除</button>`);
   return out.join(' ');
@@ -139,7 +150,7 @@ function thParseAccounts(text) {
     const parts = line.split('----');
     if (parts.length > 3) throw new Error('每行最多三段：邮箱----密码----接码页');
     const email = (parts[0] || '').trim();
-    if (!email.includes('@')) throw new Error(`邮箱格式有误：${line.slice(0, 40)}`);
+    if (!email.includes('@')) throw new Error(`邮箱格式有误：${email.slice(0, 40)}`);
     const twoPartMailbox = parts.length === 2 && parts[1].trim().startsWith('https://');
     out.push({ email,
       password: (twoPartMailbox ? '' : (parts[1] || '').trim()) || thRandomPassword(),
@@ -151,12 +162,12 @@ function thParseAccounts(text) {
 function thParseProxies(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => {
     const parts = line.split('----');
-    if (parts.length > 2 || parts.some((p) => !p.trim())) throw new Error('代理格式有误：' + line.slice(0, 40));
+    if (parts.length > 2 || parts.some((p) => !p.trim())) throw new Error('代理格式有误：每行一个地址，或 标签----地址');
     return parts[parts.length - 1].trim();
   });
 }
 
-async function thSubmitRegistration(ev) {
+async function thSubmitRegistration(ev, saveOnly = false) {
   ev.preventDefault();
   const error = $('#th-register-error');
   error.textContent = '';
@@ -171,14 +182,16 @@ async function thSubmitRegistration(ev) {
     return;
   }
   const btn = $('#th-register-submit');
+  const saveBtn = $('#th-register-save');
   thState.busy = true;
-  btn.disabled = true;
+  btn.disabled = saveBtn.disabled = true;
   try {
     const out = await api('POST', '/api/tokenharbor/registrations', {
       accounts,
       proxies,
       group: $('#th-register-group').value.trim() || 'tokenharbor',
-      autoImport: $('#th-register-auto').checked,
+      saveOnly,
+      proxyMode: $('#th-register-proxy-mode').value,
       solveCaptcha: $('#th-register-solve').checked,
       concurrency: Number($('#th-register-conc').value) || 0,
     });
@@ -192,7 +205,30 @@ async function thSubmitRegistration(ev) {
     error.textContent = thSafe(e.message) + '。请求结果不确定时，请先刷新任务列表确认任务是否已创建。';
   } finally {
     thState.busy = false;
-    btn.disabled = false;
+    btn.disabled = saveBtn.disabled = false;
+  }
+}
+
+async function loadTHProxies() {
+  const out = await api('GET', '/api/tokenharbor/proxies');
+  $('#th-proxies-status').textContent = out.count ? `已加密保存 ${out.count} 个代理；输入留空时自动复用。认证信息不回显。` : '尚未保存代理池；输入留空时使用设置中的默认代理。';
+}
+
+async function thSaveProxies(clear = false) {
+  const status = $('#th-proxies-status');
+  const button = $(clear ? '#th-clear-proxies' : '#th-save-proxies');
+  button.disabled = true;
+  try {
+    const proxies = clear ? [] : thParseProxies($('#th-register-proxies').value);
+    if (!clear && !proxies.length) throw new Error('请先填写要保存的代理');
+    if (clear && !window.confirm('清除已保存代理池？不会修改已有账号绑定的代理。')) return;
+    await api('PUT', '/api/tokenharbor/proxies', { proxies });
+    $('#th-register-proxies').value = '';
+    await loadTHProxies();
+  } catch (e) {
+    status.textContent = '保存代理池失败：' + e.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -223,6 +259,10 @@ async function thRowAction(kind, id) {
   try {
     if (kind === 'import') {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/import', { group: $('#th-register-group').value.trim() || 'tokenharbor' });
+    } else if (kind === 'subscription') {
+      err.textContent = '正在检测当前有效套餐…';
+      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/subscription', {});
+      err.textContent = '';
     } else if (kind === 'retry') {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked });
     } else if (kind === 'delete') {
@@ -390,7 +430,10 @@ function thInstall() {
   on('#btn-th-refresh', 'click', () => loadTHOverview().catch((e) => toast(e.message)));
   on('#btn-th-goregister', 'click', () => go('thregister'));
   on('#th-reg-refresh', 'click', () => loadTHRegistrations());
-  on('#th-registration-form', 'submit', thSubmitRegistration);
+  on('#th-registration-form', 'submit', (e) => thSubmitRegistration(e));
+  on('#th-register-save', 'click', (e) => thSubmitRegistration(e, true));
+  on('#th-save-proxies', 'click', () => thSaveProxies());
+  on('#th-clear-proxies', 'click', () => thSaveProxies(true));
   on('#th-settings-form', 'submit', thSaveSettings);
   on('#th-register-jobs', 'click', (e) => {
     const b = e.target.closest('[data-job]');
@@ -412,7 +455,7 @@ function thInstall() {
     if (proxy) { thRowProxy(proxy.dataset.id).catch((err) => toast(err.message)); return; }
     const checkout = e.target.closest('.th-row-checkout');
     if (checkout) { thRowCheckout(checkout.dataset.id).catch((err) => toast(err.message)); return; }
-    for (const kind of ['import', 'retry', 'delete', 'reverify']) {
+    for (const kind of ['import', 'retry', 'delete', 'reverify', 'subscription']) {
       const btn = e.target.closest('.th-row-' + kind);
       if (btn) { thRowAction(kind, btn.dataset.id); return; }
     }

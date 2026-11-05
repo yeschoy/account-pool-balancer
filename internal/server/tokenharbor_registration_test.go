@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -165,9 +166,10 @@ func TestTHRowsNeverLeakCredentials(t *testing.T) {
 
 func TestTHImportAddsOneAccount(t *testing.T) {
 	s := newTHTestServer(t)
+	proxy := setupTHSubscription(t, s, "plus")
 	store, _ := s.thStore()
 	rows, err := store.Add("that_test", []thsignupstore.Row{{
-		Email: "import@x.com", Password: "pw", APIKey: "thk_live_abcdefghijklmnop", ProxyURL: "http://u:p@1.1.1.1:8080",
+		Email: "import@x.com", Password: "pw", APIKey: "thk_live_abcdefghijklmnop", ProxyURL: proxy,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -175,11 +177,13 @@ func TestTHImportAddsOneAccount(t *testing.T) {
 	id := rows[0].ID
 	if _, err := store.Update(id, func(r *thsignupstore.Row) error {
 		r.Status = thsignupstore.Registered
+		r.Verified = true
+		r.Cookies = []thsignupstore.Cookie{{Name: "session", Value: "saved"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.thImport(id, ""); err != nil {
+	if err := s.thImport(context.Background(), id, ""); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	cfg := s.cfg.Get()
@@ -196,7 +200,7 @@ func TestTHImportAddsOneAccount(t *testing.T) {
 		t.Fatalf("wrong account: %+v", found)
 	}
 	// Importing twice must not duplicate the account.
-	if err := s.thImport(id, ""); err != nil {
+	if err := s.thImport(context.Background(), id, ""); err != nil {
 		t.Fatal(err)
 	}
 	n := 0
@@ -216,7 +220,7 @@ func TestTHImportRejectsUnregistered(t *testing.T) {
 	s := newTHTestServer(t)
 	store, _ := s.thStore()
 	rows, _ := store.Add("that_test", []thsignupstore.Row{{Email: "q@x.com", Password: "pw"}})
-	if err := s.thImport(rows[0].ID, ""); err == nil {
+	if err := s.thImport(context.Background(), rows[0].ID, ""); err == nil {
 		t.Fatal("importing a queued row must fail")
 	}
 }
@@ -236,6 +240,7 @@ func TestTHErrorStagesAreNamed(t *testing.T) {
 // address is confirmed: its key answers metadata but refuses chat.
 func TestTHImportRefusesUnverified(t *testing.T) {
 	s := newTHTestServer(t)
+	setupTHSubscription(t, s, "plus")
 	store, _ := s.thStore()
 	rows, _ := store.Add("that_test", []thsignupstore.Row{{Email: "u@x.com", Password: "pw"}})
 	id := rows[0].ID
@@ -246,18 +251,19 @@ func TestTHImportRefusesUnverified(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.thImport(id, ""); err == nil {
+	if err := s.thImport(context.Background(), id, ""); err == nil {
 		t.Fatal("an unverified account must not enter the pool as usable")
 	}
 	// Once confirmed it imports.
 	if _, err := store.Update(id, func(r *thsignupstore.Row) error {
 		r.Status = thsignupstore.Registered
 		r.Verified = true
+		r.Cookies = []thsignupstore.Cookie{{Name: "session", Value: "saved"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.thImport(id, ""); err != nil {
+	if err := s.thImport(context.Background(), id, ""); err != nil {
 		t.Fatalf("verified account should import: %v", err)
 	}
 }

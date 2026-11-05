@@ -1,0 +1,7 @@
+{
+  "name": "tokenharbor-registration-guard",
+  "status": "completed",
+  "branch": "master",
+  "description": "注册仅保存、可复用代理池、禁止自动入池与有效订阅校验",
+  "validation": "validation.md"
+}

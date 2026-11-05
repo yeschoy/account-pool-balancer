@@ -31,12 +31,14 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/thregister"
 )
 
 // Status is where one registration row stands.
 type Status string
 
 const (
+	Saved      Status = "saved"
 	Queued     Status = "queued"
 	Running    Status = "running"
 	Registered Status = "registered"
@@ -85,14 +87,17 @@ type Row struct {
 	Password string `json:"password,omitempty"`
 	// MailboxURL is the iCloud HME receive page ("…/messages/<alias>?token=…").
 	MailboxURL string `json:"mailboxUrl,omitempty"`
-	// ProxyURL is the attempt's egress; empty means the settings default.
-	ProxyURL string    `json:"proxyUrl,omitempty"`
-	Status   Status    `json:"status"`
-	Detail   string    `json:"detail,omitempty"`
-	APIKey   string    `json:"apiKey,omitempty"`
-	Account  string    `json:"accountId,omitempty"`
-	Cookies  []Cookie  `json:"cookies,omitempty"`
-	Checkout *Checkout `json:"checkout,omitempty"`
+	// ProxyBound distinguishes an explicitly bound direct route from legacy
+	// rows whose empty URL still inherits the settings default.
+	ProxyURL     string                  `json:"proxyUrl,omitempty"`
+	ProxyBound   bool                    `json:"proxyBound,omitempty"`
+	Status       Status                  `json:"status"`
+	Detail       string                  `json:"detail,omitempty"`
+	APIKey       string                  `json:"apiKey,omitempty"`
+	Account      string                  `json:"accountId,omitempty"`
+	Cookies      []Cookie                `json:"cookies,omitempty"`
+	Checkout     *Checkout               `json:"checkout,omitempty"`
+	Subscription thregister.Subscription `json:"subscription"`
 	// Group is the pool group the row joins when it is imported.
 	Group string `json:"group,omitempty"`
 	// Verified records that the confirmation mail was used. Metadata access
@@ -103,59 +108,70 @@ type Row struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
+// Egress never changes a new row's saved binding when defaults change.
+func (r Row) Egress(fallback string) string {
+	if r.ProxyBound || r.ProxyURL != "" {
+		return r.ProxyURL
+	}
+	return fallback
+}
+
 func (Row) String() string               { return "[REDACTED]" }
 func (Row) GoString() string             { return "[REDACTED]" }
 func (Row) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // Summary is the console's view: no password, no cookie, a masked key.
 type Summary struct {
-	ID          string    `json:"id"`
-	Attempt     string    `json:"attempt"`
-	Email       string    `json:"email"`
-	Status      Status    `json:"status"`
-	Detail      string    `json:"detail,omitempty"`
-	Proxy       string    `json:"proxy"`
-	Group       string    `json:"group,omitempty"`
-	KeyMasked   string    `json:"keyMasked,omitempty"`
-	HasMailbox  bool      `json:"hasMailbox"`
-	HasSession  bool      `json:"hasSession"`
-	HasCheckout bool      `json:"hasCheckout"`
-	Verified    bool      `json:"verified"`
-	FreeModels  bool      `json:"freeModels"`
-	AccountID   string    `json:"accountId,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID           string                  `json:"id"`
+	Attempt      string                  `json:"attempt"`
+	Email        string                  `json:"email"`
+	Status       Status                  `json:"status"`
+	Detail       string                  `json:"detail,omitempty"`
+	Proxy        string                  `json:"proxy"`
+	Group        string                  `json:"group,omitempty"`
+	KeyMasked    string                  `json:"keyMasked,omitempty"`
+	HasMailbox   bool                    `json:"hasMailbox"`
+	HasSession   bool                    `json:"hasSession"`
+	HasCheckout  bool                    `json:"hasCheckout"`
+	Subscription thregister.Subscription `json:"subscription"`
+	Verified     bool                    `json:"verified"`
+	FreeModels   bool                    `json:"freeModels"`
+	AccountID    string                  `json:"accountId,omitempty"`
+	CreatedAt    time.Time               `json:"createdAt"`
+	UpdatedAt    time.Time               `json:"updatedAt"`
 }
 
 // diskRow is Row's storage shape. Row deliberately marshals to a redacted
 // string (so nothing that formats a row by accident can leak it), which means
 // the file needs a plain twin to serialize.
 type diskRow struct {
-	ID         string    `json:"id"`
-	Attempt    string    `json:"attempt"`
-	Email      string    `json:"email"`
-	Password   string    `json:"password,omitempty"`
-	MailboxURL string    `json:"mailboxUrl,omitempty"`
-	ProxyURL   string    `json:"proxyUrl,omitempty"`
-	Status     Status    `json:"status"`
-	Detail     string    `json:"detail,omitempty"`
-	APIKey     string    `json:"apiKey,omitempty"`
-	Account    string    `json:"accountId,omitempty"`
-	Cookies    []Cookie  `json:"cookies,omitempty"`
-	Checkout   *Checkout `json:"checkout,omitempty"`
-	Group      string    `json:"group,omitempty"`
-	Verified   bool      `json:"verified,omitempty"`
-	FreeModels bool      `json:"freeModels,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID           string                  `json:"id"`
+	Attempt      string                  `json:"attempt"`
+	Email        string                  `json:"email"`
+	Password     string                  `json:"password,omitempty"`
+	MailboxURL   string                  `json:"mailboxUrl,omitempty"`
+	ProxyURL     string                  `json:"proxyUrl,omitempty"`
+	ProxyBound   bool                    `json:"proxyBound,omitempty"`
+	Status       Status                  `json:"status"`
+	Detail       string                  `json:"detail,omitempty"`
+	APIKey       string                  `json:"apiKey,omitempty"`
+	Account      string                  `json:"accountId,omitempty"`
+	Cookies      []Cookie                `json:"cookies,omitempty"`
+	Checkout     *Checkout               `json:"checkout,omitempty"`
+	Subscription thregister.Subscription `json:"subscription"`
+	Group        string                  `json:"group,omitempty"`
+	Verified     bool                    `json:"verified,omitempty"`
+	FreeModels   bool                    `json:"freeModels,omitempty"`
+	CreatedAt    time.Time               `json:"createdAt"`
+	UpdatedAt    time.Time               `json:"updatedAt"`
 }
 
 func (r Row) disk() diskRow {
 	return diskRow{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Password: r.Password,
-		MailboxURL: r.MailboxURL, ProxyURL: r.ProxyURL, Status: r.Status,
+		MailboxURL: r.MailboxURL, ProxyURL: r.ProxyURL, ProxyBound: r.ProxyBound, Status: r.Status,
 		Detail: r.Detail, APIKey: r.APIKey, Account: r.Account,
-		Cookies: r.Cookies, Checkout: r.Checkout, Group: r.Group, Verified: r.Verified,
+		Cookies: r.Cookies, Checkout: r.Checkout, Subscription: r.Subscription, Group: r.Group, Verified: r.Verified,
 		FreeModels: r.FreeModels, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
@@ -163,9 +179,9 @@ func (r Row) disk() diskRow {
 func (d diskRow) row() Row {
 	return Row{
 		ID: d.ID, Attempt: d.Attempt, Email: d.Email, Password: d.Password,
-		MailboxURL: d.MailboxURL, ProxyURL: d.ProxyURL, Status: d.Status,
+		MailboxURL: d.MailboxURL, ProxyURL: d.ProxyURL, ProxyBound: d.ProxyBound, Status: d.Status,
 		Detail: d.Detail, APIKey: d.APIKey, Account: d.Account,
-		Cookies: d.Cookies, Checkout: d.Checkout, Group: d.Group, Verified: d.Verified,
+		Cookies: d.Cookies, Checkout: d.Checkout, Subscription: d.Subscription, Group: d.Group, Verified: d.Verified,
 		FreeModels: d.FreeModels, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 }
@@ -173,6 +189,7 @@ func (d diskRow) row() Row {
 type diskData struct {
 	Version int       `json:"version"`
 	Rows    []diskRow `json:"rows"`
+	Proxies []string  `json:"proxies,omitempty"`
 }
 
 type envelope struct {
@@ -183,10 +200,11 @@ type envelope struct {
 
 // Store is one file, one process. Methods are goroutine-safe.
 type Store struct {
-	mu   sync.Mutex
-	path string
-	aead cipher.AEAD
-	rows []Row
+	mu      sync.Mutex
+	path    string
+	aead    cipher.AEAD
+	rows    []Row
+	proxies []string
 }
 
 func (*Store) String() string               { return "[REDACTED]" }
@@ -237,6 +255,12 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 		return nil, ErrCorrupt
 	}
 	s.rows = rows
+	for _, proxy := range data.Proxies {
+		if err := ValidateProxy(proxy); err != nil {
+			return nil, ErrCorrupt
+		}
+	}
+	s.proxies = append([]string(nil), data.Proxies...)
 	dirty := false
 	for i := range s.rows {
 		if s.rows[i].Status == Running {
@@ -256,7 +280,7 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 
 func validStatus(s Status) bool {
 	switch s {
-	case Queued, Running, Registered, Unverified, Imported, Failed, Uncertain:
+	case Saved, Queued, Running, Registered, Unverified, Imported, Failed, Uncertain:
 		return true
 	}
 	return false
@@ -278,6 +302,15 @@ func validRows(rs []Row) bool {
 // returned as is and not reset: re-submitting a list must not silently
 // re-register an account that is already in the pool.
 func (s *Store) Add(attempt string, rows []Row) ([]Summary, error) {
+	return s.add(attempt, rows, Queued)
+}
+
+// AddSaved keeps credentials and assigned egress without scheduling any work.
+func (s *Store) AddSaved(attempt string, rows []Row) ([]Summary, error) {
+	return s.add(attempt, rows, Saved)
+}
+
+func (s *Store) add(attempt string, rows []Row, status Status) ([]Summary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	seen := map[string]bool{}
@@ -305,7 +338,8 @@ func (s *Store) Add(attempt string, rows []Row) ([]Summary, error) {
 		nr := r
 		nr.Email = email
 		nr.Attempt = attempt
-		nr.Status = Queued
+		nr.Status = status
+		nr.ProxyBound = true
 		nr.Detail = ""
 		nr.Cookies = nil
 		nr.CreatedAt, nr.UpdatedAt = now, now
@@ -379,10 +413,11 @@ func (s *Store) Update(id string, fn func(*Row) error) (Row, error) {
 // SetProxy records a new egress before the attempt starts.
 func (s *Store) SetProxy(id, proxyURL string) (Row, error) {
 	return s.Update(id, func(r *Row) error {
-		if r.Status != Queued {
+		if r.Status != Queued && r.Status != Saved {
 			return ErrInvalid
 		}
 		r.ProxyURL = strings.TrimSpace(proxyURL)
+		r.ProxyBound = true
 		return nil
 	})
 }
@@ -404,7 +439,7 @@ func (s *Store) Claim(id string) (Row, error) {
 func (s *Store) Retry(id string) (Row, error) {
 	return s.Update(id, func(r *Row) error {
 		switch r.Status {
-		case Failed, Uncertain, Registered, Unverified:
+		case Saved, Failed, Uncertain, Registered, Unverified:
 		default:
 			return ErrInvalid
 		}
@@ -450,13 +485,14 @@ func (s *Store) Summaries() map[string][]Summary {
 func SummaryOf(r Row) Summary {
 	return Summary{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Status: r.Status, Detail: r.Detail,
-		Proxy:       ProxyLabel(r.ProxyURL),
-		Group:       r.Group,
-		KeyMasked:   MaskKey(r.APIKey),
-		HasMailbox:  r.MailboxURL != "",
-		HasSession:  len(r.Cookies) > 0,
-		HasCheckout: r.Checkout != nil && r.Checkout.URL != "",
-		Verified:    r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
+		Proxy:        ProxyLabel(r.ProxyURL),
+		Group:        r.Group,
+		KeyMasked:    MaskKey(r.APIKey),
+		HasMailbox:   r.MailboxURL != "",
+		HasSession:   len(r.Cookies) > 0,
+		HasCheckout:  r.Checkout != nil && r.Checkout.URL != "",
+		Subscription: r.Subscription,
+		Verified:     r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
@@ -486,8 +522,40 @@ func ProxyLabel(raw string) string {
 	return u
 }
 
+// Proxies returns a detached copy for trusted registration code only.
+func (s *Store) Proxies() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.proxies...)
+}
+
+// SaveProxies publishes the proxy pool in the same encrypted envelope as rows.
+func (s *Store) SaveProxies(proxies []string) error {
+	if len(proxies) > 1000 {
+		return errors.New("最多保存 1000 个代理")
+	}
+	next := make([]string, 0, len(proxies))
+	for _, proxy := range proxies {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" || len(proxy) > 4096 {
+			return errors.New("代理地址不能为空或过长")
+		}
+		if err := ValidateProxy(proxy); err != nil {
+			return err
+		}
+		next = append(next, proxy)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.write(s.rows, next, "thsignupstore/v1"); err != nil {
+		return err
+	}
+	s.proxies = next
+	return nil
+}
+
 func (s *Store) save(rows []Row) error {
-	return s.write(rows, "thsignupstore/v1")
+	return s.write(rows, s.proxies, "thsignupstore/v1")
 }
 
 func cloneRow(r Row) Row {
@@ -499,12 +567,12 @@ func cloneRow(r Row) Row {
 	return r
 }
 
-func (s *Store) write(rows []Row, aad string) error {
+func (s *Store) write(rows []Row, proxies []string, aad string) error {
 	disk := make([]diskRow, len(rows))
 	for i, r := range rows {
 		disk[i] = r.disk()
 	}
-	plain, err := json.Marshal(diskData{Version: 1, Rows: disk})
+	plain, err := json.Marshal(diskData{Version: 1, Rows: disk, Proxies: proxies})
 	if err != nil {
 		return err
 	}

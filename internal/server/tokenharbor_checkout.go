@@ -59,10 +59,7 @@ func (s *Server) apiTHCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.cfg.Get().TokenHarbor
-	proxy := row.ProxyURL
-	if proxy == "" {
-		proxy = cfg.ProxyURL
-	}
+	proxy := row.Egress(cfg.ProxyURL)
 	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.BaseURL), ProxyURL: proxy, RequestTimeout: 40 * time.Second})
 	if err != nil {
 		apiError(w, http.StatusBadRequest, errors.New("无法初始化账号代理"))

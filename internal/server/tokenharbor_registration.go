@@ -45,10 +45,13 @@ type thRegisterInput struct {
 }
 
 type thRegisterRequest struct {
-	Accounts   []thRegisterInput `json:"accounts"`
-	Proxies    []string          `json:"proxies,omitempty"`
-	Group      string            `json:"group,omitempty"`
-	AutoImport bool              `json:"autoImport"`
+	Accounts []thRegisterInput `json:"accounts"`
+	Proxies  []string          `json:"proxies,omitempty"`
+	Group    string            `json:"group,omitempty"`
+	// Retained only to reject stale clients instead of silently auto-importing.
+	AutoImport bool   `json:"autoImport"`
+	SaveOnly   bool   `json:"saveOnly"`
+	ProxyMode  string `json:"proxyMode,omitempty"`
 	// SolveCaptcha buys a Turnstile token when the site asks for one. Off by
 	// default: the caller pays for each attempt it enables.
 	SolveCaptcha bool `json:"solveCaptcha"`
@@ -113,6 +116,9 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
 	a("POST /api/tokenharbor/registrations/{id}/retry", s.apiTHRetry)
 	a("POST /api/tokenharbor/registrations/{id}/reverify", s.apiTHReverify)
+	a("POST /api/tokenharbor/registrations/{id}/subscription", s.apiTHSubscription)
+	a("GET /api/tokenharbor/proxies", s.apiTHProxies)
+	a("PUT /api/tokenharbor/proxies", s.apiTHSaveProxies)
 	a("POST /api/tokenharbor/registrations/{id}/checkout", s.apiTHCheckout)
 	a("GET /api/tokenharbor/registrations/{id}/checkout", s.apiTHSavedCheckout)
 	a("GET /api/tokenharbor/log", s.apiTHLog)
@@ -128,6 +134,14 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	var in thRegisterRequest
 	if err := readBody(r, &in); err != nil {
 		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.AutoImport {
+		apiError(w, http.StatusBadRequest, errors.New("注册后不再自动入池；请付款后检测有效套餐，再手动入池"))
+		return
+	}
+	if in.ProxyMode != "" && in.ProxyMode != "sequential" && in.ProxyMode != "random" {
+		apiError(w, http.StatusBadRequest, errors.New("代理分配方式仅支持 sequential 或 random"))
 		return
 	}
 	store, err := s.thStore()
@@ -186,17 +200,14 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 			ProxyURL:   strings.TrimSpace(acct.ProxyURL),
 		})
 	}
-	// Round-robin the proxy list so one IP never carries a whole batch.
+	// Bind egress at save/queue time. A proxy may serve multiple accounts.
 	cfg := s.cfg.Get().TokenHarbor
-	for i := range rows {
-		if rows[i].ProxyURL != "" {
-			continue
-		}
-		if n := len(proxies); n > 0 {
-			rows[i].ProxyURL = proxies[i%n]
-		} else {
-			rows[i].ProxyURL = cfg.ProxyURL
-		}
+	if len(proxies) == 0 {
+		proxies = store.Proxies()
+	}
+	if err := thAssignProxies(rows, proxies, cfg.ProxyURL, in.ProxyMode); err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
 	}
 	group := strings.TrimSpace(in.Group)
 	if group == "" {
@@ -209,9 +220,27 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		rows[i].Group = group
 	}
 	attempt := config.NewID("that_")
-	summaries, err := store.Add(attempt, rows)
+	add := store.Add
+	if in.SaveOnly {
+		add = store.AddSaved
+	}
+	summaries, err := add(attempt, rows)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	created := false
+	for _, row := range summaries {
+		created = created || row.Attempt == attempt
+	}
+	if !created && len(summaries) > 0 {
+		// Resubmission reopens the original records, never overwrites bound
+		// egress/passwords or silently starts a previously saved account.
+		writeJSON(w, http.StatusOK, map[string]any{"id": summaries[0].Attempt, "rows": summaries})
+		return
+	}
+	if in.SaveOnly {
+		writeJSON(w, http.StatusCreated, map[string]any{"id": attempt, "rows": summaries})
 		return
 	}
 	conc := in.Concurrency
@@ -223,12 +252,12 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		conc = cfg.RegisterConcurrency
 	}
 	s.thLive("", "任务创建", fmt.Sprintf("%d 个邮箱，并发 %d，代理 %d 个", len(rows), conc, len(proxies)), "", "info")
-	s.thRegisterAttempt(attempt, group, in.AutoImport, in.SolveCaptcha, conc, summaries)
+	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": attempt, "rows": summaries})
 }
 
 // thRegisterAttempt starts the background work for the queued rows.
-func (s *Server) thRegisterAttempt(attempt, group string, autoImport, solve bool, conc int, rows []thsignupstore.Summary) {
+func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []thsignupstore.Summary) {
 	reg := s.thRegistrar()
 	if conc <= 0 {
 		conc = s.cfg.Get().TokenHarbor.RegisterConcurrency
@@ -244,13 +273,13 @@ func (s *Server) thRegisterAttempt(attempt, group string, autoImport, solve bool
 		s.thTasks.Add(1)
 		go func() {
 			defer s.thTasks.Done()
-			_ = reg.run(id, group, autoImport, solve, conc)
+			_ = reg.run(id, solve, conc)
 		}()
 	}
 }
 
-// run registers one row and, when asked, imports it into the pool.
-func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) error {
+// run registers one row. Pool import is always a separate explicit action.
+func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	s := r.srv
 	store, err := s.thStore()
 	if err != nil {
@@ -292,10 +321,7 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) er
 		return fail("排队", errors.New("等待并发名额超时"))
 	}
 
-	proxy := row.ProxyURL
-	if proxy == "" {
-		proxy = cfg.ProxyURL
-	}
+	proxy := row.Egress(cfg.ProxyURL)
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
 		ProxyURL:          proxy,
@@ -387,19 +413,13 @@ func (r *thRegistrar) run(id, group string, autoImport, solve bool, conc int) er
 		level = "warn"
 	}
 	s.thLive(row.Email, "注册完成", thsignupstore.MaskKey(res.APIKey), proxy, level)
-	if autoImport {
-		if err := s.thImport(id, group); err != nil {
-			_, _ = store.Update(id, func(rw *thsignupstore.Row) error {
-				rw.Detail = "已注册，入池失败：" + thRedact(err.Error())
-				return nil
-			})
-		}
-	}
+	// Registration success does not establish paid subscription entitlement.
+	_, _ = s.thCheckSubscription(ctx, id)
 	return nil
 }
 
 // thImport adds a registered row's key to the pool as one account.
-func (s *Server) thImport(id, group string) error {
+func (s *Server) thImport(ctx context.Context, id, group string) error {
 	store, err := s.thStore()
 	if err != nil {
 		return err
@@ -416,8 +436,19 @@ func (s *Server) thImport(id, group string) error {
 	default:
 		return errors.New("只有已注册的账号可以入池")
 	}
+	if !row.Verified {
+		return errors.New("该账号尚未确认邮箱验证，请先补验证")
+	}
 	if strings.TrimSpace(row.APIKey) == "" {
 		return errors.New("该账号没有 API Key")
+	}
+	checkedConfig := s.cfg.Get().TokenHarbor
+	row, err = s.thCheckSubscription(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !row.Subscription.Active() {
+		return errors.New("当前没有有效付费套餐（Free/未订阅或已到期）；支付链接不代表付款成功，请付款后重新检测")
 	}
 	if group == "" {
 		group = row.Group
@@ -430,6 +461,9 @@ func (s *Server) thImport(id, group string) error {
 	}
 	accountID := row.Account
 	_, err = s.cfg.Update(-1, func(c *config.Config) error {
+		if c.TokenHarbor.BaseURL != checkedConfig.BaseURL || c.TokenHarbor.ProxyURL != checkedConfig.ProxyURL {
+			return errors.New("套餐检测期间上游或代理设置变化，请重新检测")
+		}
 		// A re-import (or a row whose account was deleted) must not duplicate:
 		// the key is the identity, exactly as for any other key pool.
 		for i := range c.Accounts {
@@ -446,7 +480,7 @@ func (s *Server) thImport(id, group string) error {
 			Group:      group,
 			Enabled:    true,
 			RuntimeKey: row.APIKey,
-			ProxyURL:   row.ProxyURL,
+			ProxyURL:   row.Egress(checkedConfig.ProxyURL),
 			CreatedAt:  time.Now(),
 		}
 		c.Accounts = append(c.Accounts, a)
@@ -567,7 +601,7 @@ func (s *Server) apiTHImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	id := r.PathValue("id")
-	if err := s.thImport(id, strings.TrimSpace(in.Group)); err != nil {
+	if err := s.thImport(r.Context(), id, strings.TrimSpace(in.Group)); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -601,7 +635,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		_ = s.thRegistrar().run(id, row.Group, false, in.SolveCaptcha, 0)
+		_ = s.thRegistrar().run(id, in.SolveCaptcha, 0)
 	}()
 	writeJSON(w, http.StatusAccepted, thsignupstore.SummaryOf(row))
 }
@@ -626,10 +660,7 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.cfg.Get().TokenHarbor
-	proxy := row.ProxyURL
-	if proxy == "" {
-		proxy = cfg.ProxyURL
-	}
+	proxy := row.Egress(cfg.ProxyURL)
 	cookies := make([]thregister.NamedCookie, 0, len(row.Cookies))
 	for _, c := range row.Cookies {
 		cookies = append(cookies, thregister.NamedCookie{Name: c.Name, Value: c.Value,

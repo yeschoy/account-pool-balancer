@@ -312,15 +312,20 @@
             <span class="hint">每行 <code>邮箱----接码页</code> 或 <code>邮箱----密码----接码页</code>。未提供密码时自动生成并加密保存。会话和 API Key 分阶段保存；不会自动同意免费模型的数据使用条款。</span>
             <label for="th-register-proxies">代理池（可选）</label>
             <textarea id="th-register-proxies" class="pc-secret-input" rows="5" autocomplete="off" spellcheck="false" placeholder="每行一个代理：http://user:pass@host:port 或 socks5://user:pass@host:port"></textarea>
-            <span class="hint">按账号顺序轮流分配，一个出口只放一个号；留空则用设置里的默认代理，再没有就直连（大陆直连注册会被地区拦）。</span>
+            <span class="hint">允许多个账号复用同一代理。留空依次使用已保存代理池、设置中的默认代理，均没有才直连；保存账号时即绑定分配结果。</span>
+            <div class="actions"><button type="button" class="btn" id="th-save-proxies">保存代理池</button><button type="button" class="btn ghost" id="th-clear-proxies">清除已保存代理池</button></div>
+            <span class="hint" id="th-proxies-status" role="status">正在读取已保存代理池…</span>
+            <label for="th-register-proxy-mode">代理分配方式</label>
+            <select id="th-register-proxy-mode"><option value="sequential">按顺序轮流分配（可复用）</option><option value="random">随机选择（可复用）</option></select>
             <label for="th-register-group">入池分组</label>
             <input id="th-register-group" value="tokenharbor" autocomplete="off">
-            <label class="check"><input type="checkbox" id="th-register-auto" checked> 注册成功后自动入池</label>
+            <span class="hint">注册后不会自动入池。需手动付款，检测到有效套餐且邮箱已验证后才能手动入池；支付链接不代表已付款。</span>
             <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
             <label for="th-register-conc">本次并发</label>
             <input id="th-register-conc" type="number" min="1" max="10" step="1" value="2">
             <span class="hint">同时注册几个号；一次提交内超出的排队，不会丢。默认值来自设置。</span>
-            <button type="submit" class="btn primary" id="th-register-submit">启动注册</button>
+            <div class="actions"><button type="button" class="btn" id="th-register-save">仅保存</button><button type="submit" class="btn primary" id="th-register-submit">启动注册</button></div>
+            <span class="hint">仅保存邮箱、密码、接码页与绑定代理，不注册、不解验证码、不付款；之后可在任务中开始注册。</span>
             <p id="th-register-error" class="error" role="alert"></p>
           </form>
         </section>
