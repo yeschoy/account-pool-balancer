@@ -657,6 +657,7 @@ func ParseDuration(s string) (time.Duration, error) {
 // quarantining it: a working proxy brings the account straight back.
 func DefaultTokenHarborErrorRules() []ErrorRule {
 	return []ErrorRule{
+		TokenHarborFreeModelsOffRule(),
 		{ID: "tokenharbor-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 502,
 			When: Match{Statuses: []int{401}},
 			Note: "Token Harbor 拒绝 API Key：核对或更换 Key"},
@@ -701,4 +702,20 @@ func DefaultTokenHarborRetryRules() []RetryRule {
 			When: Match{Statuses: []int{404}, BodyContains: []string{"model"}},
 			Note: "模型 ID 不被 Token Harbor 目录支持：换号不解决，先核对模型名"},
 	}
+}
+
+// TokenHarborFreeModelsOffRule quarantines an account whose free-model switch
+// is off.
+//
+// The switch is per account and live: the site answers
+// 403 free_models_disabled on every route to a :free model of that account,
+// while the same key still lists models, so without this rule the refusal
+// reads as a bad credential and the account is retried forever. It is a soft
+// quarantine because turning the switch back on (dashboard, or the
+// registration machine) restores the account without touching its key.
+func TokenHarborFreeModelsOffRule() ErrorRule {
+	return ErrorRule{ID: "tokenharbor-free-models-off", Scope: ScopeAccount, Action: ActionCooldown,
+		DownstreamStatus: 403, Reset: &Reset{Fallback: "30m", Max: "30m"},
+		When: Match{Statuses: []int{403}, BodyCodes: []string{"free_models_disabled"}},
+		Note: "该账号的免费模型开关是关的：在后台打开，或重新走一次注册机的开关步骤"}
 }
