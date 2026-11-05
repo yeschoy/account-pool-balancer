@@ -42,7 +42,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	// pair it with a newer index.html.
 	index, _ := fs.ReadFile(sub, "index.html")
 	sum := sha256.New()
-	for _, f := range []string{"app.css", "app.js", "perch.js"} {
+	for _, f := range []string{"app.css", "app.js", "perch.js", "tokenharbor.js"} {
 		b, _ := fs.ReadFile(sub, f)
 		sum.Write(b)
 	}
@@ -50,6 +50,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	index = bytes.ReplaceAll(index, []byte(`/assets/app.css"`), []byte(`/assets/app.css`+ver+`"`))
 	index = bytes.ReplaceAll(index, []byte(`/assets/app.js"`), []byte(`/assets/app.js`+ver+`"`))
 	index = bytes.ReplaceAll(index, []byte(`/assets/perch.js"`), []byte(`/assets/perch.js`+ver+`"`))
+	index = bytes.ReplaceAll(index, []byte(`/assets/tokenharbor.js"`), []byte(`/assets/tokenharbor.js`+ver+`"`))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", csp)
@@ -107,6 +108,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /api/workflow/reset-counts", s.apiResetCounts)
 	a("POST /api/config/reload", s.apiReload)
 	s.registerPerch(mux, a)
+	s.registerTokenHarbor(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {

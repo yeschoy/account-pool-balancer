@@ -26,6 +26,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,11 +90,94 @@ type Result struct {
 	VerifiedEmail bool
 	// FreeModelsEnabled records whether step 4 succeeded.
 	FreeModelsEnabled bool
+	// FreeModelsError is why it did not, empty when it did or was not tried.
+	FreeModelsError string
+	// MailTimedOut records that the confirmation mail never arrived within
+	// the patience budget. The account is still usable for metadata reads,
+	// and the link can be re-checked later (see Reverify).
+	MailTimedOut bool
+	// UserIDClaim is the Supabase user id the session belongs to. It is read
+	// from the session cookie, which is the only place the site exposes it to
+	// a browser client, and it is the account's stable identity upstream.
+	UserIDClaim string
+	// SessionExpiresAt is the access token's expiry, read from the same
+	// cookie. A caller keeping the session must know when it dies.
+	SessionExpiresAt time.Time
 }
 
-// NamedCookie is one session cookie (name, value) — the minimum needed to
-// replay the session without carrying a full jar.
-type NamedCookie struct{ Name, Value string }
+// NamedCookie is one session cookie, with the attributes a replay needs.
+type NamedCookie struct {
+	Name, Value string
+	Domain      string
+	Path        string
+	Expires     time.Time
+	Secure      bool
+	HTTPOnly    bool
+	SameSite    int
+}
+
+// SessionIdentity reads the Supabase user id and access-token expiry out of the
+// site's session cookie.
+//
+// tokenharbor.ai keeps its Supabase session in the standard one: a cookie named
+// "sb-<project>-auth-token" whose value is "base64-" plus the raw URL-safe
+// base64 of the session JSON, split across numbered chunks (".0", ".1", …) when
+// it exceeds the 4 KB cookie limit. Reading it back is the only way to learn the
+// user id without a second API call, and it never prints a token.
+func SessionIdentity(cookies []NamedCookie) (userID string, expires time.Time) {
+	var chunks []struct {
+		idx int
+		val string
+	}
+	for _, c := range cookies {
+		name := c.Name
+		idx := 0
+		if i := strings.LastIndex(name, "."); i >= 0 && i < len(name)-1 {
+			if n, err := strconv.Atoi(name[i+1:]); err == nil {
+				idx = n
+				name = name[:i]
+			}
+		}
+		if !strings.Contains(name, "auth-token") {
+			continue
+		}
+		chunks = append(chunks, struct {
+			idx int
+			val string
+		}{idx, c.Value})
+	}
+	if len(chunks) == 0 {
+		return "", time.Time{}
+	}
+	sort.Slice(chunks, func(i, j int) bool { return chunks[i].idx < chunks[j].idx })
+	var joined strings.Builder
+	for _, c := range chunks {
+		joined.WriteString(c.val)
+	}
+	raw := strings.TrimPrefix(joined.String(), "base64-")
+	raw = strings.TrimPrefix(raw, "base64-")
+	pad := strings.Repeat("=", (4-len(raw)%4)%4)
+	decoded, err := base64.URLEncoding.DecodeString(raw + pad)
+	if err != nil {
+		decoded, err = base64.RawURLEncoding.DecodeString(raw)
+		if err != nil {
+			return "", time.Time{}
+		}
+	}
+	var sess struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+		ExpiresAt int64 `json:"expires_at"`
+	}
+	if json.Unmarshal(decoded, &sess) != nil {
+		return "", time.Time{}
+	}
+	if sess.ExpiresAt > 0 {
+		expires = time.Unix(sess.ExpiresAt, 0)
+	}
+	return sess.User.ID, expires
+}
 
 // Solver resolves one Turnstile challenge to a token.
 type Solver interface {
@@ -121,6 +206,10 @@ type Config struct {
 	// Solver resolves Turnstile when the site asks for it; nil means "fail
 	// with ErrCaptchaRequired instead of submitting blind".
 	Solver Solver
+	// Log receives one line per step, for the console's live log panel. It
+	// must never receive a credential; the flow only passes stage labels and
+	// short reasons.
+	Log func(stage, detail string)
 	// Mailbox waits for the verification mail; nil skips verification (the
 	// account works for the dashboard but the API stays locked).
 	Mailbox Mailbox
@@ -158,6 +247,13 @@ func (c Config) timezone() string {
 		return defaultTZ
 	}
 	return c.Timezone
+}
+
+// step reports one stage to the logger (nil-safe).
+func (c Config) step(stage, detail string) {
+	if c.Log != nil {
+		c.Log(stage, detail)
+	}
 }
 
 func (c Config) label() string {
@@ -238,6 +334,7 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	if c.Password == "" {
 		return Result{}, errors.New("密码不能为空")
 	}
+	f.cfg.step("打开注册页", "")
 	page, err := f.loadSignupPage(ctx)
 	if err != nil {
 		return Result{}, err
@@ -252,13 +349,16 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	if fingerprint == "" {
 		fingerprint = newUUID()
 	}
+	f.cfg.step("解析注册表单", "action="+form.actionID[:12])
 
 	needCaptcha, err := f.precheck(ctx, fingerprint)
 	if err != nil {
 		return Result{}, err
 	}
+	f.cfg.step("预检", map[bool]string{true: "需要验证码", false: "免验证码"}[needCaptcha])
 	token := ""
 	if needCaptcha {
+		f.cfg.step("解 Turnstile", "captcha-run")
 		if f.cfg.Solver == nil {
 			return Result{}, ErrCaptchaRequired
 		}
@@ -271,6 +371,7 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 		}
 	}
 
+	f.cfg.step("提交注册", email)
 	if err := f.submitSignup(ctx, form, signupFields{
 		Email:       email,
 		Password:    c.Password,
@@ -285,24 +386,104 @@ func (f *Flow) Run(ctx context.Context, c Credentials) (Result, error) {
 	// paid routes answer.
 	if err := f.enableFreeModels(ctx); err == nil {
 		res.FreeModelsEnabled = true
+	} else {
+		f.cfg.step("免费模型", err.Error())
+		// Not fatal: free routes are a bonus on top of a working key. The
+		// reason travels with the result so the console can say why.
+		res.FreeModelsError = err.Error()
+	}
+
+	// The site decides at signup whether a new address is usable for API
+	// access at all. Probing here turns that into an actionable reason instead
+	// of a bare 401 on the key call, and it tells a revoked key apart from a
+	// key this flow built wrong.
+	if err := f.probeAPIKey(ctx); err != nil {
+		return Result{}, err
 	}
 
 	if f.cfg.Mailbox != nil {
+		f.cfg.step("等验证邮件", "最长 "+f.cfg.mailTimeout().String())
 		if link, err := f.waitVerificationLink(ctx, email); err == nil && link != "" {
 			res.VerifiedEmail = f.verifyEmail(ctx, link) == nil
+			if res.VerifiedEmail {
+				f.cfg.step("邮箱验证", "成功")
+			} else {
+				f.cfg.step("邮箱验证", "链接无效")
+			}
+		} else {
+			// Not a failure: the account exists and its key is real. The
+			// mail simply arrived after the patience budget (measured ≈9m).
+			res.MailTimedOut = true
+			f.cfg.step("等验证邮件", "超时，可在任务里补验证")
 		}
 	}
 
+	f.cfg.step("创建 API Key", "")
 	key, err := f.createAPIKey(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	res.APIKey = key
+	f.cfg.step("完成", "key="+MaskKey(key))
 	for _, ck := range f.jar.Cookies(mustURL(f.cfg.base())) {
-		res.Cookies = append(res.Cookies, NamedCookie{Name: ck.Name, Value: ck.Value})
+		res.Cookies = append(res.Cookies, NamedCookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path,
+			Expires: ck.Expires, Secure: ck.Secure, HTTPOnly: ck.HttpOnly, SameSite: int(ck.SameSite)})
 	}
+	res.UserIDClaim, res.SessionExpiresAt = SessionIdentity(res.Cookies)
 	sort.Slice(res.Cookies, func(i, j int) bool { return res.Cookies[i].Name < res.Cookies[j].Name })
 	return res, nil
+}
+
+// Reverify completes the e-mail confirmation of an account that is already
+// registered, using its stored session instead of signing up again.
+//
+// It exists because the confirmation mail is slow and uneven (measured: about
+// nine minutes on one egress, against a signup response that already succeeded).
+// Without this, a mail that arrived after the wait would strand a perfectly good
+// account: its key answers /v1/models but refuses chat with
+// "email_verification_required" until the link is opened.
+//
+// since limits the mailbox read to mails received after that instant, so an
+// older confirmation link from a previous attempt is never reused.
+func (f *Flow) Reverify(ctx context.Context, email string, session []NamedCookie, since time.Time) (string, error) {
+	if f.cfg.Mailbox == nil {
+		return "", errors.New("没有接码页，无法补验证")
+	}
+	if len(session) > 0 {
+		f.SeedCookies(session)
+	}
+	link, err := f.verificationLinkSince(ctx, since)
+	if err != nil {
+		return "", err
+	}
+	if err := f.verifyEmail(ctx, link); err != nil {
+		return "", err
+	}
+	return link, nil
+}
+
+// SeedCookies restores a stored session into this flow's jar, so a follow-up
+// request is made as the same browser rather than as a stranger.
+func (f *Flow) SeedCookies(cookies []NamedCookie) {
+	base := mustURL(f.cfg.base())
+	out := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		ck := &http.Cookie{
+			Name: c.Name, Value: c.Value, Path: c.Path, Domain: c.Domain,
+			Expires: c.Expires, Secure: c.Secure, HttpOnly: c.HTTPOnly,
+			SameSite: http.SameSite(c.SameSite),
+		}
+		if ck.Path == "" {
+			ck.Path = "/"
+		}
+		if ck.Domain == "" {
+			ck.Domain = base.Hostname()
+		}
+		out = append(out, ck)
+	}
+	if len(out) > 0 {
+		f.jar.SetCookies(base, out)
+	}
 }
 
 // AccountID is the stable, credential-free identity of a mailbox: two runs of
@@ -472,6 +653,14 @@ func (f *Flow) submitSignup(ctx context.Context, form signupForm, in signupField
 // server compares it against its own copy, so it is sent verbatim.
 const shownText = "Token Harbor may keep the requests and responses you send through free models and use them for service diagnostics, safety, optimization, and to evaluate and improve models and products. Our staff may read free-route conversations and may use third-party AI tools to help analyze them, and the providers that serve free models may use them under their own terms, including to train their own models."
 
+// enableFreeModels turns on the per-account free-model routes.
+//
+// It is best-effort by design: the switch is a consent flow gated behind the
+// dashboard's own client-side state ("reload_and_retry" until that client has
+// posted), so a pure-HTTP flow can be refused where the same account would
+// succeed in a browser. A refusal therefore costs only the free routes — the
+// key itself works, and paid models answer — so the caller records the outcome
+// instead of failing the registration.
 func (f *Flow) enableFreeModels(ctx context.Context) error {
 	body, _ := json.Marshal(map[string]any{"free_models_enabled": true, "shown_text": shownText})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.cfg.base()+"/api/me/privacy", bytes.NewReader(body))
@@ -488,11 +677,35 @@ func (f *Flow) enableFreeModels(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if resp.StatusCode != http.StatusOK {
+		// The documented refusal is {"ok":false,"error":"reload_and_retry"};
+		// keep the sentence short and quotable in the console.
+		if msg := jsonError(raw); msg != "" {
+			return fmt.Errorf("开启免模型费失败: %s", msg)
+		}
 		return fmt.Errorf("开启免模型费失败: HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// jsonError pulls the short error field out of an API response.
+func jsonError(raw []byte) string {
+	var out struct {
+		Error any `json:"error"`
+	}
+	if json.Unmarshal(raw, &out) != nil || out.Error == nil {
+		return ""
+	}
+	switch v := out.Error.(type) {
+	case string:
+		return v
+	case map[string]any:
+		if m, ok := v["message"].(string); ok {
+			return m
+		}
+	}
+	return ""
 }
 
 // ---- step 5: e-mail verification -----------------------------------------------
@@ -502,9 +715,16 @@ var verifyLinkRe = regexp.MustCompile(`https://tokenharbor\.ai/verify-email\?tok
 // waitVerificationLink polls the mailbox for the newest verification link,
 // ignoring mails that predate this run.
 func (f *Flow) waitVerificationLink(ctx context.Context, email string) (string, error) {
+	// Tolerate a couple of minutes of clock skew between us and the mailbox.
+	return f.verificationLinkSince(ctx, time.Now().Add(-2*time.Minute))
+}
+
+// verificationLinkSince polls the mailbox for a confirmation link in mail
+// received after `since`, for at most the configured mail timeout.
+func (f *Flow) verificationLinkSince(ctx context.Context, since time.Time) (string, error) {
 	deadline := time.Now().Add(f.cfg.mailTimeout())
 	poll := f.cfg.pollEvery()
-	started := time.Now().Add(-2 * time.Minute) // tolerate clock skew
+	started := since
 	for {
 		msgs, err := f.cfg.Mailbox.Messages(ctx)
 		if err == nil {
@@ -551,9 +771,98 @@ func (f *Flow) verifyEmail(ctx context.Context, link string) error {
 	return nil
 }
 
+// ErrKeyRejected means the account was created but cannot be used: the site
+// answers "Sign in first" to the session's own next request. Observed cause is
+// the network-or-device signup cap it applies to fresh accounts; the address is
+// usually reusable later or from a different egress.
+var ErrKeyRejected = errors.New("账号被判为不可用（Key 无效或已吊销）")
+
+// probeAPIKey calls /v1/models with the session's own key fetch. The dashboard
+// key is created later, so the probe uses the account's session cookie against
+// the key list endpoint, which 401s only when the session itself is refused.
+func (f *Flow) probeAPIKey(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.cfg.base()+"/api/keys", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("referer", f.cfg.base()+"/dashboard/api-keys")
+	req.Header.Set("user-agent", userAgent)
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrKeyRejected, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// The site signs a signup up but answers "Sign in first" for the very
+		// next call. That is its network-or-device signup cap, not a bad
+		// password: the same address registers fine later or from another
+		// egress (the page body carries {"error":"account_cap"}).
+		return fmt.Errorf("%w: 注册后会话立即失效，命中服务端注册限流（account_cap），换出口或稍后重试", ErrKeyRejected)
+	default:
+		return fmt.Errorf("%w: HTTP %d", ErrKeyRejected, resp.StatusCode)
+	}
+}
+
 // ---- step 6: the API key -------------------------------------------------------
 
-var apiKeyRe = regexp.MustCompile(`thk_[A-Za-z0-9_]{20,}`)
+// apiKeyRe finds a key in a response body. The quantifier must run to the
+// END of the token, not stop at a lower bound: Go's regexp is leftmost-FIRST,
+// so `thk_[A-Za-z0-9_]{20,}` happily returns the first 24 characters of a
+// 51-character key. That bug produced 38-character "keys" that 401 every time
+// while the account itself was fine, so the shape is pinned here and the
+// length is checked by LookupKey before a key is ever trusted.
+var apiKeyRe = regexp.MustCompile(`thk_live_[A-Za-z0-9_-]{8,120}`)
+
+// MinAPIKeyLen is the shortest thk_live_ key the site issues; a shorter
+// match means the body was parsed wrong, not that the key is short.
+const MinAPIKeyLen = 45
+
+// LookupKey extracts the key from a create-key response body. The JSON field
+// is preferred; a rendered page is only a fallback, and a match shorter than
+// MinAPIKeyLen is a parsing failure rather than a key.
+func LookupKey(raw []byte) (string, error) {
+	var body struct {
+		Key    string `json:"key"`
+		Token  string `json:"token"`
+		APIKey string `json:"apiKey"`
+	}
+	if json.Unmarshal(raw, &body) == nil {
+		for _, cand := range []string{body.Key, body.Token, body.APIKey} {
+			if k := normalizeKey(cand); k != "" {
+				return k, nil
+			}
+		}
+	}
+	if k := normalizeKey(apiKeyRe.FindString(string(raw))); k != "" {
+		return k, nil
+	}
+	if apiKeyRe.Match(raw) {
+		return "", fmt.Errorf("创建 API Key 的响应里 Key 只有 %d 位（应 ≥%d），已拒绝使用截断值",
+			len(apiKeyRe.FindString(string(raw))), MinAPIKeyLen)
+	}
+	return "", errors.New("创建 API Key 成功但响应里没有 Key（可能已是旧页面结构）")
+}
+
+// normalizeKey trims quoting/trailing punctuation and rejects short values.
+func normalizeKey(s string) string {
+	s = strings.TrimSpace(strings.Trim(s, `"',`))
+	if !strings.HasPrefix(s, "thk_live_") || len(s) < MinAPIKeyLen {
+		return ""
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return ""
+		}
+	}
+	return s
+}
 
 func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 	body, _ := json.Marshal(map[string]string{"label": f.cfg.label()})
@@ -572,20 +881,26 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("%w: 创建 API Key 返回 HTTP %d（该邮箱的注册不被接受，常见于重复注册）", ErrKeyRejected, resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("创建 API Key 失败: HTTP %d", resp.StatusCode)
 	}
-	// The key may come back as a JSON field or only in the rendered page; both
-	// shapes are searched rather than assumed.
-	if key := apiKeyRe.FindString(string(raw)); key != "" {
-		return key, nil
-	}
-	return "", errors.New("创建 API Key 成功但响应里没有 Key（可能已是旧页面结构）")
+	return LookupKey(raw)
 }
 
 // ---- helpers -------------------------------------------------------------------
 
 const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+
+// MaskKey shows a key's prefix and last four characters.
+func MaskKey(k string) string {
+	if len(k) <= 12 {
+		return "••••"
+	}
+	return k[:14] + "…" + k[len(k)-4:]
+}
 
 func mustURL(raw string) *url.URL {
 	u, err := url.Parse(raw)

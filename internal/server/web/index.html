@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script>
 <script src="/assets/perch.js" defer></script>
+<script src="/assets/tokenharbor.js" defer></script>
 </head>
 <body>
 <div id="auth" class="auth hidden">
@@ -39,6 +40,10 @@
       <a data-page="pautosignup" data-pool-nav="perch" hidden>自动补号</a>
       <a data-page="pkeys" data-pool-nav="perch" hidden>Perch 密钥</a>
       <a data-page="psettings" data-pool-nav="perch" hidden>Perch 设置</a>
+      <div class="nav-sep" data-pool-nav="tokenharbor" hidden>TokenHarbor</div>
+      <a data-page="thoverview" data-pool-nav="tokenharbor" hidden>TokenHarbor 概览</a>
+      <a data-page="thregister" data-pool-nav="tokenharbor" hidden>TokenHarbor 注册机</a>
+      <a data-page="thsettings" data-pool-nav="tokenharbor" hidden>TokenHarbor 设置</a>
     </nav>
     <div class="side-foot">
       <button class="btn ghost small" id="btn-password">修改密码</button>
@@ -52,6 +57,7 @@
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
+      <button class="pool-tab" data-pool="tokenharbor" role="tab">TokenHarbor 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
     </div>
@@ -272,6 +278,97 @@
             <span id="pc-auto-register-message" class="muted small" role="status"></span></div>
           <p class="hint">先批量注册、后补号：注册完成的候选停在「已注册并激活」，补号时直接入池、不会再注册一次，方便你先养一段时间。</p>
           <div class="table-wrap"><table class="table"><thead><tr><th class="pick"><input type="checkbox" id="pc-auto-pick-all" aria-label="全选待注册"></th><th>GitHub 账号</th><th>状态</th><th>代理</th><th>详情</th><th>操作</th></tr></thead><tbody id="pc-auto-rows"></tbody></table></div>
+        </section>
+      </div>
+    </section>
+
+
+    <section id="page-thoverview" class="page hidden">
+      <header class="page-head"><h1>TokenHarbor 账号池</h1>
+        <div class="actions">
+          <button class="btn" id="btn-th-refresh">刷新</button>
+          <button class="btn primary" id="btn-th-goregister">注册账号</button>
+        </div>
+      </header>
+      <div id="th-alert" class="panel hidden"></div>
+      <div id="th-cards" class="cards"></div>
+      <div class="panel">
+        <h2>这个池怎么用</h2>
+        <p class="muted">Token Harbor 是 OpenAI 兼容网关（<code>https://tokenharbor.ai/v1</code>），账号凭证就是注册机在建号时生成的
+          <code>thk_live_…</code> Key。API 按<b>出口地区</b>鉴权：中国大陆直连返回
+          <code>403 region_blocked</code>，所以每个账号都要配代理，最好一个号一个出口。</p>
+        <p class="muted small">免费模型（<code>…:free</code>）每个账号每天刷新额度；付费模型按 token 计费，余额不足时返回 402。</p>
+      </div>
+    </section>
+
+    <section id="page-thregister" class="page hidden">
+      <header class="page-head"><h1>TokenHarbor 注册机</h1><div class="actions"><button type="button" class="btn" id="th-reg-refresh">刷新任务</button></div></header>
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>新建注册任务</h2>
+          <form id="th-registration-form" autocomplete="off">
+            <label for="th-register-accounts">iCloud 邮箱</label>
+            <textarea id="th-register-accounts" class="pc-secret-input" rows="7" autocomplete="off" spellcheck="false" placeholder="邮箱----密码----接码页（每行一个，密码留空则自动生成）"></textarea>
+            <span class="hint">每行 <code>邮箱----密码----https://icloud.mida.vip/messages/…?token=…</code>。密码可留空，会生成 16 位随机密码。</span>
+            <label for="th-register-proxies">代理池（可选）</label>
+            <textarea id="th-register-proxies" class="pc-secret-input" rows="5" autocomplete="off" spellcheck="false" placeholder="每行一个代理：http://user:pass@host:port 或 socks5://user:pass@host:port"></textarea>
+            <span class="hint">按账号顺序轮流分配，一个出口只放一个号；留空则用设置里的默认代理，再没有就直连（大陆直连注册会被地区拦）。</span>
+            <label for="th-register-group">入池分组</label>
+            <input id="th-register-group" value="tokenharbor" autocomplete="off">
+            <label class="check"><input type="checkbox" id="th-register-auto" checked> 注册成功后自动入池</label>
+            <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
+            <label for="th-register-conc">本次并发</label>
+            <input id="th-register-conc" type="number" min="1" max="10" step="1" value="2">
+            <span class="hint">同时注册几个号；一次提交内超出的排队，不会丢。默认值来自设置。</span>
+            <button type="submit" class="btn primary" id="th-register-submit">启动注册</button>
+            <p id="th-register-error" class="error" role="alert"></p>
+          </form>
+        </section>
+        <section class="panel pc-registration-tasks">
+          <div class="head-row"><h2>注册任务</h2><span id="th-register-poll-error" class="error" role="status"></span></div>
+          <div id="th-register-jobs" class="pc-register-jobs"><p class="muted">暂无任务。</p></div>
+          <div id="th-register-detail" class="hidden">
+            <div class="head-row pc-register-detail-head"><h2 id="th-register-job-title">任务详情</h2><span id="th-register-job-status" class="muted"></span></div>
+            <div class="table-wrap"><table class="table"><thead><tr><th>邮箱</th><th>状态</th><th>代理</th><th>Key</th><th>详情</th><th>操作</th></tr></thead><tbody id="th-register-rows"></tbody></table></div>
+            <p id="th-register-import-error" class="error" role="alert"></p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-thsettings" class="page hidden">
+      <header class="page-head"><h1>TokenHarbor 设置</h1></header>
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <form id="th-settings-form" autocomplete="off">
+            <label for="th-set-base">API 地址</label>
+            <input id="th-set-base" placeholder="https://tokenharbor.ai/v1" autocomplete="off">
+            <label for="th-set-proxy">默认注册代理</label>
+            <input id="th-set-proxy" type="password" autocomplete="off" placeholder="http://user:pass@host:port">
+            <span class="hint">任务行没指定代理时用它；留空则直连。</span>
+            <label for="th-set-captcha">captcha-run API Key</label>
+            <input id="th-set-captcha" type="password" autocomplete="off" placeholder="留空表示不修改">
+            <span class="hint" id="th-set-captcha-hint">只写不读：页面不会回显已保存的 Key。</span>
+            <label for="th-set-label">新 Key 标签</label>
+            <input id="th-set-label" autocomplete="off" placeholder="pool">
+            <label for="th-set-group">默认入池分组</label>
+            <input id="th-set-group" autocomplete="off" placeholder="tokenharbor">
+            <label for="th-set-conc">注册并发</label>
+            <input id="th-set-conc" type="number" min="1" max="10" step="1">
+            <label for="th-set-mail">等验证邮件上限（秒）</label>
+            <input id="th-set-mail" type="number" min="30" max="1800" step="30">
+            <button type="submit" class="btn primary" id="th-set-save">保存设置</button>
+            <p id="th-set-message" class="muted small" role="status"></p>
+          </form>
+        </section>
+        <section class="panel">
+          <h2>关于指纹与封号</h2>
+          <ul class="muted small">
+            <li>注册全程是纯 HTTP，不启动浏览器：没有 canvas/WebGL/字体枚举这类被动指纹，服务端看到的只有 UA、时区和出口 IP。</li>
+            <li>同一代理上的多个账号会被按 IP 聚合，所以默认按号轮流分配代理，一个出口只放一个号。</li>
+            <li>Turnstile 由 captcha-run 代解，token 约 2 分钟有效，解完立刻提交。</li>
+            <li>同一邮箱不要重复注册：服务端会把新 Key 判定为 <code>invalid_api_key</code>。</li>
+          </ul>
         </section>
       </div>
     </section>
@@ -524,6 +621,18 @@
       </div>
     </section>
   </main>
+  <aside id="th-logbox" class="th-logbox hidden" aria-live="polite" aria-label="注册日志">
+    <header class="th-logbox-head">
+      <span>TokenHarbor 注册日志</span>
+      <span class="th-logbox-actions">
+        <button type="button" class="btn small ghost" id="th-log-pause">暂停</button>
+        <button type="button" class="btn small ghost" id="th-log-clear">清屏</button>
+        <button type="button" class="btn small ghost" id="th-log-close" aria-label="收起">收起</button>
+      </span>
+    </header>
+    <div id="th-log-body" class="th-logbox-body"><p class="muted small">暂无日志。</p></div>
+    <footer class="th-logbox-foot"><span id="th-log-status" class="muted small">空闲</span><span id="th-log-count" class="muted small"></span></footer>
+  </aside>
 </div>
 
 <dialog id="modal"><form method="dialog" id="modal-form"><h3 id="modal-title"></h3><div id="modal-body"></div><p id="modal-error" class="error"></p><div class="modal-actions" id="modal-actions"></div></form></dialog>

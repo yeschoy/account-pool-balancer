@@ -40,6 +40,10 @@ const (
 	Queued     Status = "queued"
 	Running    Status = "running"
 	Registered Status = "registered"
+	// Unverified is a registered account whose confirmation mail has not been
+	// used yet. Its key answers /v1/models but refuses chat with
+	// "email_verification_required", so it must not enter the pool as usable.
+	Unverified Status = "unverified"
 	Imported   Status = "imported"
 	Failed     Status = "failed"
 	Uncertain  Status = "uncertain"
@@ -69,6 +73,8 @@ type Row struct {
 	APIKey   string   `json:"apiKey,omitempty"`
 	Account  string   `json:"accountId,omitempty"`
 	Cookies  []Cookie `json:"cookies,omitempty"`
+	// Group is the pool group the row joins when it is imported.
+	Group string `json:"group,omitempty"`
 	// Verified records that the confirmation mail was used; the key works
 	// without it, but the site keeps asking for it.
 	Verified   bool      `json:"verified,omitempty"`
@@ -89,6 +95,7 @@ type Summary struct {
 	Status     Status    `json:"status"`
 	Detail     string    `json:"detail,omitempty"`
 	Proxy      string    `json:"proxy"`
+	Group      string    `json:"group,omitempty"`
 	KeyMasked  string    `json:"keyMasked,omitempty"`
 	HasMailbox bool      `json:"hasMailbox"`
 	Verified   bool      `json:"verified"`
@@ -113,6 +120,7 @@ type diskRow struct {
 	APIKey     string    `json:"apiKey,omitempty"`
 	Account    string    `json:"accountId,omitempty"`
 	Cookies    []Cookie  `json:"cookies,omitempty"`
+	Group      string    `json:"group,omitempty"`
 	Verified   bool      `json:"verified,omitempty"`
 	FreeModels bool      `json:"freeModels,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -120,10 +128,24 @@ type diskRow struct {
 }
 
 func (r Row) disk() diskRow {
-	return diskRow(r)
+	return diskRow{
+		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Password: r.Password,
+		MailboxURL: r.MailboxURL, ProxyURL: r.ProxyURL, Status: r.Status,
+		Detail: r.Detail, APIKey: r.APIKey, Account: r.Account,
+		Cookies: r.Cookies, Group: r.Group, Verified: r.Verified,
+		FreeModels: r.FreeModels, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}
 }
 
-func (d diskRow) row() Row { return Row(d) }
+func (d diskRow) row() Row {
+	return Row{
+		ID: d.ID, Attempt: d.Attempt, Email: d.Email, Password: d.Password,
+		MailboxURL: d.MailboxURL, ProxyURL: d.ProxyURL, Status: d.Status,
+		Detail: d.Detail, APIKey: d.APIKey, Account: d.Account,
+		Cookies: d.Cookies, Group: d.Group, Verified: d.Verified,
+		FreeModels: d.FreeModels, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+	}
+}
 
 type diskData struct {
 	Version int       `json:"version"`
@@ -211,7 +233,7 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 
 func validStatus(s Status) bool {
 	switch s {
-	case Queued, Running, Registered, Imported, Failed, Uncertain:
+	case Queued, Running, Registered, Unverified, Imported, Failed, Uncertain:
 		return true
 	}
 	return false
@@ -358,7 +380,7 @@ func (s *Store) Claim(id string) (Row, error) {
 func (s *Store) Retry(id string) (Row, error) {
 	return s.Update(id, func(r *Row) error {
 		switch r.Status {
-		case Failed, Uncertain, Registered:
+		case Failed, Uncertain, Registered, Unverified:
 		default:
 			return ErrInvalid
 		}
@@ -408,6 +430,7 @@ func SummaryOf(r Row) Summary {
 	return Summary{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Status: r.Status, Detail: r.Detail,
 		Proxy:      ProxyLabel(r.ProxyURL),
+		Group:      r.Group,
 		KeyMasked:  MaskKey(r.APIKey),
 		HasMailbox: r.MailboxURL != "",
 		Verified:   r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
