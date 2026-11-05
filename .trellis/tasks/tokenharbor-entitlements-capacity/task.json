@@ -1,0 +1,8 @@
+{
+  "name": "TokenHarbor 套餐模型额度与高吞吐",
+  "status": "planning",
+  "base_commit": "0183d7d",
+  "execution": "direct",
+  "authorization": "用户要求实现六项改进；按项目复杂任务约定使用Trellis，直接执行，不启用子代理、不对真实上游负载测试、不部署",
+  "artifacts": ["prd.md", "research.md", "design.md", "implement.md", "validation.md"]
+}
