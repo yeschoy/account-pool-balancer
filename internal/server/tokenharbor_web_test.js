@@ -259,7 +259,57 @@ async function testRowGuardAndSelectionRetention() {
   assert.equal(e.node('#th-batch-register').disabled, false);
 }
 
+async function testIndependentProxyEditing() {
+  const calls = [];
+  const e = environment(async (method, url, body) => { calls.push({ method, url, body }); });
+  e.context.toast = () => {};
+  let dialog;
+  e.context.modal = async (options) => { dialog = options; return 'cancel'; };
+  const idle = ['saved', 'registered', 'unverified', 'failed', 'uncertain'];
+  const job = { id: 'job', rows: [...idle, 'queued', 'running'].map((status) => ({ id: status, status, email: '<mock>@test', proxy: 'http://mock:8080' })) };
+  e.context.renderTHJob(job);
+  const html = e.node('#th-register-rows').innerHTML;
+  for (const id of idle) assert.match(html, new RegExp('th-row-proxy[^>]*data-id="' + id + '"'));
+  for (const id of ['queued', 'running']) {
+    assert.doesNotMatch(html, new RegExp('th-row-proxy[^>]*data-id="' + id + '"'));
+    await assert.rejects(e.context.thRowProxy(id), /不能修改代理/);
+  }
+  await e.context.thRowProxy('registered');
+  assert.equal(calls.length, 0, 'cancel never submits proxy changes');
+  assert.match(dialog.body, /不影响已入池账号/);
+  assert.match(dialog.body, /&lt;mock&gt;/);
+  e.node('#th-new-proxy').value = '';
+  await assert.rejects(dialog.buttons[1].action(), /请填写代理/);
+  assert.equal(calls.length, 0, 'empty input cannot silently clear a proxy');
+  e.node('#th-new-proxy').value = ' socks5h://user:mock-only@127.0.0.1:1080 ';
+  await dialog.buttons[1].action();
+  assert.equal(calls[0].url, '/api/tokenharbor/registrations/registered/proxy');
+  assert.equal(calls[0].body.proxyUrl, 'socks5h://user:mock-only@127.0.0.1:1080');
+  e.node('#th-proxy-direct').checked = true;
+  await dialog.buttons[1].action();
+  assert.equal(calls[1].body.proxyUrl, '');
+  e.context.state.filter = 'imported';
+  e.context.renderTHJob({ id: 'job', rows: [{ id: 'imported', status: 'imported', accountId: 'pool', email: 'pool@mock.test' }] });
+  assert.match(e.node('#th-register-rows').innerHTML, /th-row-proxy/);
+  await e.context.thPoolProxy({ id: 'pool/safe', name: '<pool>', proxyUrl: 'http://masked:8080' });
+  assert.match(dialog.body, /不影响注册机原记录/);
+  assert.match(dialog.body, /&lt;pool&gt;/);
+  assert.match(dialog.body, /旧套餐\/周用量及会话绑定将失效/);
+  await dialog.buttons[1].action();
+  assert.equal(calls[2].url, '/api/accounts/pool%2Fsafe');
+  assert.equal(calls[2].body.clearProxy, true);
+  e.node('#th-proxy-direct').checked = false;
+  await dialog.buttons[1].action();
+  assert.equal(calls[3].body.clearProxy, false);
+  assert.equal(calls[3].body.proxyUrl, 'socks5h://user:mock-only@127.0.0.1:1080');
+  assert.ok(calls.every((c) => c.method === 'PUT'));
+  const app = fs.readFileSync(path.join(__dirname, 'web', 'app.js'), 'utf8');
+  assert.match(app, /\['th-proxy', '修改代理'\]/);
+  assert.match(app, /case 'th-proxy': await thPoolProxy\(a\)/);
+}
+
 (async () => {
+  await testIndependentProxyEditing();
   await testLogSingleFlightAndSequenceDedupe();
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();

@@ -124,7 +124,7 @@ function renderTHJob(job) {
     <td><input type="checkbox" class="th-row-select" data-id="${esc(r.id)}" aria-label="选择 ${esc(r.email)}" ${thState.selected.has(r.id) ? 'checked' : ''} ${thRowLocked(r.id) || ['queued', 'running'].includes(r.status) ? 'disabled' : ''}></td>
     <td>${esc(r.email)}</td>
     <td>${thLabel(r.status)}</td>
-    <td><span class="small">${esc(r.proxy || '直连')}</span> ${['saved', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
+    <td><span class="small">${esc(r.proxy || '直连')}</span> ${!['running', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
     <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
     <td>${thRowActions(r)}</td>
@@ -252,24 +252,45 @@ async function thSaveProxies(clear = false) {
   }
 }
 
-async function thRowProxy(id) {
-  const row = thState.rows.find((r) => r.id === id);
-  await modal({
-    title: '修改注册代理',
+async function thEditProxy({ title, name, currentProxy, hint, save }) {
+  return modal({
+    title,
     body: `<div class="form">
-      <p class="muted small">${esc(row ? row.email : id)}</p>
-      <label for="th-new-proxy">代理地址</label>
-      <input id="th-new-proxy" type="password" autocomplete="off" placeholder="http://用户:密码@主机:端口 或 socks5://…">
-      <label><input id="th-proxy-direct" type="checkbox"> 清除代理（直连）</label>
+      <p class="muted small">${esc(name)}</p>
+      <p class="small">当前代理：${esc(currentProxy || '直连')}（认证信息不回显）</p>
+      <p class="muted small">${esc(hint)} 代理失败不会自动直连；更换出口可能导致官网会话需要重新验证。</p>
+      <label for="th-new-proxy">新代理地址</label>
+      <input id="th-new-proxy" type="password" autocomplete="off" placeholder="http(s)://用户:密码@主机:端口 或 socks5(h)://…">
+      <label><input id="th-proxy-direct" type="checkbox"> 明确清除代理（直连）</label>
     </div>`,
     buttons: [{ label: '取消', value: 'cancel' }, { label: '保存', value: 'save', primary: true, action: async () => {
       const direct = $('#th-proxy-direct').checked;
       const proxy = $('#th-new-proxy').value.trim();
       if (!direct && !proxy) throw new Error('请填写代理地址，或勾选清除代理');
-      await api('PUT', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/proxy', { proxyUrl: direct ? '' : proxy });
+      await save(direct ? '' : proxy);
     } }],
   });
+}
+
+async function thRowProxy(id) {
+  const row = thState.rows.find((r) => r.id === id);
+  if (!row || ['running', 'queued'].includes(row.status)) throw new Error('当前账号正在执行任务，不能修改代理');
+  const choice = await thEditProxy({
+    title: '修改注册机账号代理', name: row.email, currentProxy: row.proxy,
+    hint: '仅修改此注册记录，不影响已入池账号。新建入池账号时默认沿用这里的代理；修改后需重新检测注册机套餐。',
+    save: (proxyUrl) => api('PUT', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/proxy', { proxyUrl }),
+  });
+  if (choice === 'save') toast('注册机代理已保存，号池代理不变');
   if (currentPage === 'thregister') loadTHRegistrations();
+}
+
+async function thPoolProxy(account) {
+  const choice = await thEditProxy({
+    title: '修改号池账号代理', name: account.name || account.id, currentProxy: account.proxyUrl,
+    hint: '仅修改此号池账号，不影响注册机原记录。旧套餐/周用量及会话绑定将失效，后台按新代理重新检测，检测通过前暂停调度。',
+    save: (proxyUrl) => api('PUT', '/api/accounts/' + encodeURIComponent(account.id), { proxyUrl, clearProxy: proxyUrl === '' }),
+  });
+  if (choice === 'save') toast('号池代理已保存，注册机代理不变');
 }
 
 async function thRowAction(kind, id) {

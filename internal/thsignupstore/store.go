@@ -432,13 +432,23 @@ func (s *Store) Update(id string, fn func(*Row) error) (Row, error) {
 	return Row{}, ErrNotFound
 }
 
-// SetProxy records a new egress before the attempt starts.
+// SetProxy changes only the registration egress. Pool accounts keep their own
+// proxy after admission; queued/running work may already hold the old route.
 func (s *Store) SetProxy(id, proxyURL string) (Row, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if err := ValidateProxy(proxyURL); err != nil {
+		return Row{}, err
+	}
 	return s.Update(id, func(r *Row) error {
-		if r.Status != Queued && r.Status != Saved {
+		switch r.Status {
+		case Saved, Registered, Unverified, Imported, Failed, Uncertain:
+		default:
 			return ErrInvalid
 		}
-		r.ProxyURL = strings.TrimSpace(proxyURL)
+		if !r.ProxyBound || r.ProxyURL != proxyURL {
+			r.Subscription = thregister.Subscription{}
+		}
+		r.ProxyURL = proxyURL
 		r.ProxyBound = true
 		return nil
 	})

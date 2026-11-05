@@ -68,6 +68,10 @@ func (s *Server) apiTHCheckout(w http.ResponseWriter, r *http.Request) {
 	defer flow.Close()
 	original := row.Status
 	row, err = store.Update(id, func(rw *thsignupstore.Row) error {
+		current := s.cfg.Get().TokenHarbor
+		if rw.UpdatedAt != row.UpdatedAt || current.BaseURL != cfg.BaseURL || rw.Egress(current.ProxyURL) != proxy {
+			return errors.New("创建支付链接前账号或出口变化，请重新操作")
+		}
 		if rw.Status == thsignupstore.Running || rw.Status == thsignupstore.Queued || len(rw.Cookies) == 0 {
 			return errors.New("需要已保存且当前未执行任务的账号会话")
 		}

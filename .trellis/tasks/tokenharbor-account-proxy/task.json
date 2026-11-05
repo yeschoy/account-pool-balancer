@@ -1,0 +1,10 @@
+{
+  "name": "TokenHarbor 注册机与号池逐账号代理修改",
+  "status": "completed",
+  "completed_scope": "本地实现、暂存区独立普通/race/vet/build及真实本地Mock浏览器验收；未推送/部署",
+  "validation": "validation.md",
+  "execution": "direct",
+  "base_commit": "e518141",
+  "authorization": "用户要求新增逐账号代理修改功能；按项目复杂任务约定保留 Trellis 规划。直接执行，不启用子代理，不部署、不修改真实账号代理。",
+  "artifacts": ["prd.md", "design.md", "implement.md", "validation.md"]
+}

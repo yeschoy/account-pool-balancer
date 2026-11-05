@@ -28,6 +28,7 @@ import (
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/rules"
 	"account-pool-balancer/internal/stats"
+	"account-pool-balancer/internal/thsignupstore"
 )
 
 //go:embed web
@@ -490,6 +491,7 @@ func (s *Server) apiCreateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiUpdateAccount(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	id := r.PathValue("id")
 	var in accountInput
 	if err := readBody(r, &in); err != nil {
@@ -500,6 +502,9 @@ func (s *Server) apiUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		for i := range c.Accounts {
 			if c.Accounts[i].ID == id {
 				in.apply(&c.Accounts[i])
+				if c.Accounts[i].Provider == config.ProviderTokenHarbor && in.ProxyURL != nil && !in.ClearProxy {
+					return thsignupstore.ValidateProxy(strings.TrimSpace(*in.ProxyURL))
+				}
 				return nil
 			}
 		}

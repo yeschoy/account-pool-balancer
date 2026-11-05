@@ -612,7 +612,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -637,6 +637,7 @@ async function accountAction(a, act) {
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
       case 'reauth': return deviceAuth({ accountId: a.id });
+      case 'th-proxy': await thPoolProxy(a); break;
       case 'th-return': return await thReturnToRegistration(a.id, a.name);
       case 'toggle': await api('PUT', `/api/accounts/${a.id}`, { enabled: !a.enabled }); break;
       case 'delete':
@@ -671,7 +672,8 @@ function accountForm(a) {
     <label>权重</label><input id="f-weight" type="number" min="1" max="100" value="${v('weight', 1)}">
     <label>优先级</label><input id="f-prio" type="number" min="1" max="100" value="${v('priority', 50)}">
     <span class="hint">数字越小越优先，同优先级内按策略排序</span>
-    <label>出站代理</label><input id="f-proxy" placeholder="${a && a.hasProxy ? esc(a.proxyUrl) + '（留空不变）' : 'http:// 或 socks5://（可选）'}">
+    <label>出站代理</label><input id="f-proxy" ${pool === 'tokenharbor' ? 'type="password" autocomplete="off"' : ''} placeholder="${a && a.hasProxy ? esc(a.proxyUrl) + '（留空不变）' : 'http:// 或 socks5://（可选）'}">
+    ${pool === 'tokenharbor' ? '<span></span><span class="hint">号池与注册机代理独立设置，此处修改不影响原注册记录；新建入池时默认沿用注册代理。换出口后旧套餐/周用量失效，重新检测通过前暂停调度。</span>' : ''}
   ${pool === 'opencode-go' ? '<span></span><span class="hint">支持 HTTP/HTTPS、SOCKS5/SOCKS5H 的 IPv6 代理，例如 socks5h://[2001:db8::10]:1080（示例地址须替换）。IPv6 主机须带方括号；代理入口地址不代表它的实际出口。</span>' : ''}
     ${a && a.hasProxy ? '<span></span><label class="check"><input type="checkbox" id="f-clear-proxy">移除代理（直连）</label>' : ''}
     ${pool === 'opencode-go' ? `<label>预期固定出口 IP</label><input id="f-egress-ip" value="${v('egressIp')}" placeholder="IPv4/IPv6，不带方括号；可共享同一固定 IP"><span class="hint">先在 Go 设置配置 IP 校验 URL。留空仅绑定出口，不宣称 IP 已固定；设置后校验失败会阻止推理及额度/目录查询。</span>` : ''}

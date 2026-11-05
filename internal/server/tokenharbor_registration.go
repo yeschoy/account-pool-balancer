@@ -704,6 +704,10 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated, err := store.Update(id, func(rw *thsignupstore.Row) error {
+		current := s.cfg.Get().TokenHarbor
+		if rw.UpdatedAt != row.UpdatedAt || current.BaseURL != cfg.BaseURL || rw.Egress(current.ProxyURL) != proxy {
+			return errors.New("补验证期间账号或出口变化，请重新检测验证状态")
+		}
 		thSaveResult(rw, thregister.Result{APIKey: rw.APIKey, VerifiedEmail: true,
 			FreeModelsEnabled: rw.FreeModels, Cookies: flow.Session()})
 		if rw.Status == thsignupstore.Unverified {

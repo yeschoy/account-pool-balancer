@@ -24,9 +24,12 @@ func (s *Server) fetchTHObservation(ctx context.Context, cfg *config.Config, a c
 	if err != nil {
 		return nil, errors.New("无唯一原注册会话或Key来源不匹配，套餐未知")
 	}
-	if !row.Verified || row.Egress(cfg.TokenHarbor.ProxyURL) != a.ProxyURL {
-		return nil, errors.New("邮箱未验证或号池出口与原注册绑定不同")
+	if !row.Verified {
+		return nil, errors.New("原注册账号邮箱未验证")
 	}
+	// Registration supplies the uniquely linked session, not the pool egress.
+	// After admission each side owns its route; observe permissions through the
+	// same account proxy as inference, with the usual source/late-write guards.
 	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.TokenHarbor.BaseURL), ProxyURL: a.ProxyURL, RequestTimeout: 40 * time.Second})
 	if err != nil {
 		return nil, errors.New("账号固定代理无效")
