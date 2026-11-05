@@ -46,3 +46,15 @@ func TestLookupKeyIgnoresSurroundingPunctuation(t *testing.T) {
 		t.Fatalf("punctuated value: got %q (%v)", got, err)
 	}
 }
+
+// The live site answers {"key":{…metadata…},"plaintext":"thk_live_…"}. Reading
+// only the key object parsed fine and then failed the length check, so the
+// secret sat in the response while the flow reported "no key".
+func TestLookupKeyLiveShape(t *testing.T) {
+	body := []byte(`{"key":{"id":"3b96a128","label":"pool","prefix":"thk_live_","last4":"WGWr"},` +
+		`"plaintext":"` + realKey + `"}`)
+	got, err := LookupKey(body)
+	if err != nil || got != realKey {
+		t.Fatalf("want the plaintext key, got %q (%v)", got, err)
+	}
+}

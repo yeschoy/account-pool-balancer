@@ -944,3 +944,136 @@ func (c Config) pollEvery() time.Duration {
 	}
 	return c.PollEvery
 }
+
+// ---- key management on an existing account ------------------------------------
+
+// ExistingKey is one key the dashboard lists for an account. The value is not
+// available here: the site shows a key only at creation, so a listed key can be
+// identified (label, last four) but never read back.
+type ExistingKey struct {
+	ID        string
+	Label     string
+	Last4     string
+	CreatedAt time.Time
+}
+
+// Login signs in an existing account and keeps the session in this flow, so
+// key management can run without registering again. It does not solve a
+// captcha: sign-in does not require one.
+func (f *Flow) Login(ctx context.Context, email, password string) error {
+	page, err := f.loadLoginPage(ctx)
+	if err != nil {
+		return err
+	}
+	form, err := parseSignupForm(page)
+	if err != nil {
+		return errors.New("登录页没有可用的表单（可能已改版）")
+	}
+	if err := f.submitSignup(ctx, form, signupFields{
+		Email:       email,
+		Password:    password,
+		Fingerprint: newUUID(),
+		Timezone:    f.cfg.timezone(),
+	}); err != nil {
+		return err
+	}
+	// A refused sign-in returns no session cookie; the call is the check.
+	if err := f.probeAPIKey(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *Flow) loadLoginPage(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.cfg.base()+"/login", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("accept", "text/html,application/xhtml+xml")
+	req.Header.Set("user-agent", userAgent)
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("打开登录页失败: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("打开登录页失败: HTTP %d", resp.StatusCode)
+	}
+	return string(body), nil
+}
+
+// ListKeys returns the keys the signed-in account already has.
+func (f *Flow) ListKeys(ctx context.Context) ([]ExistingKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.cfg.base()+"/api/keys", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("referer", f.cfg.base()+"/dashboard/api-keys")
+	req.Header.Set("user-agent", userAgent)
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Key 列表失败: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("读取 Key 列表失败: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Keys []struct {
+			ID        string `json:"id"`
+			Label     string `json:"label"`
+			Last4     string `json:"last4"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"keys"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return nil, errors.New("Key 列表无法解析")
+	}
+	keys := make([]ExistingKey, 0, len(out.Keys))
+	for _, k := range out.Keys {
+		created, _ := time.Parse(time.RFC3339Nano, k.CreatedAt)
+		keys = append(keys, ExistingKey{ID: k.ID, Label: k.Label, Last4: k.Last4, CreatedAt: created})
+	}
+	return keys, nil
+}
+
+// NewKey creates one more key on the signed-in account and returns it. The
+// site reveals a key only here, which is why a lost key means "make another".
+func (f *Flow) NewKey(ctx context.Context) (string, error) {
+	return f.createAPIKey(ctx)
+}
+
+// KeyUsable reports whether the signed-in session can use the given key to
+// reach the inference API. It answers 403 email_verification_required for an
+// unverified account, which is the difference between "a key exists" and "the
+// key works"; that distinction is what keeps a bad key out of the pool.
+func (f *Flow) KeyUsable(ctx context.Context, key string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("没有 Key")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.cfg.base()+"/v1/models", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("accept", "application/json")
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("校验 Key 失败: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if msg := jsonError(raw); msg != "" {
+		return fmt.Errorf("Key 不可用（HTTP %d）: %s", resp.StatusCode, msg)
+	}
+	return fmt.Errorf("Key 不可用（HTTP %d）", resp.StatusCode)
+}
