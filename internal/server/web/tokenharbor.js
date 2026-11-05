@@ -12,9 +12,9 @@ const TH_STATUS = {
   uncertain: ['中断', 'warn'],
 };
 
-const thState = { job: '', jobs: [], rows: [], busy: false, timer: null, generation: 0 };
+const thState = { job: '', jobs: [], rows: [], busy: false, timer: null, generation: 0, selected: new Set(), pending: new Set(), batchBusy: false, batchPrompt: false, batchMessage: '' };
 // 右下角注册日志：轮询增量，暂停时只累积不渲染。
-const thLog = { seq: 0, lines: [], timer: null, paused: false, visible: false };
+const thLog = { seq: 0, lines: [], timer: null, inFlight: false, paused: false, visible: false, started: false };
 
 function thLabel(status) {
   const [label, cls] = TH_STATUS[status] || [status || '未知', ''];
@@ -56,7 +56,7 @@ async function loadTHOverview() {
 // ---- 注册机 ----
 async function loadTHRegistrations() {
   stopTHPolling();
-  thLogShow();
+  if (!thLog.started) thLogShow();
   loadTHProxies().catch(() => { $('#th-proxies-status').textContent = '已保存代理池读取失败，请刷新重试'; });
   const generation = ++thState.generation;
   const poll = async () => {
@@ -93,23 +93,27 @@ function renderTHJobs() {
   $('#th-register-jobs').innerHTML = jobs.map((job) => {
     const c = job.counts || {};
     const parts = Object.entries(c).filter(([, n]) => n > 0).map(([k, n]) => `${TH_STATUS[k] ? TH_STATUS[k][0] : k} ${n}`).join(' · ');
-    return `<button type="button" class="pc-register-job ${job.id === thState.job ? 'active' : ''}" data-job="${esc(job.id)}" aria-pressed="${job.id === thState.job}"><span>${esc(job.id)}</span><span class="muted small">${esc(fmtTime(job.createdAt, true))} · ${job.running ? '进行中' : '已结束'} · ${esc(parts || '无账号')}</span></button>`;
+    return `<button type="button" ${thState.batchBusy || thState.batchPrompt ? 'disabled' : ''} class="pc-register-job ${job.id === thState.job ? 'active' : ''}" data-job="${esc(job.id)}" aria-pressed="${job.id === thState.job}"><span>${esc(job.id)}</span><span class="muted small">${esc(fmtTime(job.createdAt, true))} · ${job.running ? '进行中' : '已结束'} · ${esc(parts || '无账号')}</span></button>`;
   }).join('') || '<p class="muted">暂无任务。</p>';
 }
 
 function renderTHJob(job) {
   thState.rows = job.rows || [];
+  const ids = new Set(thState.rows.map((r) => r.id));
+  for (const id of thState.selected) if (!ids.has(id)) thState.selected.delete(id);
   $('#th-register-detail').classList.remove('hidden');
   $('#th-register-job-title').textContent = '任务 ' + job.id;
   $('#th-register-job-status').textContent = job.running ? '进行中' : '已结束';
-  $('#th-register-rows').innerHTML = job.rows.map((r) => `<tr>
+  $('#th-register-rows').innerHTML = thState.rows.map((r) => `<tr>
+    <td><input type="checkbox" class="th-row-select" data-id="${esc(r.id)}" aria-label="选择 ${esc(r.email)}" ${thState.selected.has(r.id) ? 'checked' : ''} ${thRowLocked(r.id) || ['queued', 'running'].includes(r.status) ? 'disabled' : ''}></td>
     <td>${esc(r.email)}</td>
     <td>${thLabel(r.status)}</td>
-    <td><span class="small">${esc(r.proxy || '直连')}</span> ${['saved', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}">改代理</button>` : ''}</td>
+    <td><span class="small">${esc(r.proxy || '直连')}</span> ${['saved', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
     <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
     <td>${thRowActions(r)}</td>
-  </tr>`).join('') || '<tr><td colspan="6" class="empty">暂无账号</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="7" class="empty">暂无账号</td></tr>';
+  thUpdateSelection();
 }
 
 function thSubscriptionLabel(r) {
@@ -121,15 +125,14 @@ function thSubscriptionLabel(r) {
 
 function thRowActions(r) {
   const out = [];
-  if (r.status === 'saved') out.push(`<button type="button" class="btn small primary th-row-retry" data-id="${esc(r.id)}">开始注册</button>`);
-  if (r.hasSession && !['running', 'queued', 'saved'].includes(r.status)) out.push(`<button type="button" class="btn small th-row-subscription" data-id="${esc(r.id)}">检测套餐</button>`);
-  if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) {
-    out.push(`<button type="button" class="btn small th-row-reverify" data-id="${esc(r.id)}">补验证</button>`);
-  }
-  if (r.hasSession && r.status !== 'running' && r.status !== 'queued') out.push(`<button type="button" class="btn small th-row-checkout" data-id="${esc(r.id)}">Agent Pass 链接</button>`);
-  if (r.status === 'registered' && r.verified && r.subscription?.status === 'active') out.push(`<button type="button" class="btn small primary th-row-import" data-id="${esc(r.id)}">校验并入池</button>`);
-  if (r.status === 'failed' || r.status === 'uncertain') out.push(`<button type="button" class="btn small th-row-retry" data-id="${esc(r.id)}">${r.hasSession ? '继续（保留会话）' : '重试'}</button>`);
-  if (r.status !== 'running') out.push(`<button type="button" class="btn small ghost th-row-delete" data-id="${esc(r.id)}">删除</button>`);
+  const button = (kind, text, primary = false) => `<button type="button" class="btn small ${primary ? 'primary' : ''} th-row-${kind}" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>${esc(text)}</button>`;
+  if (r.status === 'saved') out.push(button('retry', '开始注册', true));
+  if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
+  if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
+  if (thBatchEligible('checkout', r)) out.push(button('checkout', 'Agent Pass 链接'));
+  if (r.status === 'registered' && r.verified && r.subscription?.status === 'active') out.push(button('import', '校验并入池', true));
+  if (r.status === 'failed' || r.status === 'uncertain') out.push(button('retry', r.hasSession ? '继续（保留会话）' : '重试'));
+  if (!['running', 'queued'].includes(r.status)) out.push(button('delete', '删除'));
   return out.join(' ');
 }
 
@@ -171,7 +174,7 @@ async function thSubmitRegistration(ev, saveOnly = false) {
   ev.preventDefault();
   const error = $('#th-register-error');
   error.textContent = '';
-  if (thState.busy) return;
+  if (thState.busy || thState.batchBusy || thState.batchPrompt) return;
   let accounts, proxies;
   try {
     accounts = thParseAccounts($('#th-register-accounts').value);
@@ -234,7 +237,7 @@ async function thSaveProxies(clear = false) {
 
 async function thRowProxy(id) {
   const row = thState.rows.find((r) => r.id === id);
-  modal({
+  await modal({
     title: '修改注册代理',
     body: `<div class="form">
       <p class="muted small">${esc(row ? row.email : id)}</p>
@@ -264,7 +267,7 @@ async function thRowAction(kind, id) {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/subscription', {});
       err.textContent = '';
     } else if (kind === 'retry') {
-      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked });
+      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 });
     } else if (kind === 'delete') {
       if (!window.confirm('确认删除此注册记录及已保存的会话、API Key、支付链接？此操作不删除已入池账号。')) return;
       await api('DELETE', '/api/tokenharbor/registrations/' + encodeURIComponent(id));
@@ -280,10 +283,184 @@ async function thRowAction(kind, id) {
   if (currentPage === 'thregister') loadTHRegistrations();
 }
 
+// 批量操作只复用既有单行接口，不另外创建订单/注册重试机制。
+function thRowLocked(id) {
+  return thState.batchBusy || thState.batchPrompt || thState.pending.has(id);
+}
+
+function thBatchEligible(kind, row) {
+  if (kind === 'retry') return ['saved', 'failed', 'uncertain'].includes(row.status);
+  return !!row.hasSession && !['saved', 'running', 'queued'].includes(row.status);
+}
+
+function thRenderCurrentJob() {
+  const job = thState.jobs.find((j) => j.id === thState.job);
+  if (job) renderTHJob(job);
+  renderTHJobs();
+}
+
+function thUpdateSelection() {
+  const selectable = thState.rows.filter((r) => !['queued', 'running'].includes(r.status));
+  const count = selectable.filter((r) => thState.selected.has(r.id)).length;
+  const all = $('#th-select-all');
+  all.checked = selectable.length > 0 && count === selectable.length;
+  all.indeterminate = count > 0 && count < selectable.length;
+  all.disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || selectable.length === 0;
+  $('#th-selected-count').textContent = `已选 ${thState.selected.size} 个（仅本任务）`;
+  for (const [kind, id] of [['retry', 'register'], ['subscription', 'subscription'], ['checkout', 'checkout']]) {
+    $(`#th-batch-${id}`).disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || !thState.rows.some((r) => thState.selected.has(r.id) && thBatchEligible(kind, r));
+  }
+  $('#th-batch-progress').textContent = thState.batchMessage;
+  for (const id of ['#th-register-save', '#th-register-submit']) $(id).disabled = thState.busy || thState.batchBusy || thState.batchPrompt;
+}
+
+async function thGuardRow(id, action) {
+  if (thRowLocked(id)) return;
+  thState.pending.add(id);
+  thRenderCurrentJob();
+  try {
+    return await action();
+  } finally {
+    thState.pending.delete(id);
+    thRenderCurrentJob();
+  }
+}
+
+async function thBatchCall(kind, row, options) {
+  const path = '/api/tokenharbor/registrations/' + encodeURIComponent(row.id);
+  if (kind === 'retry') return api('POST', path + '/retry', options);
+  if (kind === 'subscription') return api('POST', path + '/subscription', {});
+  if (kind === 'checkout') {
+    const out = row.hasCheckout ? await api('GET', path + '/checkout') : await api('POST', path + '/checkout', { kind: 'pass', product: 'starter_pass_monthly' });
+    thCheckoutURL(out.url);
+    return out;
+  }
+  throw new Error('未知批量操作');
+}
+
+// Requests are bounded, partial failures are final, and none are retried.
+async function thBatchRun(kind, rows, onResult = () => {}) {
+  if (thState.batchBusy || thState.pending.size) throw new Error('已有操作执行中，请等待完成');
+  thState.batchBusy = true;
+  const options = { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 };
+  const counts = { success: 0, failed: 0, skipped: 0 };
+  let next = 0;
+  const progress = () => {
+    const done = counts.success + counts.failed + counts.skipped;
+    thState.batchMessage = `已处理 ${done}/${rows.length} · ${kind === 'retry' ? '已排队' : '成功'} ${counts.success} · 失败 ${counts.failed} · 跳过 ${counts.skipped}${done === rows.length ? '（完成；未自动重试）' : ''}`;
+    thUpdateSelection();
+  };
+  const worker = async () => {
+    while (next < rows.length) {
+      const row = rows[next++];
+      let result;
+      if (!thBatchEligible(kind, row)) {
+        result = { row, status: 'skipped', error: '当前状态不适用，已跳过' };
+      } else {
+        try {
+          result = { row, status: 'success', value: await thBatchCall(kind, row, options) };
+        } catch (e) {
+          result = { row, status: 'failed', error: e.message || '请求失败，请核对账号后人工处理' };
+        }
+      }
+      counts[result.status]++;
+      onResult(result);
+      progress();
+    }
+  };
+  thRenderCurrentJob();
+  progress();
+  try {
+    await Promise.all(Array.from({ length: Math.min(3, rows.length) }, worker));
+    return counts;
+  } finally {
+    thState.batchBusy = false;
+    thRenderCurrentJob();
+    if (currentPage === 'thregister') loadTHRegistrations();
+  }
+}
+
+async function thBatchAction(kind) {
+  if (thState.batchBusy || thState.batchPrompt || thState.pending.size) return;
+  const rows = thState.rows.filter((r) => thState.selected.has(r.id));
+  if (!rows.length) return;
+  thState.batchPrompt = true;
+  thRenderCurrentJob();
+  try {
+    if (kind === 'checkout') return await thBatchCheckout(rows);
+    if (kind === 'retry') {
+      const eligible = rows.filter((r) => thBatchEligible(kind, r)).length;
+      const choice = await modal({ title: '注册所选账号', body: `<p>将注册/继续 ${eligible} 个账号，其余状态不适用的记录跳过。复用已绑定代理和已有会话，不自动入池。</p><p>${$('#th-register-solve').checked ? '已开启自动解 Turnstile：需要时会产生验证码服务费用。' : '未开启自动解验证码。'}</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '确认注册', value: 'start', primary: true }] });
+      if (choice !== 'start') return;
+    }
+    const details = [];
+    await thBatchRun(kind, rows, (result) => {
+      if (result.status !== 'success') details.push(`${result.row.email}：${result.error}`);
+    });
+    $('#th-register-import-error').textContent = details.join('\n');
+  } finally {
+    thState.batchPrompt = false;
+    thRenderCurrentJob();
+  }
+}
+
+async function thBatchCheckout(rows) {
+  let started = false;
+  let running = false;
+  // URLs stay in this explicit modal's closure, never registration state/logs.
+  const links = [];
+  await modal({ title: '批量获取 Agent Pass 订阅链接（不会付款）', wide: true, body: `<p>已选 ${rows.length} 个账号，仅处理已保存会话的空闲记录；已有链接复用，不确定的订单不重复创建。</p><p class="muted small">只获取月度单次托管链接，不自动续费、不代付，也不会自动打开多个页面。每个账号的实际价格以 Stripe 为准。</p><p id="th-batch-checkout-progress" role="status"></p><div id="th-batch-checkout-results"></div><button type="button" class="btn hidden" id="th-batch-copy-links">复制全部成功链接</button>`, buttons: [{ label: '关闭', value: 'close' }, { label: '确认获取链接', value: 'create', primary: true, action: async () => {
+    if (started) return false;
+    started = running = true;
+    const close = $('#modal-actions button[value="close"]');
+    close.disabled = true;
+    let done = 0;
+    try {
+      await thBatchRun('checkout', rows, (result) => {
+        const section = document.createElement('section');
+        const heading = document.createElement('p');
+        heading.textContent = result.row.email;
+        section.append(heading);
+        const body = document.createElement('div');
+        if (result.status === 'success') {
+          thCheckoutLink(result.value, body);
+          links.push(`${result.row.email}\t${result.value.url}`);
+        } else body.textContent = (result.status === 'skipped' ? '跳过：' : '失败：') + result.error;
+        section.append(body);
+        $('#th-batch-checkout-results').append(section);
+        $('#th-batch-checkout-progress').textContent = `已处理 ${++done}/${rows.length}；成功 ${links.length}`;
+      });
+      const copy = $('#th-batch-copy-links');
+      copy.classList.toggle('hidden', links.length === 0);
+      copy.onclick = () => copyText(links.join('\n'));
+    } finally {
+      running = false;
+      close.disabled = false;
+    }
+    return false;
+  } }], onOpen: (dlg) => {
+    const preventClose = (e) => { if (running) e.preventDefault(); };
+    dlg.addEventListener('cancel', preventClose);
+    dlg._onClose = () => {
+      dlg.removeEventListener('cancel', preventClose);
+      links.length = 0;
+      $('#th-batch-checkout-results')?.replaceChildren();
+      const copy = $('#th-batch-copy-links');
+      if (copy) copy.onclick = null;
+    };
+  } });
+}
+
 // 支付链接只在显式打开的弹窗中读取，不进入列表或实时日志。
-function thCheckoutLink(out, root) {
-  const u = new URL(out.url);
+function thCheckoutURL(raw) {
+  let u;
+  try { u = new URL(raw); } catch { throw new Error('支付链接不可信'); }
   if (u.protocol !== 'https:' || u.host !== 'checkout.stripe.com' || u.username || u.password || !u.pathname.startsWith('/c/pay/')) throw new Error('支付链接不可信');
+  return u;
+}
+
+function thCheckoutLink(out, root) {
+  const u = thCheckoutURL(out.url);
   root.replaceChildren();
   const note = document.createElement('p');
   note.textContent = '链接已加密保存。未付款；金额、优惠及有效期以 Stripe 收银台显示为准。';
@@ -372,26 +549,35 @@ async function thSaveSettings(ev) {
 
 // ---- 右下角注册日志 ----
 function thLogShow() {
-  thState.visible = true;
+  thLog.visible = thLog.started = true;
   $('#th-logbox').classList.remove('hidden');
-  if (!thLog.timer) {
-    thLogPoll();
-    thLog.timer = setTimeout(thLogPoll, 1500);
-  }
+  if (!thLog.timer && !thLog.inFlight) thLogPoll();
 }
 
 function thLogHide() {
+  thLog.visible = false;
   $('#th-logbox').classList.add('hidden');
   // 收起不动轮询状态：再打开时从上次的 seq 继续，不丢中间的行。
 }
 
 async function thLogPoll() {
+  if (thLog.inFlight) return;
+  if (thLog.timer) clearTimeout(thLog.timer);
   thLog.timer = null;
+  thLog.inFlight = true;
   try {
     const out = await api('GET', '/api/tokenharbor/log?after=' + thLog.seq);
-    const entries = (out && out.entries) || [];
+    const entries = [];
+    // A restarted server has a new in-memory sequence; allow its new log.
+    if (Number(out?.seq) < thLog.seq) thLog.seq = 0;
+    for (const e of (out && out.entries) || []) {
+      if (e.seq > thLog.seq) {
+        entries.push(e);
+        thLog.seq = e.seq;
+      }
+    }
+    thLog.seq = Math.max(thLog.seq, Number(out?.seq) || 0);
     if (entries.length) {
-      thLog.seq = out.seq || thLog.seq;
       for (const e of entries) thLog.lines.push(e);
       if (thLog.lines.length > 400) thLog.lines = thLog.lines.slice(-400);
       if (!thLog.paused) thLogRender();
@@ -400,6 +586,7 @@ async function thLogPoll() {
   } catch (e) {
     $('#th-log-status').textContent = '日志获取失败：' + thSafe(e.message);
   } finally {
+    thLog.inFlight = false;
     thLog.timer = setTimeout(thLogPoll, 1500);
   }
 }
@@ -435,9 +622,30 @@ function thInstall() {
   on('#th-save-proxies', 'click', () => thSaveProxies());
   on('#th-clear-proxies', 'click', () => thSaveProxies(true));
   on('#th-settings-form', 'submit', thSaveSettings);
+  on('#th-select-all', 'change', (e) => {
+    if (thState.batchBusy || thState.batchPrompt || thState.pending.size) return;
+    for (const row of thState.rows) {
+      if (['queued', 'running'].includes(row.status)) continue;
+      if (e.target.checked) thState.selected.add(row.id); else thState.selected.delete(row.id);
+    }
+    thRenderCurrentJob();
+  });
+  on('#th-register-rows', 'change', (e) => {
+    const checkbox = e.target.closest('.th-row-select');
+    if (!checkbox || thState.batchBusy || thState.batchPrompt || thState.pending.size) return;
+    if (checkbox.checked) thState.selected.add(checkbox.dataset.id); else thState.selected.delete(checkbox.dataset.id);
+    thUpdateSelection();
+  });
+  for (const [id, kind] of [['register', 'retry'], ['subscription', 'subscription'], ['checkout', 'checkout']]) {
+    on('#th-batch-' + id, 'click', () => thBatchAction(kind).catch((e) => toast(e.message)));
+  }
   on('#th-register-jobs', 'click', (e) => {
     const b = e.target.closest('[data-job]');
-    if (!b) return;
+    if (!b || thState.batchBusy || thState.batchPrompt) return;
+    if (thState.job !== b.dataset.job) {
+      thState.selected.clear();
+      thState.batchMessage = '';
+    }
     thState.job = b.dataset.job;
     $('#th-register-import-error').textContent = '';
     loadTHRegistrations();
@@ -452,12 +660,12 @@ function thInstall() {
   });
   on('#th-register-rows', 'click', (e) => {
     const proxy = e.target.closest('.th-row-proxy');
-    if (proxy) { thRowProxy(proxy.dataset.id).catch((err) => toast(err.message)); return; }
+    if (proxy) { thGuardRow(proxy.dataset.id, () => thRowProxy(proxy.dataset.id)).catch((err) => toast(err.message)); return; }
     const checkout = e.target.closest('.th-row-checkout');
-    if (checkout) { thRowCheckout(checkout.dataset.id).catch((err) => toast(err.message)); return; }
+    if (checkout) { thGuardRow(checkout.dataset.id, () => thRowCheckout(checkout.dataset.id)).catch((err) => toast(err.message)); return; }
     for (const kind of ['import', 'retry', 'delete', 'reverify', 'subscription']) {
       const btn = e.target.closest('.th-row-' + kind);
-      if (btn) { thRowAction(kind, btn.dataset.id); return; }
+      if (btn) { thGuardRow(btn.dataset.id, () => thRowAction(kind, btn.dataset.id)).catch((err) => toast(err.message)); return; }
     }
   });
 }

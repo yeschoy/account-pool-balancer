@@ -1,0 +1,148 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(path.join(__dirname, 'web', 'tokenharbor.js'), 'utf8');
+const tick = () => new Promise(setImmediate);
+function environment(api) {
+  const nodes = new Map();
+  const timers = new Map();
+  let nextTimer = 1;
+  const node = (selector) => {
+    if (!nodes.has(selector)) {
+      const classes = new Set();
+      nodes.set(selector, { innerHTML: '', textContent: '', checked: false, value: '2', disabled: false, scrollHeight: 0, scrollTop: 0, clientHeight: 0,
+        addEventListener() {}, querySelector() { return null; },
+        classList: { add(c) { classes.add(c); }, remove(c) { classes.delete(c); }, contains(c) { return classes.has(c); }, toggle(c, yes) { if (yes) classes.add(c); else classes.delete(c); } },
+      });
+    }
+    return nodes.get(selector);
+  };
+  const context = { $: node, api, currentPage: 'other', URL, console,
+    esc: (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]),
+    fmtTime: () => 'time',
+    setTimeout(fn) { const id = nextTimer++; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
+  };
+  vm.createContext(context);
+  vm.runInContext(source + '\nglobalThis.state = thState; globalThis.log = thLog;', context);
+  return { context, nodes, timers, node };
+}
+
+async function testLogSingleFlightAndSequenceDedupe() {
+  const pending = [];
+  const e = environment(() => new Promise((resolve) => pending.push(resolve)));
+  e.context.thLogShow(); e.context.thLogShow(); e.context.thLogShow();
+  assert.equal(pending.length, 1, 'show must not create concurrent initial polls');
+  assert.equal(e.timers.size, 0, 'only the completed poll schedules the next timer');
+  pending.shift()({ seq: 2, entries: [{ seq: 1, detail: 'once' }, { seq: 1, detail: 'duplicate' }, { seq: 2, detail: 'second' }] });
+  await tick();
+  assert.equal(e.context.log.lines.length, 2);
+  assert.equal(e.timers.size, 1);
+  e.context.thLogShow();
+  assert.equal(pending.length, 0, 'show must reuse the existing scheduled poll');
+  const [timer, run] = e.timers.entries().next().value;
+  e.timers.delete(timer); run(); e.context.thLogShow();
+  assert.equal(pending.length, 1);
+  pending.shift()({ seq: 2, entries: [{ seq: 1 }, { seq: 2 }] });
+  await tick();
+  assert.equal(e.context.log.lines.length, 2, 'repeated server entries must not render twice');
+  assert.equal(e.timers.size, 1);
+  // A server restart resets its in-memory sequence, not the polling chain.
+  const [next, poll] = e.timers.entries().next().value;
+  e.timers.delete(next); poll();
+  pending.shift()({ seq: 1, entries: [{ seq: 1, detail: 'new server' }] });
+  await tick();
+  assert.equal(e.context.log.seq, 1);
+  assert.equal(e.context.log.lines.length, 3);
+  e.context.thLogHide();
+  assert.equal(e.node('#th-logbox').classList.contains('hidden'), true);
+  assert.equal(e.context.log.visible, false);
+}
+
+async function testBatchBoundedPartialAndNoRetry() {
+  let active = 0, peak = 0;
+  const waiting = [], calls = [], results = [];
+  const e = environment((method, url, body) => {
+    calls.push({ method, url, body }); active++; peak = Math.max(peak, active);
+    return new Promise((resolve, reject) => waiting.push(() => { active--; url.includes('/row2/') ? reject(new Error('mock failure')) : resolve({ status: 'queued' }); }));
+  });
+  const rows = Array.from({ length: 8 }, (_, i) => ({ id: 'row' + i, email: 'a' + i + '@mock.test', status: 'saved' }));
+  rows.push({ id: 'running', status: 'running' });
+  const work = e.context.thBatchRun('retry', rows, (r) => results.push(r));
+  assert.equal(calls.length, 3);
+  await assert.rejects(e.context.thBatchRun('retry', rows), /已有操作/);
+  while (results.length < rows.length) {
+    waiting.splice(0).forEach((release) => release());
+    await tick();
+  }
+  const counts = await work;
+  assert.equal(peak, 3);
+  assert.equal(calls.length, 8, 'one request per eligible row, no replay');
+  assert.equal(counts.success, 7); assert.equal(counts.failed, 1); assert.equal(counts.skipped, 1);
+  assert.equal(e.context.state.batchBusy, false);
+  assert.match(e.context.state.batchMessage, /已排队 7/);
+  assert.ok(calls.every((c) => c.method === 'POST' && c.body.concurrency === 2 && c.body.solveCaptcha === false));
+}
+
+async function testCheckoutReuseAndUncertainStops() {
+  const calls = [];
+  const e = environment(async (method, url, body) => {
+    calls.push({ method, url, body });
+    if (url.includes('/uncertain/')) throw new Error('上次结果不确定');
+    return { url: 'https://checkout.stripe.com/c/pay/cs_mock_only' };
+  });
+  await e.context.thBatchCall('checkout', { id: 'saved', hasCheckout: true });
+  await e.context.thBatchCall('checkout', { id: 'new', hasCheckout: false });
+  await assert.rejects(e.context.thBatchCall('checkout', { id: 'uncertain', hasCheckout: false }), /不确定/);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[1].body.product, 'starter_pass_monthly');
+  assert.equal(calls[1].method, 'POST');
+  assert.throws(() => e.context.thCheckoutURL('https://evil.test/c/pay/x'), /不可信/);
+  assert.throws(() => e.context.thCheckoutURL('javascript:alert(1)'), /不可信/);
+  assert.equal(e.context.thBatchEligible('checkout', { status: 'saved', hasSession: false }), false);
+  assert.equal(e.context.thBatchEligible('subscription', { status: 'queued', hasSession: true }), false);
+  assert.equal(e.context.thBatchEligible('subscription', { status: 'registered', hasSession: true }), true);
+  assert.equal(JSON.stringify(e.context.state).includes('stripe'), false, 'URLs must not enter registration state');
+}
+
+async function testCancelledBatchDoesNotRegister() {
+  let calls = 0;
+  const e = environment(async () => { calls++; });
+  e.context.state.rows = [{ id: 'one', status: 'saved' }];
+  e.context.state.selected.add('one');
+  e.context.modal = async () => 'cancel';
+  await e.context.thBatchAction('retry');
+  assert.equal(calls, 0);
+  assert.equal(e.context.state.batchPrompt, false);
+  assert.equal(e.context.state.batchBusy, false);
+}
+
+async function testRowGuardAndSelectionRetention() {
+  const e = environment(async () => ({}));
+  let calls = 0, release;
+  const first = e.context.thGuardRow('one', () => { calls++; return new Promise((r) => { release = r; }); });
+  await e.context.thGuardRow('one', () => { calls++; });
+  assert.equal(calls, 1);
+  await assert.rejects(e.context.thBatchRun('retry', []), /已有操作/);
+  release(); await first;
+  assert.equal(e.context.state.pending.size, 0);
+  e.context.state.selected.add('one'); e.context.state.selected.add('deleted');
+  const job = { id: 'job', rows: [{ id: 'one', email: '<one>@mock.test', status: 'saved' }] };
+  e.context.renderTHJob(job);
+  assert.equal(e.context.state.selected.size, 1);
+  assert.equal(e.node('#th-select-all').checked, true);
+  assert.match(e.node('#th-register-rows').innerHTML, /&lt;one&gt;/);
+  assert.doesNotMatch(e.node('#th-register-rows').innerHTML, /<one>/);
+  assert.equal(e.node('#th-batch-register').disabled, false);
+}
+
+(async () => {
+  await testLogSingleFlightAndSequenceDedupe();
+  await testBatchBoundedPartialAndNoRetry();
+  await testCheckoutReuseAndUncertainStops();
+  await testRowGuardAndSelectionRetention();
+  await testCancelledBatchDoesNotRegister();
+  console.log('Token Harbor web behavior tests passed');
+})().catch((e) => { console.error(e); process.exitCode = 1; });

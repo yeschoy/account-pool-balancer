@@ -614,6 +614,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var in struct {
 		SolveCaptcha bool `json:"solveCaptcha"`
+		Concurrency  int  `json:"concurrency,omitempty"`
 	}
 	if r.ContentLength > 0 {
 		if err := readBody(r, &in); err != nil {
@@ -626,6 +627,10 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if in.Concurrency < 0 || in.Concurrency > thMaxConcurrency {
+		apiError(w, http.StatusBadRequest, errors.New("注册并发必须为 0-10"))
+		return
+	}
 	id := r.PathValue("id")
 	row, err := store.Retry(id)
 	if err != nil {
@@ -635,7 +640,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		_ = s.thRegistrar().run(id, in.SolveCaptcha, 0)
+		_ = s.thRegistrar().run(id, in.SolveCaptcha, in.Concurrency)
 	}()
 	writeJSON(w, http.StatusAccepted, thsignupstore.SummaryOf(row))
 }

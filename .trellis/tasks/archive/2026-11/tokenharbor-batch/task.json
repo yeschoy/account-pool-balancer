@@ -1,0 +1,7 @@
+{
+  "name": "tokenharbor-batch",
+  "status": "completed",
+  "branch": "master",
+  "description": "IPv6代理只读诊断、日志去重、任务内选中批量注册/套餐刷新/订阅链接",
+  "validation": "validation.md"
+}

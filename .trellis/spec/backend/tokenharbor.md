@@ -22,7 +22,7 @@ Registration persistence, proxy assignment and explicit admission are separate. 
 ### 2. Signatures
 - `POST /api/tokenharbor/registrations`: existing accounts/proxies/group plus `saveOnly:bool`, `proxyMode:"sequential"|"random"`; legacy `autoImport:true` rejected.
 - `GET/PUT /api/tokenharbor/proxies`: PUT requires `{proxies:string[]}`; explicit `[]` clears; GET/PUT respond `{count,labels}` with credential-free labels only. Max1000 entries, validated before atomic persistence.
-- `POST /api/tokenharbor/registrations/{rowId}/retry`: explicitly starts a saved row or resumes an eligible existing row.
+- `POST /api/tokenharbor/registrations/{rowId}/retry`: explicitly starts a saved row or resumes an eligible existing row; accepts solveCaptcha and optional concurrency=0..10 (0 uses setting), rejects invalid bounds before changing status.
 - `POST /api/tokenharbor/registrations/{rowId}/subscription`: only checks current plan; summary contains `subscription.{status,tier,name,cycle,checkedAt,error}`.
 - `Flow.CheckSubscription(ctx) (Subscription,error)`; `Server.thImport(ctx,id,group)` always rechecks before config mutation.
 
@@ -31,6 +31,10 @@ Registration persistence, proxy assignment and explicit admission are separate. 
 - Proxy priority: per-account override > current input pool > encrypted saved pool > registration default > direct. Sequential wraps; random draws with replacement. Changing/clearing pool does not alter existing bindings. New rows persist proxyBound=true, including direct routes; clearing a saved row proxy binds direct even when the default later changes. Only legacy rows without proxyBound inherit an empty-URL default. Passwords and proxy authentication are never projected into summaries/settings; no localStorage proxy secrets.
 - Existing AES-GCM v1 envelope adds `proxies`; row/disk/summary preserve the plan observation. `saved` survives reopen and transitions only on explicit retry. Older binaries reject the new status: preserve a pre-upgrade backup before rollback.
 - Subscription check uses saved same-account cookies and fixed egress, GET `/pricing`, no redirects/retries/mutations/inference. Decode Flight JSON strings and the unique `signedIn/free/plans/currentCycle` component; require signedIn=true, known tier/slug/name, exactly one current plan. Paid current with monthly/yearly grants current active observation; current Free denies admission. No invented expiry timestamp or inference funding claim. UI labels active as last observed, not permanently valid.
+- Task-local batch UI reuses retry/subscription/checkout APIs with at most3 in-flight admin requests, no replay, and per-row success/failure/skip counts. Registration requires confirmation including captcha cost, success means queued (not completed), and never auto-imports. Selection survives polling but clears on task switch; shared per-row/batch/prompt locks prevent duplicate dispatch.
+- Batch checkout only starts after explicit modal confirmation. Saved links use GET, new links use guarded POST; uncertain outcomes never fall back/retry. Links remain modal-local, no automatic windows/payments; copy-all requires a click and close clears local URLs/handlers. Ordinary task polling/logs never carry checkout URLs.
+- Live-log polling has exactly one in-flight request and one scheduled successor. Only the poll finally schedules the next timer; show reuses existing work. Append strictly increasing seq once (recognize server restart resets). Task refresh does not reopen a manually hidden log panel. Repeated visible log lines are not evidence of multiple upstream signup POSTs.
+- IPv4 proxy ingress can provide IPv6 egress without container IPv6. Host-only success is not container evidence: test the exact account route from the service network namespace. Never replace failed proxy with direct/another egress. Firewall changes require separate explicit authorization; don't disable UFW or broaden public exposure.
 - Check failure records unknown without erasing registration/key. Source/account changes during check discard the result. Manual import requires Verified=true + key + fresh active paid result; old summary/checkout never bypasses gate. APIs retain admin auth/CSRF and no-store. Existing enabled accounts and generic manual Key import are not silently modified.
 
 ### 4. Validation & Error Matrix
@@ -41,6 +45,9 @@ Registration persistence, proxy assignment and explicit admission are separate. 
 | autoImport=true / invalid proxyMode / missing proxies PUT | 400 before work or pool replacement |
 | free/expired/unsubscribed / missing session / schema drift / HTTP failure | no import; free or unknown observation |
 | stale source during check | discard late result, no config mutation |
+| cancelled batch registration | zero upstream/admin mutation requests |
+| mixed batch / uncertain checkout | per-row partial result; no retry or automatic payment |
+| duplicate log poll/show or row click | one in-flight chain/dispatch; no duplicate seq |
 | verified + current paid + explicit import | original pool dedupe, one enabled account |
 
 ### 5. Good / Base / Bad Cases
@@ -49,7 +56,7 @@ Registration persistence, proxy assignment and explicit admission are separate. 
 - Bad: treating Checkout.URL, /models, wallet balance, paid badge or cached active summary as an entitlement.
 
 ### 6. Tests Required
-Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overrides; encrypted reopen/clones/no secret projection; explicit start/duplicate no restart; proxy auth+CSRF/no-store; all known paid tiers/Free, expired-to-Free, unauth/ambiguous/drift/redirect/oversize/error; source-change discard; registration completion never imports even paid; manual admission rechecks against cached paid/checkout. Local browser uses fake data and mocks only.
+Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overrides; encrypted reopen/clones/no secret projection; explicit start/duplicate no restart; proxy auth+CSRF/no-store; all known paid tiers/Free, expired-to-Free, unauth/ambiguous/drift/redirect/oversize/error; source-change discard; registration completion never imports even paid; manual admission rechecks against cached paid/checkout. Local browser uses fake data and mocks only. Run `node internal/server/tokenharbor_web_test.js` for log single-flight/dedupe/restart, bounded batch partial failures/no replay, saved-link reuse, cancellation, row locks and selection/escaping. Retry tests must hold one row running and prove a duplicate start returns409 with one upstream GET.
 
 ### 7. Wrong vs Correct
 Wrong: register → verified → enabled pool account, or create checkout → mark paid.
