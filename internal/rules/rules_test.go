@@ -28,6 +28,7 @@ func TestDefaultsValidateAndMatch(t *testing.T) {
 		{403, `tier_model_not_entitled`, "tier-model-not-entitled"},
 		{403, `{"error":{"code":"account_suspended"}}`, "account-suspended"},
 		{500, `{"error":{"code":"upstream_provider_unauthenticated","message":"Upstream provider credentials are missing or invalid."}}`, "platform-provider-credentials"},
+		{500, `{"error":{"code":"internal_error","message":"[code=internal_error] failed to evaluate membership entitlement","type":"internal_error"}}`, "entitlement-evaluation-failed"},
 		{429, `slow down`, "rate-limited"},
 		{500, `boom`, ""},
 	}
@@ -205,5 +206,37 @@ func TestModalErrorRules(t *testing.T) {
 	}
 	if r := MatchRetry(DefaultModalRetryRules(), 404, `{"error":"unknown inference model"}`, http.Header{}); r == nil || r.ID != "modal-bad-request" {
 		t.Fatalf("404 must stop switching accounts")
+	}
+}
+
+// The entitlement evaluation is the gateway's own membership check: it failed
+// randomly across every account and model while the same account and model
+// answered 200 in the same minute. Cool briefly and switch, but never let a
+// real outage hold an account for long.
+func TestEntitlementEvaluationCooldown(t *testing.T) {
+	var rule *ErrorRule
+	for _, r := range DefaultErrorRules() {
+		if r.ID == "entitlement-evaluation-failed" {
+			rc := r
+			rule = &rc
+		}
+	}
+	if rule == nil {
+		t.Fatal("entitlement-evaluation-failed rule missing")
+	}
+	if rule.Action != ActionCooldown || rule.Scope != ScopeAccount {
+		t.Fatalf("action/scope = %s/%s, want cooldown/account", rule.Action, rule.Scope)
+	}
+	now := time.Date(2026, 11, 5, 12, 51, 28, 0, time.UTC)
+	body := `{"error":{"code":"internal_error","message":"[code=internal_error] failed to evaluate membership entitlement","type":"internal_error"}}`
+	if got := CooldownAfter(rule, http.Header{}, body, now, 1); got != 8*time.Second {
+		t.Fatalf("cooldown = %s, want 8s", got)
+	}
+	// a Retry-After from the gateway wins, clamped to the upper bound
+	if got := CooldownAfter(rule, http.Header{"Retry-After": []string{"3"}}, body, now, 1); got != 3*time.Second {
+		t.Fatalf("Retry-After cooldown = %s, want 3s", got)
+	}
+	if got := CooldownAfter(rule, http.Header{"Retry-After": []string{"600"}}, body, now, 1); got != time.Minute {
+		t.Fatalf("clamped cooldown = %s, want 1m", got)
 	}
 }

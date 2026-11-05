@@ -97,6 +97,17 @@ func DefaultErrorRules() []ErrorRule {
 		{ID: "platform-provider-credentials", Scope: ScopeAccount, Action: ActionIgnore, DownstreamStatus: 502,
 			When: Match{BodyContains: []string{"upstream_provider_unauthenticated", "upstream_provider_forbidden"}},
 			Note: "网关自身的供应商凭据故障（link 把上游 401/403 改写成 500），与账号无关：不扣健康分、不换号"},
+		// entitlement-evaluation-failed is the link's own membership check
+		// failing (HTTP 500 internal_error), not the account's: measured
+		// 2026-11-05 it hit every opendesign account across every model while
+		// the same account and model answered 200 in the same minute, so a
+		// retried request is likely to land on a healthy evaluation. Cool the
+		// account briefly and switch; the short cap keeps a real outage from
+		// draining the whole pool, since the next account usually works.
+		{ID: "entitlement-evaluation-failed", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 500,
+			When:  Match{BodyContains: []string{"failed to evaluate membership entitlement"}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "8s", Max: "1m"},
+			Note:  "上游网关的套餐权益判定内部失败（HTTP 500，随机、与账号无关）：冷却 8 秒后换号重试"},
 		{ID: "account-suspended", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 503,
 			When: Match{BodyContains: []string{"account_suspended"}},
 			Note: "账号被风控封禁，需人工处理"},
