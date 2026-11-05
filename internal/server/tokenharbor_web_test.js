@@ -106,12 +106,49 @@ async function testCheckoutReuseAndUncertainStops() {
   assert.equal(calls[0].method, 'GET');
   assert.equal(calls[1].body.product, 'starter_pass_monthly');
   assert.equal(calls[1].method, 'POST');
+  assert.ok(calls.every((c) => !c.body?.confirmNoPendingOrder), 'batch checkout never confirms uncertain recovery');
   assert.throws(() => e.context.thCheckoutURL('https://evil.test/c/pay/x'), /不可信/);
   assert.throws(() => e.context.thCheckoutURL('javascript:alert(1)'), /不可信/);
   assert.equal(e.context.thBatchEligible('checkout', { status: 'saved', hasSession: false }), false);
   assert.equal(e.context.thBatchEligible('subscription', { status: 'queued', hasSession: true }), false);
   assert.equal(e.context.thBatchEligible('subscription', { status: 'registered', hasSession: true }), true);
   assert.equal(JSON.stringify(e.context.state).includes('stripe'), false, 'URLs must not enter registration state');
+}
+
+async function testCheckoutRecoveryRequiresExplicitOneShotConfirmation() {
+  const calls = [];
+  const e = environment(async (method, url, body) => {
+    calls.push({ method, url, body });
+    if (calls.length < 4) throw new Error('上次结果不确定，请先核对官网账单');
+    return { url: 'https://checkout.stripe.com/c/pay/cs_recovery_mock' };
+  });
+  e.context.state.rows = [{ id: 'legacy', email: '<legacy>@mock.test', hasCheckout: false }];
+  let options;
+  e.context.modal = async (input) => { options = input; };
+  let displayed = 0;
+  e.context.thCheckoutLink = () => { displayed++; };
+  await e.context.thRowCheckout('legacy');
+  assert.equal(calls.length, 0, 'opening or cancelling a modal cannot create an order');
+  assert.match(options.body, /已核对账单/);
+  assert.match(options.body, /&lt;legacy&gt;/);
+  const create = options.buttons.find((b) => b.value === 'create').action;
+  const confirmation = e.node('#th-checkout-confirm-no-order');
+  await assert.rejects(create(), /不确定/);
+  assert.equal(calls[0].body.confirmNoPendingOrder, false, 'recovery must not be auto-confirmed');
+  confirmation.checked = true;
+  await assert.rejects(create(), /不确定/);
+  assert.equal(calls[1].body.confirmNoPendingOrder, true);
+  assert.equal(confirmation.checked, false, 'a failed recovery consumes its confirmation');
+  await assert.rejects(create(), /不确定/);
+  assert.equal(calls[2].body.confirmNoPendingOrder, false, 'a later click cannot silently replay confirmation');
+  confirmation.checked = true;
+  e.node('#modal-error').textContent = '上次结果不确定';
+  await create();
+  await create();
+  assert.equal(e.node('#modal-error').textContent, '', 'successful recovery clears the previous error');
+  assert.equal(calls.length, 4, 'successful creation must not repeat in the same modal');
+  assert.equal(displayed, 1);
+  assert.equal(JSON.stringify(e.context.state).includes('stripe'), false);
 }
 
 async function testOverviewEquivalentAmountsAndUnknown() {
@@ -313,6 +350,7 @@ async function testIndependentProxyEditing() {
   await testLogSingleFlightAndSequenceDedupe();
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();
+  await testCheckoutRecoveryRequiresExplicitOneShotConfirmation();
   await testRowGuardAndSelectionRetention();
   await testOverviewEquivalentAmountsAndUnknown();
   await testImportedFilterAndReturn();

@@ -3,6 +3,7 @@ package thregister
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,6 +113,33 @@ func TestCheckoutRefusesRedirectErrorsAndUnsafeLinks(t *testing.T) {
 			}
 			if calls != 2 {
 				t.Fatal("must not follow redirects, confirm changed quotes or retry")
+			}
+		})
+	}
+}
+
+func TestCheckoutGuardRunsOnlyAfterValidPreviewAndCanStopCreation(t *testing.T) {
+	for _, valid := range []bool{false, true} {
+		t.Run(map[bool]string{false: "invalid preview", true: "persistence failure"}[valid], func(t *testing.T) {
+			calls, guarded := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if valid {
+					w.Write([]byte(freeAgentQuote))
+				} else {
+					w.WriteHeader(503)
+				}
+			}))
+			defer srv.Close()
+			f, _ := New(Config{BaseURL: srv.URL})
+			defer f.Close()
+			persistErr := errors.New("cannot persist reservation")
+			_, err := f.CreateCheckoutGuarded(context.Background(), agentCheckout, func() error {
+				guarded++
+				return persistErr
+			})
+			if err == nil || calls != 1 || (guarded == 1) != valid || (valid && !errors.Is(err, persistErr)) {
+				t.Fatal("invalid preview or failed persistence reached order creation")
 			}
 		})
 	}

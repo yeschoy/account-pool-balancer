@@ -52,6 +52,13 @@ type checkoutResponse struct {
 // region acknowledgements and "Confirm and pay" upgrade flows hard-stop.
 // No stored-card charge, balance payment or capture endpoint is called.
 func (f *Flow) CreateCheckout(ctx context.Context, in CheckoutRequest) (string, error) {
+	return f.CreateCheckoutGuarded(ctx, in, nil)
+}
+
+// CreateCheckoutGuarded calls beforeCreate once after validating the read-only
+// preview, immediately before requesting a hosted page. A persistence failure
+// must stop creation; preview failures must not leave a pending order marker.
+func (f *Flow) CreateCheckoutGuarded(ctx context.Context, in CheckoutRequest, beforeCreate func() error) (string, error) {
 	if err := in.Validate(); err != nil {
 		return "", err
 	}
@@ -72,6 +79,11 @@ func (f *Flow) CreateCheckout(ctx context.Context, in CheckoutRequest) (string, 
 	}
 	delete(payload, "preview")
 	payload["expectedPayNowCents"] = int(cents)
+	if beforeCreate != nil {
+		if err := beforeCreate(); err != nil {
+			return "", err
+		}
+	}
 	out, err := f.checkoutCall(ctx, payload)
 	if err != nil {
 		return "", err

@@ -554,11 +554,16 @@ async function thRowCheckout(id) {
   await modal({ title: 'Agent Pass 支付链接（不会付款）', body: `<div class="form">
     <p class="muted small">${esc(row?.email || id)}</p>
     <p>Agent Pass · Monthly (one-time)，官网首月优惠以收银台显示为准。</p>
-    <p class="muted small">仅支持 Free 账号新购。不开启自动续费、不记住银行卡；遇到地区确认或订阅升级报价即停止。结果不确定时请先核对官网账单，不重复创建。</p>
+    <p class="muted small">仅支持 Free 账号新购。不开启自动续费、不记住银行卡；遇到地区确认或订阅升级报价即停止。预检失败可重试；创建结果不确定时须先核对官网账单。</p>
+    <label class="muted small"><input id="th-checkout-confirm-no-order" type="checkbox"> 已核对账单：确认未付款且无待处理订单，允许恢复上次不确定的链接获取（无需恢复时不要勾选）</label>
     <div id="th-checkout-result"></div></div>`, buttons: [{ label: '关闭', value: 'close' }, { label: '获取链接', value: 'create', primary: true, action: async () => {
       if (created) return false;
-      const out = await api('POST', path, { kind: 'pass', product: 'starter_pass_monthly' });
+      const confirmation = $('#th-checkout-confirm-no-order');
+      const confirmNoPendingOrder = confirmation.checked;
+      confirmation.checked = false; // Every uncertain recovery needs a fresh explicit confirmation.
+      const out = await api('POST', path, { kind: 'pass', product: 'starter_pass_monthly', confirmNoPendingOrder });
       created = true;
+      $('#modal-error').textContent = '';
       thCheckoutLink(out, $('#th-checkout-result'));
       return false;
     } }] });
