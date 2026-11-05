@@ -34,10 +34,12 @@ type Seat struct {
 	Soon []time.Time
 	// Pace is the longest window's share left (0–100) per hour until it
 	// renews (at least one hour).
-	Pace         float64
-	Active       int
-	Count        int64
-	LastSelected int64
+	Pace             float64
+	Active           int
+	Count            int64
+	LastSelected     int64
+	RecentRequests1H int64
+	PendingRequests  int
 	// Tokens is what this pool sent the account lately (decayed).
 	Tokens float64
 }
@@ -183,6 +185,26 @@ func orderGroup(strategy, pool string, seats []Seat, p Params) []int {
 				return a.Active < b.Active, true
 			}
 			return spread(a, b)
+		})
+	case "least-requests-1h":
+		// Include unsent leases so simultaneous new conversations cannot all
+		// pile onto the same low-count account before the first header write.
+		load := func(s Seat) uint64 { return uint64(max(s.RecentRequests1H, 0)) + uint64(max(s.PendingRequests, 0)) }
+		sort.SliceStable(idx, func(i, j int) bool {
+			a, b := seats[idx[i]], seats[idx[j]]
+			if x, y := load(a), load(b); x != y {
+				return x < y
+			}
+			if a.Active != b.Active {
+				return a.Active < b.Active
+			}
+			if a.LastSelected != b.LastSelected {
+				return a.LastSelected < b.LastSelected
+			}
+			if x, y := rotate(idx[i]), rotate(idx[j]); x != y {
+				return x < y
+			}
+			return a.ID < b.ID
 		})
 	case "least-used":
 		sortBy(func(a, b Seat) (bool, bool) {

@@ -74,8 +74,10 @@ type ModelState struct {
 }
 
 type Counter struct {
-	Count        int64 `json:"count"`
-	LastSelected int64 `json:"lastSelected"`
+	Count          int64           `json:"count"`
+	LastSelected   int64           `json:"lastSelected"`
+	RecentRequests []RequestMinute `json:"recentRequests,omitempty"`
+	pending        int             // unsent leases, never persisted
 }
 
 type Counters struct {
@@ -244,6 +246,8 @@ type Lease struct {
 	bindGen     uint64
 	provisional bool
 	permit      bool // an RPM permit reserved and not committed yet
+	counter     *Counter
+	sent        bool
 	released    bool
 }
 
@@ -544,19 +548,21 @@ func (p *Pool) admitLocked(a config.Account, now time.Time) (ok bool, blockedBy 
 }
 
 func (p *Pool) leaseLocked(a config.Account, d Decision, counted bool) *Lease {
+	c := p.counters.Accounts[a.ID]
+	if c == nil {
+		c = &Counter{}
+		p.counters.Accounts[a.ID] = c
+		p.cntDirty = true
+	}
+	c.pending++
 	if counted {
 		p.counters.Sequence++
-		c := p.counters.Accounts[a.ID]
-		if c == nil {
-			c = &Counter{}
-			p.counters.Accounts[a.ID] = c
-		}
 		c.Count++
 		c.LastSelected = p.counters.Sequence
 		p.cntDirty = true
 	}
 	_, rpm := p.limitsLocked(a)
-	return &Lease{p: p, Account: a, Decision: d, permit: rpm > 0}
+	return &Lease{p: p, Account: a, Decision: d, permit: rpm > 0, counter: c}
 }
 
 func (p *Pool) getBindingLocked(key string, now time.Time) *binding {
@@ -642,6 +648,7 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 	s := routes.Seat{ID: a.ID, Priority: a.Priority, Weight: a.Weight, Active: p.active[a.ID], Tokens: p.tokens[a.ID].value(now)}
 	if c := p.counters.Accounts[a.ID]; c != nil {
 		s.Count, s.LastSelected = c.Count, c.LastSelected
+		s.RecentRequests1H, s.PendingRequests = c.recentCount(now), c.pending
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
@@ -984,9 +991,17 @@ func (l *Lease) MarkSent() {
 	p := l.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if l.released {
+	if l.released || l.sent {
 		return
 	} // an asynchronous transport trace may arrive after cancellation
+	l.sent = true
+	if c := l.counter; c != nil {
+		c.pending--
+		if p.counters.Accounts[l.Account.ID] == c {
+			c.recordRequest(p.now())
+			p.cntDirty = true
+		}
+	}
 	if l.permit {
 		l.permit = false
 		w := p.rpm[l.Account.ID]
@@ -1015,6 +1030,9 @@ func (l *Lease) Release() {
 		return
 	}
 	l.released = true
+	if !l.sent && l.counter != nil {
+		l.counter.pending--
+	}
 	if p.active[l.Account.ID] > 0 {
 		p.active[l.Account.ID]--
 	}
@@ -1186,14 +1204,16 @@ func (p *Pool) ResetCounts() {
 // ---- views ----
 
 type View struct {
-	State      *AccountState `json:"state,omitempty"`
-	Active     int           `json:"active"`
-	RPM        int           `json:"rpm"`
-	Health     *float64      `json:"health"`
-	Samples    int           `json:"samples"`
-	Selections int64         `json:"selections"`
-	Bindings   int           `json:"bindings"`
-	Status     string        `json:"status"` // ok | disabled | cooldown | quarantined | quota-exhausted | …
+	State            *AccountState `json:"state,omitempty"`
+	Active           int           `json:"active"`
+	RPM              int           `json:"rpm"`
+	Health           *float64      `json:"health"`
+	Samples          int           `json:"samples"`
+	Selections       int64         `json:"selections"`
+	RecentRequests1H int64         `json:"recentRequests1h"`
+	PendingRequests  int           `json:"pendingRequests"`
+	Bindings         int           `json:"bindings"`
+	Status           string        `json:"status"` // ok | disabled | cooldown | quarantined | quota-exhausted | …
 }
 
 func (p *Pool) Views(cfg *config.Config) map[string]View {
@@ -1225,6 +1245,7 @@ func (p *Pool) Views(cfg *config.Config) map[string]View {
 		}
 		if c := p.counters.Accounts[a.ID]; c != nil {
 			v.Selections = c.Count
+			v.RecentRequests1H, v.PendingRequests = c.recentCount(now), c.pending
 		}
 		v.Status = p.unavailableLocked(cfg, a, "", now)
 		if v.Status == "" {
@@ -1358,6 +1379,8 @@ func (p *Pool) ExportCounters(force bool) (Counters, bool) {
 	c := Counters{Version: 1, Sequence: p.counters.Sequence, Accounts: map[string]*Counter{}}
 	for id, v := range p.counters.Accounts {
 		cp := *v
+		cp.pending = 0
+		cp.RecentRequests = v.recentSnapshot(p.now())
 		c.Accounts[id] = &cp
 	}
 	return c, true
@@ -1374,8 +1397,13 @@ func (p *Pool) ImportCounters(c Counters, valid map[string]bool) error {
 		if v == nil || v.Count < 0 || v.LastSelected < 0 || v.LastSelected > c.Sequence {
 			return fmt.Errorf("invalid selection counter for %s", id)
 		}
+		if err := validateRecentRequests(v.RecentRequests); err != nil {
+			return fmt.Errorf("invalid recent requests for %s: %w", id, err)
+		}
 		if valid[id] {
 			cp := *v
+			cp.pending = 0
+			cp.RecentRequests = v.recentSnapshot(p.now())
 			out.Accounts[id] = &cp
 		}
 	}

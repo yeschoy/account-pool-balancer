@@ -155,3 +155,32 @@ Final gates passed: full Go tests (server 43.285s), full race tests (server
 JSON and diff checks. Form changes are help text only, not a new UI flow.
 Temporary public issue-read spill was registered in _tmp_artifacts.md and retained
 pending consent; no new persistent Mock process or third-party dependency.
+
+## Recent-hour request balancing — 2026-11-05
+
+User requested recent-one-hour least-used selection when a conversation has no
+binding. Added optional `least-requests-1h`, not a silent default replacement:
+existing priority/eligibility and session/cache preference remain ahead of new
+selection. Score uses current+previous59 minute buckets of sent attempts plus
+atomic unsent reservations, not quota ratios, decayed Tokens or lifetime counts.
+Tie-breaks use active count, prior fresh-selection sequence and rotating ties.
+Sent sticky hits and upstream failures count once; metadata, diagnostics,
+cancelled-before-send and local rejects do not. Sparse <=60 buckets reuse v1
+selection-counters persistence, validate/copy/expire at restore/export, and keep
+pending leases ephemeral. Detached old leases cannot revive reset/deleted
+history. Old files start empty, without invented recent-hour backfill.
+
+Full tests (server 53.574s), race (server 80.673s), vet, native/Linux amd64+arm64
+builds, JS syntax/JSON/diff passed. Unit coverage includes 80 concurrent pending
+leases, cancellation/idempotency, minute expiry/rollback, copies/corruption,
+legacy snapshots and Go session/cache/failure accounting. Real headless browser
+saved the strategy independently from Zen/Token Harbor, showed 4/2 sends and 0
+pending, and verified a true Mock restart retained setting/counts. Only fake keys
+and local upstreams were used; no deployment, production edits or paid inference.
+
+Old ignored Mock data had obsolete Token Harbor rule defaults, so kept it
+untouched and used registered `recent-data/` instead. Owned Mock process/listener
+and QA browser stopped. New data and two owned snapshot paths are in ignored
+_tmp_artifacts.md; retain until consent. No dependency, separate scheduler or
+new task directory. Overall task remains in_progress; unrelated .worktrees/
+was not changed or staged. Operator guide: docs/opencode-go-gateway.md.

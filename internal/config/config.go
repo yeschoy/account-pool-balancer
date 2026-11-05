@@ -943,7 +943,7 @@ func Default() *Config {
 }
 
 // Strategies are the routing strategies Validate accepts.
-var Strategies = []string{"smart", "pace", "least-used", "weighted", "roundrobin", "least-selections", "least-connections", "ordered"}
+var Strategies = []string{"smart", "pace", "least-used", "least-requests-1h", "weighted", "roundrobin", "least-selections", "least-connections", "ordered"}
 
 // PerchRuntimeKey is a Perch account's placeholder runtime key: unique per
 // Supabase user id, which is what config validation requires of every account.

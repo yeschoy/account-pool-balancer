@@ -504,7 +504,7 @@ function accountRow(a) {
     <td class="num">${r.active} / ${effLimit(a.maxConcurrent, st.learnedConcurrency)}</td>
     <td class="num">${r.rpm} / ${effLimit(a.maxRpm, st.learnedRpm)}</td>
     <td class="num">${r.health === null || r.health === undefined ? '<span class="muted">—</span>' : pct(r.health)}<div class="acc-sub">${r.samples} 样本</div></td>
-    <td class="num">${num(r.selections)} / ${num(r.bindings)}</td>
+    <td class="num">${num(r.selections)} / ${num(r.bindings)}${pool === 'opencode-go' ? `<div class="acc-sub" title="当前分钟及前59分钟的网关已发送推理次数，包含会话命中；不含额度/诊断。分钟级窗口，新版本升级前的历史不回填。">近1h 已发 ${num(r.recentRequests1h ?? 0)} 次 · 待发 ${num(r.pendingRequests ?? 0)}</div>` : ''}</td>
     <td><div class="menu"><button class="btn small" data-menu>操作 ▾</button></div></td>
   </tr>`;
 }
@@ -896,6 +896,7 @@ const STRATEGY_HINTS = {
   smart: '智能（默认，参考 magpie Smart）：余量充足的账号里，窗口最早重置的先用，避免额度在重置时浪费；余量低于阈值的排后，钱包付费的最后',
   pace: '周额度节奏：剩余比例 ÷ 距重置小时数，越高越先用',
   'least-used': '用量最少优先：按窗口已用比例，其次按近期 token',
+  'least-requests-1h': '近1小时请求最少：同优先级内比较近60个分钟桶的已发推理次数＋待发预约；会话/缓存亲和优先，额度查询不计入',
   weighted: '按权重平滑轮询（NGINX 平滑加权）',
   roundrobin: '轮询：最久未被选中者优先',
   'least-selections': '选中次数最少优先，平局按在途数',

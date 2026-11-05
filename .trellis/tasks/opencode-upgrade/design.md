@@ -37,5 +37,12 @@
 - Existing stats exports gain measured cache-write/input/output/duration coverage, affinity and timing counters. Go overview/UI use provider-scoped bindings/keys/strategy and distinguish configured route from observed IP. Existing logs add source enums/observed IP and redact native identity metadata in optional detail capture.
 - Operations, defaults, Mock/browser results and limitations are documented in docs/opencode-go-gateway.md. Production and real keyed client/cache effectiveness are not validated by this local delivery.
 
+## Recent-hour balancing design
+
+- Add `least-requests-1h` as an opt-in pure `routes.Order` case; preserve priority grouping, eligibility and session/cache preference in the existing atomic pool. Recent sent count + pending unsent leases is the primary score, then active count, prior fresh-selection sequence and rotating ties; cumulative lifetime selections and quota/token metrics are not this strategy's score.
+- Add bounded sparse minute buckets to existing `Counter`, and attach its reference to each Lease. Commit once at MarkSent for both fresh and sticky sends, even with unlimited RPM. Pending changes to committed load atomically and cancels without fake usage. Reset/deletion detaches old counter references so late traces cannot revive them.
+- Keep counter version1, optional JSON fields, 5-second/normal-shutdown persistence. Validate <=60 ordered nonnegative minutes/positive counts and overflow; clone mutable slices and discard expired/future entries at restore/export. Legacy snapshots begin empty; no completed-request stats are repurposed as send history.
+- Existing WebUI gets an optional strategy description and Go hourly/pending count hint; browser fake-key API readback and a true Mock restart verify strategy isolation and restored counts. No live configuration changes or upstream paid inference.
+
 ## Rollback
 No destructive schema migration. Disable OpenCode accounts/remove their keys and revert executable. Back up config/metadata before old executables rewrite additive fields. Existing provider configuration and stats remain intact.

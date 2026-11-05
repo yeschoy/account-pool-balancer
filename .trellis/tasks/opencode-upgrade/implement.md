@@ -49,4 +49,13 @@ Local delivery guide: docs/opencode-go-gateway.md. Full Go test and race runs pa
 - Existing standard Transport retained. Added strict bracket/literal validation, Go form guidance and four-protocol authenticated IPv6 loopback/TLS regression for metadata, usage, probe, inference, IPv4-vs-IPv6 pin failure and no direct fallback. Configuration and operations: docs/opencode-go-gateway.md.
 - Actual user-proxy egress and keyed external IPv6 inference remain unverified; local quality gate results are recorded in the session journal.
 
+## Recent-hour request balancing follow-up
+
+- User requested a recent-one-hour least-used policy for new selections; existing default smart and least-used quota/decayed-token policy are not this metric.
+- Implement optional `least-requests-1h` in the existing pure route sorter and atomic pool leases. Add sparse 60-minute sent-request buckets and ephemeral pending counts to existing counters; persist/validate/deep-copy without changing counter version or old defaults.
+- Keep priority/eligibility, session/cache preference, policy/no-replay and all other pool strategies intact. Go UI explains minute precision and shows measured hourly sends. Old snapshots start an empty recent history rather than inventing it.
+- [x] Focused clock/concurrency/restart/affinity tests and their race variants passed; full Go tests (server 53.574s), full race (server 80.673s), vet, native/Linux amd64+arm64 builds, JS/JSON/diff gates passed.
+- [x] Real local fake-key browser selected/saved the strategy; Go changed while Zen/Token Harbor remained smart. Six mock sends kept the hot session on one account and routed fresh sessions to the low-usage account; row/API showed 4/2 and pending0. Actual Mock process restart restored strategy and the same counts. Owned process/listener and headless QA browser stopped; artifacts registered and retained pending consent.
+- No deployment or live paid inference in this follow-up. Broader task remains incomplete.
+
 Overall task remains in_progress. Do not archive or mark the entire P0 request completed; docs/opencode.md contains the bounded deliverable and operational instructions.
