@@ -226,6 +226,7 @@ tr[data-id]:hover { background: var(--line2); }
 }
 
 /* ---- TokenHarbor 注册日志（右下角弹窗） ---- */
+.th-log-launcher { position: fixed; right: 18px; bottom: 18px; z-index: 60; box-shadow: 0 4px 16px rgba(0,0,0,.16); }
 .th-logbox {
   position: fixed; right: 18px; bottom: 18px; width: min(520px, calc(100vw - 36px));
   max-height: 44vh; display: flex; flex-direction: column;

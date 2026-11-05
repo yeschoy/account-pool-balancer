@@ -64,14 +64,16 @@ async function loadTHRegistrations() {
       const out = await api('GET', '/api/tokenharbor/registrations');
       if (generation !== thState.generation) return;
       thState.jobs = out.jobs || [];
-      renderTHJobs();
-      if (thState.job) {
-        const job = thState.jobs.find((j) => j.id === thState.job);
-        if (job) renderTHJob(job);
-        else $('#th-register-detail').classList.add('hidden');
-      } else {
-        $('#th-register-detail').classList.add('hidden');
+      let job = thState.jobs.find((j) => j.id === thState.job);
+      if (!job) {
+        job = thState.jobs.find((j) => j.running) || thState.jobs[0];
+        thState.job = job?.id || '';
+        thState.selected.clear();
+        thState.batchMessage = '';
       }
+      renderTHJobs();
+      if (job) renderTHJob(job);
+      else $('#th-register-detail').classList.add('hidden');
       $('#th-register-poll-error').textContent = '';
     } catch (e) {
       if (generation === thState.generation) $('#th-register-poll-error').textContent = '任务获取失败：' + thSafe(e.message);
@@ -130,7 +132,7 @@ function thRowActions(r) {
   if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
   if (thBatchEligible('checkout', r)) out.push(button('checkout', 'Agent Pass 链接'));
-  if (r.status === 'registered' && r.verified && r.subscription?.status === 'active') out.push(button('import', '校验并入池', true));
+  if (thBatchEligible('import', r)) out.push(button('import', '校验并入池', true));
   if (r.status === 'failed' || r.status === 'uncertain') out.push(button('retry', r.hasSession ? '继续（保留会话）' : '重试'));
   if (!['running', 'queued'].includes(r.status)) out.push(button('delete', '删除'));
   return out.join(' ');
@@ -289,6 +291,7 @@ function thRowLocked(id) {
 }
 
 function thBatchEligible(kind, row) {
+  if (kind === 'import') return row.status === 'registered' && row.verified && row.subscription?.status === 'active';
   if (kind === 'retry') return ['saved', 'failed', 'uncertain'].includes(row.status);
   return !!row.hasSession && !['saved', 'running', 'queued'].includes(row.status);
 }
@@ -307,7 +310,7 @@ function thUpdateSelection() {
   all.indeterminate = count > 0 && count < selectable.length;
   all.disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || selectable.length === 0;
   $('#th-selected-count').textContent = `已选 ${thState.selected.size} 个（仅本任务）`;
-  for (const [kind, id] of [['retry', 'register'], ['subscription', 'subscription'], ['checkout', 'checkout']]) {
+  for (const [kind, id] of [['retry', 'register'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import']]) {
     $(`#th-batch-${id}`).disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || !thState.rows.some((r) => thState.selected.has(r.id) && thBatchEligible(kind, r));
   }
   $('#th-batch-progress').textContent = thState.batchMessage;
@@ -330,6 +333,7 @@ async function thBatchCall(kind, row, options) {
   const path = '/api/tokenharbor/registrations/' + encodeURIComponent(row.id);
   if (kind === 'retry') return api('POST', path + '/retry', options);
   if (kind === 'subscription') return api('POST', path + '/subscription', {});
+  if (kind === 'import') return api('POST', path + '/import', options);
   if (kind === 'checkout') {
     const out = row.hasCheckout ? await api('GET', path + '/checkout') : await api('POST', path + '/checkout', { kind: 'pass', product: 'starter_pass_monthly' });
     thCheckoutURL(out.url);
@@ -342,7 +346,9 @@ async function thBatchCall(kind, row, options) {
 async function thBatchRun(kind, rows, onResult = () => {}) {
   if (thState.batchBusy || thState.pending.size) throw new Error('已有操作执行中，请等待完成');
   thState.batchBusy = true;
-  const options = { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 };
+  const options = kind === 'import'
+    ? { group: $('#th-register-group').value.trim() || 'tokenharbor' }
+    : { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 };
   const counts = { success: 0, failed: 0, skipped: 0 };
   let next = 0;
   const progress = () => {
@@ -388,6 +394,12 @@ async function thBatchAction(kind) {
   thRenderCurrentJob();
   try {
     if (kind === 'checkout') return await thBatchCheckout(rows);
+    if (kind === 'import') {
+      const eligible = rows.filter((r) => thBatchEligible(kind, r)).length;
+      const group = $('#th-register-group').value.trim() || 'tokenharbor';
+      const choice = await modal({ title: '校验并入池所选账号', body: `<p>将对 ${eligible} 个邮箱已验证、上次检测套餐有效的账号重新检测当前套餐，通过后加入分组 <strong>${esc(group)}</strong>；其余记录跳过。</p><p>不会注册、付款或自动重试；套餐失效或检测失败的账号不会入池。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '确认校验并入池', value: 'import', primary: true }] });
+      if (choice !== 'import') return;
+    }
     if (kind === 'retry') {
       const eligible = rows.filter((r) => thBatchEligible(kind, r)).length;
       const choice = await modal({ title: '注册所选账号', body: `<p>将注册/继续 ${eligible} 个账号，其余状态不适用的记录跳过。复用已绑定代理和已有会话，不自动入池。</p><p>${$('#th-register-solve').checked ? '已开启自动解 Turnstile：需要时会产生验证码服务费用。' : '未开启自动解验证码。'}</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '确认注册', value: 'start', primary: true }] });
@@ -551,12 +563,14 @@ async function thSaveSettings(ev) {
 function thLogShow() {
   thLog.visible = thLog.started = true;
   $('#th-logbox').classList.remove('hidden');
+  $('#th-log-open').classList.add('hidden');
   if (!thLog.timer && !thLog.inFlight) thLogPoll();
 }
 
 function thLogHide() {
   thLog.visible = false;
   $('#th-logbox').classList.add('hidden');
+  $('#th-log-open').classList.remove('hidden');
   // 收起不动轮询状态：再打开时从上次的 seq 继续，不丢中间的行。
 }
 
@@ -636,7 +650,7 @@ function thInstall() {
     if (checkbox.checked) thState.selected.add(checkbox.dataset.id); else thState.selected.delete(checkbox.dataset.id);
     thUpdateSelection();
   });
-  for (const [id, kind] of [['register', 'retry'], ['subscription', 'subscription'], ['checkout', 'checkout']]) {
+  for (const [id, kind] of [['register', 'retry'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import']]) {
     on('#th-batch-' + id, 'click', () => thBatchAction(kind).catch((e) => toast(e.message)));
   }
   on('#th-register-jobs', 'click', (e) => {
@@ -650,6 +664,7 @@ function thInstall() {
     $('#th-register-import-error').textContent = '';
     loadTHRegistrations();
   });
+  on('#th-log-open', 'click', thLogShow);
   on('#th-log-close', 'click', thLogHide);
   on('#th-log-clear', 'click', () => { thLog.lines = []; thLogRender(); thLogStatus(0); });
   on('#th-log-pause', 'click', (e) => {

@@ -340,14 +340,16 @@
               <button type="button" class="btn" id="th-batch-register" disabled>注册所选</button>
               <button type="button" class="btn" id="th-batch-subscription" disabled>刷新所选套餐</button>
               <button type="button" class="btn" id="th-batch-checkout" disabled>获取所选订阅链接</button>
+              <button type="button" class="btn primary" id="th-batch-import" disabled>校验并入池所选</button>
             </div>
             <p id="th-batch-progress" class="muted small" role="status"></p>
-            <p class="hint">仅操作当前任务勾选的账号；不适用的记录会跳过，失败不自动重试。获取订阅链接不会付款、不会自动打开多个页面。</p>
+            <p class="hint">仅操作当前任务勾选的账号；不适用的记录会跳过，失败不自动重试。批量入池仅处理邮箱已验证且上次检测套餐有效的账号，入池前重新检测；获取订阅链接不会付款、不会自动打开多个页面。</p>
             <div class="table-wrap"><table class="table"><thead><tr><th><input type="checkbox" id="th-select-all" aria-label="全选本任务账号"></th><th>邮箱</th><th>状态</th><th>代理</th><th>Key</th><th>详情</th><th>操作</th></tr></thead><tbody id="th-register-rows"></tbody></table></div>
             <p id="th-register-import-error" class="error" role="alert"></p>
           </div>
         </section>
       </div>
+      <button type="button" class="btn primary th-log-launcher hidden" id="th-log-open" aria-controls="th-logbox">任务日志</button>
     </section>
 
     <section id="page-thsettings" class="page hidden">

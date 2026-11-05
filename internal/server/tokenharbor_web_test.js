@@ -13,7 +13,7 @@ function environment(api) {
     if (!nodes.has(selector)) {
       const classes = new Set();
       nodes.set(selector, { innerHTML: '', textContent: '', checked: false, value: '2', disabled: false, scrollHeight: 0, scrollTop: 0, clientHeight: 0,
-        addEventListener() {}, querySelector() { return null; },
+        listeners: {}, addEventListener(event, handler) { this.listeners[event] = handler; }, querySelector() { return null; },
         classList: { add(c) { classes.add(c); }, remove(c) { classes.delete(c); }, contains(c) { return classes.has(c); }, toggle(c, yes) { if (yes) classes.add(c); else classes.delete(c); } },
       });
     }
@@ -58,6 +58,13 @@ async function testLogSingleFlightAndSequenceDedupe() {
   e.context.thLogHide();
   assert.equal(e.node('#th-logbox').classList.contains('hidden'), true);
   assert.equal(e.context.log.visible, false);
+  assert.equal(e.node('#th-log-open').classList.contains('hidden'), false, 'collapsed panel must leave a reopen button');
+  e.node('#th-log-open').listeners.click();
+  assert.equal(e.context.log.visible, true);
+  assert.equal(e.node('#th-logbox').classList.contains('hidden'), false);
+  assert.equal(e.node('#th-log-open').classList.contains('hidden'), true);
+  assert.equal(e.context.log.lines.length, 3, 'reopening retains previous logs');
+  assert.equal(e.timers.size, 1, 'reopening must not start another polling chain');
 }
 
 async function testBatchBoundedPartialAndNoRetry() {
@@ -107,13 +114,74 @@ async function testCheckoutReuseAndUncertainStops() {
   assert.equal(JSON.stringify(e.context.state).includes('stripe'), false, 'URLs must not enter registration state');
 }
 
-async function testCancelledBatchDoesNotRegister() {
+async function testRegistrationDefaultTaskAndRetention() {
+  const recent = { id: 'recent', rows: [{ id: 'one', status: 'saved' }] };
+  const running = { id: 'running', running: true, rows: [{ id: 'two', status: 'running' }] };
+  let jobs = [recent, running];
+  const calls = [];
+  const e = environment(async (method, url) => { calls.push({ method, url }); return { jobs }; });
+  e.context.log.started = true;
+  e.node('#th-logbox').classList.add('hidden');
+  await e.context.loadTHRegistrations();
+  assert.equal(e.context.state.job, 'running', 'initial load expands an active task even when a newer saved task exists');
+  assert.equal(e.node('#th-register-detail').classList.contains('hidden'), false);
+  e.context.state.job = 'recent';
+  e.context.state.selected.add('one');
+  await e.context.loadTHRegistrations();
+  assert.equal(e.context.state.job, 'recent', 'polling preserves the manually selected task');
+  assert.equal(e.context.state.selected.has('one'), true);
+  jobs = [running];
+  await e.context.loadTHRegistrations();
+  assert.equal(e.context.state.job, 'running');
+  assert.equal(e.context.state.selected.size, 0, 'switching away from a deleted task clears its selection');
+  jobs = [recent];
+  await e.context.loadTHRegistrations();
+  assert.equal(e.context.state.job, 'recent', 'no active task falls back to the latest task');
+  jobs = [];
+  await e.context.loadTHRegistrations();
+  assert.equal(e.context.state.job, '');
+  assert.equal(e.node('#th-register-detail').classList.contains('hidden'), true);
+  assert.equal(e.node('#th-logbox').classList.contains('hidden'), true, 'task refresh must not reopen manually hidden logs');
+  assert.ok(calls.every((c) => c.method === 'GET'), 'expanding tasks must not register accounts');
+}
+
+async function testBatchImportPartialAndScoped() {
+  const calls = [];
+  const e = environment(async (method, url, body) => {
+    calls.push({ method, url, body });
+    if (url.includes('/expired/')) throw new Error('套餐已失效');
+    return { status: 'imported' };
+  });
+  const paid = (id) => ({ id, email: id + '@mock.test', status: 'registered', verified: true, subscription: { status: 'active' } });
+  const rows = [paid('paid'), paid('expired'), { ...paid('free'), subscription: { status: 'free' } },
+    { ...paid('unverified'), verified: false }, { ...paid('imported'), status: 'imported' }, paid('not-selected')];
+  e.context.state.rows = rows;
+  rows.slice(0, -1).forEach((r) => e.context.state.selected.add(r.id));
+  e.node('#th-register-group').value = 'tokenharbor';
+  e.context.thUpdateSelection();
+  assert.equal(e.node('#th-batch-import').disabled, false);
+  let prompt;
+  e.context.modal = async (options) => { prompt = options; return 'import'; };
+  await e.context.thBatchAction('import');
+  assert.match(prompt.body, /重新检测当前套餐/);
+  assert.equal(calls.length, 2, 'only selected, verified, last-observed paid rows are submitted once');
+  assert.ok(calls.every((c) => c.method === 'POST' && c.url.endsWith('/import') && c.body.group === 'tokenharbor'));
+  assert.match(e.context.state.batchMessage, /成功 1 · 失败 1 · 跳过 3/);
+  assert.match(e.node('#th-register-import-error').textContent, /expired@mock.test：套餐已失效/);
+  e.context.state.selected.clear();
+  e.context.state.selected.add('free');
+  e.context.thUpdateSelection();
+  assert.equal(e.node('#th-batch-import').disabled, true);
+}
+
+async function testCancelledBatchDoesNotMutate() {
   let calls = 0;
   const e = environment(async () => { calls++; });
   e.context.state.rows = [{ id: 'one', status: 'saved' }];
   e.context.state.selected.add('one');
   e.context.modal = async () => 'cancel';
   await e.context.thBatchAction('retry');
+  await e.context.thBatchAction('import');
   assert.equal(calls, 0);
   assert.equal(e.context.state.batchPrompt, false);
   assert.equal(e.context.state.batchBusy, false);
@@ -143,6 +211,8 @@ async function testRowGuardAndSelectionRetention() {
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();
   await testRowGuardAndSelectionRetention();
-  await testCancelledBatchDoesNotRegister();
+  await testRegistrationDefaultTaskAndRetention();
+  await testBatchImportPartialAndScoped();
+  await testCancelledBatchDoesNotMutate();
   console.log('Token Harbor web behavior tests passed');
 })().catch((e) => { console.error(e); process.exitCode = 1; });
