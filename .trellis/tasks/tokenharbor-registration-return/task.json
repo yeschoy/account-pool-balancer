@@ -1,0 +1,9 @@
+{
+  "name": "TokenHarbor 注册归档退回与套餐模型调研",
+  "status": "completed",
+  "base_commit": "ceca444",
+  "execution": "direct",
+  "authorization": "用户请求实现分类/退回并调研模型；依项目复杂任务约定留存 Trellis，不启用子代理、不部署",
+  "artifacts": ["prd.md", "design.md", "implement.md", "research.md", "validation.md"],
+  "result": "完成待处理/已入池分类及安全退回、纠正目录文案；相关race/Node/vet/build与本地Mock浏览器验证通过；取得官方29组Pass映射及两把原生Key的77项目录证据，不修改推理路由，不部署"
+}

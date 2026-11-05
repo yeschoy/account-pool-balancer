@@ -61,3 +61,13 @@ Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overri
 ### 7. Wrong vs Correct
 Wrong: register → verified → enabled pool account, or create checkout → mark paid.
 Correct: save/register → separate current-plan observation → user payment → fresh active-plan check on explicit import; failures deny admission without deleting credentials.
+
+## Registration archive / return
+
+- Console task-local pending/imported tabs filter before deriving selection; pending is the initial view. Switching clears selection, polling retains its visible scope, and operation locks prevent switching during dispatch/confirmation.
+- `POST /api/accounts/{id}/return-to-registration` requires admin/CSRF/no-store and a unique imported row linked by exact accountId; an existing pool account must still have the same provider and full key. Never infer a session by email or masked key, and reject Key-only accounts with no original registration.
+- Explicit return removes only that account from config and restores the encrypted row to registered/unverified, clearing accountId but preserving credentials, fixed egress, mailbox, checkout and plan observation. No signup, upstream calls, payment or key revocation. Re-admission still checks the current plan.
+- Admission/return/delete-row local commits share thAdmissionMu; never hold it across network checks. Admission revalidates row UpdatedAt and lifecycle association after a subscription check, so a late result cannot undo return.
+- Config and signup persistence are two files, not an atomic transaction: remove pool config first while holding the row update lock. If row persistence fails, keep the imported/accountId row recoverable, report the partial outcome, and allow return to finish from the imported tab even when the pool account is already absent. Never auto-restore config or overwrite new writes.
+- TokenHarbor API model tier is not a Pass entitlement. Management counts are labelled catalog/目录模型. Official `/pricing` currently exposes a separate model-to-Pass mapping; unmatched legacy IDs and stale observations remain unknown, not zero or denied. Do not silently crop routing or downstream models without an explicit pool policy.
+- Targeted checks: `node internal/server/tokenharbor_web_test.js`; `go test -race ./internal/server -run '^TestTH'`. Include archive selection, return confirmation, secret preservation, auth/CSRF, mismatched links, partial persistence recovery and a late import check; validate the actual account menu with the floating log panel present.

@@ -114,6 +114,7 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("GET /api/tokenharbor/registrations/{id}", s.apiTHRegistration)
 	a("PUT /api/tokenharbor/registrations/{id}/proxy", s.apiTHRowProxy)
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
+	a("POST /api/accounts/{id}/return-to-registration", s.apiTHReturn)
 	a("POST /api/tokenharbor/registrations/{id}/retry", s.apiTHRetry)
 	a("POST /api/tokenharbor/registrations/{id}/reverify", s.apiTHReverify)
 	a("POST /api/tokenharbor/registrations/{id}/subscription", s.apiTHSubscription)
@@ -443,9 +444,13 @@ func (s *Server) thImport(ctx context.Context, id, group string) error {
 		return errors.New("该账号没有 API Key")
 	}
 	checkedConfig := s.cfg.Get().TokenHarbor
+	originalStatus, originalAccount := row.Status, row.Account
 	row, err = s.thCheckSubscription(ctx, id)
 	if err != nil {
 		return err
+	}
+	if row.Status != originalStatus || row.Account != originalAccount {
+		return errors.New("套餐检测期间入池状态变化，请重新操作")
 	}
 	if !row.Subscription.Active() {
 		return errors.New("当前没有有效付费套餐（Free/未订阅或已到期）；支付链接不代表付款成功，请付款后重新检测")
@@ -459,38 +464,36 @@ func (s *Server) thImport(ctx context.Context, id, group string) error {
 	if group == "" {
 		group = config.TokenHarborGroup
 	}
-	accountID := row.Account
-	_, err = s.cfg.Update(-1, func(c *config.Config) error {
-		if c.TokenHarbor.BaseURL != checkedConfig.BaseURL || c.TokenHarbor.ProxyURL != checkedConfig.ProxyURL {
-			return errors.New("套餐检测期间上游或代理设置变化，请重新检测")
-		}
-		// A re-import (or a row whose account was deleted) must not duplicate:
-		// the key is the identity, exactly as for any other key pool.
-		for i := range c.Accounts {
-			if c.Accounts[i].Provider == config.ProviderTokenHarbor && c.Accounts[i].RuntimeKey == row.APIKey {
-				accountID = c.Accounts[i].ID
-				return nil
-			}
-		}
-		a := config.Account{
-			ID:         config.NewID("acc_"),
-			Provider:   config.ProviderTokenHarbor,
-			Name:       row.Email,
-			Email:      row.Email,
-			Group:      group,
-			Enabled:    true,
-			RuntimeKey: row.APIKey,
-			ProxyURL:   row.Egress(checkedConfig.ProxyURL),
-			CreatedAt:  time.Now(),
-		}
-		c.Accounts = append(c.Accounts, a)
-		accountID = a.ID
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+	s.thAdmissionMu.Lock()
+	defer s.thAdmissionMu.Unlock()
 	_, err = store.Update(id, func(rw *thsignupstore.Row) error {
+		if rw.UpdatedAt != row.UpdatedAt {
+			return errors.New("套餐检测后账号状态变化，请重新操作")
+		}
+		accountID := row.Account
+		_, err := s.cfg.Update(-1, func(c *config.Config) error {
+			if c.TokenHarbor.BaseURL != checkedConfig.BaseURL || c.TokenHarbor.ProxyURL != checkedConfig.ProxyURL {
+				return errors.New("套餐检测期间上游或代理设置变化，请重新检测")
+			}
+			// Re-imports dedupe by the full native key, never by email or mask.
+			for i := range c.Accounts {
+				if c.Accounts[i].Provider == config.ProviderTokenHarbor && c.Accounts[i].RuntimeKey == row.APIKey {
+					accountID = c.Accounts[i].ID
+					return nil
+				}
+			}
+			a := config.Account{
+				ID: config.NewID("acc_"), Provider: config.ProviderTokenHarbor,
+				Name: row.Email, Email: row.Email, Group: group, Enabled: true,
+				RuntimeKey: row.APIKey, ProxyURL: row.Egress(checkedConfig.ProxyURL), CreatedAt: time.Now(),
+			}
+			c.Accounts = append(c.Accounts, a)
+			accountID = a.ID
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		rw.Status = thsignupstore.Imported
 		rw.Account = accountID
 		rw.Detail = "已入池"
@@ -732,6 +735,8 @@ func (s *Server) apiTHLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiTHDeleteRow(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	s.thAdmissionMu.Lock()
+	defer s.thAdmissionMu.Unlock()
 	store, err := s.thStore()
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, err)

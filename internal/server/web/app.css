@@ -115,6 +115,8 @@ td.actions .btn + .btn { margin-left: 6px; }
 .menu-list button { text-align: left; border: 0; background: none; color: var(--text); padding: 7px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
 .menu-list button:hover { background: var(--line2); }
 .menu-list button.danger { color: var(--bad); }
+/* TokenHarbor 日志悬窗不能挡住账号操作菜单。 */
+body[data-pool="tokenharbor"] .menu-list { z-index: 70; }
 
 .form { display: grid; grid-template-columns: 150px 1fr; gap: 10px 12px; align-items: center; }
 .form label { color: var(--muted); font-size: 13px; }

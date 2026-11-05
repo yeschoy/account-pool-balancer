@@ -489,7 +489,7 @@ function accountRow(a) {
   const cat = q && q.catalog ? Object.entries(q.catalog) : [];
   const catOn = cat.filter(([, en]) => en).map(([m]) => m).sort();
   const catTitle = a.provider === 'tokenharbor' ? '上游模型目录，不代表余额或推理授权：\n' : openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
-  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : '可用模型 '}${catOn.length}${cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
+  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : a.provider === 'tokenharbor' ? '目录模型 ' : '可用模型 '}${catOn.length}${cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
   status += catHTML;
   const covHTML = cov.length ? `<div class="acc-sub" title="${esc(cov.map(([m, c]) => m + '：' + (c.covered === true ? 'Design Plan 模型' : c.covered === false ? '套餐模型' : '未知')).join('\n'))}">已识别 ${cov.length} 个模型的类别</div>` : '';
   const sum = !ollama && !modal && !openCode && q && q.summary ? `<div class="acc-sub" title="累计消费 ${esc(q.summary.totalConsumedUsd)} · 累计充值 ${esc(q.summary.totalRechargedUsd)} · 调用 ${esc(q.summary.usageCount)} 次">今日 ${esc(usd(q.summary.todayConsumedUsd))}</div>` : '';
@@ -607,7 +607,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型目录' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型目录' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -632,6 +632,7 @@ async function accountAction(a, act) {
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
       case 'reauth': return deviceAuth({ accountId: a.id });
+      case 'th-return': return await thReturnToRegistration(a.id, a.name);
       case 'toggle': await api('PUT', `/api/accounts/${a.id}`, { enabled: !a.enabled }); break;
       case 'delete':
         if (await modal({ title: '删除账号', body: `<p>确定删除 <b>${esc(a.name)}</b>？它的密钥会从配置中移除，绑定到它的会话会改派。</p>`, buttons: [{ label: '取消', value: 'c' }, { label: '删除', value: 'del', danger: true }] }) !== 'del') return;

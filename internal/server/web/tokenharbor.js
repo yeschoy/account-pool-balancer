@@ -12,7 +12,7 @@ const TH_STATUS = {
   uncertain: ['中断', 'warn'],
 };
 
-const thState = { job: '', jobs: [], rows: [], busy: false, timer: null, generation: 0, selected: new Set(), pending: new Set(), batchBusy: false, batchPrompt: false, batchMessage: '' };
+const thState = { job: '', filter: 'pending', jobs: [], rows: [], busy: false, timer: null, generation: 0, selected: new Set(), pending: new Set(), batchBusy: false, batchPrompt: false, batchMessage: '' };
 // 右下角注册日志：轮询增量，暂停时只累积不渲染。
 const thLog = { seq: 0, lines: [], timer: null, inFlight: false, paused: false, visible: false, started: false };
 
@@ -100,7 +100,17 @@ function renderTHJobs() {
 }
 
 function renderTHJob(job) {
-  thState.rows = job.rows || [];
+  const rows = job.rows || [];
+  const imported = rows.filter((r) => r.status === 'imported').length;
+  for (const [filter, label, count] of [['pending', '待处理', rows.length - imported], ['imported', '已入池', imported]]) {
+    const tab = $('#th-filter-' + filter);
+    const active = thState.filter === filter;
+    tab.textContent = `${label}（${count}）`;
+    tab.classList.toggle('primary', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0;
+  }
+  thState.rows = rows.filter((r) => (r.status === 'imported') === (thState.filter === 'imported'));
   const ids = new Set(thState.rows.map((r) => r.id));
   for (const id of thState.selected) if (!ids.has(id)) thState.selected.delete(id);
   $('#th-register-detail').classList.remove('hidden');
@@ -114,7 +124,7 @@ function renderTHJob(job) {
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
     <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
     <td>${thRowActions(r)}</td>
-  </tr>`).join('') || '<tr><td colspan="7" class="empty">暂无账号</td></tr>';
+  </tr>`).join('') || `<tr><td colspan="7" class="empty">${thState.filter === 'imported' ? '本任务暂无已入池账号' : '本任务暂无待处理账号；已入池记录请切换「已入池」查看'}</td></tr>`;
   thUpdateSelection();
 }
 
@@ -133,6 +143,7 @@ function thRowActions(r) {
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
   if (thBatchEligible('checkout', r)) out.push(button('checkout', 'Agent Pass 链接'));
   if (thBatchEligible('import', r)) out.push(button('import', '校验并入池', true));
+  if (r.status === 'imported' && r.accountId) out.push(button('return', '退回注册机'));
   if (r.status === 'failed' || r.status === 'uncertain') out.push(button('retry', r.hasSession ? '继续（保留会话）' : '重试'));
   if (!['running', 'queued'].includes(r.status)) out.push(button('delete', '删除'));
   return out.join(' ');
@@ -262,6 +273,11 @@ async function thRowAction(kind, id) {
   err.textContent = '';
   if (kind === 'reverify') err.textContent = '';
   try {
+    if (kind === 'return') {
+      const row = thState.rows.find((r) => r.id === id);
+      if (!row?.accountId) throw new Error('此记录没有关联的号池账号');
+      return await thReturnToRegistration(row.accountId, row.email);
+    }
     if (kind === 'import') {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/import', { group: $('#th-register-group').value.trim() || 'tokenharbor' });
     } else if (kind === 'subscription') {
@@ -283,6 +299,22 @@ async function thRowAction(kind, id) {
     err.textContent = thSafe(e.message);
   }
   if (currentPage === 'thregister') loadTHRegistrations();
+}
+
+// 退回只移动现有资料，不重新注册、不创建或撤销上游 Key。
+async function thReturnToRegistration(accountID, name) {
+  return thGuardRow('return:' + accountID, async () => {
+    const choice = await modal({ title: '退回 TokenHarbor 注册机', body: `<p>将 <strong>${esc(name || accountID)}</strong> 移出号池，停止后续调度；原注册会话、Key、接码资料和代理绑定均保留。</p><p>不会重新注册或付款。之后重新入池仍需校验当前有效套餐。仅支持有原注册记录的账号。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '确认退回', value: 'return', primary: true }] });
+    if (choice !== 'return') return false;
+    const row = await api('POST', '/api/accounts/' + encodeURIComponent(accountID) + '/return-to-registration', {});
+    thState.job = row.attempt;
+    thState.filter = 'pending';
+    thState.selected.clear();
+    thState.batchMessage = '';
+    toast('已移出号池并退回原注册任务，资料已保留');
+    go('thregister');
+    return true;
+  });
 }
 
 // 批量操作只复用既有单行接口，不另外创建订单/注册重试机制。
@@ -636,6 +668,14 @@ function thInstall() {
   on('#th-save-proxies', 'click', () => thSaveProxies());
   on('#th-clear-proxies', 'click', () => thSaveProxies(true));
   on('#th-settings-form', 'submit', thSaveSettings);
+  for (const filter of ['pending', 'imported']) on('#th-filter-' + filter, 'click', () => {
+    if (thState.batchBusy || thState.batchPrompt || thState.pending.size || thState.filter === filter) return;
+    thState.filter = filter;
+    thState.selected.clear();
+    thState.batchMessage = '';
+    $('#th-register-import-error').textContent = '';
+    thRenderCurrentJob();
+  });
   on('#th-select-all', 'change', (e) => {
     if (thState.batchBusy || thState.batchPrompt || thState.pending.size) return;
     for (const row of thState.rows) {
@@ -678,7 +718,7 @@ function thInstall() {
     if (proxy) { thGuardRow(proxy.dataset.id, () => thRowProxy(proxy.dataset.id)).catch((err) => toast(err.message)); return; }
     const checkout = e.target.closest('.th-row-checkout');
     if (checkout) { thGuardRow(checkout.dataset.id, () => thRowCheckout(checkout.dataset.id)).catch((err) => toast(err.message)); return; }
-    for (const kind of ['import', 'retry', 'delete', 'reverify', 'subscription']) {
+    for (const kind of ['import', 'return', 'retry', 'delete', 'reverify', 'subscription']) {
       const btn = e.target.closest('.th-row-' + kind);
       if (btn) { thGuardRow(btn.dataset.id, () => thRowAction(kind, btn.dataset.id)).catch((err) => toast(err.message)); return; }
     }

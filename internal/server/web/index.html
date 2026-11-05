@@ -335,6 +335,10 @@
           <div id="th-register-jobs" class="pc-register-jobs"><p class="muted">暂无任务。</p></div>
           <div id="th-register-detail" class="hidden">
             <div class="head-row pc-register-detail-head"><h2 id="th-register-job-title">任务详情</h2><span id="th-register-job-status" class="muted"></span></div>
+            <div class="actions" role="tablist" aria-label="注册记录分类">
+              <button type="button" class="btn primary" id="th-filter-pending" role="tab" aria-selected="true" aria-controls="th-register-rows">待处理（0）</button>
+              <button type="button" class="btn" id="th-filter-imported" role="tab" aria-selected="false" aria-controls="th-register-rows">已入池（0）</button>
+            </div>
             <div class="actions">
               <span id="th-selected-count" class="muted small">已选 0 个</span>
               <button type="button" class="btn" id="th-batch-register" disabled>注册所选</button>

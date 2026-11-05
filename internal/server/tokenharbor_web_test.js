@@ -13,7 +13,7 @@ function environment(api) {
     if (!nodes.has(selector)) {
       const classes = new Set();
       nodes.set(selector, { innerHTML: '', textContent: '', checked: false, value: '2', disabled: false, scrollHeight: 0, scrollTop: 0, clientHeight: 0,
-        listeners: {}, addEventListener(event, handler) { this.listeners[event] = handler; }, querySelector() { return null; },
+        listeners: {}, attributes: {}, setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(event, handler) { this.listeners[event] = handler; }, querySelector() { return null; },
         classList: { add(c) { classes.add(c); }, remove(c) { classes.delete(c); }, contains(c) { return classes.has(c); }, toggle(c, yes) { if (yes) classes.add(c); else classes.delete(c); } },
       });
     }
@@ -114,6 +114,46 @@ async function testCheckoutReuseAndUncertainStops() {
   assert.equal(JSON.stringify(e.context.state).includes('stripe'), false, 'URLs must not enter registration state');
 }
 
+async function testImportedFilterAndReturn() {
+  const calls = [];
+  const e = environment(async (method, url) => { calls.push({ method, url }); return { attempt: 'job', id: 'paid', status: 'registered' }; });
+  const job = { id: 'job', rows: [{ id: 'draft', email: 'draft@mock.test', status: 'saved' },
+    { id: 'paid', email: 'paid@mock.test', status: 'imported', accountId: 'acc_mock' }] };
+  e.context.state.job = job.id;
+  e.context.state.jobs = [job];
+  e.context.renderTHJob(job);
+  assert.equal(e.context.state.rows.length, 1);
+  assert.equal(e.context.state.rows[0].id, 'draft');
+  assert.equal(e.node('#th-filter-imported').textContent, '已入池（1）');
+  assert.doesNotMatch(e.node('#th-register-rows').innerHTML, /paid@mock.test/);
+  e.context.state.selected.add('draft');
+  e.node('#th-filter-imported').listeners.click();
+  assert.equal(e.context.state.filter, 'imported');
+  assert.equal(e.context.state.selected.size, 0);
+  assert.equal(e.context.state.rows[0].id, 'paid');
+  assert.match(e.node('#th-register-rows').innerHTML, /退回注册机/);
+  e.context.state.batchBusy = true;
+  e.node('#th-filter-pending').listeners.click();
+  assert.equal(e.context.state.filter, 'imported', 'busy batches cannot change selection scope');
+  e.context.state.batchBusy = false;
+  e.context.modal = async () => 'cancel';
+  await e.context.thReturnToRegistration('acc_mock', 'paid@mock.test');
+  assert.equal(calls.length, 0, 'cancelled return must not remove a pool account');
+  let page;
+  e.context.go = (next) => { page = next; };
+  e.context.toast = () => {};
+  e.context.modal = async () => 'return';
+  await e.context.thReturnToRegistration('acc_mock', 'paid@mock.test');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/accounts/acc_mock/return-to-registration');
+  assert.equal(e.context.state.filter, 'pending');
+  assert.equal(e.context.state.job, 'job');
+  assert.equal(page, 'thregister');
+  job.rows[1].status = 'registered';
+  e.context.renderTHJob(job);
+  assert.equal(e.context.state.rows.length, 2, 'returned accounts reappear in the default view');
+}
+
 async function testRegistrationDefaultTaskAndRetention() {
   const recent = { id: 'recent', rows: [{ id: 'one', status: 'saved' }] };
   const running = { id: 'running', running: true, rows: [{ id: 'two', status: 'running' }] };
@@ -211,6 +251,7 @@ async function testRowGuardAndSelectionRetention() {
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();
   await testRowGuardAndSelectionRetention();
+  await testImportedFilterAndReturn();
   await testRegistrationDefaultTaskAndRetention();
   await testBatchImportPartialAndScoped();
   await testCancelledBatchDoesNotMutate();

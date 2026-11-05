@@ -88,6 +88,8 @@ type Server struct {
 	thSignups *thsignupstore.Store
 	thRegMu   sync.Mutex
 	thReg     *thRegistrar
+	// Local admission/return commits are serialized; upstream checks never hold it.
+	thAdmissionMu sync.Mutex
 	// The registration log, kept live for the console's tail panel.
 	thLogMu sync.Mutex
 	thLogs  *thLogHub
