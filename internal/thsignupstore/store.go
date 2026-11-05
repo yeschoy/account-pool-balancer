@@ -373,6 +373,28 @@ func (s *Store) List() []Summary {
 	return out
 }
 
+// ForAccount returns a unique, exact account/key link without projecting all
+// rows or guessing by email. The snapshot is detached and remains sensitive.
+func (s *Store) ForAccount(accountID, key string) (Row, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var found *Row
+	for i := range s.rows {
+		r := &s.rows[i]
+		if r.Account != accountID {
+			continue
+		}
+		if found != nil || r.APIKey != key || key == "" || r.Status != Imported {
+			return Row{}, ErrInvalid
+		}
+		found = r
+	}
+	if found == nil {
+		return Row{}, ErrNotFound
+	}
+	return cloneRow(*found), nil
+}
+
 // Get returns the full row for trusted callers (the registrar).
 func (s *Store) Get(id string) (Row, error) {
 	s.mu.Lock()

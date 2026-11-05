@@ -111,6 +111,7 @@ func (r *thRegistrar) budget(n int) chan struct{} {
 func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.HandlerFunc)) {
 	a("POST /api/tokenharbor/registrations", s.apiTHRegister)
 	a("GET /api/tokenharbor/registrations", s.apiTHRegistrations)
+	a("GET /api/tokenharbor/overview", s.apiTHOverview)
 	a("GET /api/tokenharbor/registrations/{id}", s.apiTHRegistration)
 	a("PUT /api/tokenharbor/registrations/{id}/proxy", s.apiTHRowProxy)
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
@@ -610,6 +611,9 @@ func (s *Server) apiTHImport(w http.ResponseWriter, r *http.Request) {
 	}
 	store, _ := s.thStore()
 	row, _ := store.Get(id)
+	if row.Account != "" {
+		s.quota.RefreshSession(row.Account)
+	}
 	writeJSON(w, http.StatusOK, thsignupstore.SummaryOf(row))
 }
 
@@ -807,7 +811,7 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := s.cfg.Update(rev, func(c *config.Config) error {
 		// Registration settings do not own the pool scheduler or model polling.
-		next.Routing, next.ModelSyncSec = c.TokenHarbor.Routing, c.TokenHarbor.ModelSyncSec
+		next.Routing, next.ModelSyncSec, next.AccountSyncSec = c.TokenHarbor.Routing, c.TokenHarbor.ModelSyncSec, c.TokenHarbor.AccountSyncSec
 		if strings.TrimSpace(next.CaptchaKey) == "" && !in.ClearCaptchaKey {
 			next.CaptchaKey = c.TokenHarbor.CaptchaKey
 		}

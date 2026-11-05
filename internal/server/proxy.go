@@ -53,52 +53,53 @@ type workflowDecision struct {
 }
 
 type requestLog struct {
-	TS                  time.Time `json:"ts"`
-	RequestID           string    `json:"requestId"`
-	ClientKeyID         string    `json:"clientKeyId,omitempty"`
-	ClientKeyName       string    `json:"clientKeyName,omitempty"`
-	Group               string    `json:"group,omitempty"`
-	Provider            string    `json:"provider,omitempty"`
-	Path                string    `json:"path"`
-	InboundProtocol     string    `json:"inboundProtocol"`
-	Protocol            string    `json:"protocol"`
-	Model               string    `json:"model"`
-	Stream              bool      `json:"stream"`
-	AccountID           string    `json:"accountId,omitempty"`
-	AccountName         string    `json:"accountName,omitempty"`
-	Proxy               string    `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
-	SelectionReason     string    `json:"selectionReason,omitempty"`
-	Selector            string    `json:"selector"`
-	Overflow            bool      `json:"overflow"`
-	Switched            bool      `json:"switched"`
-	ClientFamily        string    `json:"clientFamily,omitempty"`
-	CacheHintSource     string    `json:"cacheHintSource,omitempty"`
-	CacheAffinityResult string    `json:"cacheAffinityResult,omitempty"`
-	CacheControl        bool      `json:"cacheControl,omitempty"`
-	EgressStatus        string    `json:"egressStatus,omitempty"`
-	EgressIP            string    `json:"egressIp,omitempty"`
-	SessionSource       string    `json:"sessionSource"`
-	AffinityKeyType     string    `json:"affinityKeyType"`
-	AffinityConfidence  string    `json:"affinityConfidence"`
-	BindingResult       string    `json:"bindingResult"`
-	Status              int       `json:"status"`
-	Result              string    `json:"result"`
-	UpstreamStatus      *int      `json:"upstreamStatus"`
-	ErrorCategory       string    `json:"errorCategory,omitempty"`
-	BlockedBy           string    `json:"blockedBy,omitempty"`
-	RetryAfter          *int      `json:"retryAfter,omitempty"`
-	DurationMs          int64     `json:"durationMs"`
-	TTFTMs              *int64    `json:"ttftMs"`
-	InputTokens         *int64    `json:"inputTokens"`
-	OutputTokens        *int64    `json:"outputTokens"`
-	CachedTokens        *int64    `json:"cachedTokens"`
-	CacheCreationTokens *int64    `json:"cacheCreationTokens,omitempty"`
-	ReasoningTokens     *int64    `json:"reasoningTokens,omitempty"`
-	CacheHit            *bool     `json:"cacheHit"`
-	CacheRate           *float64  `json:"cacheRate"`      // cached share of the prompt, 0..1
-	Cost                *float64  `json:"cost,omitempty"` // in Currency, from the price table
-	Currency            string    `json:"currency,omitempty"`
-	UpstreamRequestID   string    `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
+	failureDetails      map[int]bool // bounded by attempts; not serialized
+	TS                  time.Time    `json:"ts"`
+	RequestID           string       `json:"requestId"`
+	ClientKeyID         string       `json:"clientKeyId,omitempty"`
+	ClientKeyName       string       `json:"clientKeyName,omitempty"`
+	Group               string       `json:"group,omitempty"`
+	Provider            string       `json:"provider,omitempty"`
+	Path                string       `json:"path"`
+	InboundProtocol     string       `json:"inboundProtocol"`
+	Protocol            string       `json:"protocol"`
+	Model               string       `json:"model"`
+	Stream              bool         `json:"stream"`
+	AccountID           string       `json:"accountId,omitempty"`
+	AccountName         string       `json:"accountName,omitempty"`
+	Proxy               string       `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
+	SelectionReason     string       `json:"selectionReason,omitempty"`
+	Selector            string       `json:"selector"`
+	Overflow            bool         `json:"overflow"`
+	Switched            bool         `json:"switched"`
+	ClientFamily        string       `json:"clientFamily,omitempty"`
+	CacheHintSource     string       `json:"cacheHintSource,omitempty"`
+	CacheAffinityResult string       `json:"cacheAffinityResult,omitempty"`
+	CacheControl        bool         `json:"cacheControl,omitempty"`
+	EgressStatus        string       `json:"egressStatus,omitempty"`
+	EgressIP            string       `json:"egressIp,omitempty"`
+	SessionSource       string       `json:"sessionSource"`
+	AffinityKeyType     string       `json:"affinityKeyType"`
+	AffinityConfidence  string       `json:"affinityConfidence"`
+	BindingResult       string       `json:"bindingResult"`
+	Status              int          `json:"status"`
+	Result              string       `json:"result"`
+	UpstreamStatus      *int         `json:"upstreamStatus"`
+	ErrorCategory       string       `json:"errorCategory,omitempty"`
+	BlockedBy           string       `json:"blockedBy,omitempty"`
+	RetryAfter          *int         `json:"retryAfter,omitempty"`
+	DurationMs          int64        `json:"durationMs"`
+	TTFTMs              *int64       `json:"ttftMs"`
+	InputTokens         *int64       `json:"inputTokens"`
+	OutputTokens        *int64       `json:"outputTokens"`
+	CachedTokens        *int64       `json:"cachedTokens"`
+	CacheCreationTokens *int64       `json:"cacheCreationTokens,omitempty"`
+	ReasoningTokens     *int64       `json:"reasoningTokens,omitempty"`
+	CacheHit            *bool        `json:"cacheHit"`
+	CacheRate           *float64     `json:"cacheRate"`      // cached share of the prompt, 0..1
+	Cost                *float64     `json:"cost,omitempty"` // in Currency, from the price table
+	Currency            string       `json:"currency,omitempty"`
+	UpstreamRequestID   string       `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
 	// Conversations is how many distinct accounts this request tried while a
 	// conversation fingerprint was present. It stays 1 while every attempt
 	// remained on one account, and only exceeds 1 when a failover handed one
@@ -199,23 +200,24 @@ type usage struct {
 }
 
 type attemptResult struct {
-	kind            outcome
-	result          string // success | failed, for delivered
-	status          int
-	upstreamStatus  int
-	category        string // upstream | network | timeout | proxy
-	terminal        string // success | upstream_http | upstream_envelope | timeout | proxy | network
-	body            []byte
-	header          http.Header
-	contentType     string
-	sent            atomic.Bool
-	upstreamSession string
-	egressIP        string
-	goRecord        *requestLog
-	wrapped         bool
-	accountScoped   bool
-	evaluated       bool
-	retryAfter      time.Duration
+	kind              outcome
+	result            string // success | failed, for delivered
+	status            int
+	upstreamStatus    int
+	category          string // upstream | network | timeout | proxy
+	terminal          string // success | upstream_http | upstream_envelope | timeout | proxy | network
+	body              []byte
+	header            http.Header
+	contentType       string
+	sent              atomic.Bool
+	upstreamSession   string
+	egressIP          string
+	goRecord          *requestLog
+	privateIdentities []string // request-local only; never serialized
+	wrapped           bool
+	accountScoped     bool
+	evaluated         bool
+	retryAfter        time.Duration
 	// downstreamStatus / ruleID come from the matched error rule
 	downstreamStatus int
 	ruleID           string
@@ -383,6 +385,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var cw *captureWriter
 	var reqHeader http.Header
 	var reqBody []byte
+	var detailIdentities []string
 	if cfg.Logs.Detail {
 		cw = &captureWriter{ResponseWriter: w, max: cfg.Logs.DetailBodyKB << 10}
 		w, reqHeader = cw, r.Header.Clone()
@@ -433,14 +436,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok && !unpricedWrites {
 			cost, rec.Cost, rec.Currency = c, &c, cur
 		}
-		if rec.Provider == config.ProviderOpenCodeGo && result == "failed" && len(rec.Attempts) == 0 {
-			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: "Go gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
+		if (rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor) && result == "failed" && len(rec.Attempts) == 0 {
+			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: rec.Provider + " gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
 		}
 		s.logs.Append("requests", rec.TS, rec)
-		if cw != nil {
+		if cw != nil && (cfg.Logs.Detail || (rec.Provider == config.ProviderTokenHarbor && result == "failed" && len(rec.failureDetails) == 0)) {
 			max := cw.max
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
-				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
+				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
 				ResponseHeaders: maskHeaders(cfg, cw.Header()), ResponseBodyBytes: cw.n}
 			capturedBody := reqBody
 			if rec.Provider == config.ProviderOpenCodeGo {
@@ -455,10 +458,28 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
 				capturedBody = goPrivateBody(reqBody)
 			}
-			d.RequestBody, d.RequestBodyTruncated = maskBody(cfg, capturedBody, max)
+			if rec.Provider == config.ProviderTokenHarbor {
+				d.RequestHeaders = maskHeaders(cfg, thPrivateHeaders(reqHeader))
+				for _, name := range cfg.Routing.SessionHeaders {
+					for key := range d.RequestHeaders {
+						if strings.EqualFold(key, name) {
+							d.RequestHeaders[key] = []string{"[REDACTED]"}
+						}
+					}
+				}
+				d.ResponseHeaders = maskHeaders(cfg, thPrivateHeaders(cw.Header()))
+				var cut bool
+				capturedBody, cut = thBodyPreview(reqBody, detailIdentities, max)
+				d.RequestBodyTruncated = cut
+			}
+			var reqCut bool
+			d.RequestBody, reqCut = maskBody(cfg, capturedBody, max)
+			d.RequestBodyTruncated = d.RequestBodyTruncated || reqCut
 			respBody, cut := cw.body()
 			if rec.Provider == config.ProviderOpenCodeGo {
 				respBody = goPrivateBody(respBody)
+			} else if rec.Provider == config.ProviderTokenHarbor {
+				respBody = thPrivateBody(respBody, detailIdentities)
 			}
 			d.ResponseBody, _ = maskBody(cfg, respBody, len(respBody))
 			d.ResponseBodyTruncated = cut
@@ -491,7 +512,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rootCfg := cfg
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
-	if rec.Provider == config.ProviderOpenCodeGo {
+	if rec.Provider == config.ProviderTokenHarbor {
+		if cw == nil {
+			cw = &captureWriter{ResponseWriter: w, max: min(cfg.Logs.DetailBodyKB, 64) << 10}
+			w, reqHeader = cw, r.Header.Clone()
+		}
+		cw.max = min(cw.max, 64<<10)
+	}
+	if rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor {
 		rec.ClientFamily = goClientFamily(r.Header, nil)
 	}
 	if !poolPathOK(rec.Provider, r.URL.Path) {
@@ -502,8 +530,34 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		finish(http.StatusNotFound, "failed")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(cfg.Routing.MaxBodyMB)<<20))
+	var body []byte
+	var err error
+	releaseBody := func() {}
+	if rec.Provider == config.ProviderTokenHarbor {
+		body, releaseBody, err = s.readTHBody(w, r, int64(cfg.Routing.MaxBodyMB)<<20)
+	} else {
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, int64(cfg.Routing.MaxBodyMB)<<20))
+	}
+	defer releaseBody()
 	if err != nil {
+		if errors.Is(err, errTHBufferLimit) {
+			rec.ErrorCategory = "gateway-buffer-limit"
+			writeLocalError(w, proto, 429, "rate_limit_error", "gateway_buffer_limit", "gateway input buffer budget is full; upstream was not contacted", 1)
+			finish(429, "failed")
+			return
+		}
+		if errors.Is(err, errTHBodyLength) {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_content_length", "request Content-Length mismatch", 0)
+			finish(400, "failed")
+			return
+		}
+		if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			rec.ErrorCategory = "request-timeout"
+			writeLocalError(w, proto, 408, "invalid_request_error", "request_timeout", "request upload timed out", 0)
+			finish(408, "failed")
+			return
+		}
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
 			writeLocalError(w, proto, http.StatusRequestEntityTooLarge, "invalid_request_error", "body_too_large", "request body too large", 0)
@@ -515,14 +569,31 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqBody = body
-	obj, err := parseRequestBody(body)
+	obj, err := parseRoutingBody(body, rec.Provider == config.ProviderTokenHarbor)
 	if err != nil {
+		if rec.Provider == config.ProviderTokenHarbor {
+			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
+			detailIdentities = thIdentityValues(r.Header, redactionObject, cfg.Routing.SessionHeaders)
+		}
 		rec.ErrorCategory = "request"
-		writeLocalError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_json", "request body must be a JSON object", 0)
+		message := "request body must be a JSON object"
+		if rec.Provider == config.ProviderTokenHarbor {
+			message = "request body must be valid JSON with at most one lowercase model field"
+		}
+		writeLocalError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_json", message, 0)
 		finish(http.StatusBadRequest, "failed")
 		return
 	}
+	if rec.Provider == config.ProviderTokenHarbor {
+		detailIdentities = thIdentityValues(r.Header, obj, cfg.Routing.SessionHeaders)
+	}
 	rec.Model, _ = obj["model"].(string)
+	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
+		rec.ErrorCategory = "request"
+		writeLocalError(w, proto, 400, "invalid_request_error", "invalid_model", "TokenHarbor requires an explicit nonempty model for Pass enforcement", 0)
+		finish(400, "failed")
+		return
+	}
 	rec.Stream, _ = obj["stream"].(bool)
 	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor {
 		s.quota.NoteModel(rec.Model)
@@ -539,6 +610,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
 		rec.CacheControl = bytes.Contains(body, []byte(`"cache_control"`))
 	} else if rec.Provider == config.ProviderTokenHarbor {
+		rec.ClientFamily = goClientFamily(r.Header, obj)
 		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
 	}
 	stateful := config.StrictResponses(rec.Provider) && lookup(obj, "previous_response_id") != ""
@@ -670,7 +742,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.AccountID, rec.AccountName, rec.SelectionReason, rec.Overflow = acct.ID, acct.Name, d.Reason, d.Overflow
 		rec.Proxy = egressLabel(acct.ProxyURL)
 
-		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident)
+		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident, detailIdentities)
+		res.privateIdentities = detailIdentities
+		if rec.Provider == config.ProviderTokenHarbor && (res.kind == outFailed || res.result == "failed") {
+			s.thFailureDetail(cfg, rec, r, body, res, i)
+		}
 		lease.Release()
 		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", EgressIP: res.egressIP, Terminal: res.terminal}
 		if acct.ProxyURL != "" {
@@ -810,7 +886,11 @@ type evaluation struct {
 // to the client, logs it, and says whether to switch accounts.
 func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string, res *attemptResult, rid string, idx int, keyID, keyName string) evaluation {
 	now := time.Now()
-	reason, truncated := errorReason(cfg, res.body, res.contentType)
+	reasonBody := res.body
+	if acct.Provider == config.ProviderTokenHarbor {
+		reasonBody, _ = thBodyPreview(reasonBody, res.privateIdentities, 16<<10)
+	}
+	reason, truncated := errorReason(cfg, reasonBody, res.contentType)
 	redacted := redactSecrets(cfg, clip(string(res.body), 16<<10))
 	matchText := strings.ToLower(redacted)
 	el := errorLog{TS: now.UTC(), RequestID: rid, AttemptIndex: idx, ClientKeyID: keyID, ClientKeyName: keyName, Provider: acct.Provider, AccountID: acct.ID, AccountName: acct.Name, Model: model,
@@ -1079,7 +1159,7 @@ func isProxyError(err error, proxyURL string) bool {
 	return strings.Contains(msg, "proxyconnect") || strings.Contains(msg, "socks")
 }
 
-func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, body []byte, proto string, rec *requestLog, attemptNo int, start time.Time, group string, ident Identity) *attemptResult {
+func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, body []byte, proto string, rec *requestLog, attemptNo int, start time.Time, group string, ident Identity, privateIdentities []string) *attemptResult {
 	acct := lease.Account
 	res := &attemptResult{goRecord: rec}
 	t0 := time.Now()
@@ -1270,7 +1350,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses")
 	if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
-		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group)
+		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities)
 	}
 
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 512<<20))
@@ -1536,7 +1616,7 @@ type evMsg struct {
 }
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
-	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string) *attemptResult {
+	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string) *attemptResult {
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
 	done := make(chan struct{})
@@ -1663,8 +1743,11 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				if isErr, st, payload := sseError(event, data); isErr {
 					res.result, res.category = "failed", "upstream"
 					if lease.Account.Provider == config.ProviderOpenCodeGo && !res.evaluated && res.goRecord != nil {
-						failure := &attemptResult{status: st, upstreamStatus: resp.StatusCode, egressIP: res.egressIP, body: payload, contentType: "application/json", header: resp.Header, terminal: "upstream_envelope", category: "upstream"}
+						failure := &attemptResult{privateIdentities: privateIdentities, status: st, upstreamStatus: resp.StatusCode, egressIP: res.egressIP, body: payload, contentType: "application/json", header: resp.Header, terminal: "upstream_envelope", category: "upstream"}
 						rc := res.goRecord
+						if lease.Account.Provider == config.ProviderTokenHarbor {
+							s.thFailureDetail(cfg, rc, r, body, failure, attemptNo-1)
+						}
 						s.evaluate(cfg, lease.Account, rc.Model, failure, rc.RequestID, attemptNo-1, rc.ClientKeyID, rc.ClientKeyName)
 						res.evaluated = true
 						res.category = failure.category
@@ -1795,6 +1878,9 @@ func (s *Server) resetModels() {
 // upstreamModels is the raw /v1/models of an account of group, cached per
 // group; concurrent misses wait for one upstream read.
 func (s *Server) upstreamModels(ctx context.Context, cfg *config.Config, group string) []byte {
+	if cfg.GroupPool(group) == config.ProviderTokenHarbor {
+		return s.thModels(cfg, group)
+	}
 	s.models.Lock()
 	if e, ok := s.models.byGroup[group]; ok && time.Since(e.at) < time.Duration(cfg.Routing.ModelsCacheSec)*time.Second {
 		s.models.Unlock()
@@ -1840,6 +1926,9 @@ func (s *Server) upstreamModels(ctx context.Context, cfg *config.Config, group s
 // what it can't see. Which account actually serves a model is decided per
 // request by the pool's own per-account catalogue, not here.
 func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group string) []byte {
+	if cfg.GroupPool(group) == config.ProviderTokenHarbor {
+		return s.thModels(cfg, group)
+	}
 	if config.IsOpenCode(cfg.GroupPool(group)) {
 		if !cfg.OpenCode.Enabled {
 			return nil

@@ -610,6 +610,8 @@ type TokenHarbor struct {
 	MailTimeoutSec int `json:"mailTimeoutSec"`
 	// ModelSyncSec re-reads /v1/models this often; 0 disables.
 	ModelSyncSec int `json:"modelSyncSec"`
+	// Nil upgrades old configs to 300s; explicit zero disables account polling.
+	AccountSyncSec *int `json:"accountSyncSec,omitempty"`
 	// Group is the pool group registrations join when a task names none.
 	Group string `json:"group"`
 }

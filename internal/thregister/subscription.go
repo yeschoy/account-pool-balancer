@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -85,19 +84,7 @@ type pricingSubscription struct {
 
 func parseSubscription(body []byte) (Subscription, error) {
 	unknown := errors.New("套餐页面结构已变化或状态不明确，无法确认订阅；请在官网核对")
-	// Decode the streamed Flight strings, then parse JSON records. Never
-	// search arbitrary HTML text for 'paid' or evaluate a server script.
-	var flight strings.Builder
-	for _, match := range flightChunk.FindAllSubmatch(body, -1) {
-		var chunk []json.RawMessage
-		if json.Unmarshal(match[1], &chunk) != nil || len(chunk) != 2 || string(chunk[0]) != "1" {
-			continue
-		}
-		var text string
-		if json.Unmarshal(chunk[1], &text) == nil {
-			flight.WriteString(text)
-		}
-	}
+	// Parse streamed JSON only; never evaluate server JavaScript.
 	var candidates []pricingSubscription
 	var walk func(any, int)
 	walk = func(v any, depth int) {
@@ -126,15 +113,8 @@ func parseSubscription(body []byte) (Subscription, error) {
 			}
 		}
 	}
-	for _, line := range strings.Split(flight.String(), "\n") {
-		_, raw, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		var node any
-		if json.Unmarshal([]byte(raw), &node) == nil {
-			walk(node, 0)
-		}
+	for _, node := range flightRecords(body) {
+		walk(node, 0)
 	}
 	if len(candidates) != 1 {
 		return Subscription{}, unknown

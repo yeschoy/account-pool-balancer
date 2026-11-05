@@ -114,6 +114,19 @@ async function testCheckoutReuseAndUncertainStops() {
   assert.equal(JSON.stringify(e.context.state).includes('stripe'), false, 'URLs must not enter registration state');
 }
 
+async function testOverviewEquivalentAmountsAndUnknown() {
+  const allowance = { totalEquivalentUsd: 40, availableWeeklyEquivalentUsd: 3.75, agentAccounts: 2, measuredWeeklyAccounts: 1, unknownAccounts: 1, otherPlanAccounts: 1, basis: '2×Boost等效值，不是钱包余额' };
+  const e = environment(async (method, url) => url === '/api/tokenharbor/overview' ? allowance : url.startsWith('/api/accounts') ? { accounts: [] } : { stats: { total: {} } });
+  await e.context.loadTHOverview();
+  assert.match(e.node('#th-cards').innerHTML, /\$40\.00/);
+  assert.match(e.node('#th-cards').innerHTML, /\$3\.75/);
+  assert.match(e.node('#th-quota-basis').textContent, /不是钱包余额/);
+  allowance.availableWeeklyEquivalentUsd = null;
+  await e.context.loadTHOverview();
+  assert.match(e.node('#th-cards').innerHTML, /未知/);
+  assert.doesNotMatch(e.node('#th-cards').innerHTML, /\$0\.00/);
+}
+
 async function testImportedFilterAndReturn() {
   const calls = [];
   const e = environment(async (method, url) => { calls.push({ method, url }); return { attempt: 'job', id: 'paid', status: 'registered' }; });
@@ -251,6 +264,7 @@ async function testRowGuardAndSelectionRetention() {
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();
   await testRowGuardAndSelectionRetention();
+  await testOverviewEquivalentAmountsAndUnknown();
   await testImportedFilterAndReturn();
   await testRegistrationDefaultTaskAndRetention();
   await testBatchImportPartialAndScoped();

@@ -72,7 +72,8 @@ type Snapshot struct {
 	PerchAt    time.Time   `json:"perchAt,omitzero"`
 	PerchError string      `json:"perchError,omitempty"`
 
-	OpenCode *opencode.State `json:"opencode,omitempty"`
+	OpenCode    *opencode.State   `json:"opencode,omitempty"`
+	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
@@ -313,6 +314,7 @@ func (s *Snapshot) clone() *Snapshot {
 	}
 	c := *s
 	c.OpenCode = s.OpenCode.Clone()
+	c.TokenHarbor = s.TokenHarbor.clone()
 	c.Windows = append([]Window(nil), s.Windows...)
 	if s.Catalog != nil {
 		c.Catalog = make(map[string]bool, len(s.Catalog))
@@ -577,10 +579,11 @@ func (s *Snapshot) Pace(now time.Time) float64 {
 }
 
 type Poller struct {
-	Cfg           func() *config.Config
-	HTTPFor       func(proxyURL string) *http.Client
-	OnUpdate      func(accountID string)
-	GoEgressCheck func(context.Context, *config.Config, config.Account) error
+	Cfg              func() *config.Config
+	HTTPFor          func(proxyURL string) *http.Client
+	OnUpdate         func(accountID string)
+	GoEgressCheck    func(context.Context, *config.Config, config.Account) error
+	TokenHarborFetch func(context.Context, *config.Config, config.Account) (*TokenHarborState, error)
 	// PerchFetch reads a Perch account's usage meter. It is a hook so this
 	// package needs no knowledge of Perch's session handling (which lives in
 	// internal/perchstore): given an account it returns the meter, or an
@@ -786,10 +789,10 @@ func (p *Poller) dispatch(ctx context.Context) {
 		if config.IsOpenCode(a.Provider) && !cfg.OpenCode.Enabled {
 			continue
 		}
-		if a.Provider == config.ProviderTokenHarbor && cfg.TokenHarbor.ModelSyncSec == 0 && !p.urgent[a.ID] {
+		if a.Provider == config.ProviderTokenHarbor && cfg.TokenHarbor.AccountInterval() == 0 && !p.urgent[a.ID] {
 			continue
 		}
-		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && !p.urgent[a.ID]) {
+		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && a.Provider != config.ProviderTokenHarbor && !p.urgent[a.ID]) {
 			continue
 		}
 		s := p.snaps[a.ID]
@@ -840,7 +843,7 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 		return p.fetchOpenCodeForce(ctx, p.Cfg(), a, true)
 	}
 	if a.Provider == config.ProviderTokenHarbor {
-		return p.fetchTokenHarbor(ctx, p.Cfg(), a)
+		return p.fetchTokenHarbor(ctx, p.Cfg(), a, true)
 	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
@@ -928,7 +931,7 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
 	switch a.Provider {
 	case config.ProviderTokenHarbor:
-		return p.fetchTokenHarbor(ctx, cfg, a)
+		return p.fetchTokenHarbor(ctx, cfg, a, false)
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 		return p.fetchOpenCode(ctx, cfg, a)
 	case config.ProviderOllama:

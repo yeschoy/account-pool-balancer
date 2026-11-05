@@ -16,6 +16,8 @@ import (
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/pool"
+	"account-pool-balancer/internal/quota"
+	"account-pool-balancer/internal/thregister"
 )
 
 type thCall struct {
@@ -23,14 +25,15 @@ type thCall struct {
 	header          http.Header
 }
 type thEnv struct {
-	s         *Server
-	front, up *httptest.Server
-	mu        sync.Mutex
-	calls     []thCall
-	handler   http.HandlerFunc
+	s            *Server
+	front, up    *httptest.Server
+	mu           sync.Mutex
+	calls        []thCall
+	handler      http.HandlerFunc
+	discardCalls bool
 }
 
-func newTHEnv(t *testing.T) *thEnv {
+func newTHEnv(t testing.TB) *thEnv {
 	t.Helper()
 	e := &thEnv{}
 	e.up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +44,9 @@ func newTHEnv(t *testing.T) *thEnv {
 		b, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(b))
 		e.mu.Lock()
-		e.calls = append(e.calls, thCall{key: r.Header.Get("Authorization"), path: r.URL.Path, body: string(b), header: r.Header.Clone()})
+		if !e.discardCalls {
+			e.calls = append(e.calls, thCall{key: r.Header.Get("Authorization"), path: r.URL.Path, body: string(b), header: r.Header.Clone()})
+		}
 		h := e.handler
 		e.mu.Unlock()
 		if h != nil {
@@ -76,6 +81,7 @@ func newTHEnv(t *testing.T) *thEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedTHCapabilities(e.s)
 	e.front = httptest.NewServer(e.s.Handler())
 	t.Cleanup(e.front.Close)
 	for !e.s.logs.Ready() {
@@ -83,6 +89,21 @@ func newTHEnv(t *testing.T) *thEnv {
 	}
 	return e
 }
+
+// Existing native protocol tests require verified fake entitlement, not a
+// bypass of the production fail-closed gate.
+func seedTHCapabilities(s *Server) {
+	cfg, now := s.cfg.Get(), time.Now()
+	for _, a := range cfg.Accounts {
+		if a.Provider != config.ProviderTokenHarbor {
+			continue
+		}
+		used := 0.0
+		source := quota.ResponseBindingSource(cfg, a)
+		s.quota.Load(map[string]*quota.Snapshot{a.ID: {Catalog: map[string]bool{"m": true}, CatalogAt: now, CatalogSource: source, TokenHarbor: &quota.TokenHarborState{Source: source, Owner: a.ID, Plan: thregister.Subscription{Status: "active", Tier: "plus", Name: "Agent Pass", CheckedAt: now}, Usage: thregister.PassUsage{OverageBilling: new(bool), UsedPercent: &used, Activated: true, ResetsAt: now.Add(time.Hour), CheckedAt: now}, CheckedAt: now, ValidUntil: now.Add(10 * time.Minute)}}})
+	}
+}
+
 func (e *thEnv) post(t *testing.T, path, body string, headers map[string]string) (int, string, http.Header) {
 	t.Helper()
 	r, _ := http.NewRequest(http.MethodPost, e.front.URL+path, strings.NewReader(body))
@@ -149,7 +170,7 @@ func TestTokenHarborNativeBytesHeadersAndLogs(t *testing.T) {
 }
 
 func TestTokenHarborSessionAndCacheAffinity(t *testing.T) {
-	for _, headers := range []map[string]string{{"Session_id": "codex-s"}, {"X-Codex-Thread-Id": "codex-thread"}, {"X-Claude-Code-Session-Id": "claude-s"}, {"X-Prompt-Cache-Key": "cache-header"}} {
+	for _, headers := range []map[string]string{{"Session_id": "codex-s"}, {"X-Codex-Thread-Id": "codex-thread"}, {"X-Claude-Code-Session-Id": "claude-s"}, {"X-Opencode-Session-Id": "opencode-s"}, {"X-Opencode-Parent-Session-Id": "opencode-parent"}, {"X-Session-Id": "pi-openrouter-session", "User-Agent": "pi/1.0"}, {"X-Session-Affinity": "pi-messages-session", "User-Agent": "pi/1.0"}, {"X-Prompt-Cache-Key": "cache-header"}} {
 		t.Run(fmt.Sprint(headers), func(t *testing.T) {
 			e := newTHEnv(t)
 			// Equal priority + least-selections makes losing affinity observable.

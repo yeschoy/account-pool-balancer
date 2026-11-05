@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -25,11 +26,16 @@ func env(k, def string) string {
 }
 
 func main() {
+	budget, err := strconv.Atoi(env("ODB_TH_BUFFER_MB", "2048"))
+	if err != nil {
+		log.Fatal("invalid ODB_TH_BUFFER_MB")
+	}
+	bufferMB := flag.Int("th-buffer-mb", budget, "TokenHarbor shared input-buffer budget in MiB (also capped by GOMEMLIMIT)")
 	addr := flag.String("addr", env("ODB_ADDR", ":8790"), "listen address")
 	dataDir := flag.String("data", env("ODB_DATA_DIR", "./data"), "data directory (config, metadata, logs)")
 	flag.Parse()
 
-	srv, err := server.New(*dataDir, server.Options{AdminPassword: os.Getenv("ODB_ADMIN_PASSWORD")})
+	srv, err := server.New(*dataDir, server.Options{AdminPassword: os.Getenv("ODB_ADMIN_PASSWORD"), TokenHarborBufferedMB: *bufferMB})
 	if err != nil {
 		log.Fatalf("startup: %v", err)
 	}

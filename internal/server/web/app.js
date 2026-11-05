@@ -218,7 +218,7 @@ function go(page) {
   $$('.page').forEach((p) => p.classList.toggle('hidden', p.id !== 'page-' + page));
   clearInterval(refreshTimer);
   pages[page]().catch((e) => toast(e.message));
-  if (page === 'overview' || page === 'accounts') {
+  if (page === 'overview' || page === 'accounts' || page === 'thoverview') {
     refreshTimer = setInterval(() => { if (!document.hidden && !$('#modal').open) pages[currentPage]().catch(() => {}); }, 15000);
   }
 }
@@ -349,7 +349,7 @@ async function loadOverview() {
 }
 
 // ---- accounts ----
-const STATUS = { 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
+const STATUS = { 'wallet-overage-enabled': ['官网钱包续费已开启，暂停调度', 'warn'], 'plan-unknown': ['套餐未知/过期', 'warn'], 'quota-unknown': ['周用量未知/过期', 'warn'], 'catalog-pending': ['等待模型同步', 'warn'], 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
 const statusLabel = (s) => (STATUS[s] || [s])[0];
 const statusClass = (s) => (STATUS[s] || ['', ''])[1];
 
@@ -424,7 +424,12 @@ function openCodeQuotaHTML(a) {
 }
 
 function windowsHTML(a) {
-  if (a.provider === 'tokenharbor') return '<span class="badge">余额未知</span><div class="acc-sub">仅同步模型目录，不推断套餐或余额</div>' + (a.quota?.authFailed ? '<span class="badge bad">API Key 鉴权失败</span>' : '') + (a.quota?.catalogError ? `<div class="acc-sub">目录读取失败：${esc(a.quota.catalogError)}</div>` : '') + (a.quota?.catalogAt && !a.quotaFresh ? '<span class="badge warn">目录过期</span>' : '');
+  if (a.provider === 'tokenharbor') {
+    const t = a.quota?.tokenHarbor;
+    if (!t) return '<span class="badge warn">套餐未知，暂停调度</span>';
+    const u = t.usage || {};
+    return `<span class="badge ${a.quotaFresh ? 'ok' : 'warn'}">${esc(t.plan?.name || '套餐未知')}${a.quotaFresh ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周已用（上次检测）${u.usedPercent == null ? '未知' : num(u.usedPercent) + '%'}${u.resetsAt ? ' · 重置 ' + esc(fmtTime(u.resetsAt, true)) : u.usedPercent == null ? ' · 周窗口未知' : u.activated ? ' · 重置未知' : ' · 周窗口尚未激活'}</div><div class="acc-sub">${esc(t.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t.checkedAt, true))} · 不是钱包余额</div>`;
+  }
   if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
   if (a.provider === 'ollama') return ollamaQuotaHTML(a);
   if (a.provider === 'modal') return modalEndpointsHTML(a);
@@ -488,8 +493,8 @@ function accountRow(a) {
   const cov = !ollama && !modal && !openCode && q && q.coverage ? Object.entries(q.coverage) : [];
   const cat = q && q.catalog ? Object.entries(q.catalog) : [];
   const catOn = cat.filter(([, en]) => en).map(([m]) => m).sort();
-  const catTitle = a.provider === 'tokenharbor' ? '上游模型目录，不代表余额或推理授权：\n' : openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
-  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : a.provider === 'tokenharbor' ? '目录模型 ' : '可用模型 '}${catOn.length}${cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
+  const catTitle = a.provider === 'tokenharbor' ? '本账号已确认套餐覆盖且原生目录支持的模型（不代表周剩余额度）：\n' : openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
+  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : a.provider === 'tokenharbor' ? '上次确认覆盖 ' : '可用模型 '}${catOn.length}${a.provider === 'tokenharbor' ? ' / 目录 ' + Object.keys(q?.tokenHarbor?.directory || {}).length : cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
   status += catHTML;
   const covHTML = cov.length ? `<div class="acc-sub" title="${esc(cov.map(([m, c]) => m + '：' + (c.covered === true ? 'Design Plan 模型' : c.covered === false ? '套餐模型' : '未知')).join('\n'))}">已识别 ${cov.length} 个模型的类别</div>` : '';
   const sum = !ollama && !modal && !openCode && q && q.summary ? `<div class="acc-sub" title="累计消费 ${esc(q.summary.totalConsumedUsd)} · 累计充值 ${esc(q.summary.totalRechargedUsd)} · 调用 ${esc(q.summary.usageCount)} 次">今日 ${esc(usd(q.summary.todayConsumedUsd))}</div>` : '';
@@ -607,7 +612,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型目录' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -628,7 +633,7 @@ async function accountAction(a, act) {
       case 'edit': return editAccount(a);
       case 'test': return testAccount(a);
       case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
-      case 'refresh': await api('POST', `/api/accounts/${a.id}/refresh-quota`); toast('额度已刷新'); break;
+      case 'refresh': await api('POST', `/api/accounts/${a.id}/refresh-quota`); toast(a.provider === 'tokenharbor' ? '套餐、覆盖模型与周用量已刷新' : '额度已刷新'); break;
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
       case 'reauth': return deviceAuth({ accountId: a.id });
@@ -651,7 +656,7 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" placeholder="${a ? esc(a.runtimeKey) + '（留空不变）' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isTokenHarbor() ? '原生 Chat / Responses / Messages。保留缓存标记，会话默认不溢出；余额未知。Key 仅写入。免费限额按账号/IP共享，手设 RPM 不是上游额度。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。Key 仅写入；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
@@ -939,7 +944,7 @@ const OPENCODE_FIELDS = [
   ['goPolicyCooldownSec', 'Go 政策拒绝暂停（秒）', 'int', '1–86400；不换号/出口，不清空订阅额度，可人工恢复'],
 ];
 const openCodeFields = () => OPENCODE_FIELDS.filter(([k]) => pool === 'opencode-go' ? !k.startsWith('zen') && k !== 'goFallbackGroup' : !['goEgressCheckUrl','goEgressCheckSec','goPolicyCooldownSec'].includes(k));
-const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : ROUTING_FIELDS;
+const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1132,6 +1137,7 @@ async function loadSettings() {
   $('#tokenharbor-settings').classList.toggle('hidden', !isTokenHarbor());
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
   $('#th-sync').value = s.tokenHarbor?.modelSyncSec ?? 1800;
+  $('#th-account-sync').value = s.tokenHarbor?.accountSyncSec ?? 300;
   $('#opencode-settings').classList.toggle('hidden', !isOpenCode());
   renderForm($('#form-opencode'), openCodeFields(), s.opencode || {}, 'oc');
   $('#oc-protocols').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocols : s.opencode?.zenProtocols) || {}, null, 2);
@@ -1156,7 +1162,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
-  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value) };
+  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value) };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});
     try {
@@ -1231,13 +1237,13 @@ function requestRow(r) {
 }
 function detailRow(d) {
   const sz = (n, cut) => num(n) + ' B' + (cut ? ' <span class="badge warn">截断</span>' : '');
-  return `<tr><td class="num">${esc(fmtTime(d.ts))}</td><td><span class="acc-sub">${esc(d.protocol)}</span></td><td>${esc(d.model)}</td><td>${keyCell(d)}</td><td>${statusBadge(d.status)}</td>
+  return `<tr><td class="num">${esc(fmtTime(d.ts))}</td><td><span class="acc-sub">${esc(d.protocol)}</span></td><td>${esc(d.model)}</td><td>${keyCell(d)}</td><td>${statusBadge(d.status, d.result)}${d.context === 'failed_attempt' ? '<div class="acc-sub">失败尝试 #' + esc(d.attemptIndex) + '</div>' : ''}</td>
     <td class="num">${sz(d.requestBodyBytes, d.requestBodyTruncated)}</td><td class="num">${sz(d.responseBodyBytes, d.responseBodyTruncated)}</td><td class="small">${esc(d.requestId)}</td></tr>`;
 }
 function showDetail(d) {
   const pretty = (t) => { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return t; } };
   const sec = (title, text) => `<h4>${esc(title)}</h4><pre>${esc(text)}</pre>`;
-  modal({ title: `${d.method} ${d.path} → ${d.status}${d.clientKeyName || d.clientKeyId ? '（密钥 ' + (d.clientKeyName || d.clientKeyId) + '）' : ''}`, wide: true, body:
+  modal({ title: `${d.context === 'failed_attempt' ? '失败尝试 #' + d.attemptIndex + ' · ' : ''}${d.method} ${d.path} → ${d.status}${d.clientKeyName || d.clientKeyId ? '（密钥 ' + (d.clientKeyName || d.clientKeyId) + '）' : ''}`, wide: true, body:
     sec('请求头', JSON.stringify(d.requestHeaders, null, 2)) + sec('请求体' + (d.requestBodyTruncated ? '（已截断）' : ''), pretty(d.requestBody)) +
     sec('响应头', JSON.stringify(d.responseHeaders, null, 2)) + sec('响应体' + (d.responseBodyTruncated ? '（已截断）' : ''), pretty(d.responseBody)) });
 }
@@ -1246,7 +1252,12 @@ function errorRow(e) {
     <td>${statusBadge(e.status)}${e.upstreamStatus && e.upstreamStatus !== e.status ? `<div class="acc-sub">上游 ${esc(e.upstreamStatus)}</div>` : ''}</td>
     <td>${esc(e.category)}<div class="acc-sub">${esc(e.terminal)}${e.origin ? ' · ' + esc(e.origin) : ''}</div>${e.egress ? `<div class="acc-sub">${esc(e.egress)}${e.egressIp ? ' / ' + esc(e.egressIp) : ''}</div>` : ''}</td>
     <td>${e.ruleId ? `${esc(e.ruleId)}<div class="acc-sub">${esc(e.ruleAction)}${e.switched ? ' · 换号' : ''}</div>` : `<span class="muted">${esc(e.matchedBy)}</span>`}${e.retryRuleId ? `<div class="acc-sub">停止重试：${esc(e.retryRuleId)}</div>` : ''}</td>
-    <td class="small">${esc(String(e.reason).slice(0, 160))}</td></tr>`;
+    <td class="small">${esc(String(e.reason).slice(0, 160))}${e.provider === 'tokenharbor' ? `<div><button type="button" class="btn small er-detail" data-rid="${esc(e.requestId)}" data-attempt="${esc(e.attemptIndex ?? 0)}">详细请求</button></div>` : ''}</td></tr>`;
+}
+async function openErrorDetails(requestId, attemptIndex) {
+  const d = await api('GET', withPool('/api/logs/details?requestId=' + encodeURIComponent(requestId) + '&attemptIndex=' + encodeURIComponent(attemptIndex)));
+  if (d.items?.length) showDetail(d.items.find(x => x.context === 'failed_attempt') || d.items[0]);
+  else toast('没有该次尝试的详细记录：旧版未采集、记录已过期或尚未生成。');
 }
 // deleteRequestLog removes one record and re-renders the page from the start.
 async function deleteRequestLog(requestId) {
@@ -1291,6 +1302,8 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
     try { await api('DELETE', `/api/logs/${kind}`); loadLogs(kind, true); } catch (e) { toast(e.message); }
   });
   $(`#${p}-table tbody`).addEventListener('click', (ev) => {
+    const detail = ev.target.closest('.er-detail');
+    if (detail) { openErrorDetails(detail.dataset.rid, detail.dataset.attempt).catch((e) => toast(e.message)); return; }
     const del = ev.target.closest('.rq-del');
     if (del) { deleteRequestLog(del.dataset.rid).catch((e) => toast(e.message)); return; }
     const tr = ev.target.closest('tr');

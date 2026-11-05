@@ -280,8 +280,14 @@ var bodyKeysKept = map[string]bool{"model": true, "stream": true, "previous_resp
 // The rest is only skipped over, not decoded, so a long history costs a scan
 // and no allocations. Only the decoded parts are validated; a malformed
 // remainder is left for the upstream to reject.
-func parseRequestBody(b []byte) (map[string]any, error) {
-	errBad := errors.New("not a JSON object")
+func parseRequestBody(b []byte) (map[string]any, error) { return parseRoutingBody(b, false) }
+
+func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
+	errBad := errors.New("not an unambiguous JSON object")
+	if strictModel && !json.Valid(b) {
+		return nil, errBad
+	}
+	seenModel := false
 	i := skipSpace(b, 0)
 	if i >= len(b) || b[i] != '{' {
 		return nil, errBad
@@ -299,6 +305,12 @@ func parseRequestBody(b []byte) (map[string]any, error) {
 		var key string
 		if json.Unmarshal(b[i:ke], &key) != nil {
 			return nil, errBad
+		}
+		if strictModel && strings.EqualFold(key, "model") {
+			if key != "model" || seenModel {
+				return nil, errBad
+			}
+			seenModel = true
 		}
 		i = skipSpace(b, ke)
 		if i >= len(b) || b[i] != ':' {

@@ -404,6 +404,18 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 			return "quota-exhausted"
 		}
 	}
+	if a.Provider == config.ProviderTokenHarbor {
+		snap := p.quota(a.ID)
+		if snap == nil || snap.TokenHarbor == nil || snap.TokenHarbor.Source != quota.ResponseBindingSource(cfg, a) {
+			return "plan-unknown"
+		}
+		if why := snap.TokenHarbor.Gate(now); why != "" {
+			return why
+		}
+		if model != "" && !snap.Catalog[model] {
+			return "not-entitled"
+		}
+	}
 	if st := p.stateLocked(a.ID, now); st != nil {
 		if st.HardQuarantined {
 			return "quarantined"
@@ -723,6 +735,32 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	if req.RequireBinding {
 		if req.Affinity == "" || p.getBindingLocked(req.Affinity, now) == nil {
 			return nil, &BindingError{Reason: "missing or expired; resend full history without previous_response_id"}
+		}
+	}
+	// TokenHarbor sticky hits need validate only their owner, not hash/read
+	// every other account's entitlement on every turn. Busy overflow modes
+	// still use the original full selection path below.
+	if (cfg.Routing.Sticky || req.RequireBinding) && req.Affinity != "" && req.CacheAffinity == "" && cfg.GroupPool(req.Group) == config.ProviderTokenHarbor {
+		if b := p.getBindingLocked(req.Affinity, now); b != nil && !req.Excluded[b.accountID] {
+			if a, ok := cfg.Account(b.accountID); ok && a.Provider == config.ProviderTokenHarbor && a.Group == req.Group && p.unavailableLocked(cfg, a, req.Model, now) == "" && !p.healthExcludedLocked(cfg, a.ID, now) {
+				if req.RequireBinding && b.source != "" && b.source != quota.ResponseBindingSource(cfg, a) {
+					return nil, &BindingError{Reason: "credential or proxy changed"}
+				}
+				if ok, by, ra := p.admitLocked(a, now); ok {
+					b.expiresAt = now.Add(ttl(cfg, b.explicit))
+					if b.source != "" {
+						p.dirty = true
+					}
+					p.lru.MoveToFront(p.bindings[req.Affinity])
+					result := "hit"
+					if !b.confirmed {
+						result = "provisional"
+					}
+					return p.leaseLocked(a, Decision{AccountID: a.ID, Reason: "binding", BindingResult: result, Candidates: 1, Order: []string{a.ID}}, false), nil
+				} else if req.PreserveBinding || req.RequireBinding || cfg.Routing.OnBindingBusy == "reject" {
+					return nil, &CapacityError{BlockedBy: by, RetryAfter: ra}
+				}
+			}
 		}
 	}
 	var cands []candidate

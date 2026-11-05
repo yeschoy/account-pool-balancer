@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +91,8 @@ type Server struct {
 	thReg     *thRegistrar
 	// Local admission/return commits are serialized; upstream checks never hold it.
 	thAdmissionMu sync.Mutex
+	thBuffered    atomic.Int64
+	thBufferLimit int64
 	// The registration log, kept live for the console's tail panel.
 	thLogMu sync.Mutex
 	thLogs  *thLogHub
@@ -126,7 +129,8 @@ const (
 // Options for New; zero values are fine.
 type Options struct {
 	// AdminPassword initializes the admin password when none is set yet.
-	AdminPassword string
+	AdminPassword         string
+	TokenHarborBufferedMB int // 0 uses 2048 MiB, capped at a third of GOMEMLIMIT
 }
 
 func New(dataDir string, opt Options) (*Server, error) {
@@ -137,10 +141,22 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now()}
+	bufferMB := opt.TokenHarborBufferedMB
+	if bufferMB == 0 {
+		bufferMB = 2048
+	}
+	if bufferMB < 1 || bufferMB > 65536 {
+		return nil, errors.New("TokenHarborBufferedMB must be 1..65536")
+	}
+	bufferLimit := int64(bufferMB) << 20
+	if soft := debug.SetMemoryLimit(-1); soft > 0 && soft/3 < bufferLimit {
+		bufferLimit = max(1<<20, soft/3)
+	}
+	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now(), thBufferLimit: bufferLimit}
 	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
 	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
+	s.quota.TokenHarborFetch = s.fetchTHObservation
 	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
 		return s.ensureGoEgress(ctx, cfg, a, false)
 	}
@@ -279,6 +295,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	for _, a := range next.Accounts {
 		if config.IsOpenCode(a.Provider) && next.OpenCode.Enabled {
 			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.RuntimeBase(o) != next.RuntimeBase(a) {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderTokenHarbor {
+			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.TokenHarbor.AccountInterval() != next.TokenHarbor.AccountInterval() {
 				s.quota.RefreshSession(a.ID)
 			}
 		}

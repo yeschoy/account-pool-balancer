@@ -292,6 +292,7 @@
       </header>
       <div id="th-alert" class="panel hidden"></div>
       <div id="th-cards" class="cards"></div>
+      <p id="th-quota-basis" class="hint" role="status"></p>
       <div class="panel">
         <h2>这个池怎么用</h2>
         <p class="muted">Token Harbor 是 OpenAI 兼容网关（<code>https://tokenharbor.ai/v1</code>），账号凭证就是注册机在建号时生成的
@@ -541,8 +542,8 @@
       <header class="page-head"><h1>路由设置</h1><div class="actions"><span class="muted" id="set-rev"></span><button class="btn primary" id="btn-save-settings">保存</button></div></header>
       <div class="panel hidden" id="tokenharbor-settings">
         <h2>Token Harbor 独立设置</h2>
-        <p class="muted small">原生 Chat Completions / Responses / Messages；不转换协议、不删除工具、不改缓存标记。默认会话亲和且忙碌不溢出；上游缓存命中不保证。余额未知，免费限额按账号/IP共享，付费不限 RPM；不自动添加大额消费确认。</p>
-        <div class="form"><label for="th-base">API Base（含 /v1）</label><input id="th-base" placeholder="https://tokenharbor.ai/v1"><label for="th-sync">模型刷新间隔（秒）</label><input id="th-sync" type="number" min="0" max="86400"><span></span><span class="hint">0 关闭自动刷新；否则 60–86400。还需开启下方额度轮询总开关。手动刷新仍可用。</span></div>
+        <p class="muted small">原生 Chat Completions / Responses / Messages；不转换协议、不删除工具、不改缓存标记。默认会话亲和且忙碌不溢出；上游缓存命中不保证。只放行官网已确认的套餐模型，套餐/周用量未知或已过期、周额耗尽或官网钱包续费开启时暂停；不自动启用免费模型、不自动添加大额消费确认。钱包余额仍未知。</p>
+        <div class="form"><label for="th-base">API Base（含 /v1）</label><input id="th-base" placeholder="https://tokenharbor.ai/v1"><label for="th-sync">目录刷新间隔（秒）</label><input id="th-sync" type="number" min="0" max="86400"><label for="th-account-sync">套餐/周用量同步（秒）</label><input id="th-account-sync" type="number" min="0" max="300"><span></span><span class="hint">账号同步默认300秒，独立于其他池额度开关；账号同步0关闭本池周期检测（含目录）。目录0仅关闭目录周期更新，首次校验仍需目录。启用时账号同步60–300秒、目录60–86400秒。手动刷新仍可用；套餐/周用量未知或过期不调度，未知模型不放行。</span></div>
       </div>
       <div class="panel hidden" id="opencode-settings">
         <h2>OpenCode 独立设置（Zen / Go 共用接入开关，路由与错误规则分别保存）</h2>

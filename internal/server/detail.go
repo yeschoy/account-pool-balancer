@@ -41,6 +41,10 @@ type detailLog struct {
 	Provider              string              `json:"provider,omitempty"`
 	AccountID             string              `json:"accountId,omitempty"`
 	Status                int                 `json:"status"`
+	Result                string              `json:"result,omitempty"`
+	AttemptIndex          int                 `json:"attemptIndex"`
+	Context               string              `json:"context,omitempty"`
+	Terminal              string              `json:"terminal,omitempty"`
 	RequestHeaders        map[string][]string `json:"requestHeaders"`
 	RequestBody           string              `json:"requestBody"`
 	RequestBodyBytes      int                 `json:"requestBodyBytes"`
@@ -52,7 +56,7 @@ type detailLog struct {
 }
 
 func (d *detailLog) LogKeys() map[string]string {
-	return map[string]string{"requestId": d.RequestID, "accountId": d.AccountID, "clientKeyId": d.ClientKeyID, "provider": d.Provider, "status": strconv.Itoa(d.Status),
+	return map[string]string{"attemptIndex": strconv.Itoa(d.AttemptIndex), "requestId": d.RequestID, "accountId": d.AccountID, "clientKeyId": d.ClientKeyID, "provider": d.Provider, "status": strconv.Itoa(d.Status),
 		"model": d.Model, "protocol": d.Protocol}
 }
 
@@ -119,10 +123,15 @@ func (c *captureWriter) Write(b []byte) (int, error) {
 		k := min(room, len(rest))
 		c.head, rest = append(c.head, rest[:k]...), rest[k:]
 	}
-	if len(rest) > 0 {
-		c.tail = append(c.tail, rest...)
-		if len(c.tail) > 2*h {
-			c.tail = append(c.tail[:0], c.tail[len(c.tail)-h:]...)
+	if len(rest) > 0 && h > 0 {
+		if len(rest) >= h {
+			c.tail = append(c.tail[:0], rest[len(rest)-h:]...)
+		} else {
+			if keep := h - len(rest); len(c.tail) > keep {
+				copy(c.tail, c.tail[len(c.tail)-keep:])
+				c.tail = c.tail[:keep]
+			}
+			c.tail = append(c.tail, rest...)
 		}
 	}
 	n, err := c.ResponseWriter.Write(b)

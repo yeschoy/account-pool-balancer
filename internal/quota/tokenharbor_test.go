@@ -9,7 +9,13 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/thregister"
 )
+
+func fakeTHObservation(context.Context, *config.Config, config.Account) (*TokenHarborState, error) {
+	used := 0.0
+	return &TokenHarborState{Plan: thregister.Subscription{Status: "active", Tier: "plus", Name: "Agent Pass"}, Models: map[string]string{"native": "agent"}, Usage: thregister.PassUsage{OverageBilling: new(bool), UsedPercent: &used, Activated: true, ResetsAt: time.Now().Add(time.Hour)}}, nil
+}
 
 func TestTokenHarborCatalogOnlyAndStale(t *testing.T) {
 	var code atomic.Int32
@@ -31,6 +37,7 @@ func TestTokenHarborCatalogOnlyAndStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := NewPoller(func() *config.Config { return cfg }, func(string) *http.Client { return up.Client() })
+	p.TokenHarborFetch = fakeTHObservation
 	a := cfg.Accounts[0]
 	if err := p.RefreshNow(context.Background(), a); err != nil {
 		t.Fatal(err)
@@ -39,7 +46,7 @@ func TestTokenHarborCatalogOnlyAndStale(t *testing.T) {
 	if !good.Catalog["native"] || len(good.Aliases) != 0 || !good.PlanAt.IsZero() || good.WalletUSD != "" || good.CatalogSource == "" {
 		t.Fatal("catalog confused with plan/balance")
 	}
-	if d := good.NextAt.Sub(good.CatalogAt); d != 1800*time.Second {
+	if d := good.NextAt.Sub(good.CatalogAt); d != 300*time.Second {
 		t.Fatalf("wrong sync interval %s", d)
 	}
 	for _, status := range []int32{503, 403, 401} {
@@ -63,6 +70,8 @@ func TestTokenHarborCatalogOnlyAndStale(t *testing.T) {
 		t.Fatal("auth state not recovered")
 	}
 	cfg.TokenHarbor.ModelSyncSec = 0
+	off := 0
+	cfg.TokenHarbor.AccountSyncSec = &off
 	before := calls.Load()
 	p.dispatch(context.Background())
 	p.workers.Wait()
@@ -91,6 +100,7 @@ func TestTokenHarborCatalogDoesNotFollowRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := NewPoller(func() *config.Config { return cfg }, func(string) *http.Client { return up.Client() })
+	p.TokenHarborFetch = fakeTHObservation
 	if p.RefreshNow(context.Background(), cfg.Accounts[0]) == nil || leaked.Load() {
 		t.Fatal("credential redirect followed")
 	}

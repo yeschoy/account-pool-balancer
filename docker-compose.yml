@@ -4,6 +4,14 @@ services:
     image: account-pool-balancer:latest
     container_name: account-pool-balancer
     restart: unless-stopped
+    # Initial budget for the high-context gateway, not an upstream TPM guarantee.
+    # Keep 2 GiB outside the Go soft limit for stacks, sockets and runtime overhead.
+    mem_limit: "${ODB_MEMORY_LIMIT:-8g}"
+    memswap_limit: "${ODB_MEMORY_SWAP_LIMIT:-8g}"
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
     # the app drains in-flight requests for up to 30s on SIGTERM
     stop_grace_period: 35s
     # run as the host user so ./data stays readable and backup-able on the host
@@ -11,6 +19,8 @@ services:
     environment:
       - ODB_ADMIN_PASSWORD=${ODB_ADMIN_PASSWORD:-}
       - TZ=Asia/Shanghai
+      - GOMEMLIMIT=${ODB_GOMEMLIMIT:-6GiB}
+      - ODB_TH_BUFFER_MB=${ODB_TH_BUFFER_MB:-2048}
     volumes:
       - ./data:/data
     ports:

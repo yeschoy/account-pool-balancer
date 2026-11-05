@@ -28,9 +28,10 @@ function thSafe(text) {
 
 // ---- 概览 ----
 async function loadTHOverview() {
-  const [accounts, overview] = await Promise.all([
+  const [accounts, overview, allowance] = await Promise.all([
     api('GET', '/api/accounts?provider=tokenharbor').catch(() => null),
     api('GET', '/api/overview?provider=tokenharbor').catch(() => null),
+    api('GET', '/api/tokenharbor/overview').catch(() => null),
   ]);
   const list = (accounts && accounts.accounts) || [];
   const total = list.length;
@@ -45,10 +46,13 @@ async function loadTHOverview() {
   alert.innerHTML = alerts.map((a) => `<p class="error">${esc(a)}</p>`).join('');
   const cards = [
     ['账号总数', total, 'TokenHarbor'],
-    ['已启用', enabled, '可调度'],
+    ['已启用', enabled, '还需套餐/周用量有效才能调度'],
+    ['Agent 周期等效总额', allowance?.totalEquivalentUsd == null ? '未知' : '$' + allowance.totalEquivalentUsd.toFixed(2), `已确认 Agent ${allowance?.agentAccounts ?? '—'} 个，含已禁用账号`],
+    ['当前可调度周等效额度', allowance?.availableWeeklyEquivalentUsd == null ? '未知' : '$' + allowance.availableWeeklyEquivalentUsd.toFixed(2), `周用量已测 ${allowance?.measuredWeeklyAccounts ?? '—'} / ${allowance?.agentAccounts ?? '—'} 个 Agent`],
     ['配了代理', withProxy, withProxy < total ? '其余的直连会被地区拦' : '全部按出口调度'],
     ['24h 请求', overview?.stats?.total?.r || 0, '最近 24 小时'],
   ];
+  $('#th-quota-basis').textContent = allowance ? allowance.basis + ` 套餐未知 ${allowance.unknownAccounts} 个，非 Agent ${allowance.otherPlanAccounts} 个（不套用20/5）。Agent 最早检测 ${allowance.oldestAgentObservationAt ? fmtTime(allowance.oldestAgentObservationAt, true) : '未知'}。后台按账号自己的周窗口同步；此处读取缓存，单账号“刷新模型/套餐”可立即检测。` : '套餐/额度读取失败，未按满额或零余额推算。';
   $('#th-cards').innerHTML = cards.map(([k, v, s]) =>
     `<div class="card"><div class="card-k">${esc(k)}</div><div class="card-v">${esc(String(v))}</div><div class="card-s">${esc(s)}</div></div>`).join('');
 }

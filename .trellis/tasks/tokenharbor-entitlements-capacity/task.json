@@ -1,6 +1,8 @@
 {
   "name": "TokenHarbor 套餐模型额度与高吞吐",
-  "status": "planning",
+  "status": "completed",
+  "completed_scope": "本地实现与Mock验收；未推送/部署，真实TPM和大规模长流容量未认证",
+  "validation": "validation.md",
   "base_commit": "0183d7d",
   "execution": "direct",
   "authorization": "用户要求实现六项改进；按项目复杂任务约定使用Trellis，直接执行，不启用子代理、不对真实上游负载测试、不部署",

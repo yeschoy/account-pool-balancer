@@ -23,6 +23,11 @@ func (c *Config) normalizeTokenHarbor() error {
 			return err
 		}
 	}
+	if t.AccountSyncSec != nil && *t.AccountSyncSec != 0 {
+		if err := clampInt(t.AccountSyncSec, 60, 300, "tokenHarbor.accountSyncSec"); err != nil {
+			return err
+		}
+	}
 	if c.TokenHarborErrorRules == nil {
 		c.TokenHarborErrorRules = rules.DefaultTokenHarborErrorRules()
 	}
@@ -36,6 +41,13 @@ func (c *Config) normalizeTokenHarbor() error {
 		return fmt.Errorf("tokenharbor: %w", err)
 	}
 	return nil
+}
+
+func (t TokenHarbor) AccountInterval() int {
+	if t.AccountSyncSec == nil {
+		return 300
+	}
+	return *t.AccountSyncSec
 }
 
 // StrictResponses pools persist confirmed, credential-bound response IDs and
