@@ -1,10 +1,10 @@
 {
   "name": "TokenHarbor 正常注册限速与真实请求标识",
   "status": "completed",
-  "completed_scope": "本地实现、Go/Node全量质量门禁及真实本地Mock浏览器验收；未推送部署、未调用真实上游",
+  "completed_scope": "本地实现/完整质量门禁/Mock浏览器验收完成；后续经用户授权推送并部署54f28aa，公网与3分钟13次健康观察通过；未主动注册或付费推理",
   "validation": "validation.md",
   "execution": "direct",
   "base_commit": "f654a6c",
-  "authorization": "用户接受正常限速、退避、遇限制暂停的建议；只使用真实UA标识，不实施IP/设备/指纹伪装。仅本地验证，不部署或真实注册。",
+  "authorization": "用户接受正常限速、退避、遇限制暂停的建议；只使用真实UA标识，不实施IP/设备/指纹伪装。最初仅本地验证；后续用户明确授权先推送再部署并连续观察几分钟。无真实注册/验证码/付款/主动付费推理授权。",
   "artifacts": ["prd.md", "design.md", "implement.md", "validation.md"]
 }
