@@ -54,7 +54,7 @@
 - 干净git archive源码：`/home/ubuntu/project/account-pool-balancer-releases/20261106T213621Z-a8902bc`；未夹带两份原有HTML/JS测试草稿或未跟踪目录。旧工作树仍e6f063b/干净/分叉，未在旧树构建、reset或覆盖配置。
 - 镜像`account-pool-balancer:release-a8902bc-20261106T213621Z`，ID`sha256:73c0301dd57e2a59ed45ee95a5ffda0bdb3f288701b7f8d40dc4a9759c844f26`。复用下节刚完成的同格式断网预检，不重复复制敏感数据；构建就绪后才停服务并做完整一致data备份。仅通过release内image override切换原Compose目标服务，UID1000:1000、环境、卷/端口/网络别名、健康/重启策略和实际资源保持原状；线上Memory限制原本为0，不套用本地新Compose的8GiB。
 - **78账号、92注册记录及其凭据/Key/固定代理/支付记录/备注、保存代理池、routingSecret和完整配置均保留**。允许后台正常更新Cookie/套餐观察/更新时间，其他资产用远端内存HMAC比对；配置逐字节一致，日志保留仍30天，未擅自启用功能。
-- 全量Go normal/race/vet/build、三套Node行为测试及本地假数据浏览器通过：模拟非`/c/pay/`链接一次创建、加密保存、显式读取和前端展示成功，mock预检1/创建1，另一pending不变、未入池、核账框未勾选。**这是本地验收；修正后未追加真实创建，尚无修正版线上成功生成的证据。**
+- 全量Go normal/race/vet/build、三套Node行为测试及本地假数据浏览器通过：模拟非`/c/pay/`链接一次创建、加密保存、显式读取和前端展示成功，mock预检1/创建1，另一pending不变、未入池、核账框未勾选。**以上是本地验收。随后用户再次明确授权单账号实测：21:45:55 UTC使用无既有checkout的已验证Free账号`fac***@icloud.com`（`thr_b24e4eab89cf71a7070b6953`，任务`that_ace0a9355f17cf11dbd84322`），在OVH运行a8902bc的正常管理员/CSRF接口上通过原固定代理创建一次，2.542秒返回HTTP200。非`/c/pay/`的HTTPS checkout.stripe.com链接已加密保存，显式GET读回一致；账号仍registered、无pending/failure，原30份checkout记录及完整配置不变。未重试旧订单、提交付款或启用自动续费；管理员正常退出。验证范围是生成、保存及读取，不包含Stripe页面渲染或付款完成。**
 - Docker healthy、restartCount=0，healthz及四静态资源本机校验通过。真实未登录公网浏览器`https://ods.yeschoy.io/`的healthz/四资源均200，保留?v查询串，SHA256与a8902bc逐一相符；21:38:11 UTC完成核对。上线及限制已立即反馈，本文档随后补记，不再次重启。
 
 | 阶段 | UTC 时间 |
