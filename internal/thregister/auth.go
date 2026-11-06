@@ -26,6 +26,17 @@ func HasSession(cookies []NamedCookie) bool {
 	return false
 }
 
+// Match the observed business rejection, not arbitrary response text or broad
+// "invalid credentials"/HTTP status guesses. Extra refusal text stays manual.
+func loginCredentialsMismatch(message string) bool {
+	switch strings.ToLower(strings.Join(strings.Fields(message), " ")) {
+	case "that email and password don't match.", "that email and password don't match. give it another try.":
+		return true
+	default:
+		return false
+	}
+}
+
 // React server actions return business errors with HTTP 200. Accept only the
 // structured error/needCaptcha fields, never arbitrary HTML or Flight text.
 func authActionError(body []byte) (string, bool) {

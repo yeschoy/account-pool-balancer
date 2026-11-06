@@ -427,6 +427,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
 	defer cancel()
 	var res thregister.Result
+	newSignup := row.GitHub == nil && len(row.Cookies) == 0
 	if row.GitHub != nil {
 		res = thStoredResult(row)
 		if !res.OAuthComplete {
@@ -443,16 +444,25 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		if thregister.HasSession(res.Cookies) {
 			s.thLive(row.Email, "恢复会话", "继续已保存登录会话，不重复注册", proxy, "info")
 		} else {
-			s.thLive(row.Email, "登录恢复", "仅有注册中间 Cookie；尝试原账号登录，不重新注册", proxy, "info")
+			s.thLive(row.Email, "登录恢复", "仅有注册中间 Cookie；先尝试原账号登录", proxy, "info")
 			err = flow.Login(ctx, row.Email, row.Password)
 			if err == nil {
 				res.Cookies = flow.Session()
+			} else if errors.Is(err, thregister.ErrLoginCredentialsMismatch) &&
+				row.APIKey == "" && !row.Verified && row.Account == "" && row.Checkout == nil &&
+				!thregister.HasSession(flow.Session()) {
+				// User-authorized exception for this precise login rejection.
+				// Preserve the row/credentials/route and share the ordinary gate;
+				// a rejected or uncertain signup is never repeated in this run.
+				newSignup = true
+				s.thLive(row.Email, "重新注册", "官网返回邮箱密码不匹配；按原凭据、原出口重新注册一次", proxy, "warn")
 			}
 		}
-		if err == nil {
+		if err == nil && !newSignup {
 			res, err = flow.Resume(ctx, res)
 		}
-	} else {
+	}
+	if newSignup {
 		s.thLive(row.Email, "注册限速", "固定单并发；新注册提交至少间隔60秒，受限仅结束当前账号，不暂停其他账号", proxy, "info")
 		// Wait before any site/captcha work; the submission hook records the
 		// actual POST timestamp so a slow solver cannot collapse the gap.
@@ -474,6 +484,8 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			stage = "验证码"
 		case errors.Is(err, thregister.ErrKeyRejected):
 			stage = "账号判定"
+		case errors.Is(err, thregister.ErrLoginCredentialsMismatch):
+			stage = "登录被拒"
 		case errors.Is(err, thregister.ErrSessionRejected):
 			stage = "注册被拒"
 		}

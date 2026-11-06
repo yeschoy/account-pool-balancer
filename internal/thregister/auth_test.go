@@ -43,6 +43,7 @@ func TestSignupHTTP200BusinessErrorsStopBeforeKeyRequests(t *testing.T) {
 	}{
 		{"flight", "0:{\"a\":\"$@1\"}\n1:{\"error\":\"Account registration refused\"}\n", "Account registration refused", ErrSessionRejected},
 		{"json", `{"error":{"message":"Already registered"}}`, "Already registered", ErrSessionRejected},
+		{"signup mismatch is not signin", `{"error":"That email and password don't match."}`, "don't match", ErrSessionRejected},
 		{"captcha", "1:{\"error\":\"Complete the challenge\",\"needCaptcha\":true}\n", "", ErrCaptchaRequired},
 		{"intermediate only", "0:{\"a\":\"$@1\"}\n1:{}\n", "未发放登录会话", ErrSessionRejected},
 		{"credential reflection", "1:{\"error\":\"rejected password-SECRET form-secret\"}\n", "[REDACTED]", ErrSessionRejected},
@@ -76,6 +77,9 @@ func TestSignupHTTP200BusinessErrorsStopBeforeKeyRequests(t *testing.T) {
 			_, err := flow.Run(context.Background(), Credentials{Email: "test@example.com", Password: "password-SECRET"})
 			if !errors.Is(err, tc.kind) || !strings.Contains(err.Error(), tc.want) || keys != 0 {
 				t.Fatalf("want structured rejection before key request: %v, key requests %d", err, keys)
+			}
+			if errors.Is(err, ErrLoginCredentialsMismatch) {
+				t.Fatal("signup rejection must not be classified as a login mismatch")
 			}
 			if strings.Contains(err.Error(), "password-SECRET") || strings.Contains(err.Error(), "form-secret") {
 				t.Fatal("action error reflected a submitted secret")
@@ -122,7 +126,7 @@ func TestLoginUsesSigninActionAndReportsBusinessError(t *testing.T) {
 	flow, _ := New(Config{BaseURL: srv.URL})
 	defer flow.Close()
 	err := flow.Login(context.Background(), "test@example.com", "pw")
-	if !errors.Is(err, ErrSessionRejected) || !strings.Contains(err.Error(), "don't match") || posts != 1 {
+	if !errors.Is(err, ErrSessionRejected) || !errors.Is(err, ErrLoginCredentialsMismatch) || !strings.Contains(err.Error(), "don't match") || posts != 1 {
 		t.Fatal("a failed sign-in must expose the real structured error, once")
 	}
 }

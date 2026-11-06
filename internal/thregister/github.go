@@ -16,6 +16,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"sort"
@@ -197,6 +198,7 @@ type oauthPage struct {
 	body     []byte
 	redirect string
 	status   int
+	media    string
 }
 
 func sameOrigin(a, b *url.URL) bool {
@@ -208,7 +210,8 @@ func (f *Flow) oauthRequest(ctx context.Context, method, target string, body io.
 	if err != nil || u.Host == "" || u.User != nil {
 		return oauthPage{}, errors.New("OAuth 地址无效")
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	trace, networkPhase := oauthRequestTrace(f.cfg.ProxyURL != "")
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), method, target, body)
 	if err != nil {
 		return oauthPage{}, errors.New("OAuth 请求格式无效")
 	}
@@ -221,20 +224,32 @@ func (f *Flow) oauthRequest(ctx context.Context, method, target string, body io.
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return oauthPage{}, fmt.Errorf("%s %s 请求失败：%s；结果待核对，未重试或切换出口", oauthRequestStage(u), method, oauthNetworkReason(err, f.cfg.ProxyURL != ""))
+		return oauthPage{}, fmt.Errorf("%s %s 请求失败：%s（最近阶段：%s）；结果待核对，未重试或切换出口", oauthRequestStage(u), method, oauthNetworkReason(err, f.cfg.ProxyURL != ""), networkPhase())
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if limited := registrationRateLimit(resp, ""); limited != nil {
-		return oauthPage{}, limited
+		return oauthPage{}, fmt.Errorf("%s %s: %w", oauthRequestStage(u), method, limited)
 	}
-	if err != nil || len(raw) > maxBody {
-		return oauthPage{}, errors.New("OAuth 响应不完整或过大；未重试")
+	if err != nil {
+		return oauthPage{}, fmt.Errorf("%s %s 响应读取失败：%s（HTTP %d；阶段：读取响应体）；结果待核对，未重试", oauthRequestStage(u), method, oauthNetworkReason(err, f.cfg.ProxyURL != ""), resp.StatusCode)
+	}
+	if len(raw) > maxBody {
+		return oauthPage{}, fmt.Errorf("%s %s 响应过大；结果待核对，未重试", oauthRequestStage(u), method)
 	}
 	if resp.StatusCode >= 400 {
-		return oauthPage{}, fmt.Errorf("OAuth 请求被拒绝：HTTP %d；未重试", resp.StatusCode)
+		return oauthPage{}, fmt.Errorf("%s %s 上游请求被拒绝：HTTP %d；未重试", oauthRequestStage(u), method, resp.StatusCode)
 	}
-	page := oauthPage{url: u, body: raw, status: resp.StatusCode}
+	media := "未知内容类型"
+	switch strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])) {
+	case "text/html":
+		media = "HTML"
+	case "application/json":
+		media = "JSON"
+	case "text/plain":
+		media = "纯文本"
+	}
+	page := oauthPage{url: u, body: raw, status: resp.StatusCode, media: media}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		page.redirect = resp.Header.Get("Location")
 	}
@@ -251,7 +266,7 @@ func oauthRequestStage(u *url.URL) string {
 		case "/session":
 			return "GitHub 密码登录"
 		case "/login/oauth/authorize":
-			return "GitHub 授权页"
+			return "GitHub OAuth授权页"
 		case "/sessions/two-factor", "/sessions/two-factor/app":
 			return "GitHub 2FA 页面"
 		case "/sessions/verified-device":
@@ -292,6 +307,12 @@ func oauthNetworkReason(err error, usingProxy bool) string {
 		return "网络请求超时（连接、TLS 或等待响应）"
 	}
 	switch {
+	case errors.Is(err, context.Canceled):
+		return "请求已取消"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "响应流提前结束（unexpected EOF）"
+	case errors.Is(err, io.EOF):
+		return "连接提前关闭（EOF）"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "连接被拒绝"
 	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
@@ -309,6 +330,8 @@ func oauthNetworkReason(err error, usingProxy bool) string {
 		return "代理认证被拒绝（尚未建立官网连接）"
 	case usingProxy && strings.Contains(message, "forbidden"):
 		return "代理 CONNECT 请求被拒绝（Forbidden，尚未建立官网连接）"
+	case strings.Contains(message, "http2:"):
+		return "HTTP/2 连接或流异常"
 	case strings.Contains(message, "x509:"), strings.Contains(message, "tls:"):
 		return "TLS 握手或证书校验失败"
 	default:
@@ -398,7 +421,7 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 			}
 		}
 		if form == nil {
-			return page, fmt.Errorf("%s 返回未识别表单（HTTP %d）；可能需人工验证或页面已变化，会话已保存，未绕过验证", oauthRequestStage(u), page.status)
+			return page, fmt.Errorf("%s 本地表单解析无法继续（来源：GitHub；HTTP %d；%s；表单数 %d；已提交密码=%t、2FA=%t、授权=%t）；不能据此判定密码错误或风控，会话已保存，未重复提交或绕过验证", oauthRequestStage(u), page.status, page.media, len(forms), passwordSent, totpSent, grantSent)
 		}
 		if form.fields.Get("authenticity_token") == "" {
 			return page, errors.New("GitHub 表单缺少 CSRF 令牌")
@@ -406,10 +429,12 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 		action, _ := u.Parse(form.action)
 		switch action.Path {
 		case "/session":
+			f.cfg.step("GitHub 密码登录", "提交一次，不自动重试")
 			passwordSent = true
 			form.fields.Set("login", c.Login)
 			form.fields.Set("password", c.Password)
 		case "/sessions/two-factor":
+			f.cfg.step("GitHub 2FA", "提交一次，不自动重试")
 			totpSent = true
 			code, e := githubTOTP(c.TOTPSecret, time.Now())
 			if e != nil {
@@ -417,6 +442,7 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 			}
 			form.fields.Set("app_otp", code)
 		case "/login/oauth/authorize":
+			f.cfg.step("GitHub OAuth授权", "提交一次，不自动重试")
 			grantSent = true
 		}
 		page, err = f.oauthRequest(ctx, "POST", action.String(), strings.NewReader(form.fields.Encode()), "application/x-www-form-urlencoded")

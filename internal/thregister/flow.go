@@ -63,6 +63,10 @@ var ErrCaptchaRequired = errors.New("turnstile token required")
 // registration, a rejected captcha, a duplicate email).
 var ErrSessionRejected = errors.New("signup rejected")
 
+// ErrLoginCredentialsMismatch identifies only the known sign-in rejection.
+// It does not establish that the account is absent or permit a signup replay.
+var ErrLoginCredentialsMismatch = errors.New("login credentials mismatch")
+
 // Credentials is one account to register.
 type Credentials struct {
 	Email    string
@@ -741,6 +745,9 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 		return fmt.Errorf("%w: 认证响应不完整或过大，结果待核对；未自动重试", ErrSessionRejected)
 	}
 	message, needCaptcha := authActionError(body)
+	credentialsMismatch := mode == "signin" &&
+		(resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized) &&
+		loginCredentialsMismatch(message)
 	if message != "" {
 		// Only the structured action error is diagnostic. Never log the whole
 		// Flight/HTML response or let it reflect submitted credentials.
@@ -761,6 +768,9 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 		return ErrCaptchaRequired
 	}
 	if message != "" {
+		if credentialsMismatch {
+			return fmt.Errorf("%w: %w: %s", ErrSessionRejected, ErrLoginCredentialsMismatch, compact([]byte(message)))
+		}
 		return fmt.Errorf("%w: %s", ErrSessionRejected, compact([]byte(message)))
 	}
 	if resp.StatusCode >= 400 {

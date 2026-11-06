@@ -30,7 +30,7 @@ func TestTHIntermediateCookieRetryLogsInWithoutSignup(t *testing.T) {
 					}
 					signins++
 					if !accepted {
-						fmt.Fprint(w, "1:{\"error\":\"That email and password don't match.\"}\n")
+						fmt.Fprint(w, "1:{\"error\":\"Account sign-in refused\"}\n")
 						return
 					}
 					http.SetCookie(w, &http.Cookie{Name: "sb-test-auth-token", Value: "logged-in", Path: "/"})
@@ -83,7 +83,7 @@ func TestTHIntermediateCookieRetryLogsInWithoutSignup(t *testing.T) {
 				if err != nil || keyCreates != 1 || row.APIKey == "" || !thsignupstore.SummaryOf(row).HasSession {
 					t.Fatalf("successful login must continue and save the new key: %v", err)
 				}
-			} else if err == nil || keyCreates != 0 || row.Status != thsignupstore.Failed || !strings.Contains(row.Detail, "don't match") || thsignupstore.SummaryOf(row).HasSession {
+			} else if err == nil || keyCreates != 0 || row.Status != thsignupstore.Failed || !strings.Contains(row.Detail, "Account sign-in refused") || thsignupstore.SummaryOf(row).HasSession {
 				t.Fatal("failed login must stop with the upstream business reason, no key and no fake session")
 			}
 			// The recovery must never import an account or opt in to free models.
