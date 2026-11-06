@@ -81,10 +81,8 @@ type thRegistrar struct {
 	srv *Server
 	mu  sync.Mutex
 	sem chan struct{}
-	// All scheduling state is process-local; old work never auto-restarts.
+	// Only submission spacing is shared; a refusal never pauses other rows.
 	nextSignup     time.Time
-	pausedUntil    time.Time
-	pauseSequence  uint64
 	signupInterval time.Duration // zero uses the production 60-second floor
 }
 
@@ -227,11 +225,6 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	for i := range rows {
 		rows[i].Group = group
 	}
-	registrar := s.thRegistrar()
-	generation := registrar.generation()
-	if !in.SaveOnly && registrar.rejectPaused(w) {
-		return
-	}
 	attempt := config.NewID("that_")
 	add := store.Add
 	if in.SaveOnly {
@@ -258,12 +251,12 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	conc := thRegistrationConcurrency
 	s.thLive("", "任务创建", fmt.Sprintf("%d 个邮箱，并发 %d，代理 %d 个", len(rows), conc, len(proxies)), "", "info")
-	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries, generation)
+	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": attempt, "rows": summaries})
 }
 
 // thRegisterAttempt starts the background work for the queued rows.
-func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []thsignupstore.Summary, generation uint64) {
+func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []thsignupstore.Summary) {
 	reg := s.thRegistrar()
 	if conc <= 0 {
 		conc = s.cfg.Get().TokenHarbor.RegisterConcurrency
@@ -274,21 +267,16 @@ func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []
 		}
 		id := row.ID
 		// All rows share the fixed global budget, regardless of task settings.
-		// Capture the pause generation at dispatch, not delayed goroutine start.
 		s.thTasks.Add(1)
 		go func() {
 			defer s.thTasks.Done()
-			_ = reg.runQueued(id, solve, conc, generation)
+			_ = reg.run(id, solve, conc)
 		}()
 	}
 }
 
 // run registers one row. Pool import is always a separate explicit action.
 func (r *thRegistrar) run(id string, solve bool, conc int) error {
-	return r.runQueued(id, solve, conc, r.generation())
-}
-
-func (r *thRegistrar) runQueued(id string, solve bool, conc int, generation uint64) error {
 	s := r.srv
 	store, err := s.thStore()
 	if err != nil {
@@ -330,9 +318,6 @@ func (r *thRegistrar) runQueued(id string, solve bool, conc int, generation uint
 		return fail("排队", errors.New("等待单并发名额超过24小时；未发起注册，请人工核对后重新排队"))
 	}
 
-	if err := r.checkPaused(generation, true); err != nil {
-		return fail("注册暂停", err)
-	}
 	proxy := row.Egress(cfg.ProxyURL)
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
@@ -396,7 +381,7 @@ func (r *thRegistrar) runQueued(id string, solve bool, conc int, generation uint
 			res, err = flow.Resume(ctx, res)
 		}
 	} else {
-		s.thLive(row.Email, "注册限速", "固定单并发；新注册提交至少间隔60秒，遇限制停止并等待人工处理", proxy, "info")
+		s.thLive(row.Email, "注册限速", "固定单并发；新注册提交至少间隔60秒，受限仅结束当前账号，不暂停其他账号", proxy, "info")
 		// Wait before any site/captcha work; the submission hook records the
 		// actual POST timestamp so a slow solver cannot collapse the gap.
 		err = r.awaitSignup(ctx, false)
@@ -410,8 +395,7 @@ func (r *thRegistrar) runQueued(id string, solve bool, conc int, generation uint
 		stage := "注册"
 		var limited *thregister.RateLimitError
 		if errors.As(err, &limited) {
-			r.pause(limited.RetryAfter)
-			return fail("注册暂停", err)
+			return fail("注册受限", err)
 		}
 		switch {
 		case errors.Is(err, thregister.ErrCaptchaRequired):
@@ -675,10 +659,6 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	registrar := s.thRegistrar()
-	generation := registrar.generation()
-	if registrar.rejectPaused(w) {
-		return
-	}
 	row, err := store.Retry(id)
 	if err != nil {
 		s.thStoreError(w, err)
@@ -687,7 +667,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		_ = registrar.runQueued(id, in.SolveCaptcha, in.Concurrency, generation)
+		_ = registrar.run(id, in.SolveCaptcha, in.Concurrency)
 	}()
 	writeJSON(w, http.StatusAccepted, thsignupstore.SummaryOf(row))
 }

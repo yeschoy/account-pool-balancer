@@ -10,15 +10,16 @@ import (
 	"account-pool-balancer/internal/rules"
 )
 
-// RateLimitError stops registration work. It never instructs the caller to
-// replay a POST or change identity/egress; restarting requires a human action.
+// RateLimitError stops only the current account's attempt, never other rows.
+// It never instructs the caller to replay a POST or change identity/egress;
+// retrying this account requires a human action.
 type RateLimitError struct {
 	RetryAfter time.Duration
 	Reason     string
 }
 
 func (e *RateLimitError) Error() string {
-	return fmt.Sprintf("官网注册暂停：%s；至少等待 %s 后人工重新发起，未自动重试", e.Reason, e.RetryAfter.Round(time.Second))
+	return fmt.Sprintf("当前账号注册受限：%s；至少等待 %s 后人工重试该账号，未自动重试", e.Reason, e.RetryAfter.Round(time.Second))
 }
 
 func (e *RateLimitError) Unwrap() error { return ErrSessionRejected }
