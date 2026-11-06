@@ -128,13 +128,14 @@ Content-Type: application/json
 注册机自动识别四段输入：`GitHub账号----GitHub密码----2FA密钥----邮箱接码地址`；原邮箱两/三段格式仍兼容。支持 `/mailbox/<token>` 的 MailCat 接码页（含 191006.xyz）以及原 iCloud 接码页。接码页必须返回可解析的邮件时间；不使用时间未知的旧邮件。
 
 - GitHub、Supabase、TokenHarbor OAuth 回调和 `/oauth/finish` 全程使用保存时绑定的授权代理。直接连接/连接代理的本机套接字强制 IPv4，**代理本身也必须提供 IPv4 出口**，不能根据代理入口 IP 推断出口。GitHub 密码、TOTP 和授权表单各只提交一次；设备验证、额外权限、风控、拒绝或未知页面停止，不伪装指纹、不绕过验证、不自动重试。
+- 官网实际 OAuth 身份服务入口包含 `https://auth.tokenharbor.ai/auth/v1/authorize?provider=github`（Supabase 自定义域名），也兼容原 `*.supabase.co`。只放行确切官方域名/合法 Supabase 域名的 HTTPS 入口，并将后续身份服务跳转固定到返回的原始 origin；不放行相似域名、任意子域、额外端口、用户信息或 fragment。
 - finish 从当前页面动态读取 Action ID/Key，提交实际 URL（保留 next 查询串）的 multipart server action；不硬编码捕获的 Cookie、Action ID、Sentry、客户端指纹或部署头。只有官网确认 dashboard 跳转才记完成，HTTP200 不等于成功；不默认同意免费模型的数据条款。
 - 「GitHub 授权后 TokenHarbor 代理」可填写独立 IPv6 出口代理，按账号顺序绑定；留空沿用授权代理。仅确认 OAuth/finish 后切换，创建 Key、邮箱验证、套餐检测走 TH 代理；接码服务显式直连。行内“改代理”只改 TH 出口，不改 GitHub 授权出口。两个域的 Cookie 不互相转发，GitHub Cookie 与 OAuth `provider_token`（如有 refresh token 也保留）独立记录，TH Cookie 续期不会擦掉原 GitHub 授权令牌；失败不换路。
 - OAuth 完成不代表 TokenHarbor 邮箱已验证；继续原有创建 Key、邮件验证流程，等待超时保留双会话和 Key，之后可补验证。已完成 OAuth 的重试复用 TH 会话，不重复授权/finish/创建已有 Key，仍须已验证邮箱和有效付费套餐才可手动入池。
 - **用户明确选择：新增 GitHub 整行记录（密码、2FA、两套 Cookie、API Key 等）明文保存**在业务文件 `data/tokenharbor-signup.json` 的 `githubRows`；文件原子写入、0600，目录新建0700，不入 Git，管理 API/页面/日志不回显。旧邮箱记录及保存代理池继续使用原加密部分，不全库解密迁移。读取该文件即可取得 GitHub 会话，请限制备份/目录访问；回滚旧版前先备份，旧版写文件会丢弃不认识的 GitHub 行。
 - API 附加字段：账号 `provider:"github",login,password,totpSecret,mailboxUrl,githubProxyUrl?,sessionProxyUrl?`；请求 `proxies` 为授权代理池、`sessionProxies` 为 TH 后续代理池。`sessionProxyUrl:""` 显式绑定后续直连。仅保存不会发起外部请求；按 GitHub login 去重，不因授权解析出真实邮箱而重复建行。
 
-验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。后续单真实账号实测在固定代理入口即遇 HTTP403（`forbidden ip … not supported`），未到 GitHub 登录、未取得会话/Key，不算完整注册验收。SOCKS5 收到 HTTP 响应、CONNECT 拒绝、DNS/超时等现按固定服务阶段和安全错误类别报告，不输出原始 URL/state 或代理认证信息；不自动改协议、换节点或重试。
+验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。后续单真实账号实测在固定代理入口即遇 HTTP403（`forbidden ip … not supported`），未到 GitHub 登录、未取得会话/Key，不算完整注册验收。SOCKS5 收到 HTTP 响应、CONNECT 拒绝、DNS/超时等现按固定服务阶段和安全错误类别报告，不输出原始 URL/state 或代理认证信息；不自动改协议、换节点或重试。随后第二个账号经用户明确授权以 IPv4 直连，实测修复了官方自定义鉴权域名漏白名单；到达官网/鉴权服务和 GitHub 授权入口，但上下文登录页超时或返回未识别表单，仍未完成登录、finish、邮箱验证或生成 Key。5个 GitHub 中间 Cookie 与1个 TH PKCE 检查点已私下保存，不代表有效会话；未确认密码错误或平台风控。
 
 ## 注册记录保存、代理复用与套餐检测
 

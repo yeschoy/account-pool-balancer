@@ -245,9 +245,22 @@ func (f *Flow) oauthRequest(ctx context.Context, method, target string, body io.
 // (proxy credentials/reflected values) is safe to log. Report allowlisted facts.
 func oauthRequestStage(u *url.URL) string {
 	if u.Hostname() == "github.com" {
-		return "GitHub OAuth"
+		switch u.Path {
+		case "/login":
+			return "GitHub 登录页"
+		case "/session":
+			return "GitHub 密码登录"
+		case "/login/oauth/authorize":
+			return "GitHub 授权页"
+		case "/sessions/two-factor", "/sessions/two-factor/app":
+			return "GitHub 2FA 页面"
+		case "/sessions/verified-device":
+			return "GitHub 设备验证页"
+		default:
+			return "GitHub OAuth页面"
+		}
 	}
-	if strings.HasSuffix(u.Hostname(), ".supabase.co") {
+	if u.Hostname() == "auth.tokenharbor.ai" || strings.HasSuffix(u.Hostname(), ".supabase.co") {
 		return "Supabase OAuth"
 	}
 	switch u.Path {
@@ -276,7 +289,7 @@ func oauthNetworkReason(err error, usingProxy bool) string {
 	}
 	var network net.Error
 	if errors.As(err, &network) && network.Timeout() {
-		return "连接或 TLS 握手超时"
+		return "网络请求超时（连接、TLS 或等待响应）"
 	}
 	switch {
 	case errors.Is(err, syscall.ECONNREFUSED):
@@ -315,7 +328,7 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 		return oauthPage{}, errors.New("OAuth 入口响应无法解析")
 	}
 	u, err := url.Parse(out.URL)
-	if err != nil || u.Scheme != "https" || u.User != nil || !strings.HasSuffix(u.Hostname(), ".supabase.co") || u.Port() != "" || u.Path != "/auth/v1/authorize" || u.Query().Get("provider") != "github" {
+	if err != nil || u.Scheme != "https" || u.User != nil || (u.Hostname() != "auth.tokenharbor.ai" && !strings.HasSuffix(u.Hostname(), ".supabase.co")) || u.Port() != "" || u.Fragment != "" || u.Path != "/auth/v1/authorize" || u.Query().Get("provider") != "github" {
 		return oauthPage{}, errors.New("OAuth 入口不是受信任的 GitHub/Supabase 地址")
 	}
 	supabaseOrigin := u.Scheme + "://" + u.Host
@@ -385,7 +398,7 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 			}
 		}
 		if form == nil {
-			return page, errors.New("GitHub 要求人工验证、拒绝登录或页面已变化；会话已保存，未绕过验证")
+			return page, fmt.Errorf("%s 返回未识别表单（HTTP %d）；可能需人工验证或页面已变化，会话已保存，未绕过验证", oauthRequestStage(u), page.status)
 		}
 		if form.fields.Get("authenticity_token") == "" {
 			return page, errors.New("GitHub 表单缺少 CSRF 令牌")

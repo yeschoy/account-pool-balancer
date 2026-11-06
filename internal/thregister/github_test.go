@@ -26,8 +26,14 @@ func githubMockResponse(r *http.Request, status int, body string) *http.Response
 }
 
 func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
-	for _, finishFailure := range []bool{false, true} {
-		t.Run(fmt.Sprintf("finishFailure=%v", finishFailure), func(t *testing.T) {
+	for _, tc := range []struct {
+		host          string
+		finishFailure bool
+	}{
+		{"test.supabase.co", false}, {"auth.tokenharbor.ai", false}, {"auth.tokenharbor.ai", true},
+	} {
+		host, finishFailure := tc.host, tc.finishFailure
+		t.Run(fmt.Sprintf("host=%s/finishFailure=%v", host, finishFailure), func(t *testing.T) {
 			const action = "1234567890abcdef1234567890abcdef12345678ab"
 			const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 			authCalls, finishPosts, keyPosts, verifyCalls, checkpoints := 0, 0, 0, 0, 0
@@ -50,8 +56,8 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 				}
 				switch r.Method + " " + r.URL.Host + r.URL.Path {
 				case "POST tokenharbor.ai/api/auth/oauth-url":
-					response.Body = io.NopCloser(strings.NewReader(`{"url":"https://test.supabase.co/auth/v1/authorize?provider=github"}`))
-				case "GET test.supabase.co/auth/v1/authorize":
+					response.Body = io.NopCloser(strings.NewReader(fmt.Sprintf(`{"url":"https://%s/auth/v1/authorize?provider=github"}`, host)))
+				case "GET " + host + "/auth/v1/authorize":
 					return redirect("https://github.com/login")
 				case "GET github.com/login":
 					response.Body = io.NopCloser(strings.NewReader(`<form method="post" action="/session"><input name="authenticity_token" value="mockcsrf"><input name="login"><input name="password" type="password"></form>`))
@@ -77,8 +83,8 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 					if r.Form.Get("authorize") != "1" || r.Form.Has("deny") {
 						t.Fatal("wrong authorization button")
 					}
-					return redirect("https://test.supabase.co/auth/v1/callback?code=mock")
-				case "GET test.supabase.co/auth/v1/callback":
+					return redirect("https://" + host + "/auth/v1/callback?code=mock")
+				case "GET " + host + "/auth/v1/callback":
 					return redirect("https://tokenharbor.ai/auth/callback?code=mock")
 				case "GET tokenharbor.ai/auth/callback":
 					value := "base64-" + base64.RawURLEncoding.EncodeToString([]byte(`{"user":{"email":"mock@local.test","user_metadata":{"preferred_username":"mock-user"}},"expires_at":1999999999,"provider_token":"gho_mock_provider_token"}`))
