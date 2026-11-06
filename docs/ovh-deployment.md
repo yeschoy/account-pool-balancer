@@ -32,6 +32,22 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 邮箱验证等待调整（2026-11-06 13:30 UTC）
+
+- 按用户要求，通过正常管理员设置API（CSRF + expectedRevision）将线上
+  `tokenHarbor.mailTimeoutSec` 从0（引擎回退3分钟）设为120秒；API及磁盘均确认生效，
+  revision由5217变为5218。轮询仍是每次邮箱查询完成后等待5秒；新启动任务使用2分钟，
+  已启动任务不打断、不重放。
+- 设置接口同时按既有固定单并发规则将存储的registerConcurrency从0规范化为1，
+  实际并发前后均为1；除这项规范化、等待时长及revision外，完整配置一致。
+- 未构建、部署或重启服务，healthz HTTP200、容器healthy、restartCount=0。
+  未触发注册、验证码、创建Key、付款、入池或推理；操作会话已正常退出。
+- 修改前config及change.json保留于受限业务备份
+  `/home/ubuntu/backups/account-pool-balancer/20261106T133030Z-th-mail-120/`，
+  目录0700、文件0600，不下载、不入Git，不作为临时垃圾清理。回退只通过设置API恢复
+  mailTimeoutSec，不能用旧整份config覆盖后续在线变更。13:36:51 UTC复核通过。
+  本节仅补记录，不再次部署。
+
 ## 当前部署（2026-11-06 UTC，远程 master：0d32578）
 
 - 按用户要求以 GitHub 远程 `master` 最新提交为准：fetch 后及切换前再次核对均为
