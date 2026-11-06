@@ -134,7 +134,7 @@ Content-Type: application/json
 - **用户明确选择：新增 GitHub 整行记录（密码、2FA、两套 Cookie、API Key 等）明文保存**在业务文件 `data/tokenharbor-signup.json` 的 `githubRows`；文件原子写入、0600，目录新建0700，不入 Git，管理 API/页面/日志不回显。旧邮箱记录及保存代理池继续使用原加密部分，不全库解密迁移。读取该文件即可取得 GitHub 会话，请限制备份/目录访问；回滚旧版前先备份，旧版写文件会丢弃不认识的 GitHub 行。
 - API 附加字段：账号 `provider:"github",login,password,totpSecret,mailboxUrl,githubProxyUrl?,sessionProxyUrl?`；请求 `proxies` 为授权代理池、`sessionProxies` 为 TH 后续代理池。`sessionProxyUrl:""` 显式绑定后续直连。仅保存不会发起外部请求；按 GitHub login 去重，不因授权解析出真实邮箱而重复建行。
 
-验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。
+验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。后续单真实账号实测在固定代理入口即遇 HTTP403（`forbidden ip … not supported`），未到 GitHub 登录、未取得会话/Key，不算完整注册验收。SOCKS5 收到 HTTP 响应、CONNECT 拒绝、DNS/超时等现按固定服务阶段和安全错误类别报告，不输出原始 URL/state 或代理认证信息；不自动改协议、换节点或重试。
 
 ## 注册记录保存、代理复用与套餐检测
 

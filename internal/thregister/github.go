@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -220,7 +221,7 @@ func (f *Flow) oauthRequest(ctx context.Context, method, target string, body io.
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return oauthPage{}, errors.New("OAuth 网络请求失败，结果待核对；未重试或切换出口")
+		return oauthPage{}, fmt.Errorf("%s %s 请求失败：%s；结果待核对，未重试或切换出口", oauthRequestStage(u), method, oauthNetworkReason(err, f.cfg.ProxyURL != ""))
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
@@ -238,6 +239,68 @@ func (f *Flow) oauthRequest(ctx context.Context, method, target string, body io.
 		page.redirect = resp.Header.Get("Location")
 	}
 	return page, nil
+}
+
+// Neither the full request URL (OAuth code/state) nor the raw network error
+// (proxy credentials/reflected values) is safe to log. Report allowlisted facts.
+func oauthRequestStage(u *url.URL) string {
+	if u.Hostname() == "github.com" {
+		return "GitHub OAuth"
+	}
+	if strings.HasSuffix(u.Hostname(), ".supabase.co") {
+		return "Supabase OAuth"
+	}
+	switch u.Path {
+	case "/api/auth/oauth-url":
+		return "TokenHarbor OAuth入口"
+	case "/oauth/finish":
+		return "TokenHarbor finish"
+	case "/auth/callback", "/api/auth/callback":
+		return "TokenHarbor OAuth回调"
+	default:
+		return "TokenHarbor OAuth页面"
+	}
+}
+
+func oauthNetworkReason(err error, usingProxy bool) string {
+	for {
+		requestError, ok := err.(*url.Error)
+		if !ok {
+			break
+		}
+		err = requestError.Err
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "DNS 解析失败"
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return "连接或 TLS 握手超时"
+	}
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "连接被拒绝"
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+		return "网络不可达"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "连接被重置"
+	}
+	// Inspect known library diagnostics only to select a fixed, nonsecret
+	// label. In particular version72 ('H') was a proxy HTTP403, not a GH ban.
+	message := strings.ToLower(err.Error())
+	switch {
+	case usingProxy && strings.Contains(message, "unexpected protocol version 72"):
+		return "SOCKS5 握手收到 HTTP 响应，代理协议或入口准入异常（尚未建立官网连接）"
+	case usingProxy && (strings.Contains(message, "no acceptable authentication methods") || strings.Contains(message, "authentication failed")):
+		return "代理认证被拒绝（尚未建立官网连接）"
+	case usingProxy && strings.Contains(message, "forbidden"):
+		return "代理 CONNECT 请求被拒绝（Forbidden，尚未建立官网连接）"
+	case strings.Contains(message, "x509:"), strings.Contains(message, "tls:"):
+		return "TLS 握手或证书校验失败"
+	default:
+		return "网络传输失败"
+	}
 }
 
 func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpoint func() error) (oauthPage, error) {
