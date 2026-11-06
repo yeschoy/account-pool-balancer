@@ -123,6 +123,7 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("POST /api/accounts/{id}/return-to-registration", s.apiTHReturn)
 	a("POST /api/tokenharbor/registrations/{id}/retry", s.apiTHRetry)
 	a("POST /api/tokenharbor/registrations/{id}/reverify", s.apiTHReverify)
+	a("POST /api/tokenharbor/registrations/{id}/resend-verification", s.apiTHResendVerification)
 	a("POST /api/tokenharbor/registrations/{id}/subscription", s.apiTHSubscription)
 	a("GET /api/tokenharbor/proxies", s.apiTHProxies)
 	a("PUT /api/tokenharbor/proxies", s.apiTHSaveProxies)

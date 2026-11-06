@@ -145,6 +145,7 @@ function thRowActions(r) {
   if (r.status === 'saved') out.push(button('retry', '开始注册', true));
   if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
+  if (['unverified', 'registered'].includes(r.status) && !r.verified && r.hasSession) out.push(button('resend-verification', '重发验证码'));
   if (thBatchEligible('checkout', r)) out.push(button('checkout', 'Agent Pass 链接'));
   if (thBatchEligible('import', r)) out.push(button('import', '校验并入池', true));
   if (r.status === 'imported' && r.accountId) out.push(button('return', '退回注册机'));
@@ -323,6 +324,12 @@ async function thRowAction(kind, id) {
     } else if (kind === 'delete') {
       if (!window.confirm('确认删除此注册记录及已保存的会话、API Key、支付链接？此操作不删除已入池账号。')) return;
       await api('DELETE', '/api/tokenharbor/registrations/' + encodeURIComponent(id));
+    } else if (kind === 'resend-verification') {
+      thLogShow();
+      err.textContent = '正在请求重发验证码，请勿重复点击…';
+      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/resend-verification', {});
+      err.textContent = '';
+      toast('验证码已重发，请稍后点击“补验证”');
     } else if (kind === 'reverify') {
       thLogShow();
       err.textContent = '正在查找验证邮件…';
@@ -759,7 +766,7 @@ function thInstall() {
     if (proxy) { thGuardRow(proxy.dataset.id, () => thRowProxy(proxy.dataset.id)).catch((err) => toast(err.message)); return; }
     const checkout = e.target.closest('.th-row-checkout');
     if (checkout) { thGuardRow(checkout.dataset.id, () => thRowCheckout(checkout.dataset.id)).catch((err) => toast(err.message)); return; }
-    for (const kind of ['import', 'return', 'retry', 'delete', 'reverify', 'subscription']) {
+    for (const kind of ['import', 'return', 'retry', 'delete', 'reverify', 'resend-verification', 'subscription']) {
       const btn = e.target.closest('.th-row-' + kind);
       if (btn) { thGuardRow(btn.dataset.id, () => thRowAction(kind, btn.dataset.id)).catch((err) => toast(err.message)); return; }
     }
