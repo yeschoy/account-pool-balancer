@@ -372,17 +372,57 @@ async function testIndependentProxyEditing() {
 }
 
 async function testRegistrationPacingControls() {
-  const e = environment(async () => ({ tokenHarbor: { registerConcurrency: 9 }, revision: 1 }));
+  const writes = [];
+  const e = environment(async (method, url, body) => {
+    if (method === 'PUT') writes.push(body);
+    return { tokenHarbor: { registerConcurrency: 4 }, revision: 1 };
+  });
   await e.context.loadTHSettings();
-  assert.equal(e.node('#th-set-conc').value, '1');
-  assert.equal(e.node('#th-register-conc').value, '1', 'legacy settings cannot raise the effective concurrency');
+  assert.equal(e.node('#th-set-conc').value, '4');
+  assert.equal(e.node('#th-register-conc').value, '4', 'saved default must actually reach the registration form');
+  e.node('#th-set-conc').value = '5';
+  await e.context.thSaveSettings({ preventDefault() {} });
+  assert.equal(writes[0].tokenHarbor.registerConcurrency, 5);
+  for (const value of ['0', '6', '2.5', '', '-1']) {
+    e.node('#th-register-conc').value = value;
+    assert.throws(() => e.context.thConcurrency('#th-register-conc'), /1–5/);
+  }
+  e.node('#th-register-conc').value = '0';
+  const result = await e.context.thBatchRun('subscription', [{ id: 'session', status: 'registered', hasSession: true }]);
+  assert.equal(result.success, 1, 'registration concurrency validation must not block read-only plan checks');
+  e.node('#th-register-conc').value = '5';
+  assert.equal(e.context.thConcurrency('#th-register-conc'), 5);
   const html = fs.readFileSync(path.join(__dirname, 'web', 'index.html'), 'utf8');
   for (const id of ['th-register-conc', 'th-set-conc']) {
-    assert.match(html, new RegExp('<input id="' + id + '"[^>]*max="1"[^>]*value="1"[^>]*readonly'));
+    const tag = html.match(new RegExp('<input id="' + id + '"[^>]*>'))[0];
+    assert.match(tag, /min="1" max="5" step="1"/);
+    assert.doesNotMatch(tag, /readonly|disabled/);
   }
-  assert.match(html, /固定单并发，不额外设置注册提交间隔/);
+  assert.match(html, /所有任务合计最多5个/);
+  assert.doesNotMatch(html, /固定单并发/);
   assert.doesNotMatch(html, /(?:注册提交|提交)至少间隔60秒/);
   assert.match(html, /不会自动重试/);
+}
+
+async function testJobOrderUsesOnlyCreationTime() {
+  const jobs = [
+    { id: 'zzz-old', createdAt: '2026-11-05T22:00:00Z', updatedAt: '2027-01-01T00:00:00Z', running: true },
+    { id: 'mmm-middle', createdAt: '2026-11-06T22:00:00Z' },
+    { id: 'bbb-new', createdAt: '2026-11-07T22:00:00Z' },
+    { id: 'aaa-new', createdAt: '2026-11-07T22:00:00Z', note: 'edited' },
+  ];
+  const e = environment(async (method, url) => url.endsWith('/settings') ? { tokenHarbor: { registerConcurrency: 3 } } : { jobs, seq: 0, entries: [] });
+  await e.context.loadTHRegistrations();
+  assert.equal(e.node('#th-register-conc').value, '3');
+  assert.deepEqual(Array.from(e.context.state.jobs, (j) => j.id), ['aaa-new', 'bbb-new', 'mmm-middle', 'zzz-old']);
+  e.context.state.job = 'zzz-old';
+  e.context.state.jobs = jobs;
+  e.context.renderTHJobs();
+  const html = e.node('#th-register-jobs').innerHTML;
+  assert.ok(html.indexOf('data-job="aaa-new"') < html.indexOf('data-job="mmm-middle"'));
+  assert.ok(html.indexOf('data-job="mmm-middle"') < html.indexOf('data-job="zzz-old"'));
+  assert.equal(e.context.state.job, 'zzz-old', 'sorting cannot switch the selected task');
+  assert.equal(jobs[0].id, 'zzz-old', 'sorting cannot mutate the response array');
 }
 
 async function testPendingCheckoutCanBePreviewedWithoutApprovalOrReplay() {
@@ -539,6 +579,7 @@ async function testGitHubFormatAndSessionProjection() {
   await testTaskNotesAreEscapedScopedAndExplicitlySaved();
   await testGitHubFormatAndSessionProjection();
   await testRegistrationPacingControls();
+  await testJobOrderUsesOnlyCreationTime();
   await testIndependentProxyEditing();
   await testLogSingleFlightAndSequenceDedupe();
   await testBatchBoundedPartialAndNoRetry();

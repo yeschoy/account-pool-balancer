@@ -1,0 +1,11 @@
+{
+  "name": "TokenHarbor UA、时间排序、1–5并发及随机完成顺序",
+  "status": "completed",
+  "completed_scope": "四项功能本地实现、全量Go normal/race/vet/build、Node与真实浏览器假数据验收完成；未合并、推送或部署",
+  "validation": "validation.md",
+  "execution": "direct",
+  "base_commit": "9ac4ce7ff90c58f41d7c26807d1513353877cc4a",
+  "branch": "tokenharbor-ua-order-concurrency",
+  "authorization": "用户要求新workspace及四项功能；仅本地开发验证，不包含真实注册、发信、付款、推送或部署。按开发者复杂任务要求建立轻量Trellis记录。",
+  "artifacts": ["prd.md", "design.md", "implement.md", "validation.md"]
+}

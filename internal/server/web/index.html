@@ -327,8 +327,9 @@
             <span class="hint">注册后不会自动入池。需手动付款，检测到有效套餐且邮箱已验证后才能手动入池；支付链接不代表已付款。</span>
             <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
             <label for="th-register-conc">本次并发</label>
-            <input id="th-register-conc" type="number" min="1" max="1" step="1" value="1" readonly>
-            <span class="hint">固定单并发，不额外设置注册提交间隔。官网拒绝或限流时仅结束当前账号，按 Retry-After 等待后人工重试；不会自动重试或切换出口。</span>
+            <input id="th-register-conc" type="number" min="1" max="5" step="1" value="1">
+            <span class="hint">可设置1–5个注册并发，所有任务合计最多5个；同一活跃任务沿用开始时的上限。不额外设置提交间隔。官网拒绝或限流时仅结束当前账号，按 Retry-After 等待后人工重试；不会自动重试或切换出口。</span>
+            <span class="hint">新账号固定分配桌面 UA；有接码页时随机采用“先取Key后验证”或“先验证后取Key”，中断继续不重新分配。旧账号保持原身份和顺序。</span>
             <div class="actions"><button type="button" class="btn" id="th-register-save">仅保存</button><button type="submit" class="btn primary" id="th-register-submit">启动注册</button></div>
             <span class="hint">仅保存账号凭据、接码页与两个阶段的绑定代理，不注册、不解验证码、不付款；之后可在任务中开始注册。GitHub 不使用自动验证码服务。</span>
             <p id="th-register-error" class="error" role="alert"></p>
@@ -378,7 +379,8 @@
             <label for="th-set-group">默认入池分组</label>
             <input id="th-set-group" autocomplete="off" placeholder="tokenharbor">
             <label for="th-set-conc">注册并发</label>
-            <input id="th-set-conc" type="number" min="1" max="1" step="1" value="1" readonly>
+            <input id="th-set-conc" type="number" min="1" max="5" step="1" value="1">
+            <span class="hint">默认1，可设置1–5。新任务可在“本次并发”覆盖；不改变已运行任务的上限。</span>
             <label for="th-set-mail">等验证邮件上限（秒）</label>
             <input id="th-set-mail" type="number" min="30" max="1800" step="30">
             <label for="th-set-region">出口地区（ISO 国家码）</label>

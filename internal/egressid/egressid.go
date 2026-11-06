@@ -303,8 +303,10 @@ var spots = []spot{
 // valid identity so a caller without a stable id is not forced into the Go
 // default; callers that have an account id should pass it.
 func For(seed string) Identity {
-	i := indexFor(seed, len(spots))
-	s := spots[i]
+	return identityForSpot(seed, spots[indexFor(seed, len(spots))])
+}
+
+func identityForSpot(seed string, s spot) Identity {
 	return Identity{
 		UserAgent:       s.userAgent,
 		Brand:           s.brand,
@@ -325,9 +327,8 @@ func indexFor(seed string, n int) int {
 	return int(binary.BigEndian.Uint32(sum[:4]) % uint32(n))
 }
 
-// Len reports how many distinct identities the table offers, for callers that
-// want to report or test the spread.
-func Len() int { return len(spots) }
+// Len includes the frozen legacy table and the current named profiles.
+func Len() int { return len(spots) + len(desktopProfiles) }
 
 // UserAgentFor is For(seed).UserAgent, for call sites that only need the
 // header value.

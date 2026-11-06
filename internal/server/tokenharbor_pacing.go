@@ -6,7 +6,7 @@ import (
 )
 
 // checkSignup guards site/captcha work and the final submission without adding
-// a local delay. The registrar's single worker still serializes accounts.
+// a local delay. The registrar still enforces task and global worker limits.
 func (r *thRegistrar) checkSignup(ctx context.Context) error {
 	select {
 	case <-ctx.Done():

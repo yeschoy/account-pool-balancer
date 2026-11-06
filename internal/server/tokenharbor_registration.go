@@ -64,15 +64,11 @@ type thRegisterRequest struct {
 	// SolveCaptcha buys a Turnstile token when the site asks for one. Off by
 	// default: the caller pays for each attempt it enables.
 	SolveCaptcha bool `json:"solveCaptcha"`
-	// Concurrency is accepted for legacy clients (0..thMaxConcurrency), but
-	// the effective global registration budget is always one.
+	// Concurrency is 1–5; zero uses the saved default. Tasks share a global cap.
 	Concurrency int `json:"concurrency,omitempty"`
 }
 
-// Legacy request bounds stay compatible; no requested value raises the
-// effective global budget above one.
-const thMaxConcurrency = 10
-const thRegistrationConcurrency = 1
+const thMaxConcurrency = config.TokenHarborRegistrationMax
 
 // thRegistrationView is the console's attempt row: counts plus summaries.
 type thRegistrationView struct {
@@ -88,9 +84,15 @@ type thRegistrationView struct {
 // thRegistrar runs rows in the background. It owns the concurrency budget so
 // two attempts cannot each open the full set of registrations.
 type thRegistrar struct {
-	srv *Server
-	mu  sync.Mutex
-	sem chan struct{}
+	srv      *Server
+	mu       sync.Mutex
+	sem      chan struct{}
+	attempts map[string]*thAttemptBudget
+}
+
+type thAttemptBudget struct {
+	sem  chan struct{}
+	refs int // running plus waiting; do not rebuild a live task's limit
 }
 
 func (s *Server) thRegistrar() *thRegistrar {
@@ -102,15 +104,73 @@ func (s *Server) thRegistrar() *thRegistrar {
 	return s.thReg
 }
 
-// budget is one immutable global slot, even when legacy requests carry
-// different concurrency settings. Rebuilding a channel would bypass the cap.
-func (r *thRegistrar) budget(_ int) chan struct{} {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sem == nil {
-		r.sem = make(chan struct{}, thRegistrationConcurrency)
+// acquire uses a fixed global cap and a shared per-task budget. Concurrent
+// retries cannot create private semaphores or rebuild a live task's limit.
+func (r *thRegistrar) acquire(ctx context.Context, attempt string, limit int) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return r.sem
+	select {
+	case <-r.srv.thStopping:
+		return nil, errors.New("服务正在停止")
+	default:
+	}
+	limit = max(1, min(limit, thMaxConcurrency))
+	r.mu.Lock()
+	if r.sem == nil {
+		r.sem = make(chan struct{}, thMaxConcurrency)
+	}
+	if r.attempts == nil {
+		r.attempts = make(map[string]*thAttemptBudget)
+	}
+	b := r.attempts[attempt]
+	if b == nil {
+		b = &thAttemptBudget{sem: make(chan struct{}, limit)}
+		r.attempts[attempt] = b
+	}
+	b.refs++
+	global := r.sem
+	r.mu.Unlock()
+	unref := func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		b.refs--
+		if b.refs == 0 {
+			delete(r.attempts, attempt)
+		}
+	}
+	select {
+	case b.sem <- struct{}{}:
+	case <-ctx.Done():
+		unref()
+		return nil, ctx.Err()
+	case <-r.srv.thStopping:
+		unref()
+		return nil, errors.New("服务正在停止")
+	}
+	select {
+	case global <- struct{}{}:
+		release := func() { <-global; <-b.sem; unref() }
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		select {
+		case <-r.srv.thStopping:
+			release()
+			return nil, errors.New("服务正在停止")
+		default:
+		}
+		return release, nil
+	case <-ctx.Done():
+		<-b.sem
+		unref()
+		return nil, ctx.Err()
+	case <-r.srv.thStopping:
+		<-b.sem
+		unref()
+		return nil, errors.New("服务正在停止")
+	}
 }
 
 // ---- API ---------------------------------------------------------------------
@@ -149,7 +209,7 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Concurrency < 0 || in.Concurrency > thMaxConcurrency {
-		apiError(w, http.StatusBadRequest, errors.New("注册并发参数必须为 0-10；实际固定单并发"))
+		apiError(w, http.StatusBadRequest, errors.New("注册并发必须为 1-5；0 表示使用默认设置"))
 		return
 	}
 	if in.AutoImport {
@@ -304,7 +364,10 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"id": attempt, "rows": summaries})
 		return
 	}
-	conc := thRegistrationConcurrency
+	conc := in.Concurrency
+	if conc == 0 {
+		conc = cfg.RegisterConcurrency
+	}
 	s.thLive("", "任务创建", fmt.Sprintf("%d 个邮箱，并发 %d，代理 %d 个", len(rows), conc, len(proxies)), "", "info")
 	s.thRegisterAttempt(attempt, in.SolveCaptcha, conc, summaries)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": attempt, "rows": summaries})
@@ -321,7 +384,7 @@ func (s *Server) thRegisterAttempt(attempt string, solve bool, conc int, rows []
 			continue
 		}
 		id := row.ID
-		// All rows share the fixed global budget, regardless of task settings.
+		// Each task shares its selected limit, under the fixed global cap.
 		s.thTasks.Add(1)
 		go func() {
 			defer s.thTasks.Done()
@@ -341,8 +404,6 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if conc <= 0 {
 		conc = cfg.RegisterConcurrency
 	}
-	sem := r.budget(conc)
-
 	select {
 	case <-s.thStopping:
 		return errors.New("服务正在停止")
@@ -376,19 +437,20 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		return errors.New(detail)
 	}
 
-	select {
-	case sem <- struct{}{}:
-		defer func() { <-sem }()
-	case <-s.thStopping:
-		return errors.New("服务正在停止")
-	case <-time.After(24 * time.Hour):
-		return fail("排队", errors.New("等待单并发名额超过24小时；未发起注册，请人工核对后重新排队"))
+	queueCtx, queueCancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	release, waitErr := r.acquire(queueCtx, row.Attempt, conc)
+	queueCancel()
+	if waitErr != nil {
+		return fail("排队", errors.New("等待注册并发名额已取消或超时；未发起注册，请人工核对后重新排队"))
 	}
+	defer release()
 
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
 		ProxyURL:          proxy,
 		Seed:              id,
+		BrowserProfile:    row.BrowserProfile,
+		CompletionOrder:   row.CompletionOrder,
 		EgressRegion:      thEgressRegion(cfg, proxy),
 		Label:             thLabel(cfg),
 		VerificationSince: row.CreatedAt,
@@ -409,22 +471,20 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			s.thLive(row.Email, stage, detail, logProxy, "info")
 		},
 	}
-	if row.GitHub != nil {
-		flowCfg.UserAgent = thregister.OAuthUserAgent
-	}
 	if row.MailboxURL != "" {
 		// The mailbox is a separate HTTPS service, not the account's upstream.
 		// Select direct delivery explicitly; never fall back after proxy failure.
-		flowCfg.Mailbox = &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: id}
+		flowCfg.Mailbox = &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: id, BrowserProfile: row.BrowserProfile}
 	}
 	if solve && row.GitHub == nil {
 		flowCfg.Solver = thcaptcha.New(thcaptcha.Config{
-			BaseURL:    cfg.CaptchaBase,
-			APIKey:     cfg.CaptchaKey,
-			HTTPClient: s.thHTTPClient(proxy),
-			Seed:       id,
-			PollEvery:  time.Duration(cfg.SolverPollMs) * time.Millisecond,
-			Timeout:    time.Duration(cfg.SolveTimeoutSec) * time.Second,
+			BaseURL:        cfg.CaptchaBase,
+			APIKey:         cfg.CaptchaKey,
+			HTTPClient:     s.thHTTPClient(proxy),
+			Seed:           id,
+			BrowserProfile: row.BrowserProfile,
+			PollEvery:      time.Duration(cfg.SolverPollMs) * time.Millisecond,
+			Timeout:        time.Duration(cfg.SolveTimeoutSec) * time.Second,
 		})
 	}
 	flow, err := thregister.New(flowCfg)
@@ -467,7 +527,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 				row.APIKey == "" && !row.Verified && row.Account == "" && row.Checkout == nil &&
 				!thregister.HasSession(flow.Session()) {
 				// User-authorized exception for this precise login rejection.
-				// Preserve the row/credentials/route and the single worker;
+				// Preserve the row/credentials/route and the shared worker budget;
 				// a rejected or uncertain signup is never repeated in this run.
 				newSignup = true
 				s.thLive(row.Email, "重新注册", "官网返回邮箱密码不匹配；按原凭据、原出口重新注册一次", proxy, "warn")
@@ -478,7 +538,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		}
 	}
 	if newSignup {
-		s.thLive(row.Email, "注册调度", "固定单并发；不额外设置注册提交间隔，受限仅结束当前账号，不暂停其他账号", proxy, "info")
+		s.thLive(row.Email, "注册调度", fmt.Sprintf("任务并发 %d（全局最多5）；不额外设置提交间隔，受限仅结束当前账号", conc), proxy, "info")
 		err = r.checkSignup(ctx)
 		if err == nil {
 			res, err = flow.Run(ctx, thregister.Credentials{
@@ -631,28 +691,19 @@ func (s *Server) apiTHRegistrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grouped := store.Summaries()
-	groups := make([]string, 0, len(grouped))
-	for k := range grouped {
-		groups = append(groups, k)
+	out := make([]thRegistrationView, 0, len(grouped))
+	for id, rows := range grouped {
+		out = append(out, thJobView(id, store.AttemptNote(id), rows))
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(groups)))
-	out := make([]thRegistrationView, 0, len(groups))
-	for _, k := range groups {
-		rows := grouped[k]
-		view := thRegistrationView{ID: k, Note: store.AttemptNote(k), Rows: rows, Counts: map[string]int{}}
-		for _, row := range rows {
-			view.Counts[string(row.Status)]++
-			if row.CreatedAt.After(view.CreatedAt) {
-				view.CreatedAt = row.CreatedAt
-			}
-			if row.Status == thsignupstore.Running || row.Status == thsignupstore.Queued {
-				view.Running = true
-			}
+	// IDs are random, not chronological. Sort ALL jobs before applying the cap.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
 		}
-		out = append(out, view)
-		if len(out) >= thRegistrationJobs {
-			break
-		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if len(out) > thRegistrationJobs {
+		out = out[:thRegistrationJobs]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }
@@ -666,23 +717,31 @@ func (s *Server) apiTHRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	var rows []thsignupstore.Summary
-	view := thRegistrationView{ID: id, Note: store.AttemptNote(id), Counts: map[string]int{}}
 	for _, row := range store.List() {
 		if row.Attempt != id {
 			continue
 		}
 		rows = append(rows, row)
-		view.Counts[string(row.Status)]++
-		if row.Status == thsignupstore.Running || row.Status == thsignupstore.Queued {
-			view.Running = true
-		}
 	}
 	if rows == nil {
 		apiError(w, http.StatusNotFound, errors.New("注册任务不存在"))
 		return
 	}
-	view.Rows = rows
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, thJobView(id, store.AttemptNote(id), rows))
+}
+
+func thJobView(id, note string, rows []thsignupstore.Summary) thRegistrationView {
+	view := thRegistrationView{ID: id, Note: note, Rows: rows, Counts: map[string]int{}}
+	for _, row := range rows {
+		view.Counts[string(row.Status)]++
+		if view.CreatedAt.IsZero() || row.CreatedAt.Before(view.CreatedAt) {
+			view.CreatedAt = row.CreatedAt
+		}
+		if row.Status == thsignupstore.Running || row.Status == thsignupstore.Queued {
+			view.Running = true
+		}
+	}
+	return view
 }
 
 // Notes belong to the task ID, not an individual registration row.
@@ -781,7 +840,7 @@ func (s *Server) apiTHRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Concurrency < 0 || in.Concurrency > thMaxConcurrency {
-		apiError(w, http.StatusBadRequest, errors.New("注册并发必须为 0-10"))
+		apiError(w, http.StatusBadRequest, errors.New("注册并发必须为 1-5；0 表示使用默认设置"))
 		return
 	}
 	id := r.PathValue("id")
@@ -829,11 +888,12 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		BaseURL:        thBaseURL(cfg.BaseURL),
 		ProxyURL:       proxy,
 		Seed:           row.ID,
+		BrowserProfile: row.BrowserProfile,
 		EgressRegion:   thEgressRegion(cfg, proxy),
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
 		UserAgent:      thRowUserAgent(row),
-		Mailbox:        &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: row.ID},
+		Mailbox:        &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: row.ID, BrowserProfile: row.BrowserProfile},
 		Log: func(stage, detail string) {
 			s.thLive(row.Email, stage, detail, proxy, "info")
 		},
@@ -926,7 +986,7 @@ func (s *Server) apiTHSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	cfg := s.cfg.Get()
 	th := cfg.TokenHarbor
-	th.RegisterConcurrency = thRegistrationConcurrency
+	// Config normalization supplies the effective 1–5 default.
 	hasCaptcha := strings.TrimSpace(th.CaptchaKey) != ""
 	proxyLabel := thsignupstore.ProxyLabel(th.ProxyURL)
 	th.CaptchaKey, th.ProxyURL = "", ""
@@ -951,7 +1011,13 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := *in.TokenHarbor
-	next.RegisterConcurrency = thRegistrationConcurrency
+	if next.RegisterConcurrency < 0 || next.RegisterConcurrency > thMaxConcurrency {
+		apiError(w, http.StatusBadRequest, errors.New("注册并发必须为 1-5"))
+		return
+	}
+	if next.RegisterConcurrency == 0 {
+		next.RegisterConcurrency = 1
+	}
 	if err := thsignupstore.ValidateProxy(next.ProxyURL); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return

@@ -120,6 +120,11 @@ func thSaveResult(row *thsignupstore.Row, res thregister.Result) {
 		}
 	}
 	row.APIKey, row.Verified, row.FreeModels = res.APIKey, res.VerifiedEmail, res.FreeModelsEnabled
+	if res.CompletionOrder != "" {
+		row.CompletionOrder = res.CompletionOrder
+	}
+	row.VerificationMailAttempted = row.VerificationMailAttempted || res.VerificationMailAttempted
+	row.APIKeyCreationAttempted = row.APIKeyCreationAttempted || res.APIKeyCreationAttempted
 	row.Cookies = thStoreCookies(res.Cookies)
 }
 
@@ -149,7 +154,9 @@ func thRowUserAgent(row thsignupstore.Row) string {
 
 func thStoredResult(row thsignupstore.Row) thregister.Result {
 	res := thregister.Result{Email: row.Email, APIKey: row.APIKey,
-		VerifiedEmail: row.Verified, FreeModelsEnabled: row.FreeModels}
+		VerifiedEmail: row.Verified, FreeModelsEnabled: row.FreeModels,
+		CompletionOrder: row.CompletionOrder, VerificationMailAttempted: row.VerificationMailAttempted,
+		APIKeyCreationAttempted: row.APIKeyCreationAttempted}
 	if row.GitHub != nil {
 		res.OAuthComplete = row.GitHub.OAuthComplete
 		res.GitHubToken, res.GitHubRefreshToken = row.GitHub.ProviderToken, row.GitHub.ProviderRefreshToken

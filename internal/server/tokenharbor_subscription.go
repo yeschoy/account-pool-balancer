@@ -26,7 +26,7 @@ func (s *Server) thCheckSubscription(ctx context.Context, id string) (thsignupst
 	}
 	cfg := s.cfg.Get().TokenHarbor
 	proxy := row.Egress(cfg.ProxyURL)
-	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.BaseURL), ProxyURL: proxy, UserAgent: thRowUserAgent(row), Seed: row.ID, EgressRegion: thEgressRegion(cfg, proxy), RequestTimeout: 40 * time.Second})
+	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.BaseURL), ProxyURL: proxy, UserAgent: thRowUserAgent(row), Seed: row.ID, BrowserProfile: row.BrowserProfile, EgressRegion: thEgressRegion(cfg, proxy), RequestTimeout: 40 * time.Second})
 	if err != nil {
 		return row, errors.New("套餐检测代理无效")
 	}

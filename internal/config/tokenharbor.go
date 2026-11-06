@@ -9,8 +9,17 @@ import (
 	"account-pool-balancer/internal/rules"
 )
 
+// TokenHarborRegistrationMax is shared by API, settings and worker admission.
+const TokenHarborRegistrationMax = 5
+
 func (c *Config) normalizeTokenHarbor() error {
 	t := &c.TokenHarbor
+	// Legacy configs could carry 0..10 while the worker was fixed at one.
+	if t.RegisterConcurrency <= 0 {
+		t.RegisterConcurrency = 1
+	} else if t.RegisterConcurrency > TokenHarborRegistrationMax {
+		t.RegisterConcurrency = TokenHarborRegistrationMax
+	}
 	if t.BaseURL == "" {
 		t.BaseURL = TokenHarborDefaults().BaseURL
 	}

@@ -37,7 +37,8 @@ func TestSignupCheckpointsSessionBeforeKeyFailure(t *testing.T) {
 	f, _ := New(Config{BaseURL: srv.URL, Checkpoint: func(r Result) error { snapshots = append(snapshots, r); return nil }})
 	defer f.Close()
 	res, err := f.Run(context.Background(), Credentials{Email: "test@example.com", Password: "pw"})
-	if err == nil || len(snapshots) != 1 || len(snapshots[0].Cookies) == 0 || len(res.Cookies) == 0 {
+	if err == nil || len(snapshots) != 2 || len(snapshots[0].Cookies) == 0 || len(res.Cookies) == 0 ||
+		snapshots[0].APIKeyCreationAttempted || !snapshots[1].APIKeyCreationAttempted || snapshots[1].APIKey != "" {
 		t.Fatalf("session must survive key failure: snapshots=%d err=%v", len(snapshots), err)
 	}
 }

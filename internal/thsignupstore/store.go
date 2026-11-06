@@ -34,6 +34,7 @@ import (
 	"unicode/utf8"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/thregister"
 )
 
@@ -119,9 +120,12 @@ type Row struct {
 	Checkout     *Checkout               `json:"checkout,omitempty"`
 	Subscription thregister.Subscription `json:"subscription"`
 	// Group is the pool group the row joins when it is imported.
-	Group string `json:"group,omitempty"`
-	// Verified records that the confirmation mail was used. Metadata access
-	// alone does not establish verification or paid inference authorization.
+	Group                     string                     `json:"group,omitempty"`
+	BrowserProfile            string                     `json:"browserProfile,omitempty"`
+	CompletionOrder           thregister.CompletionOrder `json:"completionOrder,omitempty"`
+	VerificationMailAttempted bool                       `json:"verificationMailAttempted,omitempty"`
+	APIKeyCreationAttempted   bool                       `json:"apiKeyCreationAttempted,omitempty"`
+	// Verified records confirmed email ownership, not paid admission.
 	Verified   bool      `json:"verified,omitempty"`
 	FreeModels bool      `json:"freeModels,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -160,6 +164,8 @@ type Summary struct {
 	CheckoutPending  bool                        `json:"checkoutPending"`
 	CheckoutFailure  *thregister.CheckoutFailure `json:"checkoutFailure,omitempty"`
 	Subscription     thregister.Subscription     `json:"subscription"`
+	BrowserProfile   string                      `json:"browserProfile,omitempty"`
+	CompletionOrder  thregister.CompletionOrder  `json:"completionOrder,omitempty"`
 	Verified         bool                        `json:"verified"`
 	FreeModels       bool                        `json:"freeModels"`
 	AccountID        string                      `json:"accountId,omitempty"`
@@ -171,26 +177,30 @@ type Summary struct {
 // string (so nothing that formats a row by accident can leak it), which means
 // the file needs a plain twin to serialize.
 type diskRow struct {
-	ID           string                  `json:"id"`
-	Attempt      string                  `json:"attempt"`
-	Email        string                  `json:"email"`
-	Password     string                  `json:"password,omitempty"`
-	GitHub       *GitHubAuth             `json:"github,omitempty"`
-	MailboxURL   string                  `json:"mailboxUrl,omitempty"`
-	ProxyURL     string                  `json:"proxyUrl,omitempty"`
-	ProxyBound   bool                    `json:"proxyBound,omitempty"`
-	Status       Status                  `json:"status"`
-	Detail       string                  `json:"detail,omitempty"`
-	APIKey       string                  `json:"apiKey,omitempty"`
-	Account      string                  `json:"accountId,omitempty"`
-	Cookies      []Cookie                `json:"cookies,omitempty"`
-	Checkout     *Checkout               `json:"checkout,omitempty"`
-	Subscription thregister.Subscription `json:"subscription"`
-	Group        string                  `json:"group,omitempty"`
-	Verified     bool                    `json:"verified,omitempty"`
-	FreeModels   bool                    `json:"freeModels,omitempty"`
-	CreatedAt    time.Time               `json:"createdAt"`
-	UpdatedAt    time.Time               `json:"updatedAt"`
+	ID                        string                     `json:"id"`
+	Attempt                   string                     `json:"attempt"`
+	Email                     string                     `json:"email"`
+	Password                  string                     `json:"password,omitempty"`
+	GitHub                    *GitHubAuth                `json:"github,omitempty"`
+	MailboxURL                string                     `json:"mailboxUrl,omitempty"`
+	ProxyURL                  string                     `json:"proxyUrl,omitempty"`
+	ProxyBound                bool                       `json:"proxyBound,omitempty"`
+	Status                    Status                     `json:"status"`
+	Detail                    string                     `json:"detail,omitempty"`
+	APIKey                    string                     `json:"apiKey,omitempty"`
+	Account                   string                     `json:"accountId,omitempty"`
+	Cookies                   []Cookie                   `json:"cookies,omitempty"`
+	Checkout                  *Checkout                  `json:"checkout,omitempty"`
+	Subscription              thregister.Subscription    `json:"subscription"`
+	Group                     string                     `json:"group,omitempty"`
+	BrowserProfile            string                     `json:"browserProfile,omitempty"`
+	CompletionOrder           thregister.CompletionOrder `json:"completionOrder,omitempty"`
+	VerificationMailAttempted bool                       `json:"verificationMailAttempted,omitempty"`
+	APIKeyCreationAttempted   bool                       `json:"apiKeyCreationAttempted,omitempty"`
+	Verified                  bool                       `json:"verified,omitempty"`
+	FreeModels                bool                       `json:"freeModels,omitempty"`
+	CreatedAt                 time.Time                  `json:"createdAt"`
+	UpdatedAt                 time.Time                  `json:"updatedAt"`
 }
 
 func (r Row) disk() diskRow {
@@ -200,6 +210,8 @@ func (r Row) disk() diskRow {
 		Detail: r.Detail, APIKey: r.APIKey, Account: r.Account,
 		Cookies: r.Cookies, Checkout: r.Checkout, Subscription: r.Subscription, Group: r.Group, Verified: r.Verified,
 		FreeModels: r.FreeModels, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		BrowserProfile: r.BrowserProfile, CompletionOrder: r.CompletionOrder, VerificationMailAttempted: r.VerificationMailAttempted,
+		APIKeyCreationAttempted: r.APIKeyCreationAttempted,
 	}
 }
 
@@ -210,6 +222,8 @@ func (d diskRow) row() Row {
 		Detail: d.Detail, APIKey: d.APIKey, Account: d.Account,
 		Cookies: d.Cookies, Checkout: d.Checkout, Subscription: d.Subscription, Group: d.Group, Verified: d.Verified,
 		FreeModels: d.FreeModels, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		BrowserProfile: d.BrowserProfile, CompletionOrder: d.CompletionOrder, VerificationMailAttempted: d.VerificationMailAttempted,
+		APIKeyCreationAttempted: d.APIKeyCreationAttempted,
 	}
 }
 
@@ -404,6 +418,11 @@ func (s *Store) add(attempt string, rows []Row, status Status) ([]Summary, error
 		nr.CreatedAt, nr.UpdatedAt = now, now
 		if nr.ID == "" {
 			nr.ID = config.NewID("thr_")
+		}
+		nr.BrowserProfile = egressid.PickProfile(nr.ID)
+		nr.CompletionOrder = thregister.KeyThenVerify
+		if nr.MailboxURL != "" {
+			nr.CompletionOrder = thregister.CompletionOrderFor(nr.ID)
 		}
 		next = append(next, nr)
 		out = append(out, SummaryOf(nr))
@@ -645,6 +664,7 @@ func SummaryOf(r Row) Summary {
 		Subscription: r.Subscription,
 		Verified:     r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		BrowserProfile: r.BrowserProfile, CompletionOrder: r.CompletionOrder,
 	}
 	if r.Checkout != nil && r.Checkout.URL == "" {
 		out.CheckoutPending = true

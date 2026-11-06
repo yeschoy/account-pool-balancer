@@ -16,6 +16,17 @@ const thState = { job: '', filter: 'pending', jobs: [], rows: [], busy: false, t
 // 右下角注册日志：轮询增量，暂停时只累积不渲染。
 const thLog = { seq: 0, lines: [], timer: null, inFlight: false, paused: false, visible: false, started: false };
 
+function thConcurrency(selector) {
+  const n = Number($(selector).value);
+  if (!Number.isInteger(n) || n < 1 || n > 5) throw new Error('注册并发必须为1–5的整数');
+  return n;
+}
+
+function thJobsNewestFirst(jobs) {
+  const time = (job) => Date.parse(job.createdAt) || 0;
+  return [...jobs].sort((a, b) => time(b) - time(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 function thLabel(status) {
   const [label, cls] = TH_STATUS[status] || [status || '未知', ''];
   return `<span class="badge ${cls}">${esc(label)}</span>`;
@@ -63,11 +74,21 @@ async function loadTHRegistrations() {
   if (!thLog.started) thLogShow();
   loadTHProxies().catch(() => { $('#th-proxies-status').textContent = '已保存代理池读取失败，请刷新重试'; });
   const generation = ++thState.generation;
+  if (!thState.concurrencyLoaded) {
+    thState.concurrencyLoaded = true;
+    const input = $('#th-register-conc');
+    const previous = input.value;
+    try {
+      const settings = await api('GET', '/api/tokenharbor/settings');
+      if (generation === thState.generation && input.value === previous) input.value = String(Math.max(1, Math.min(5, Number(settings.tokenHarbor?.registerConcurrency) || 1)));
+    } catch { thState.concurrencyLoaded = false; }
+  }
+  if (generation !== thState.generation) return;
   const poll = async () => {
     try {
       const out = await api('GET', '/api/tokenharbor/registrations');
       if (generation !== thState.generation) return;
-      thState.jobs = out.jobs || [];
+      thState.jobs = thJobsNewestFirst(out.jobs || []);
       let job = thState.jobs.find((j) => j.id === thState.job);
       if (!job) {
         job = thState.jobs.find((j) => j.running) || thState.jobs[0];
@@ -95,7 +116,7 @@ function stopTHPolling() {
 }
 
 function renderTHJobs() {
-  const jobs = thState.jobs;
+  const jobs = thJobsNewestFirst(thState.jobs);
   $('#th-register-jobs').innerHTML = jobs.map((job) => {
     const c = job.counts || {};
     const parts = Object.entries(c).filter(([, n]) => n > 0).map(([k, n]) => `${TH_STATUS[k] ? TH_STATUS[k][0] : k} ${n}`).join(' · ');
@@ -165,7 +186,7 @@ function renderTHJob(job) {
     <td>${thLabel(r.status)}</td>
     <td>${r.authProvider === 'github' ? `<span class="small">授权：${esc(r.githubProxy || '直连 IPv4')}<br>TH：</span>` : ''}<span class="small">${esc(r.proxy || '直连')}</span> ${!['running', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
-    <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
+    <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}<br><span class="muted">UA：${esc(r.browserProfile || '原有固定身份')} · ${r.completionOrder === 'verify-then-key' ? '先验证邮箱，再取Key' : '先取Key，再验证邮箱'}</span></td>
     <td>${thRowActions(r)}</td>
   </tr>`).join('') || `<tr><td colspan="7" class="empty">${thState.filter === 'imported' ? '本任务暂无已入池账号' : '本任务暂无待处理账号；已入池记录请切换「已入池」查看'}</td></tr>`;
   thUpdateSelection();
@@ -184,7 +205,8 @@ function thRowActions(r) {
   if (r.status === 'saved') out.push(button('retry', '开始注册', true));
   if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
-  if (['unverified', 'registered'].includes(r.status) && !r.verified && r.hasSession) out.push(button('resend-verification', '重发验证码'));
+  const verifyFirstPending = r.completionOrder === 'verify-then-key' && ['failed', 'uncertain'].includes(r.status);
+  if ((['unverified', 'registered'].includes(r.status) || verifyFirstPending) && !r.verified && r.hasSession) out.push(button('resend-verification', '重发验证码'));
   if (thSessionActionEligible(r)) out.push(button('checkout', r.checkoutPending ? '检查支付 / 恢复链接' : 'Agent Pass 链接'));
   if (thBatchEligible('import', r)) out.push(button('import', '校验并入池', true));
   if (r.status === 'imported' && r.accountId) out.push(button('return', '退回注册机'));
@@ -242,12 +264,13 @@ async function thSubmitRegistration(ev, saveOnly = false) {
   const error = $('#th-register-error');
   error.textContent = '';
   if (thState.busy || thState.batchBusy || thState.batchPrompt) return;
-  let accounts, proxies, sessionProxies;
+  let accounts, proxies, sessionProxies, concurrency;
   try {
     accounts = thParseAccounts($('#th-register-accounts').value);
     if (!accounts.length || accounts.length > 100) throw new Error('请填写 1-100 个邮箱');
     proxies = thParseProxies($('#th-register-proxies').value);
     sessionProxies = thParseProxies($('#th-register-session-proxies').value);
+    concurrency = thConcurrency('#th-register-conc');
   } catch (e) {
     error.textContent = e.message;
     return;
@@ -265,7 +288,7 @@ async function thSubmitRegistration(ev, saveOnly = false) {
       saveOnly,
       proxyMode: $('#th-register-proxy-mode').value,
       solveCaptcha: $('#th-register-solve').checked,
-      concurrency: Number($('#th-register-conc').value) || 0,
+      concurrency,
     });
     if (!out || !out.id) throw new Error('后台没有返回任务 ID，请先刷新任务列表确认');
     $('#th-register-accounts').value = '';
@@ -363,7 +386,7 @@ async function thRowAction(kind, id) {
       await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/subscription', {});
       err.textContent = '';
     } else if (kind === 'retry') {
-      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 });
+      await api('POST', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/retry', { solveCaptcha: $('#th-register-solve').checked, concurrency: thConcurrency('#th-register-conc') });
     } else if (kind === 'delete') {
       if (!window.confirm('确认删除此注册记录及已保存的会话、API Key、支付链接？此操作不删除已入池账号。')) return;
       await api('DELETE', '/api/tokenharbor/registrations/' + encodeURIComponent(id));
@@ -466,10 +489,10 @@ async function thBatchCall(kind, row, options) {
 // Requests are bounded, partial failures are final, and none are retried.
 async function thBatchRun(kind, rows, onResult = () => {}) {
   if (thState.batchBusy || thState.pending.size) throw new Error('已有操作执行中，请等待完成');
-  thState.batchBusy = true;
   const options = kind === 'import'
     ? { group: $('#th-register-group').value.trim() || 'tokenharbor' }
-    : { solveCaptcha: $('#th-register-solve').checked, concurrency: Number($('#th-register-conc').value) || 0 };
+    : kind === 'retry' ? { solveCaptcha: $('#th-register-solve').checked, concurrency: thConcurrency('#th-register-conc') } : {};
+  thState.batchBusy = true;
   const counts = { success: 0, failed: 0, skipped: 0 };
   let next = 0;
   const progress = () => {
@@ -676,11 +699,13 @@ async function loadTHSettings() {
   $('#th-set-captcha-hint').textContent = out.hasCaptcha ? '已保存一个 Key，页面不会回显；留空表示不修改。' : '还没有保存 captcha-run Key：注册时无法自动解 Turnstile。';
   $('#th-set-label').value = th.keyLabel || 'pool';
   $('#th-set-group').value = th.group || 'tokenharbor';
-  $('#th-set-conc').value = '1';
+  const defaultConcurrency = Math.max(1, Math.min(5, Number(th.registerConcurrency) || 1));
+  $('#th-set-conc').value = String(defaultConcurrency);
   $('#th-set-mail').value = th.mailTimeoutSec || 600;
   $('#th-set-region').value = th.egressRegion || '';
   const conc = $('#th-register-conc');
-  if (conc) conc.value = '1';
+  if (conc) conc.value = String(defaultConcurrency);
+  thState.concurrencyLoaded = true;
   $('#th-set-save').dataset.revision = String(out.revision || 0);
 }
 
@@ -690,6 +715,9 @@ async function thSaveSettings(ev) {
   const msg = $('#th-set-message');
   msg.textContent = '';
   const proxyRaw = $('#th-set-proxy').value.trim();
+  let concurrency;
+  try { concurrency = thConcurrency('#th-set-conc'); }
+  catch (e) { msg.textContent = e.message; return; }
   const body = {
     tokenHarbor: {
       baseUrl: $('#th-set-base').value.trim() || 'https://tokenharbor.ai/v1',
@@ -697,7 +725,7 @@ async function thSaveSettings(ev) {
       captchaKey: $('#th-set-captcha').value.trim(),
       keyLabel: $('#th-set-label').value.trim() || 'pool',
       group: $('#th-set-group').value.trim() || 'tokenharbor',
-      registerConcurrency: 1,
+      registerConcurrency: concurrency,
       mailTimeoutSec: Number($('#th-set-mail').value) || 600,
       egressRegion: $('#th-set-region').value.trim().toUpperCase(),
     },

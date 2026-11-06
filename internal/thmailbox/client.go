@@ -74,7 +74,8 @@ type Client struct {
 	// the registration it serves, it must look like the same browser, or the
 	// mail host sees a different client at exactly the moment the account is
 	// being created.
-	Seed string
+	Seed           string
+	BrowserProfile string
 }
 
 // New builds a reader for a mailbox share page.
@@ -126,7 +127,7 @@ func (c *Client) Messages(ctx context.Context) ([]thregister.Message, error) {
 		return nil, err
 	}
 	req.Header.Set("accept", "application/json")
-	egressid.Apply(req.Header, egressid.For(c.Seed))
+	egressid.Apply(req.Header, egressid.ForProfile(c.Seed, c.BrowserProfile))
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("接码页请求失败: %v", err)

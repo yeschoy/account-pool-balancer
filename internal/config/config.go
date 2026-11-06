@@ -601,7 +601,7 @@ type TokenHarbor struct {
 	// KeyLabel is the label of the API key the machine creates on each
 	// registered account.
 	KeyLabel string `json:"keyLabel"`
-	// RegisterConcurrency is retained for compatibility; registration uses one global slot.
+	// RegisterConcurrency is the default per-task worker limit (1–5); all tasks share a global cap of 5.
 	RegisterConcurrency int `json:"registerConcurrency"`
 	// MailTimeoutSec bounds the wait for the verification mail. Measured
 	// delivery is uneven (≈9 minutes on one IPv6 egress), so this is a

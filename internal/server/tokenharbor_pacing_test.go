@@ -16,14 +16,6 @@ import (
 	"account-pool-balancer/internal/thsignupstore"
 )
 
-func TestTHRegistrationBudgetCannotBeRebuiltByLegacyConcurrency(t *testing.T) {
-	r := &thRegistrar{}
-	one := r.budget(2)
-	if one != r.budget(10) || one != r.budget(0) || cap(one) != 1 {
-		t.Fatal("all tasks must share exactly one immutable slot")
-	}
-}
-
 func TestTHSignupCheckHonorsCancellationWithoutReservingDelay(t *testing.T) {
 	s := &Server{thStopping: make(chan struct{})}
 	r := &thRegistrar{srv: s}
@@ -96,7 +88,7 @@ func TestTHRateLimitOnlyFailsCurrentRow(t *testing.T) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		done <- r.run(rows[0].ID, false, 10)
+		done <- r.run(rows[0].ID, false, 1)
 	}()
 	select {
 	case <-started:
@@ -106,7 +98,7 @@ func TestTHRateLimitOnlyFailsCurrentRow(t *testing.T) {
 	s.thTasks.Add(1)
 	go func() {
 		defer s.thTasks.Done()
-		done <- r.run(rows[1].ID, false, 2)
+		done <- r.run(rows[1].ID, false, 1)
 	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for {

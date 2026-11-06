@@ -13,8 +13,9 @@
 //     multipart fields: _1_email, _1_password, _1_cf-turnstile-response,
 //     _1_device_fingerprint, _1_timezone, _1_invite_code, _1_next
 //  4. Optional explicit privacy consent (disabled by default)
-//  5. POST /api/keys {"label":…}                     -> save thk_live_… immediately
-//  6. GET  /verify-email?token=…                    (link arrives by mail)
+//  5. API Key creation and email verification, in a saved per-account order:
+//     POST /api/keys {"label":…} -> checkpoint the one-time key immediately
+//     GET /verify-email?token=… -> checkpoint verification immediately
 //
 // Registration returns a logged-in browser session; email verification only
 // unlocks API access. The API key is shown once, so it is captured here and
@@ -95,12 +96,15 @@ type Result struct {
 	// e-mail, so two runs of the same mailbox map to one pool account.
 	UserID string
 	// Cookies is the logged-in browser session, for later re-reads.
-	Cookies            []NamedCookie
-	GitHubCookies      []NamedCookie
-	GitHubToken        string
-	GitHubRefreshToken string
-	OAuthComplete      bool
-	// VerifiedEmail records whether step 5 completed within this run.
+	Cookies                   []NamedCookie
+	GitHubCookies             []NamedCookie
+	GitHubToken               string
+	GitHubRefreshToken        string
+	OAuthComplete             bool
+	CompletionOrder           CompletionOrder
+	VerificationMailAttempted bool
+	APIKeyCreationAttempted   bool
+	// VerifiedEmail records whether email confirmation completed.
 	VerifiedEmail bool
 	// FreeModelsEnabled records whether step 4 succeeded.
 	FreeModelsEnabled bool
@@ -219,9 +223,13 @@ type Config struct {
 	ProxyURL string
 	// Seed selects this account's client identity (User-Agent and the client
 	// hints that must agree with it). Pass the account's stable id: the same
-	// account then looks the same across restarts, while two accounts in one
-	// pool never present the same string. Empty keeps the first table row.
+	// account then keeps a stable selection across restarts. Different accounts
+	// may share a profile; empty still yields a valid legacy identity.
 	Seed string
+	// BrowserProfile restores the immutable named desktop profile of this row.
+	BrowserProfile string
+	// CompletionOrder is assigned once when the row is saved; empty is legacy key-first.
+	CompletionOrder CompletionOrder
 	// UserAgent overrides legacy requests for an honestly identified OAuth client.
 	UserAgent string
 	// Tests can intercept only the authorization transport, independently of
@@ -319,6 +327,9 @@ type Flow struct {
 
 // New builds a flow with a fresh cookie jar and one transport.
 func New(cfg Config) (*Flow, error) {
+	if !cfg.CompletionOrder.valid() {
+		return nil, errors.New("注册完成顺序无效；未发起请求")
+	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
@@ -348,7 +359,7 @@ func New(cfg Config) (*Flow, error) {
 	if zone != "" && cfg.Timezone == "" {
 		cfg.Timezone = zone
 	}
-	f := &Flow{cfg: cfg, jar: jar, id: egressid.For(cfg.Seed), lang: lang, client: &http.Client{
+	f := &Flow{cfg: cfg, jar: jar, id: egressid.ForProfile(cfg.Seed, cfg.BrowserProfile), lang: lang, client: &http.Client{
 		Transport: transport,
 		Jar:       jar,
 		Timeout:   cfg.timeout(),
@@ -477,6 +488,9 @@ func (f *Flow) Session() []NamedCookie {
 }
 
 func (f *Flow) checkpoint(res *Result) error {
+	if res.CompletionOrder == "" {
+		res.CompletionOrder = f.cfg.CompletionOrder
+	}
 	res.Cookies = f.Session()
 	res.UserIDClaim, res.SessionExpiresAt = SessionIdentity(res.Cookies)
 	if f.cfg.Checkpoint != nil {
@@ -498,6 +512,9 @@ func (f *Flow) Resume(ctx context.Context, res Result) (Result, error) {
 }
 
 func (f *Flow) finish(ctx context.Context, res Result) (Result, error) {
+	if !res.CompletionOrder.valid() {
+		return res, errors.New("注册完成顺序无效；未继续创建Key或验证")
+	}
 	// Persist the session BEFORE any further request can fail.
 	if err := f.checkpoint(&res); err != nil {
 		return res, err
@@ -513,58 +530,33 @@ func (f *Flow) finish(ctx context.Context, res Result) (Result, error) {
 		}
 	}
 
-	// The site decides at signup whether a new address is usable for API
-	// access at all. Probing here turns that into an actionable reason instead
-	// of a bare 401 on the key call, and it tells a revoked key apart from a
-	// key this flow built wrong.
-	if err := f.probeAPIKey(ctx); err != nil {
+	// Legacy resumes with an existing key must not suddenly send mail. New
+	// accounts may send once; the attempted marker is persisted BEFORE POST.
+	allowSend := res.APIKey == ""
+	verify := func() error {
+		err := f.completeVerification(ctx, &res, allowSend)
+		if saveErr := f.checkpoint(&res); saveErr != nil {
+			return saveErr
+		}
+		return err
+	}
+	if res.CompletionOrder == VerifyThenKey {
+		f.cfg.step("完成顺序", "先验证邮箱，再获取 API Key（账号固定）")
+		if err := verify(); err != nil {
+			return res, err
+		}
+		if !res.VerifiedEmail {
+			return res, errors.New("邮箱尚未验证；已保存会话，未创建 API Key，请稍后手动继续")
+		}
+	}
+	if err := f.completeAPIKey(ctx, &res); err != nil {
 		return res, err
 	}
-	// A key is revealed once. Save it before waiting for mail or doing any
-	// optional work; a later failure must not strand that credential.
-	if res.APIKey == "" {
-		f.cfg.step("创建 API Key", "")
-		key, err := f.createAPIKey(ctx)
-		if err != nil {
+	if res.CompletionOrder != VerifyThenKey {
+		f.cfg.step("完成顺序", "先获取 API Key，再验证邮箱（账号固定）")
+		if err := verify(); err != nil {
 			return res, err
 		}
-		res.APIKey = key
-		if err := f.checkpoint(&res); err != nil {
-			return res, err
-		}
-		// OAuth finish does not send the site's verification mail. Request it
-		// only for this newly checkpointed key; resuming an existing key must
-		// not automatically replay an uncertain send action.
-		if res.OAuthComplete && f.cfg.Mailbox != nil && !res.VerifiedEmail {
-			f.cfg.step("发送验证邮件", "提交一次官网发信动作；不代表已验证")
-			res.VerifiedEmail, err = f.SendVerificationEmail(ctx)
-			if err != nil {
-				return res, err
-			}
-		}
-	}
-
-	if f.cfg.Mailbox != nil && !res.VerifiedEmail {
-		f.cfg.step("等验证邮件", "最长 "+f.cfg.mailTimeout().String())
-		if link, err := f.waitVerificationLink(ctx, res.Email); err == nil && link != "" {
-			res.VerifiedEmail = f.verifyEmail(ctx, link) == nil
-			if res.VerifiedEmail {
-				f.cfg.step("邮箱验证", "成功")
-			} else {
-				f.cfg.step("邮箱验证", "链接无效")
-			}
-		} else if errors.Is(err, ErrMailboxRejected) {
-			return res, err
-		} else {
-			// Not a failure: the account exists and its key is real. The
-			// mail simply arrived after the patience budget (measured ≈9m).
-			res.MailTimedOut = true
-			f.cfg.step("等验证邮件", "超时，可在任务里补验证")
-		}
-	}
-
-	if err := f.checkpoint(&res); err != nil {
-		return res, err
 	}
 	f.cfg.step("完成", "key="+MaskKey(res.APIKey))
 	return res, nil

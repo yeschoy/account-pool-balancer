@@ -45,7 +45,8 @@ type Config struct {
 	// Seed selects the identity presented to the captcha service. The service
 	// sees the same registration as the site does, so it must not see a
 	// different client at the same moment.
-	Seed string
+	Seed           string
+	BrowserProfile string
 }
 
 func (c Config) base() string {
@@ -160,7 +161,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 	if err != nil {
 		return err
 	}
-	egressid.Apply(req.Header, egressid.For(c.cfg.Seed))
+	egressid.Apply(req.Header, egressid.ForProfile(c.cfg.Seed, c.cfg.BrowserProfile))
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
