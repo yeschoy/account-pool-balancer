@@ -48,7 +48,38 @@
   mailTimeoutSec，不能用旧整份config覆盖后续在线变更。13:36:51 UTC复核通过。
   本节仅补记录，不再次部署。
 
-## 当前部署（2026-11-06 UTC，远程 master：3058850）
+## 当前部署：Stripe 链接路径兼容（2026-11-06 21:37 UTC，a8902bc）
+
+- 用户同意上线安全诊断并用一个未尝试账号验证。先上线`9f6ab11`取得真实响应结构，再修复前后端均写死`/c/pay/`的问题，最终运行`a8902bc6069b4795c2c08d7864e3638ee9e0aef9`。Stripe官方[Session.url合同](https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url)不保证路径前缀；现在只接受HTTPS、精确checkout.stripe.com、无userinfo/显式端口/空白且非空根地址，路径/query/fragment按不透明值处理。不扩展自定义域名或invoice_url，不更改报价、单次月付、禁止扣款/升级、pending保护及保存链接优先复用规则。
+- 干净git archive源码：`/home/ubuntu/project/account-pool-balancer-releases/20261106T213621Z-a8902bc`；未夹带两份原有HTML/JS测试草稿或未跟踪目录。旧工作树仍e6f063b/干净/分叉，未在旧树构建、reset或覆盖配置。
+- 镜像`account-pool-balancer:release-a8902bc-20261106T213621Z`，ID`sha256:73c0301dd57e2a59ed45ee95a5ffda0bdb3f288701b7f8d40dc4a9759c844f26`。复用下节刚完成的同格式断网预检，不重复复制敏感数据；构建就绪后才停服务并做完整一致data备份。仅通过release内image override切换原Compose目标服务，UID1000:1000、环境、卷/端口/网络别名、健康/重启策略和实际资源保持原状；线上Memory限制原本为0，不套用本地新Compose的8GiB。
+- **78账号、92注册记录及其凭据/Key/固定代理/支付记录/备注、保存代理池、routingSecret和完整配置均保留**。允许后台正常更新Cookie/套餐观察/更新时间，其他资产用远端内存HMAC比对；配置逐字节一致，日志保留仍30天，未擅自启用功能。
+- 全量Go normal/race/vet/build、三套Node行为测试及本地假数据浏览器通过：模拟非`/c/pay/`链接一次创建、加密保存、显式读取和前端展示成功，mock预检1/创建1，另一pending不变、未入池、核账框未勾选。**这是本地验收；修正后未追加真实创建，尚无修正版线上成功生成的证据。**
+- Docker healthy、restartCount=0，healthz及四静态资源本机校验通过。真实未登录公网浏览器`https://ods.yeschoy.io/`的healthz/四资源均200，保留?v查询串，SHA256与a8902bc逐一相符；21:38:11 UTC完成核对。上线及限制已立即反馈，本文档随后补记，不再次重启。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 21:36:33.410–21:36:40.174（6.764秒） |
+| 请求停止 / 旧进程退出 | 21:36:40.275 / 21:36:40.370 |
+| 完整一致备份及gzip/SHA256核验 | 21:36:40.639–21:36:41.782 |
+| 切换请求 / 新容器启动 | 21:36:41.782 / 21:36:41.972 |
+| 首次HTTP健康可达 / Docker healthy | 21:36:43.078 / 21:37:12.309 |
+| 本机验收 / 公网验收 | 21:37:12.411 / 21:38:11 |
+
+未采样精确不可用窗口，不把约30秒Docker健康等待、开发诊断时间或整个交付时长当作停机。
+受限备份`/home/ubuntu/backups/account-pool-balancer/20261106T213621Z-checkout-a8902bc/`含data.tar.gz、校验、原Compose/.env、构建/切换日志及deploy.json，目录0700、敏感文件0600。data SHA256：`8f21d56682876de98f215db884d7834f5538c7c29810113cdd4321a0f54f3710`。回退镜像`account-pool-balancer:rollback-20261106T213621Z`保留；降级前核查新写入，不用旧整份data覆盖在线变化。正式备份/镜像/源码保留，临时预检副本/容器及本地验收文件按`_tmp_artifacts.md`待用户同意清理。
+
+## 支付响应诊断部署与一次实测（2026-11-06 21:09 UTC，9f6ab11）
+
+- 首次从3058850升级至`9f6ab1151363d2d70778853946ac64ec0133e5ae`，含此前已完成的任务备注、默认7天记录级日志保留（保留线上显式30天）、真实周额度/月余额未知展示及只读支付预检。新增诊断只保留固定字段名/JSON类型/总字段数和URL分类，不回显URL标识符、任意键值、Cookie或凭据；HTTP200业务错误也可识别。
+- 源码`/home/ubuntu/project/account-pool-balancer-releases/20261106T210853Z-9f6ab11`；镜像`account-pool-balancer:release-9f6ab11-20261106T210853Z`，ID`sha256:ee7162341de53c541db6f7bffec5ff41617eab6fa5e5933f5fe637810e0aa3ff`。
+- 新可选元数据首次升级按原UID1000:1000运行断网副本，health及鉴权注册列表92行核验通过；预检容器`account-pool-balancer-checkout-preflight-20261106t210853z`已停止，副本保留在备份内preflight-data。原服务退出0后完整一致备份，再仅切换原Compose镜像；78账号/92记录关键资产、完整配置及运行参数均保留。
+- 21:10:30 UTC，按用户授权只选一个无checkout标记的已验证Free账号`ter***@icloud.com`（`thr_d01e72e8b54c5e505082607b`、任务`that_ace0a9355f17cf11dbd84322`），通过正常管理员API/CSRF及其原固定代理提交一次链接创建；报价预检通过。3.948秒后本地API502，上游HTTP200，仅`checkout_url`字符串，HTTPS/checkout.stripe.com、无userinfo/端口/空白，但路径分类other-path，被旧固定前缀校验拒收。**未保留原始URL，不能断言该地址完整有效或收银台已验证；此次至少证明了固定路径造成的拒收点。**
+- 创建前pending已持久化，结束后registered、无保存URL，有安全failure诊断；此前全部29份checkout记录保持原样。该账号只读ledger总数0，不代表没有待处理订单。**没有再次创建、换更多账号、核账代确认、地区确认、付款或自动续费操作**；管理员会话正常退出。旧不确定标记均保留，不能盲目重试。
+- 构建21:09:04.768–21:09:11.407；停止请求/退出21:09:12.307/12.411；完整备份21:09:12.677–13.815；切换/启动21:09:13.815/14.033；HTTP可达21:09:15.143，Docker healthy21:09:44.388，本机验收21:09:44.503。公网health/四资源200及版本哈希核验亦通过。
+- 备份`/home/ubuntu/backups/account-pool-balancer/20261106T210853Z-checkout-9f6ab11/`，data SHA256`897da473e91f86c8b19e7f70f2844cff6e083958ee05955722113bade38609d8`；回退镜像`account-pool-balancer:rollback-20261106T210853Z`（原3058850）保留。凭据仅远端内存/stdin，不下载或写入脚本/日志/Git，未新建Trellis任务。
+
+## 历史部署（2026-11-06 UTC，远程 master：3058850）
 
 - 按用户要求快速部署最新分支；fetch 后本地/远程 `master` 均为
   `3058850ba2aab0dd24dd1256bbd08191530666d6`，从干净 `git archive` 构建，
