@@ -39,6 +39,7 @@ type checkoutResponse struct {
 	Quote                 *CheckoutQuote  `json:"quote"`
 	Error                 json.RawMessage `json:"error"`
 	RegionWarningRequired bool            `json:"region_warning_required"`
+	Shape                 string          `json:"-"`
 }
 
 // CreateCheckout previews the account first. ONLY a free account's one-time
@@ -71,7 +72,7 @@ func (f *Flow) CreateCheckoutGuarded(ctx context.Context, in CheckoutRequest, be
 		return "", checkoutFailure("create", "quote-changed", 200, "", "报价或订阅状态已变化，已停止；不继续确认或重复请求")
 	}
 	if !ValidCheckoutURL(out.URL) {
-		return "", checkoutFailure("create", "invalid-link", 200, "", "支付响应没有可信的 Stripe 托管链接；不会自动重试，请核对官网账单")
+		return "", checkoutFailure("create", "invalid-link", 200, "", "支付响应没有可信的 Stripe 托管链接；不会自动重试，请核对官网账单；返回结构："+out.Shape)
 	}
 	return out.URL, nil
 }
@@ -132,6 +133,7 @@ func (f *Flow) checkoutCall(ctx context.Context, payload map[string]any, stage s
 		return out, checkoutFailure(stage, "response-incomplete", resp.StatusCode, "", message)
 	}
 	parseErr := json.Unmarshal(raw, &out)
+	out.Shape = checkoutResponseShape(raw)
 	code := checkoutErrorCode(out.Error)
 	errorValue := string(bytes.TrimSpace(out.Error))
 	hasBusinessError := errorValue != "" && errorValue != "null" && errorValue != `""`
@@ -152,10 +154,10 @@ func (f *Flow) checkoutCall(ctx context.Context, payload map[string]any, stage s
 				message = "支付接口限流；不会自动重试"
 			}
 		}
-		return out, checkoutFailure(stage, "upstream-rejected", resp.StatusCode, code, message)
+		return out, checkoutFailure(stage, "upstream-rejected", resp.StatusCode, code, message+"；返回结构："+out.Shape)
 	}
 	if parseErr != nil {
-		return out, checkoutFailure(stage, "invalid-json", resp.StatusCode, "", "支付响应无法解析；不会自动重试")
+		return out, checkoutFailure(stage, "invalid-json", resp.StatusCode, "", "支付响应无法解析；不会自动重试；返回结构："+out.Shape)
 	}
 	return out, nil
 }

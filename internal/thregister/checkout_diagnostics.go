@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -87,6 +88,85 @@ var checkoutErrorMessages = map[string]string{
 	"finish_signup":                      "账号尚未完成官网资料，请人工完成；不会重新注册",
 	"region_blocked":                     "官网拒绝当前地区；不会切换出口",
 	"region_confirmation_required":       "官网要求人工确认地区；本服务不会代为确认",
+}
+
+// Only fixed field names, JSON types and URL classes leave the response.
+// Arbitrary keys, hostnames, paths, query/fragment values and userinfo may
+// contain reflected credentials and must never appear in diagnostics.
+func checkoutResponseShape(raw []byte) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return "非JSON对象"
+	}
+	parts := []string{}
+	for _, key := range []string{"checkout_url", "invoice_url", "url", "checkoutUrl", "error", "quote", "upgraded", "region_warning_required", "message", "success", "ok"} {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		kind := "null"
+		var parsed any
+		if json.Unmarshal(value, &parsed) == nil {
+			switch parsed.(type) {
+			case string:
+				kind = "string"
+			case bool:
+				kind = "boolean"
+			case float64:
+				kind = "number"
+			case map[string]any:
+				kind = "object"
+			case []any:
+				kind = "array"
+			}
+		}
+		part := key + "=" + kind
+		if key == "checkout_url" || key == "invoice_url" || key == "url" || key == "checkoutUrl" {
+			if text, ok := parsed.(string); ok {
+				part += "[" + checkoutURLShape(text) + "]"
+			}
+		}
+		parts = append(parts, part)
+	}
+	// Count extra keys, but never echo a possibly secret arbitrary key.
+	return fmt.Sprintf("%d字段{%s}", len(fields), strings.Join(parts, ","))
+}
+
+func checkoutURLShape(raw string) string {
+	if raw == "" {
+		return "empty"
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "parse-invalid"
+	}
+	scheme := "other-scheme"
+	if u.Scheme == "https" {
+		scheme = "https"
+	} else if u.Scheme == "http" {
+		scheme = "http"
+	}
+	host := "external-host"
+	switch u.Hostname() {
+	case "checkout.stripe.com", "invoice.stripe.com", "billing.stripe.com", "pay.stripe.com":
+		host = u.Hostname()
+	case "tokenharbor.ai":
+		host = "site-origin"
+	default:
+		if strings.HasSuffix(u.Hostname(), ".stripe.com") {
+			host = "stripe-subdomain"
+		} else if strings.HasSuffix(u.Hostname(), ".tokenharbor.ai") {
+			host = "site-subdomain"
+		}
+	}
+	path := "other-path"
+	for _, prefix := range []string{"/c/pay/", "/pay/", "/i/", "/p/"} {
+		if strings.HasPrefix(u.Path, prefix) {
+			path = prefix + "token:" + fmt.Sprint(len(u.Path) > len(prefix))
+			break
+		}
+	}
+	return fmt.Sprintf("%s,%s,%s,userinfo:%t,port:%t,whitespace:%t", scheme, host, path, u.User != nil, u.Port() != "", strings.ContainsAny(raw, "\r\n\t "))
 }
 
 func checkoutErrorCode(raw json.RawMessage) string {

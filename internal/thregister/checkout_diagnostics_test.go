@@ -71,6 +71,45 @@ func TestCheckoutFailureOfNilAndEmptyBusinessError(t *testing.T) {
 	}
 }
 
+func TestCheckoutResponseShapeNeverEchoesSecretsOrReplays(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"checkout_url":"https://private.example/c/pay/private-token?cookie=private#private"}`, "external-host,/c/pay/token:true"},
+		{`{"checkout_url":"https://invoice.stripe.com/i/private-token"}`, "invoice.stripe.com,/i/token:true"},
+		{`{"invoice_url":"https://invoice.stripe.com/i/private-token"}`, "invoice_url=string"},
+		{`{"url":"https://checkout.stripe.com/c/pay/private-token"}`, "url=string"},
+		{`{"checkout_url":42,"private-key":"private-cookie"}`, "checkout_url=number"},
+		{`{"error":{"code":"private-cookie"},"private-key":"private-value"}`, "error=object"},
+		{`{"checkout_url":"https://private-user:private-password@checkout.stripe.com/c/pay/private-token"}`, "userinfo:true"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			calls := 0
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					w.Write([]byte(freeAgentQuote))
+					return
+				}
+				w.Write([]byte(tc.body))
+			}))
+			defer up.Close()
+			f, _ := New(Config{BaseURL: up.URL})
+			defer f.Close()
+			_, err := f.CreateCheckout(context.Background(), agentCheckout)
+			failure := CheckoutFailureOf(err)
+			if failure == nil || !failure.Uncertain || failure.Stage != "create" || !strings.Contains(failure.Message, tc.want) || calls != 2 {
+				t.Fatalf("missing shape or replay: %+v calls=%d", failure, calls)
+			}
+			raw, _ := json.Marshal(failure)
+			if strings.Contains(string(raw)+err.Error(), "private") {
+				t.Fatal("response values/unknown keys leaked")
+			}
+		})
+	}
+	if checkoutResponseShape([]byte(`"private-cookie"`)) != "非JSON对象" {
+		t.Fatal("non-object reflected")
+	}
+}
+
 func TestCheckoutPreviewNeverCreatesHostedSession(t *testing.T) {
 	calls := 0
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
