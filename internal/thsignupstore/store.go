@@ -73,10 +73,11 @@ type Cookie struct {
 // Checkout is a sensitive hosted payment session, stored only in the encrypted
 // file and revealed through the explicit administrator checkout endpoint.
 type Checkout struct {
-	Kind      string    `json:"kind"`
-	Product   string    `json:"product"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"createdAt"`
+	Kind      string                      `json:"kind"`
+	Product   string                      `json:"product"`
+	URL       string                      `json:"url"`
+	CreatedAt time.Time                   `json:"createdAt"`
+	Failure   *thregister.CheckoutFailure `json:"failure,omitempty"`
 }
 
 func (Checkout) String() string   { return "[REDACTED]" }
@@ -141,27 +142,29 @@ func (Row) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // Summary is the console's view: no password, no cookie, a masked key.
 type Summary struct {
-	ID               string                  `json:"id"`
-	Attempt          string                  `json:"attempt"`
-	Email            string                  `json:"email"`
-	Status           Status                  `json:"status"`
-	Detail           string                  `json:"detail,omitempty"`
-	Proxy            string                  `json:"proxy"`
-	Group            string                  `json:"group,omitempty"`
-	KeyMasked        string                  `json:"keyMasked,omitempty"`
-	HasMailbox       bool                    `json:"hasMailbox"`
-	HasSession       bool                    `json:"hasSession"`
-	AuthProvider     string                  `json:"authProvider,omitempty"`
-	GitHubLogin      string                  `json:"githubLogin,omitempty"`
-	GitHubProxy      string                  `json:"githubProxy,omitempty"`
-	HasGitHubSession bool                    `json:"hasGithubSession,omitempty"`
-	HasCheckout      bool                    `json:"hasCheckout"`
-	Subscription     thregister.Subscription `json:"subscription"`
-	Verified         bool                    `json:"verified"`
-	FreeModels       bool                    `json:"freeModels"`
-	AccountID        string                  `json:"accountId,omitempty"`
-	CreatedAt        time.Time               `json:"createdAt"`
-	UpdatedAt        time.Time               `json:"updatedAt"`
+	ID               string                      `json:"id"`
+	Attempt          string                      `json:"attempt"`
+	Email            string                      `json:"email"`
+	Status           Status                      `json:"status"`
+	Detail           string                      `json:"detail,omitempty"`
+	Proxy            string                      `json:"proxy"`
+	Group            string                      `json:"group,omitempty"`
+	KeyMasked        string                      `json:"keyMasked,omitempty"`
+	HasMailbox       bool                        `json:"hasMailbox"`
+	HasSession       bool                        `json:"hasSession"`
+	AuthProvider     string                      `json:"authProvider,omitempty"`
+	GitHubLogin      string                      `json:"githubLogin,omitempty"`
+	GitHubProxy      string                      `json:"githubProxy,omitempty"`
+	HasGitHubSession bool                        `json:"hasGithubSession,omitempty"`
+	HasCheckout      bool                        `json:"hasCheckout"`
+	CheckoutPending  bool                        `json:"checkoutPending"`
+	CheckoutFailure  *thregister.CheckoutFailure `json:"checkoutFailure,omitempty"`
+	Subscription     thregister.Subscription     `json:"subscription"`
+	Verified         bool                        `json:"verified"`
+	FreeModels       bool                        `json:"freeModels"`
+	AccountID        string                      `json:"accountId,omitempty"`
+	CreatedAt        time.Time                   `json:"createdAt"`
+	UpdatedAt        time.Time                   `json:"updatedAt"`
 }
 
 // diskRow is Row's storage shape. Row deliberately marshals to a redacted
@@ -643,6 +646,13 @@ func SummaryOf(r Row) Summary {
 		Verified:     r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
+	if r.Checkout != nil && r.Checkout.URL == "" {
+		out.CheckoutPending = true
+		if r.Checkout.Failure != nil {
+			failure := *r.Checkout.Failure
+			out.CheckoutFailure = &failure
+		}
+	}
 	if r.GitHub != nil {
 		out.AuthProvider, out.GitHubLogin = "github", r.GitHub.Login
 		out.GitHubProxy = ProxyLabel(r.GitHub.ProxyURL)
@@ -726,6 +736,10 @@ func cloneRow(r Row) Row {
 	}
 	if r.Checkout != nil {
 		checkout := *r.Checkout
+		if checkout.Failure != nil {
+			failure := *checkout.Failure
+			checkout.Failure = &failure
+		}
 		r.Checkout = &checkout
 	}
 	return r

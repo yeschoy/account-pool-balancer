@@ -17,13 +17,17 @@ import (
 // PassUsage is a read-only observation of the account's own seven-day window.
 // It is neither a wallet balance nor consent to use free models.
 type PassUsage struct {
-	UsedPercent    *float64  `json:"usedPercent,omitempty"`
-	Activated      bool      `json:"activated"`
-	Exhausted      bool      `json:"exhausted"`
-	OverageBilling *bool     `json:"overageBilling,omitempty"`
-	ResetsAt       time.Time `json:"resetsAt,omitzero"`
-	CheckedAt      time.Time `json:"checkedAt,omitzero"`
-	Error          string    `json:"error,omitempty"`
+	UsedPercent *float64 `json:"usedPercent,omitempty"`
+	// Amounts are the site's actual USD allowances, not the overview's 2x
+	// equivalent display. The site does not currently report a monthly balance.
+	WeeklyLimitUSD  *float64  `json:"weeklyLimitUsd,omitempty"`
+	MonthlyLimitUSD *float64  `json:"monthlyLimitUsd,omitempty"`
+	Activated       bool      `json:"activated"`
+	Exhausted       bool      `json:"exhausted"`
+	OverageBilling  *bool     `json:"overageBilling,omitempty"`
+	ResetsAt        time.Time `json:"resetsAt,omitzero"`
+	CheckedAt       time.Time `json:"checkedAt,omitzero"`
+	Error           string    `json:"error,omitempty"`
 }
 
 type Observation struct {
@@ -170,8 +174,10 @@ func parsePassUsage(body []byte, planName string) (PassUsage, error) {
 		PeriodEnd      string   `json:"period_ends_at"`
 		ResetAt        string   `json:"reset_at"`
 		Plan           struct {
-			Name       string
-			WindowDays int `json:"window_days"`
+			Name            string
+			WindowDays      int             `json:"window_days"`
+			WindowAllowance json.RawMessage `json:"window_allowance_usd"`
+			Allowance       json.RawMessage `json:"allowance_usd"`
 		}
 	}
 	if json.Unmarshal(body, &doc) != nil || doc.OK == nil || !*doc.OK || doc.OnPlan == nil || !*doc.OnPlan || doc.Activated == nil || doc.PlanUsed == nil || doc.PlanExhausted == nil || doc.OverageBilling == nil || doc.Plan.Name != planName || doc.Plan.WindowDays != 7 {
@@ -180,6 +186,19 @@ func parsePassUsage(body []byte, planName string) (PassUsage, error) {
 	p := *doc.PlanUsed
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 100 || (!*doc.Activated && p != 0) || (*doc.PlanExhausted && p < 100) {
 		return out, errors.New("付费套餐周百分比无效")
+	}
+	// Optional display amounts must never change the established weekly gate.
+	// Missing, non-numeric or inconsistent amounts stay unknown, not full/zero.
+	amount := func(raw json.RawMessage) *float64 {
+		var value float64
+		if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &value) != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return nil
+		}
+		return &value
+	}
+	out.WeeklyLimitUSD, out.MonthlyLimitUSD = amount(doc.Plan.WindowAllowance), amount(doc.Plan.Allowance)
+	if out.WeeklyLimitUSD != nil && out.MonthlyLimitUSD != nil && *out.WeeklyLimitUSD > *out.MonthlyLimitUSD {
+		out.WeeklyLimitUSD, out.MonthlyLimitUSD = nil, nil
 	}
 	out.OverageBilling = doc.OverageBilling
 	out.UsedPercent, out.Activated, out.Exhausted = doc.PlanUsed, *doc.Activated, *doc.PlanExhausted || p >= 100

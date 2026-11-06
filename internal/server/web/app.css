@@ -218,6 +218,9 @@ tr[data-id]:hover { background: var(--line2); }
 .th-register-job-row > .btn { flex-shrink: 0; }
 .th-register-job-name strong, .th-register-job-name .small { display: block; }
 #th-job-note { width: 100%; resize: vertical; }
+#modal-body .form.th-checkout-form { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.th-checkout-form p { margin: 0; overflow-wrap: anywhere; }
+.th-checkout-form label { line-height: 1.6; }
 .pc-register-detail-head { margin-top: 20px; }
 .pc-register-detail-head h2 { overflow-wrap: anywhere; }
 .pc-register-import { margin-top: 14px; }

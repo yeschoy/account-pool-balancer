@@ -185,7 +185,7 @@ function thRowActions(r) {
   if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
   if (['unverified', 'registered'].includes(r.status) && !r.verified && r.hasSession) out.push(button('resend-verification', '重发验证码'));
-  if (thBatchEligible('checkout', r)) out.push(button('checkout', 'Agent Pass 链接'));
+  if (thSessionActionEligible(r)) out.push(button('checkout', r.checkoutPending ? '检查支付 / 恢复链接' : 'Agent Pass 链接'));
   if (thBatchEligible('import', r)) out.push(button('import', '校验并入池', true));
   if (r.status === 'imported' && r.accountId) out.push(button('return', '退回注册机'));
   if (r.status === 'failed' || r.status === 'uncertain') out.push(button('retry', r.hasSession ? '继续（保留会话）' : '重试'));
@@ -406,10 +406,14 @@ function thRowLocked(id) {
   return thState.batchBusy || thState.batchPrompt || thState.pending.has(id);
 }
 
+function thSessionActionEligible(row) {
+  return !!row.hasSession && !['saved', 'running', 'queued'].includes(row.status);
+}
+
 function thBatchEligible(kind, row) {
   if (kind === 'import') return row.status === 'registered' && row.verified && row.subscription?.status === 'active';
   if (kind === 'retry') return ['saved', 'failed', 'uncertain'].includes(row.status);
-  return !!row.hasSession && !['saved', 'running', 'queued'].includes(row.status);
+  return thSessionActionEligible(row) && (kind !== 'checkout' || !row.checkoutPending);
 }
 
 function thRenderCurrentJob() {
@@ -451,6 +455,7 @@ async function thBatchCall(kind, row, options) {
   if (kind === 'subscription') return api('POST', path + '/subscription', {});
   if (kind === 'import') return api('POST', path + '/import', options);
   if (kind === 'checkout') {
+    if (row.checkoutPending && !row.hasCheckout) throw new Error('支付创建结果未确认，请在单账号窗口只读检查并人工核对账单');
     const out = row.hasCheckout ? await api('GET', path + '/checkout') : await api('POST', path + '/checkout', { kind: 'pass', product: 'starter_pass_monthly' });
     thCheckoutURL(out.url);
     return out;
@@ -610,20 +615,49 @@ async function thRowCheckout(id) {
     return;
   }
   let created = false;
-  await modal({ title: 'Agent Pass 支付链接（不会付款）', body: `<div class="form">
+  let uncertain = !!row?.checkoutPending;
+  const failure = row?.checkoutFailure;
+  const history = failure ? `${failure.stage === 'preview' ? '报价预检' : '支付创建'}：${failure.message || '未知原因'}${failure.httpStatus ? `（HTTP ${failure.httpStatus}）` : ''}${failure.code ? ` · ${failure.code}` : ''}` : uncertain ? '历史创建响应未保留，结果尚未确认；请先在官网核对账单，不要直接重复获取。' : '';
+  await modal({ title: 'Agent Pass 支付链接（不会付款）', body: `<div class="form th-checkout-form">
     <p class="muted small">${esc(row?.email || id)}</p>
     <p>Agent Pass · Monthly (one-time)，官网首月优惠以收银台显示为准。</p>
-    <p class="muted small">仅支持 Free 账号新购。不开启自动续费、不记住银行卡；遇到地区确认或订阅升级报价即停止。预检失败可重试；创建结果不确定时须先核对官网账单。</p>
+    <p class="muted small">仅支持 Free 账号新购。不开启自动续费、不记住银行卡；遇到地区确认或订阅升级报价即停止。只读预检不创建订单，也不能证明没有旧待处理订单。</p>
+    <p class="error" id="th-checkout-history">${esc(history)}</p>
+    <p class="muted small" id="th-checkout-diagnostic" role="status"></p>
     <label class="muted small"><input id="th-checkout-confirm-no-order" type="checkbox"> 已核对账单：确认未付款且无待处理订单，允许恢复上次不确定的链接获取（无需恢复时不要勾选）</label>
-    <div id="th-checkout-result"></div></div>`, buttons: [{ label: '关闭', value: 'close' }, { label: '获取链接', value: 'create', primary: true, action: async () => {
+    <div id="th-checkout-result"></div></div>`, buttons: [{ label: '关闭', value: 'close' }, { label: '只读检查会话/报价', value: 'preview', action: async () => {
+      if (created) return false;
+      const status = $('#th-checkout-diagnostic');
+      status.textContent = '正在只读检查原会话及报价，不创建订单…';
+      try {
+        const out = await api('POST', path + '/preview', { kind: 'pass', product: 'starter_pass_monthly' });
+        const price = out?.quote?.payNowUsd;
+        if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price > 1.99) throw new Error('预检返回未知报价，请人工核对');
+        status.textContent = `当前会话及单次报价可用：$${price.toFixed(2)}。未创建订单；不代表没有旧待处理订单。`;
+        $('#modal-error').textContent = '';
+      } catch (e) {
+        status.textContent = '预检失败，未创建新订单：' + e.message;
+        throw e;
+      }
+      return false;
+    } }, { label: '获取链接', value: 'create', primary: true, action: async () => {
       if (created) return false;
       const confirmation = $('#th-checkout-confirm-no-order');
       const confirmNoPendingOrder = confirmation.checked;
       confirmation.checked = false; // Every uncertain recovery needs a fresh explicit confirmation.
-      const out = await api('POST', path, { kind: 'pass', product: 'starter_pass_monthly', confirmNoPendingOrder });
-      created = true;
-      $('#modal-error').textContent = '';
-      thCheckoutLink(out, $('#th-checkout-result'));
+      if (uncertain && !confirmNoPendingOrder) throw new Error('上次支付链接结果不确定；请先核对官网账单，再明确勾选“已核对账单”恢复，不能用预检代替核对');
+      try {
+        const out = await api('POST', path, { kind: 'pass', product: 'starter_pass_monthly', confirmNoPendingOrder });
+        created = true;
+        $('#modal-error').textContent = '';
+        thCheckoutLink(out, $('#th-checkout-result'));
+      } catch (e) {
+        if (/结果不确定|支付链接创建/.test(e.message)) {
+          uncertain = true;
+          $('#th-checkout-history').textContent = e.message;
+        }
+        throw e;
+      }
       return false;
     } }] });
   if (currentPage === 'thregister') loadTHRegistrations();
@@ -714,11 +748,12 @@ async function thLogPoll() {
       }
     }
     thLog.seq = Math.max(thLog.seq, Number(out?.seq) || 0);
-    if (entries.length) {
-      for (const e of entries) thLog.lines.push(e);
-      if (thLog.lines.length > 400) thLog.lines = thLog.lines.slice(-400);
-      if (!thLog.paused) thLogRender();
-    }
+    for (const e of entries) thLog.lines.push(e);
+    const before = thLog.lines.length;
+    const days = Number(out?.retentionDays) > 0 ? Number(out.retentionDays) : 7;
+    const cutoff = Date.now() - days * 86400000;
+    thLog.lines = thLog.lines.filter((e) => !e.ts || Date.parse(e.ts) >= cutoff).slice(-400);
+    if (!thLog.paused && (entries.length || before !== thLog.lines.length)) thLogRender();
     thLogStatus(entries.length);
   } catch (e) {
     $('#th-log-status').textContent = '日志获取失败：' + thSafe(e.message);

@@ -822,7 +822,7 @@ func DefaultPerch() Perch {
 		CheckConcurrency:   4,
 		QuotaIntervalSec:   600,
 		AlertOnFailure:     true,
-		LogRetentionDays:   30,
+		LogRetentionDays:   7,
 
 		Surface: "cli",
 		Lane:    "chat",
@@ -945,7 +945,7 @@ func Default() *Config {
 		TokenHarbor:           TokenHarborDefaults(),
 		OpenCode:              DefaultOpenCode(),
 		Pricing:               pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
-		Logs:                  Logs{RetentionDays: 30, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
+		Logs:                  Logs{RetentionDays: 7, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
 }
 

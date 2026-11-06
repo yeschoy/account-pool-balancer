@@ -43,6 +43,19 @@ func (h *thLogHub) append(e thLogEntry) int64 {
 	return h.seq
 }
 
+// prune drops expired live-tail entries without resetting sequence cursors.
+func (h *thLogHub) prune(cut time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kept := h.ring[:0]
+	for _, entry := range h.ring {
+		if !entry.TS.Before(cut) {
+			kept = append(kept, entry)
+		}
+	}
+	h.ring = append([]thLogEntry(nil), kept...)
+}
+
 // since returns entries with Seq > after, newest last.
 func (h *thLogHub) since(after int64) ([]thLogEntry, int64) {
 	h.mu.Lock()
@@ -69,7 +82,9 @@ func (s *Server) thLog() *thLogHub {
 func (s *Server) thLive(email, stage, detail, proxy, level string) {
 	entry := thLogEntry{TS: time.Now(), Email: email, Stage: stage,
 		Detail: thRedact(detail), Proxy: thProxyLabel(proxy), Level: level}
-	s.thLog().append(entry)
+	hub := s.thLog()
+	hub.append(entry)
+	hub.prune(time.Now().Add(-time.Duration(s.cfg.Get().Logs.RetentionDays) * 24 * time.Hour))
 	if s.logs == nil {
 		return
 	}

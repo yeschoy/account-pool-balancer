@@ -250,7 +250,7 @@ function renderPoolTabs() {
   $('#oc-batch').classList.toggle('hidden', !managedKeyPool());
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', tokenharbor: '额度（未知）', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', tokenharbor: '周限 / 月限余额', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
     wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', tokenharbor: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
@@ -423,13 +423,28 @@ function openCodeQuotaHTML(a) {
   return parts.join('');
 }
 
-function windowsHTML(a) {
-  if (a.provider === 'tokenharbor') {
-    const t = a.quota?.tokenHarbor;
-    if (!t) return '<span class="badge warn">套餐未知，暂停调度</span>';
-    const u = t.usage || {};
-    return `<span class="badge ${a.quotaFresh ? 'ok' : 'warn'}">${esc(t.plan?.name || '套餐未知')}${a.quotaFresh ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周已用（上次检测）${u.usedPercent == null ? '未知' : num(u.usedPercent) + '%'}${u.resetsAt ? ' · 重置 ' + esc(fmtTime(u.resetsAt, true)) : u.usedPercent == null ? ' · 周窗口未知' : u.activated ? ' · 重置未知' : ' · 周窗口尚未激活'}</div><div class="acc-sub">${esc(t.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t.checkedAt, true))} · 不是钱包余额</div>`;
+function tokenHarborQuotaHTML(a) {
+  const t = a.quota?.tokenHarbor;
+  const u = t?.usage || {};
+  const observed = !!t && a.quotaFresh;
+  const amount = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  const pctKnown = typeof u.usedPercent === 'number' && Number.isFinite(u.usedPercent) && u.usedPercent >= 0 && u.usedPercent <= 100;
+  const windowExpired = u.activated && (!u.resetsAt || !Number.isFinite(Date.parse(u.resetsAt)) || Date.parse(u.resetsAt) <= Date.now());
+  const fresh = observed && pctKnown && !u.error && !windowExpired;
+  const left = pctKnown ? 100 - u.usedPercent : null;
+  let weekly = '未知';
+  if (fresh) {
+    weekly = amount(u.weeklyLimitUsd) ? `约 $${(Math.round(u.weeklyLimitUsd * left) / 100).toFixed(2)} / $${u.weeklyLimitUsd.toFixed(2)}（剩余 ${num(left)}%）` : `剩余 ${num(left)}%（金额未知）`;
+  } else if (pctKnown) {
+    weekly += `（上次剩余 ${num(left)}%，不可视为当前余额）`;
   }
+  const reset = u.resetsAt ? ' · 重置 ' + esc(fmtTime(u.resetsAt, true)) : !pctKnown ? ' · 周窗口未知' : u.activated ? ' · 重置未知' : ' · 周窗口尚未激活';
+  const monthly = '未知（官网未提供月剩余）' + (amount(u.monthlyLimitUsd) ? ` · ${observed ? '' : '上次'}月总额度 $${u.monthlyLimitUsd.toFixed(2)}` : '');
+  return `<span class="badge ${observed ? 'ok' : 'warn'}">${esc(t?.plan?.name || '套餐未知')}${observed ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周限余额：${esc(weekly)}${reset}</div><div class="acc-sub">月限余额：${esc(monthly)}</div><div class="acc-sub">${esc(t?.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t?.checkedAt, true))} · 官网额度，非钱包余额；周金额按百分比估算</div>`;
+}
+
+function windowsHTML(a) {
+  if (a.provider === 'tokenharbor') return tokenHarborQuotaHTML(a);
   if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
   if (a.provider === 'ollama') return ollamaQuotaHTML(a);
   if (a.provider === 'modal') return modalEndpointsHTML(a);
@@ -954,7 +969,7 @@ const QUOTA_FIELDS = [
   ['staleSec', '快照过期（秒）', 'int', '过期后按未知额度处理'],
 ];
 const LOG_FIELDS = [
-  ['retentionDays', '保留天数', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
+  ['retentionDays', '日志保留天数（默认7天）', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
   ['detail', '详细日志', 'bool', '记录请求头/体、响应头/体（凭据已脱敏），排查完请关闭'], ['maxDetails', '详细日志条数', 'int'], ['detailBodyKB', '单个体上限（KB）', 'int', '超出时保留头尾各一半、省略中间；内存中的详细日志总量上限 256MB，超出自动淘汰最旧的'],
 ];
 function renderForm(el, fields, obj, prefix) {

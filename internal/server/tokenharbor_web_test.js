@@ -145,7 +145,7 @@ async function testCheckoutRecoveryRequiresExplicitOneShotConfirmation() {
   const calls = [];
   const e = environment(async (method, url, body) => {
     calls.push({ method, url, body });
-    if (calls.length < 4) throw new Error('上次结果不确定，请先核对官网账单');
+    if (calls.length < 3) throw new Error('上次结果不确定，请先核对官网账单');
     return { url: 'https://checkout.stripe.com/c/pay/cs_recovery_mock' };
   });
   e.context.state.rows = [{ id: 'legacy', email: '<legacy>@mock.test', hasCheckout: false }];
@@ -166,13 +166,13 @@ async function testCheckoutRecoveryRequiresExplicitOneShotConfirmation() {
   assert.equal(calls[1].body.confirmNoPendingOrder, true);
   assert.equal(confirmation.checked, false, 'a failed recovery consumes its confirmation');
   await assert.rejects(create(), /不确定/);
-  assert.equal(calls[2].body.confirmNoPendingOrder, false, 'a later click cannot silently replay confirmation');
+  assert.equal(calls.length, 2, 'a later unchecked click is blocked locally and cannot replay confirmation');
   confirmation.checked = true;
   e.node('#modal-error').textContent = '上次结果不确定';
   await create();
   await create();
   assert.equal(e.node('#modal-error').textContent, '', 'successful recovery clears the previous error');
-  assert.equal(calls.length, 4, 'successful creation must not repeat in the same modal');
+  assert.equal(calls.length, 3, 'successful creation must not repeat in the same modal');
   assert.equal(displayed, 1);
   assert.equal(JSON.stringify(e.context.state).includes('stripe'), false);
 }
@@ -385,6 +385,64 @@ async function testRegistrationPacingControls() {
   assert.match(html, /不会自动重试/);
 }
 
+async function testPendingCheckoutCanBePreviewedWithoutApprovalOrReplay() {
+  const calls = [];
+  const e = environment(async (method, url, body) => {
+    calls.push({ method, url, body });
+    return url.endsWith('/preview') ? { quote: { payNowUsd: 0.99 }, createsOrder: false, provesNoPendingOrder: false } : { url: 'https://checkout.stripe.com/c/pay/cs_readonly_mock' };
+  });
+  const row = { id: 'pending/one', email: 'pending@mock.test', status: 'registered', hasSession: true, hasCheckout: false, checkoutPending: true, checkoutFailure: { stage: 'create', httpStatus: 502, code: 'stripe_session_failed', message: '<unsafe>provider failure' } };
+  e.context.state.rows = [row];
+  assert.equal(e.context.thBatchEligible('checkout', row), false, 'batch cannot attempt recovery of uncertain orders');
+  assert.match(e.context.thRowActions(row), /检查支付 \/ 恢复链接/);
+  await assert.rejects(e.context.thBatchCall('checkout', row), /人工核对/);
+  let options;
+  e.context.modal = async (input) => { options = input; };
+  e.context.thCheckoutLink = () => {};
+  await e.context.thRowCheckout(row.id);
+  assert.equal(calls.length, 0);
+  assert.match(options.body, /th-checkout-form/);
+  assert.match(options.body, /&lt;unsafe&gt;/);
+  assert.doesNotMatch(options.body, /<unsafe>/);
+  const create = options.buttons.find((b) => b.value === 'create').action;
+  const preview = options.buttons.find((b) => b.value === 'preview').action;
+  const confirmation = e.node('#th-checkout-confirm-no-order');
+  await assert.rejects(create(), /先核对官网账单/);
+  assert.equal(calls.length, 0, 'known pending marker is explained before another creation request');
+  confirmation.checked = true;
+  await preview();
+  assert.equal(confirmation.checked, true, 'read-only preview must not consume or supply recovery approval');
+  assert.equal(calls[0].url, '/api/tokenharbor/registrations/pending%2Fone/checkout/preview');
+  assert.equal(calls[0].body.confirmNoPendingOrder, undefined);
+  assert.match(e.node('#th-checkout-diagnostic').textContent, /\$0\.99/);
+  assert.match(e.node('#th-checkout-diagnostic').textContent, /不代表没有旧待处理订单/);
+  confirmation.checked = false;
+  await assert.rejects(create(), /先核对官网账单/);
+  assert.equal(calls.length, 1, 'successful preview cannot unlock creation');
+  confirmation.checked = true;
+  await create();
+  await create();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.confirmNoPendingOrder, true);
+  assert.equal(confirmation.checked, false);
+  const css = fs.readFileSync(path.join(__dirname, 'web', 'app.css'), 'utf8');
+  assert.match(css, /#modal-body\s+\.form\.th-checkout-form\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/, 'override must outrank the generic modal two-column form');
+}
+
+async function testLiveLogRetentionDropsCachedExpiredLines() {
+  let reply = { seq: 2, retentionDays: 7, entries: [{ seq: 1, ts: new Date(Date.now() - 8 * 86400000).toISOString(), detail: 'expired' }, { seq: 2, ts: new Date().toISOString(), detail: 'fresh' }] };
+  const e = environment(async () => reply);
+  await e.context.thLogPoll();
+  assert.equal(e.context.log.lines.length, 1);
+  assert.equal(e.context.log.lines[0].detail, 'fresh');
+  assert.equal(e.context.log.seq, 2, 'cleanup cannot reset the incremental sequence');
+  e.context.log.lines[0].ts = new Date(Date.now() - 2 * 86400000).toISOString();
+  reply = { seq: 2, retentionDays: 1, entries: [] };
+  await e.context.thLogPoll();
+  assert.equal(e.context.log.lines.length, 0, 'config shrink clears cached lines even without new log entries');
+  assert.match(e.node('#th-log-body').innerHTML, /暂无日志/);
+}
+
 async function testTaskNotesAreEscapedScopedAndExplicitlySaved() {
   const calls = [];
   let fail = true;
@@ -486,6 +544,8 @@ async function testGitHubFormatAndSessionProjection() {
   await testBatchBoundedPartialAndNoRetry();
   await testCheckoutReuseAndUncertainStops();
   await testCheckoutRecoveryRequiresExplicitOneShotConfirmation();
+  await testPendingCheckoutCanBePreviewedWithoutApprovalOrReplay();
+  await testLiveLogRetentionDropsCachedExpiredLines();
   await testRowGuardAndSelectionRetention();
   await testOverviewEquivalentAmountsAndUnknown();
   await testImportedFilterAndReturn();

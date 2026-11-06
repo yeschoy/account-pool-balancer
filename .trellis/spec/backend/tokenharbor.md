@@ -76,6 +76,77 @@ Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overri
 Wrong: register → verified → enabled pool account, or create checkout → mark paid.
 Correct: save/register → separate current-plan observation → user payment → fresh active-plan check on explicit import; failures deny admission without deleting credentials.
 
+## Observed weekly allowance and monthly-total display
+
+### 1. Scope / Trigger
+Extend per-account balance display without changing Pass eligibility or the overview's user-approved2× equivalents.
+
+### 2. Signatures
+`PassUsage.weeklyLimitUsd` comes only from authenticated `/api/me/free-tier` `plan.window_allowance_usd`; `monthlyLimitUsd` comes from `plan.allowance_usd`. Both are optional finite positive numbers, consistent with window_days=7 and the matched plan.
+
+### 3. Contracts
+- The observed response gives weekly used percentage and monthly nominal allowance (`windows_per_month=4`), not an independently measured monthly balance. The observed dashboard likewise renders weekly usage. Never infer month remaining from one week, multiply weekly remaining by4 or substitute wallet/checkout price.
+- UI shows remaining percent, approximate actual USD weekly balance (`limit × (100-usedPct)/100`), weekly reset, and `月限余额：未知（官网未提供月剩余）` with the known monthly total. Clone optional amount pointers in quota snapshots; optional display fields must not change the weekly eligibility gate.
+
+### 4. Validation & Error Matrix
+| Condition | Display / behavior |
+|---|---|
+| Valid week limit + fresh percentage | Approximate USD remainder and remaining percentage |
+| Missing/invalid/inconsistent money fields | Amount unknown; established weekly gate unchanged |
+| Expired/failed/unknown usage | Current balance unknown; old percentage clearly labelled |
+| Monthly total only | Show total separately; monthly remaining stays unknown |
+
+### 5. Good / Base / Bad Cases
+Good: observed weekly2.5/monthly-total10 and29% weekly usage ⇒ approximate weekly1.78, month remaining unknown. Base: old cached observations retain percentages with unknown amounts. Bad: presenting10 or `10×(1−29%)` as monthly remaining.
+
+### 6. Tests Required
+Cover observed2.5/10 amounts, absent/invalid money fields with unchanged weekly gate, exhausted/expired/unknown views, rounding/escaping and detached snapshots. Run `node internal/server/tokenharbor_quota_web_test.js` and Go normal/race tests.
+
+### 7. Wrong vs Correct
+Wrong: fabricate a monthly balance or reuse the overview2× equivalent as actual per-account USD.
+Correct: expose only independently measured fields, label weekly estimates, and keep unsupported monthly remainder unknown.
+
+## Read-only checkout diagnostics and first-failure preservation
+
+### 1. Scope / Trigger
+An uncertain creation marker can legitimately block later checkout attempts. Its protection is not proof of the first failure's cause or of whether an upstream session exists.
+
+### 2. Signatures
+- `POST /api/tokenharbor/registrations/{rowId}/checkout/preview`, body `{kind:"pass",product:"starter_pass_monthly"}`.
+- Response `{quote:{...},createsOrder:false,provesNoPendingOrder:false}`; standard administrator auth/CSRF/no-store.
+- `Flow.PreviewCheckout` issues exactly one preview=true request; creation reuses the same quote validation before its existing guarded boundary.
+- `Checkout.failure` persists credential-free `CheckoutFailure`; row summaries expose `checkoutPending` and optional `checkoutFailure`, never a checkout URL.
+
+### 3. Contracts
+- Only a Free account's Agent Pass monthly one-time quote with verified positive cents<=199 is accepted. No upgrade, region acknowledgement, balance debit, capture, automatic renewal, redirect or mutation retry. Preview never creates/clears a reservation; successful preview does not attest to unpaid/no-pending status.
+- Use the row's fixed egress and saved session; discard results on row/base/route changes. Persist genuinely rotated auth cookies only under source guards; no account lifecycle, checkout or admission changes.
+- Allowlist business error codes (including nested region errors), phase (`preview`/`create`), HTTP status and safe messages. Never retain raw responses/headers/URLs/Cookies/reflected arbitrary error strings. Handle business errors even on HTTP200. Preview network failure is not described as a newly created uncertain order.
+- After a creation reservation, persist the first safe creation failure and log its stage. Subsequent replay protection must retain/show it rather than replace it with only the generic protection message. Legacy markers without diagnostics remain unknown; never invent the lost cause or clear their guard.
+- Single-account UI offers read-only session/quote inspection and an unchecked-by-default one-shot manual recovery attestation. Known pending attempts are blocked locally until explicitly attested; batches skip them. Preview cannot check/consume the checkbox or unlock creation. The payment form is one column, overriding the generic modal form's more-specific CSS.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| Missing admin / CSRF | 401 / 403, zero upstream requests |
+| Other product / unknown quote / unsafe price | Stop before creation |
+| Preview valid | Safe quote only; pending record unchanged |
+| Row/route changes while previewing | Discard with409 |
+| Known pending without explicit recovery attestation | 409, zero new creation requests; preserve original diagnostic |
+| Creation rejected/unknown/incomplete | Keep marker and safe first failure; no automatic retry |
+| Existing trusted saved link | Reuse it; never overwrite/create another |
+
+### 5. Good / Base / Bad Cases
+- Good: inspect a pending row's current quote, keep its original failure visible, then require actual manual billing review before a separately authorized recovery.
+- Base: an old marker with no first error says the historical response is unavailable, not that the account or payment provider is definitely at fault.
+- Bad: interpreting HTTP200 preview as proof of no pending order, automatically checking recovery, or reproducing an uncertain financial mutation to obtain a better error message.
+
+### 6. Tests Required
+Unit tests assert phases/status/allowlisted errors, no secret reflection, preview-only payload and zero mutation replay. API tests cover admin/CSRF, source isolation, unchanged pending/full rows, no reservation on new preview, persisted first failure and detached summary pointers. Web tests cover local blocking, batch skip, preview without approval consumption, one-shot recovery and CSS specificity. Real-browser acceptance uses only local fake accounts/upstreams and verifies preview count>0, create count=0 and a single computed form column.
+
+### 7. Wrong vs Correct
+Wrong: clear a legacy marker because the saved session or a new quote works.
+Correct: report exactly what was observed; retain financial uncertainty until the user independently checks the matching account's billing state and explicitly attests recovery.
+
 ## Per-task registration notes
 
 ### 1. Scope / Trigger

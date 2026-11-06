@@ -115,17 +115,17 @@ type job struct {
 	k     *kind
 	line  []byte
 	clear bool
+	prune bool
 	// del runs on the writer goroutine so a rewrite cannot race an append.
 	del  *deleteJob
 	done chan struct{}
 }
 
-// deleteJob removes one record from the segment named by seg: lines stamped
-// after seq were appended later, and a line holding want is the record itself.
+// deleteJob keeps the exact record bytes. Retention rewrites can change line
+// offsets, so a ring sequence must never be used as an on-disk line number.
 type deleteJob struct {
 	seg  int64
-	seq  int64
-	want string
+	data json.RawMessage
 	out  Removed
 	err  error
 }
@@ -172,7 +172,6 @@ func Open(dir string, limits func() Limits) (*Store, error) {
 		s.kinds[name] = &kind{name: name, filters: f}
 	}
 	go s.writer()
-	go s.recover()
 	return s, nil
 }
 
@@ -230,6 +229,9 @@ func (s *Store) Append(kindName string, ts time.Time, rec any) {
 		keys, _, _ = extractKeys(data, k.filters)
 	}
 	lim := s.limits()
+	if ts.Before(retentionCutoff(lim, time.Now())) {
+		return
+	}
 	// Open the job under the same lock as the ring insert: the writer may bump
 	// k.current between these two steps otherwise, and the record would be
 	// stamped with the previous segment.
@@ -270,6 +272,11 @@ func segmentIndex(name string) int64 {
 }
 
 func (s *Store) writer() {
+	// Recovery, pruning and segment writes have one owner. Opening a live
+	// segment concurrently with recovery could otherwise reuse its number.
+	s.recover()
+	s.enforce()
+	s.ready.Store(true)
 	enforce := time.NewTicker(10 * time.Minute)
 	defer enforce.Stop()
 	flush := time.NewTicker(flushEvery)
@@ -284,6 +291,11 @@ func (s *Store) writer() {
 				close(s.closed)
 				return
 			}
+			if j.prune {
+				s.enforce()
+				close(j.done)
+				continue
+			}
 			if j.clear {
 				s.clearFiles(j.k)
 				close(j.done)
@@ -292,7 +304,7 @@ func (s *Store) writer() {
 			if j.del != nil {
 				// This goroutine is the only appender, so nothing writes to the
 				// segment while it is being rewritten.
-				j.del.out.Disk, j.del.err = s.dropSegLine(j.k, j.del.seg, j.del.seq, j.del.want)
+				j.del.out.Disk, j.del.err = s.dropSegLine(j.k, j.del.seg, j.del.data)
 				close(j.done)
 				continue
 			}
@@ -396,19 +408,83 @@ func (s *Store) isCurrent(path string) bool {
 	return false
 }
 
-// enforce deletes segments past retention, then the oldest while the total
-// is over the cap (runs on the writer goroutine).
+func retentionCutoff(lim Limits, now time.Time) time.Time {
+	days := lim.RetentionDays
+	if days <= 0 {
+		days = 7
+	}
+	return now.Add(-time.Duration(days) * 24 * time.Hour)
+}
+
+// pruneExpired applies retention to record timestamps, including mixed-age
+// live segments and the query rings. File mtime is only a legacy fallback.
+// It runs on the writer goroutine, so appends cannot race a segment rewrite.
+func (s *Store) pruneExpired(cut time.Time) {
+	unflushed := map[string]bool{}
+	for _, k := range s.kinds {
+		k.mu.Lock()
+		all := k.ordered()
+		kept := all[:0]
+		for _, r := range all {
+			if !r.ts.Before(cut) {
+				kept = append(kept, r)
+			}
+		}
+		k.ring, k.head = append([]record(nil), kept...), 0
+		k.mu.Unlock()
+		if k.w != nil && k.w.Flush() != nil {
+			s.dropped.Add(1)
+			unflushed[k.file.Name()] = true
+		}
+	}
+	for _, seg := range s.segments() {
+		if unflushed[seg.path] {
+			continue
+		}
+		removed := false
+		data, count, err := deal(seg.path, recordLimit(seg.kind), func(line []byte, _ int64) bool {
+			_, ts, ok := extractKeys(line, nil)
+			if !ok || ts.IsZero() {
+				ts = seg.mod
+			}
+			if ts.Before(cut) {
+				removed = true
+				return false
+			}
+			return true
+		})
+		if err != nil || !removed {
+			if err != nil {
+				s.dropped.Add(1)
+			}
+			continue
+		}
+		k := s.kinds[seg.kind]
+		live := k.file != nil && k.file.Name() == seg.path
+		switch {
+		case count == 0:
+			if live {
+				s.closeFile(k)
+			}
+			err = os.Remove(seg.path)
+		default:
+			err = s.replaceSegment(k, seg.path, data)
+		}
+		if err != nil {
+			s.dropped.Add(1)
+		}
+	}
+}
+
+// enforce prunes expired records, then bounds remaining disk usage.
 func (s *Store) enforce() {
 	lim := s.limits()
+	cut := retentionCutoff(lim, time.Now())
+	s.pruneExpired(cut)
 	segs := s.segments()
-	cut := time.Now().Add(-time.Duration(lim.RetentionDays) * 24 * time.Hour)
 	var total int64
 	var keep []segFile
 	for _, f := range segs {
-		if f.mod.Before(cut) && !s.isCurrent(f.path) {
-			os.Remove(f.path)
-			continue
-		}
 		total += f.size
 		keep = append(keep, f)
 	}
@@ -480,8 +556,8 @@ func (s *Store) clearFiles(k *kind) {
 // recover loads the newest records of each kind from disk in the
 // background; queries answer 503 until it is done.
 func (s *Store) recover() {
-	defer s.ready.Store(true)
 	lim := s.limits()
+	cut := retentionCutoff(lim, time.Now())
 	segs := s.segments()
 	for name, k := range s.kinds {
 		max := max(lim.MaxRecords[name], 1)
@@ -502,7 +578,7 @@ func (s *Store) recover() {
 			for sc.Scan() {
 				line := append([]byte(nil), sc.Bytes()...)
 				keys, ts, ok := extractKeys(line, k.filters)
-				if ok {
+				if ok && !ts.Before(cut) {
 					recs = append(recs, record{ts: ts, data: line, keys: keys, seg: seg})
 				}
 			}
@@ -560,6 +636,10 @@ func (s *Store) Query(kindName string, filters map[string]string, since, until t
 		return Page{}, fmt.Errorf("unknown log kind")
 	}
 	page := Page{Items: []json.RawMessage{}}
+	cut := retentionCutoff(s.limits(), time.Now())
+	if since.IsZero() || since.Before(cut) {
+		since = cut
+	}
 	var lastSeq int64
 	// walk the ring newest first under the read lock: records are immutable,
 	// so nothing is copied (the ring can hold 50k)
@@ -640,9 +720,7 @@ func (s *Store) Remove(kindName, rid string) (Removed, error) {
 		k.mu.Unlock()
 		return Removed{}, ErrNotFound
 	}
-	// A rewrite keeps the file's line order; records stamped after the target
-	// (and the target's own line) are the only ones past it.
-	seg, seq := target.seg, target.seq
+	seg := target.seg
 	out := Removed{Memory: 1}
 	k.ring, k.head = nil, 0
 	k.ring = kept
@@ -650,7 +728,7 @@ func (s *Store) Remove(kindName, rid string) (Removed, error) {
 	if seg < 0 {
 		return out, nil // unreachable: recovery keeps unreadable names at -1
 	}
-	j := &deleteJob{seg: seg, seq: seq, want: string(want)}
+	j := &deleteJob{seg: seg, data: target.data}
 	done := make(chan struct{})
 	s.ch <- job{k: k, del: j, done: done}
 	<-done
@@ -659,80 +737,72 @@ func (s *Store) Remove(kindName, rid string) (Removed, error) {
 }
 
 // dropSegLine removes the record from its segment (writer goroutine).
-func (s *Store) dropSegLine(k *kind, seg, seq int64, want string) (int, error) {
-	// A record queued before the writer opened its file is stamped 0; it is in
-	// the live segment like anything else stamped at or after the previous one.
-	k.mu.RLock()
-	current, open := k.current, k.file
-	k.mu.RUnlock()
-	floor := seg
-	if floor < current && seg == 0 {
-		floor = current
-	}
-	// The writer opened its latest segment after this record was stamped, so it
-	// holds the record at line seq. Older segments are found by their number.
-	live := open != nil && current >= floor
-	path := ""
-	if live {
-		path = open.Name()
-	}
-	if !live {
-		path = ""
-		for _, f := range s.segments() {
-			if f.kind == k.name && segmentIndex(filepath.Base(f.path)) == seg {
-				path = f.path
-				break
-			}
-		}
-	}
-	if path == "" {
-		return 0, nil // rotated or trimmed away since the record was written
-	}
-	if live && k.w.Buffered() > 0 {
-		// Lines still in the writer's buffer are not on disk yet: flush them or
-		// the scan would miss them and this rewrite would drop them.
+func (s *Store) dropSegLine(k *kind, seg int64, target json.RawMessage) (int, error) {
+	if k.w != nil && k.w.Buffered() > 0 {
 		if err := k.w.Flush(); err != nil {
 			return 0, err
 		}
 	}
-	// Only lines stamped after seq can be the record or follow it, so skip the
-	// rest without scanning their (possibly large) bodies.
-	data, n, err := deal(path, recordLimit(k.name), func(line []byte, idx int64) bool {
-		return idx < seq || !bytes.Contains(line, []byte(want))
+	files := s.segments()
+	// Usually the stamped segment is exact. A record queued at rotation may
+	// belong to its successor, so fall back to other segments of this kind.
+	sort.SliceStable(files, func(i, j int) bool {
+		return segmentIndex(filepath.Base(files[i].path)) == seg && segmentIndex(filepath.Base(files[j].path)) != seg
 	})
-	if err != nil {
-		return 0, err
-	}
-	if live {
-		// The append handle cannot be written at an offset, so the rewritten
-		// bytes go in through a plain handle that keeps the same inode.
-		if err := rewriteInPlace(path, data); err != nil {
+	for _, file := range files {
+		if file.kind != k.name {
+			continue
+		}
+		removed := false
+		data, n, err := deal(file.path, recordLimit(k.name), func(line []byte, _ int64) bool {
+			if !removed && bytes.Equal(line, target) {
+				removed = true
+				return false
+			}
+			return true
+		})
+		if err != nil {
 			return 0, err
 		}
-		k.size = int64(len(data))
-		k.w.Reset(k.file)
-		return 1, nil
+		if !removed {
+			continue
+		}
+		if n == 0 {
+			if k.file != nil && k.file.Name() == file.path {
+				s.closeFile(k)
+			}
+			return 1, os.Remove(file.path)
+		}
+		return 1, s.replaceSegment(k, file.path, data)
 	}
-	if n == 0 {
-		return 1, os.Remove(path)
-	}
-	return 1, writeFileAtomic(path, data)
+	return 0, nil // already pruned from disk; memory deletion still succeeded
 }
 
-// rewriteInPlace replaces path's contents with data, keeping the inode so an
-// open append handle (the live segment) stays valid.
-func rewriteInPlace(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+// replaceSegment publishes retained bytes atomically, reopening a live append
+// handle after rename. A failed temp write must not truncate fresh log data.
+func (s *Store) replaceSegment(k *kind, path string, data []byte) error {
+	live := k.file != nil && k.file.Name() == path
+	if live {
+		s.closeFile(k)
+	}
+	err := writeFileAtomic(path, data)
+	if !live {
+		return err
+	}
+	f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if openErr == nil {
+		info, statErr := f.Stat()
+		if statErr != nil {
+			f.Close()
+			openErr = statErr
+		} else {
+			k.file, k.w, k.size = f, bufio.NewWriterSize(f, 64<<10), info.Size()
+		}
+	}
 	if err != nil {
 		return err
 	}
-	if _, err = f.Write(data); err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	return err
+	return openErr
 }
 
 // writeFileAtomic replaces path with data through a synced temporary file.

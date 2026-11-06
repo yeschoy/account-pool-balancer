@@ -41,6 +41,14 @@ func (s *TokenHarborState) clone() *TokenHarborState {
 		p := *s.Usage.UsedPercent
 		c.Usage.UsedPercent = &p
 	}
+	if s.Usage.WeeklyLimitUSD != nil {
+		v := *s.Usage.WeeklyLimitUSD
+		c.Usage.WeeklyLimitUSD = &v
+	}
+	if s.Usage.MonthlyLimitUSD != nil {
+		v := *s.Usage.MonthlyLimitUSD
+		c.Usage.MonthlyLimitUSD = &v
+	}
 	return &c
 }
 func (s *TokenHarborState) PlanFresh(now time.Time) bool {

@@ -4,6 +4,8 @@ Read [OpenCode integration contracts](opencode.md) before modifying config,
 quota, pool, proxy, identity or admin code in this repository.
 Read [Token Harbor contracts](tokenharbor.md) for its native-key integration,
 cache accounting, strict continuation and write-only settings boundary.
+Read [Business log retention](logs.md) before changing log cleanup, recovery,
+query cutoffs or live-tail retention.
 
 Quality gate: gofmt; go test ./...; go test -race ./...; go vet ./...;
 go build ./cmd/odb. Use local mocks, never claim credentials or client tests

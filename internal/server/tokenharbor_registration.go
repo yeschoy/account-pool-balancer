@@ -131,6 +131,7 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("GET /api/tokenharbor/proxies", s.apiTHProxies)
 	a("PUT /api/tokenharbor/proxies", s.apiTHSaveProxies)
 	a("POST /api/tokenharbor/registrations/{id}/checkout", s.apiTHCheckout)
+	a("POST /api/tokenharbor/registrations/{id}/checkout/preview", s.apiTHCheckoutPreview)
 	a("GET /api/tokenharbor/registrations/{id}/checkout", s.apiTHSavedCheckout)
 	a("GET /api/tokenharbor/log", s.apiTHLog)
 	a("DELETE /api/tokenharbor/registrations/{id}", s.apiTHDeleteRow)
@@ -882,11 +883,14 @@ func (s *Server) apiTHLog(w http.ResponseWriter, r *http.Request) {
 			after = n
 		}
 	}
-	entries, seq := s.thLog().since(after)
+	days := s.cfg.Get().Logs.RetentionDays
+	hub := s.thLog()
+	hub.prune(time.Now().Add(-time.Duration(days) * 24 * time.Hour))
+	entries, seq := hub.since(after)
 	if entries == nil {
 		entries = []thLogEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "seq": seq})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "seq": seq, "retentionDays": days})
 }
 
 func (s *Server) apiTHDeleteRow(w http.ResponseWriter, r *http.Request) {
