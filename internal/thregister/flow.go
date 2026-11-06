@@ -235,6 +235,10 @@ type Config struct {
 	Mailbox Mailbox
 	// Timezone is sent as the form's timezone field.
 	Timezone string
+	// EgressRegion is the ISO country the run's proxy exits from, when known.
+	// It selects a plausible timezone and language so those do not contradict
+	// the exit IP. Empty keeps Timezone as configured and is never guessed.
+	EgressRegion string
 	// Label is the API key label created on the dashboard.
 	Label string
 	// Direct reports that ProxyURL is the loopback relay rather than the real
@@ -304,6 +308,9 @@ type Flow struct {
 	// id is the browser this registration presents. It is chosen once per flow
 	// from cfg.Seed so every step of one run agrees with every other.
 	id egressid.Identity
+	// lang overrides the build's Accept-Language when the egress region implies
+	// a different one, so language, timezone and exit IP agree.
+	lang string
 }
 
 // New builds a flow with a fresh cookie jar and one transport.
@@ -329,7 +336,15 @@ func New(cfg Config) (*Flow, error) {
 			cfg.Log("出口", "未配置代理，本次运行将从本机 IP 出网")
 		}
 	}
-	f := &Flow{cfg: cfg, jar: jar, id: egressid.For(cfg.Seed), client: &http.Client{
+	// Timezone and Accept-Language describe where the person sits, so both are
+	// derived from the egress region when one is known. An unknown region
+	// leaves cfg.Timezone as configured, because a zone that contradicts the
+	// exit IP is a stronger signal than a boring default.
+	zone, lang := egressid.Zone(cfg.Seed, cfg.EgressRegion)
+	if zone != "" && cfg.Timezone == "" {
+		cfg.Timezone = zone
+	}
+	f := &Flow{cfg: cfg, jar: jar, id: egressid.For(cfg.Seed), lang: lang, client: &http.Client{
 		Transport: transport,
 		Jar:       jar,
 		Timeout:   cfg.timeout(),
@@ -621,7 +636,7 @@ func (f *Flow) loadSignupPage(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	f.applyIdentity(req)
+	f.applyIdentityKind(req, egressid.Navigate)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("打开注册页失败: %v", err)
@@ -706,11 +721,41 @@ type signupFields struct {
 	Email, Password, Token, Fingerprint, Timezone string
 }
 
-// submitAuth posts the selected signup/signin action. HTTP 200 can carry a
-// rejected React action result, so it is not itself proof of authentication.
+// webkitBoundary returns a multipart boundary in the shape a browser's
+// FormData uses. Go's mime/multipart emits a bare 60-hex string, which is a
+// visible tell: a Chromium form post always starts "----WebKitFormBoundary"
+// and continues with 16 alphanumerics.
+func webkitBoundary() (string, error) {
+	const alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = alnum[int(b[i])%len(alnum)]
+	}
+	return "----WebKitFormBoundary" + string(b[:]), nil
+}
+
+// newBrowserForm builds a multipart writer whose boundary looks like the one a
+// browser's FormData generates.
+func newBrowserForm(buf *bytes.Buffer) (*multipart.Writer, error) {
+	boundary, err := webkitBoundary()
+	if err != nil {
+		return nil, err
+	}
+	mw := multipart.NewWriter(buf)
+	if err := mw.SetBoundary(boundary); err != nil {
+		return nil, err
+	}
+	return mw, nil
+}
 func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields, mode string) error {
 	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
+	mw, err := newBrowserForm(&buf)
+	if err != nil {
+		return err
+	}
 	writeField := func(name, value string) error { return mw.WriteField(name, value) }
 	steps := []struct{ name, value string }{
 		{"_1_$ACTION_REF_1", ""},
@@ -749,7 +794,7 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 	req.Header.Set("next-action", form.actionID)
 	req.Header.Set("origin", f.cfg.base())
 	req.Header.Set("referer", pageURL)
-	f.applyIdentity(req)
+	f.applyIdentityKind(req, egressid.SameOriginDocument)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("提交认证失败（结果待核对，未自动重试）: %v", err)
@@ -916,7 +961,9 @@ func (f *Flow) verifyEmail(ctx context.Context, link string) error {
 		return err
 	}
 	req.Header.Set("referer", f.cfg.base()+"/dashboard")
-	f.applyIdentity(req)
+	// Clicking the link in the mail opens a top-level document, so it carries
+	// the navigation hint set, not the XHR one.
+	f.applyIdentityKind(req, egressid.Navigate)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return err
@@ -1059,9 +1106,32 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 // /login and a different one on /api/keys, and the hints always agree with the
 // User-Agent they travel with.
 func (f *Flow) applyIdentity(req *http.Request) {
-	egressid.Apply(req.Header, f.id)
-	req.Header.Set("accept-language", f.id.AcceptLanguage)
+	f.applyIdentityKind(req, egressid.SameOriginXHR)
 }
+
+// applyIdentityKind is applyIdentity for a request whose browser category is
+// known. Chrome derives Sec-Fetch-* from that category, and a page load and a
+// fetch() carry different values, so the kind has to travel with the request
+// rather than be guessed here.
+func (f *Flow) applyIdentityKind(req *http.Request, kind egressid.FetchKind) {
+	for name, value := range f.id.Headers(kind) {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("accept-language", f.AcceptLanguage())
+}
+
+// AcceptLanguage is the language tag this run presents; the timezone table can
+// override the build's default so the two agree with the egress region.
+func (f *Flow) AcceptLanguage() string {
+	if f.lang != "" {
+		return f.lang
+	}
+	return f.id.AcceptLanguage
+}
+
+// Timezone reports the IANA zone this run will claim. An unconfigured flow
+// keeps a value that is merely unremarkable rather than an invented one.
+func (f *Flow) Timezone() string { return f.cfg.timezone() }
 
 // UserAgent reports the identity this flow presents, for logging and tests.
 // It is not a credential.
@@ -1163,7 +1233,7 @@ func (f *Flow) loadLoginPage(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("accept", "text/html,application/xhtml+xml")
-	f.applyIdentity(req)
+	f.applyIdentityKind(req, egressid.Navigate)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("打开登录页失败: %v", err)

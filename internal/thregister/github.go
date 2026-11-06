@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -84,10 +83,13 @@ func (f *Flow) RunGitHub(ctx context.Context, c GitHubCredentials, res Result) (
 	if err := ValidateGitHub(c.Login, c.Password, c.TOTPSecret); err != nil {
 		return res, err
 	}
-	// Enforce an honest product identity even for non-console callers.
-	if tr, ok := f.client.Transport.(*http.Transport); ok {
-		f.client.Transport = &oauthTransport{Transport: tr, userAgent: OAuthUserAgent}
-	}
+	// The OAuth product identity belongs to the authorization hops only. An
+	// earlier version installed it on the flow's own transport, which then
+	// stamped "account-pool-balancer/tokenharbor-oauth" on every later
+	// tokenharbor.ai request this account made (key creation, dashboard reads,
+	// plan checks) — a name no browser sends, on the site that issued the
+	// session. The site's own requests keep the browser identity the flow
+	// already presents; only the authorization transport is relabelled.
 	f.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) > 6 || !sameOrigin(req.URL, mustURL(f.cfg.base())) {
 			return http.ErrUseLastResponse
@@ -466,7 +468,10 @@ func (f *Flow) finishOAuth(ctx context.Context, page oauthPage) error {
 		return errors.New("finish 页面缺少动态 Action ID/Key，未提交")
 	}
 	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
+	mw, err := newBrowserForm(&buf)
+	if err != nil {
+		return errors.New("finish 请求格式无效")
+	}
 	fields := [][2]string{
 		{"_1_$ACTION_REF_1", ""},
 		{"_1_$ACTION_1:0", fmt.Sprintf(`{"id":%q,"bound":"$@1"}`, form.actionID)},

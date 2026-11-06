@@ -592,6 +592,7 @@ async function loadTHSettings() {
   $('#th-set-group').value = th.group || 'tokenharbor';
   $('#th-set-conc').value = '1';
   $('#th-set-mail').value = th.mailTimeoutSec || 600;
+  $('#th-set-region').value = th.egressRegion || '';
   const conc = $('#th-register-conc');
   if (conc) conc.value = '1';
   $('#th-set-save').dataset.revision = String(out.revision || 0);
@@ -612,6 +613,7 @@ async function thSaveSettings(ev) {
       group: $('#th-set-group').value.trim() || 'tokenharbor',
       registerConcurrency: 1,
       mailTimeoutSec: Number($('#th-set-mail').value) || 600,
+      egressRegion: $('#th-set-region').value.trim().toUpperCase(),
     },
     expectedRevision: Number(btn.dataset.revision || 0),
   };

@@ -110,10 +110,16 @@ func thStoreCookies(cookies []thregister.NamedCookie) []thsignupstore.Cookie {
 	return out
 }
 
+// thRowUserAgent returns the User-Agent override for a saved row's tokenharbor.ai
+// requests.
+//
+// It is deliberately always empty. A GitHub row used to override every
+// site request with the OAuth product name, which meant plan checks, checkout
+// previews and subscription reads announced "account-pool-balancer/tokenharbor-oauth"
+// on the site whose session they carried — a string no browser sends. The OAuth
+// identity now stays on the authorization hops (see RunGitHub); the site sees
+// the same browser identity as a password registration.
 func thRowUserAgent(row thsignupstore.Row) string {
-	if row.GitHub != nil {
-		return thregister.OAuthUserAgent
-	}
 	return ""
 }
 

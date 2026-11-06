@@ -2,8 +2,10 @@ package egressid
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The choice must not move between processes: the same account that looked
@@ -41,7 +43,7 @@ func TestHintsAgreeWithUserAgent(t *testing.T) {
 			t.Fatalf("%s: UA major %q, hint version %q", seed, major, id.BrandVersion)
 		}
 		h := id.Header()
-		want := BuildBrandList(id.Brand, major)
+		want := BuildBrandList(id.Seed, id.Brand, major)
 		if h["sec-ch-ua"] != want {
 			t.Fatalf("%s: sec-ch-ua = %q, want %q", seed, h["sec-ch-ua"], want)
 		}
@@ -91,6 +93,12 @@ func TestNoFutureVersions(t *testing.T) {
 		}
 		if n := atoi(t, maj); n > 145 {
 			t.Fatalf("UA advertises Chrome %s, ahead of any shipped build: %q", maj, s.userAgent)
+		}
+		// A stale version is its own signal: a pool that has claimed Chrome 138
+		// for a year describes an operator who never updates. Chrome moves
+		// roughly every four weeks, so anything two releases behind is suspect.
+		if n := atoi(t, maj); n < 143 {
+			t.Fatalf("UA advertises Chrome %s, too old to be a current user: %q", maj, s.userAgent)
 		}
 		// Chrome ends in "Safari/537.36"; Edge appends its own product token.
 		if !strings.HasSuffix(s.userAgent, "Safari/537.36") && !strings.Contains(s.userAgent, "Safari/537.36 Edg/") {
@@ -160,5 +168,158 @@ func TestChromeMajor(t *testing.T) {
 		if got := ChromeMajor(tc.in); got != tc.want {
 			t.Fatalf("ChromeMajor(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// Chrome sends sec-ch-ua-platform-version only after the server opts in with
+// Accept-CH. Sending it unconditionally is a tell, so it must be absent.
+func TestHighEntropyHintNotSentUnconditionally(t *testing.T) {
+	h := For("seed").Header()
+	if v, ok := h["sec-ch-ua-platform-version"]; ok {
+		t.Fatalf("platform-version sent without Accept-CH: %q", v)
+	}
+}
+
+// Sec-Fetch-* is injected by the browser's network stack, never by page
+// script, so a browser User-Agent without it cannot be a browser. Each
+// request kind carries the values Chrome would actually use.
+func TestFetchHeadersMatchRequestKind(t *testing.T) {
+	id := For("seed")
+	nav := id.Headers(Navigate)
+	if nav["sec-fetch-site"] != "none" || nav["sec-fetch-mode"] != "navigate" || nav["sec-fetch-dest"] != "document" {
+		t.Fatalf("top-level navigation set is wrong: %v", nav)
+	}
+	if nav["sec-fetch-user"] != "?1" || nav["upgrade-insecure-requests"] != "1" {
+		t.Fatalf("navigation missing user/upgrade headers: %v", nav)
+	}
+	xhr := id.Headers(SameOriginXHR)
+	if xhr["sec-fetch-site"] != "same-origin" || xhr["sec-fetch-mode"] != "cors" || xhr["sec-fetch-dest"] != "empty" {
+		t.Fatalf("same-origin XHR set is wrong: %v", xhr)
+	}
+	if _, ok := xhr["upgrade-insecure-requests"]; ok {
+		t.Fatal("upgrade-insecure-requests must not be sent on an XHR")
+	}
+	if _, ok := xhr["sec-fetch-user"]; ok {
+		t.Fatal("sec-fetch-user must not be sent on an XHR")
+	}
+	doc := id.Headers(SameOriginDocument)
+	if doc["sec-fetch-site"] != "same-origin" || doc["sec-fetch-dest"] != "document" {
+		t.Fatalf("same-origin document set is wrong: %v", doc)
+	}
+}
+
+// A whole pool reporting one timezone is the batch signal this replaces, so a
+// region must yield more than one zone and two seeds must usually differ.
+func TestZoneSpreadsWithinRegion(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		name, lang := Zone("acct-"+atoi2(i), "US")
+		if name == "" || lang == "" {
+			t.Fatalf("US seed %d produced no zone", i)
+		}
+		seen[name] = true
+	}
+	if len(seen) < 3 {
+		t.Fatalf("US region collapsed onto %d zones: %v", len(seen), seen)
+	}
+}
+
+// The same account must keep its zone across runs, or it looks like a user who
+// teleported between sessions.
+func TestZoneStableForOneSeed(t *testing.T) {
+	a, la := Zone("acct-stable", "DE")
+	b, lb := Zone("acct-stable", "DE")
+	if a != b || la != lb {
+		t.Fatalf("zone changed for one seed: %q/%q vs %q/%q", a, la, b, lb)
+	}
+	if a == "" {
+		t.Fatal("DE must resolve")
+	}
+}
+
+// An unknown region must yield nothing rather than an invented value: a zone
+// that contradicts the exit IP is worse than a boring default.
+func TestZoneUnknownRegionYieldsNothing(t *testing.T) {
+	for _, region := range []string{"", "ZZ", "  ", "Atlantis"} {
+		if name, lang := Zone("seed", region); name != "" || lang != "" {
+			t.Fatalf("region %q produced %q/%q", region, name, lang)
+		}
+	}
+}
+
+// Every modelled region must be resolvable and every zone must name a real
+// IANA area, so a typo cannot ship as a plausible-looking but invalid zone.
+func TestZoneTableIsWellFormed(t *testing.T) {
+	regions := Regions()
+	if len(regions) < 5 {
+		t.Fatalf("only %d regions modelled", len(regions))
+	}
+	for _, z := range zones {
+		if _, err := time.LoadLocation(z.name); err != nil {
+			t.Fatalf("zone %q is not a loadable IANA zone: %v", z.name, err)
+		}
+		if z.lang == "" {
+			t.Fatalf("zone %q has no Accept-Language", z.name)
+		}
+	}
+}
+
+func atoi2(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
+// A browser always sends a language; a browser User-Agent without one is the
+// same contradiction as a missing hint set.
+func TestApplySetsAcceptLanguage(t *testing.T) {
+	h := http.Header{}
+	Apply(h, For("seed"))
+	if h.Get("Accept-Language") == "" {
+		t.Fatal("Apply left Accept-Language unset beside a browser User-Agent")
+	}
+}
+
+// Chrome permutes the Sec-CH-UA brand order per install and randomizes the
+// GREASE entry. Identical strings across a pool are themselves a fingerprint.
+func TestBrandListVariesPerSeed(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 60; i++ {
+		seen[For("acct-" + atoi2(i)).Header()["sec-ch-ua"]] = true
+	}
+	if len(seen) < 3 {
+		t.Fatalf("Sec-CH-UA collapsed to %d distinct values across 60 seeds", len(seen))
+	}
+}
+
+// The permutation must stay stable for one account, or its own hint string
+// changes between requests.
+func TestBrandListStableForOneSeed(t *testing.T) {
+	a := For("acct-stable").Header()["sec-ch-ua"]
+	b := For("acct-stable").Header()["sec-ch-ua"]
+	if a != b {
+		t.Fatalf("brand list changed for one seed: %q vs %q", a, b)
+	}
+}
+
+// The GREASE entry must not sit in the same position every time.
+func TestBrandListGreasePositionVaries(t *testing.T) {
+	positions := map[int]bool{}
+	for i := 0; i < 60; i++ {
+		parts := strings.Split(For("s" + atoi2(i)).Header()["sec-ch-ua"], ", ")
+		for idx, p := range parts {
+			if strings.Contains(p, "Not") {
+				positions[idx] = true
+			}
+		}
+	}
+	if len(positions) < 2 {
+		t.Fatalf("GREASE brand always in the same position: %v", positions)
 	}
 }

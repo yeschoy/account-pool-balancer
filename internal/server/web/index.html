@@ -381,6 +381,9 @@
             <input id="th-set-conc" type="number" min="1" max="1" step="1" value="1" readonly>
             <label for="th-set-mail">等验证邮件上限（秒）</label>
             <input id="th-set-mail" type="number" min="30" max="1800" step="30">
+            <label for="th-set-region">出口地区（ISO 国家码）</label>
+            <input id="th-set-region" autocomplete="off" placeholder="留空保持 UTC">
+            <span class="hint">填代理实际出口国家（如 US、DE、SG）。注册表单的时区与语言会按账号在该地区内稳定选取，避免整个号池都声称 UTC。留空则不推断，保持原值。</span>
             <button type="submit" class="btn primary" id="th-set-save">保存设置</button>
             <p id="th-set-message" class="muted small" role="status"></p>
           </form>
@@ -390,6 +393,7 @@
           <ul class="muted small">
             <li>注册是纯 HTTP 流程，不模拟人工操作，不伪装 IP、设备或浏览器来绕过限制；真实推理客户端标识原样保留，通用库标识使用本项目真实名称。</li>
             <li>保持账号已绑定出口，不因限流轮换代理。官网未公开限制维度，不能仅凭提示断言 IP 被封或账号不存在。</li>
+            <li>每个账号的浏览器标识、时区与出口地区保持一致，账号之间彼此不同；不伪造 TLS 指纹，也不为规避限制而轮换身份。</li>
             <li>全局单并发，不额外设置注册提交间隔；收到注册过多、429或服务繁忙仅结束当前账号，不自动解码应对限制。该账号按完整 Retry-After 等待后人工重试，缺省至少5分钟；不暂停其他账号。</li>
             <li>不会自动重放失败任务，需要人工确认后重新发起。已有会话优先恢复；注册响应不确定时先核对官网，不重复提交。</li>
           </ul>

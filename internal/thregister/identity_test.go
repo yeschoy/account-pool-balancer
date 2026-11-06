@@ -111,3 +111,42 @@ func TestRegisterUserAgentIsNotAFutureBuild(t *testing.T) {
 		t.Fatalf("User-Agent advertises Chrome %s, which no build ships: %q", major, f.UserAgent())
 	}
 }
+
+// A region-seeded run must claim a timezone and a language from that region,
+// and two accounts in one region must not collapse onto one pair.
+func TestRegionDrivesTimezoneAndLanguage(t *testing.T) {
+	seenTZ := map[string]bool{}
+	seenLang := map[string]bool{}
+	for _, seed := range []string{"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"} {
+		f, err := New(Config{BaseURL: "http://127.0.0.1:1", Seed: seed, EgressRegion: "DE", RequestTimeout: 1e9})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		tz := f.Timezone()
+		if tz == "" || tz == "UTC" {
+			t.Fatalf("%s: DE region still claims %q", seed, tz)
+		}
+		seenTZ[tz] = true
+		seenLang[f.AcceptLanguage()] = true
+	}
+	if len(seenTZ) < 2 {
+		t.Fatalf("DE region collapsed onto one timezone: %v", seenTZ)
+	}
+	if len(seenLang) < 1 {
+		t.Fatal("no language selected")
+	}
+}
+
+// No region means no claim: the flow must keep its configured value rather
+// than invent one that may contradict the exit IP.
+func TestNoRegionKeepsConfiguredTimezone(t *testing.T) {
+	f, err := New(Config{BaseURL: "http://127.0.0.1:1", Seed: "x", RequestTimeout: 1e9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if got := f.Timezone(); got != "UTC" {
+		t.Fatalf("unconfigured region produced %q", got)
+	}
+}

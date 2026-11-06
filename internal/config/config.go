@@ -614,6 +614,11 @@ type TokenHarbor struct {
 	AccountSyncSec *int `json:"accountSyncSec,omitempty"`
 	// Group is the pool group registrations join when a task names none.
 	Group string `json:"group"`
+	// EgressRegion is the ISO country the registration proxies exit from. It
+	// selects a plausible timezone and Accept-Language for each account so
+	// those do not contradict the exit IP. Empty leaves the historical UTC
+	// value in place; an unrecognised value is ignored rather than guessed.
+	EgressRegion string `json:"egressRegion"`
 }
 
 // TokenHarborDefaults returns the non-zero defaults the admin form shows.

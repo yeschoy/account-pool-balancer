@@ -1154,6 +1154,64 @@ func copyRequestHeaders(dst, src http.Header) {
 	}
 }
 
+// completeBrowserHints fills in Sec-CH-UA, Accept-Language and the Sec-Fetch
+// set when, and only when, the request already carries a browser User-Agent.
+//
+// Such a client contradicts itself otherwise: a Chrome User-Agent with no
+// brand list, no language and no fetch metadata is not a browser sending an
+// unusual header set, it is a program wearing a browser's name. Clients that
+// identify themselves (Codex, Claude Code, OpenCode, the OpenAI and Anthropic
+// SDKs) are left completely alone.
+func completeBrowserHints(h http.Header) {
+	ua := h.Get("User-Agent")
+	if ua == "" || !strings.HasPrefix(ua, "Mozilla/") {
+		return
+	}
+	if h.Get("Sec-Ch-Ua") != "" {
+		// The caller already sent a coherent hint set; do not second-guess it.
+		return
+	}
+	if egressid.ChromeMajor(ua) == "" {
+		// A non-Chromium browser (Firefox, Safari) sends no client hints at
+		// all, so adding them would be the contradiction. Only the fetch
+		// metadata below applies to every browser.
+		if h.Get("Sec-Fetch-Mode") == "" {
+			h.Set("Sec-Fetch-Mode", "cors")
+			h.Set("Sec-Fetch-Dest", "empty")
+			h.Set("Sec-Fetch-Site", "cross-site")
+		}
+		return
+	}
+	if h.Get("Accept-Language") == "" {
+		h.Set("Accept-Language", "en-US,en;q=0.9")
+	}
+	// An inference call is a fetch() from an application, never a navigation.
+	if h.Get("Sec-Fetch-Mode") == "" {
+		h.Set("Sec-Fetch-Mode", "cors")
+		h.Set("Sec-Fetch-Dest", "empty")
+		h.Set("Sec-Fetch-Site", "cross-site")
+	}
+	major := egressid.ChromeMajor(ua)
+	brand := "Google Chrome"
+	if strings.Contains(ua, "Edg/") {
+		brand = "Microsoft Edge"
+	}
+	h.Set("Sec-Ch-Ua", egressid.BuildBrandList(ua, brand, major))
+	if h.Get("Sec-Ch-Ua-Mobile") == "" {
+		h.Set("Sec-Ch-Ua-Mobile", "?0")
+	}
+	if h.Get("Sec-Ch-Ua-Platform") == "" {
+		switch {
+		case strings.Contains(ua, "Windows NT"):
+			h.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+		case strings.Contains(ua, "Macintosh"):
+			h.Set("Sec-Ch-Ua-Platform", `"macOS"`)
+		case strings.Contains(ua, "Linux"):
+			h.Set("Sec-Ch-Ua-Platform", `"Linux"`)
+		}
+	}
+}
+
 func isProxyError(err error, proxyURL string) bool {
 	if proxyURL == "" {
 		return false
@@ -1260,6 +1318,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return res
 	}
 	copyRequestHeaders(req.Header, r.Header)
+	// A downstream client that sends a browser User-Agent but no Sec-CH-UA
+	// hints describes a browser to one header reader and a script to the next,
+	// which is a stronger signal than an honest library name. Only a browser
+	// User-Agent is completed this way: Codex, Claude Code and OpenCode send
+	// their own product strings and must keep them untouched.
+	completeBrowserHints(req.Header)
 	if acct.Provider == config.ProviderTokenHarbor {
 		req.Header.Set("User-Agent", gatewayUserAgent(req.Header.Get("User-Agent"), "account-pool-balancer/tokenharbor-gateway"))
 	}

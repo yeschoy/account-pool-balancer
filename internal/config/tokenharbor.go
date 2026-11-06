@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/rules"
 )
 
@@ -27,6 +28,24 @@ func (c *Config) normalizeTokenHarbor() error {
 		if err := clampInt(t.AccountSyncSec, 60, 300, "tokenHarbor.accountSyncSec"); err != nil {
 			return err
 		}
+	}
+	// A region the zone table does not model cannot make the timezone more
+	// believable, so it is rejected rather than silently ignored: an operator
+	// who typed "us " or "USA" should learn that, not ship a UTC pool again.
+	if region := strings.ToUpper(strings.TrimSpace(t.EgressRegion)); region != "" {
+		known := false
+		for _, r := range egressid.Regions() {
+			if r == region {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("tokenHarbor.egressRegion: %q is not a modelled egress region (want one of %s, or empty)", t.EgressRegion, strings.Join(egressid.Regions(), ", "))
+		}
+		t.EgressRegion = region
+	} else {
+		t.EgressRegion = ""
 	}
 	if c.TokenHarborErrorRules == nil {
 		c.TokenHarborErrorRules = rules.DefaultTokenHarborErrorRules()

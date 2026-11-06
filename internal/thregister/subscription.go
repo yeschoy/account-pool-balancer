@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"account-pool-balancer/internal/egressid"
 )
 
 // Subscription is a credential-free observation, not proof that a checkout
@@ -41,7 +43,7 @@ func (f *Flow) CheckSubscription(ctx context.Context) (Subscription, error) {
 	}
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("Cache-Control", "no-cache, no-store")
-	f.applyIdentity(req)
+	f.applyIdentityKind(req, egressid.Navigate)
 	client := *f.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)

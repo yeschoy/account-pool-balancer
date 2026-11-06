@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"account-pool-balancer/internal/egressid"
 )
 
 // PassUsage is a read-only observation of the account's own seven-day window.
@@ -104,7 +106,13 @@ func (f *Flow) readAccount(ctx context.Context, path, accept string) ([]byte, er
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Cache-Control", "no-cache, no-store")
-	f.applyIdentity(req)
+	// A page read is a navigation, an API read is an XHR: Chrome sends a
+	// different Sec-Fetch set for each, so the kind follows the path.
+	if strings.HasPrefix(path, "/api/") {
+		f.applyIdentityKind(req, egressid.SameOriginXHR)
+	} else {
+		f.applyIdentityKind(req, egressid.Navigate)
+	}
 	client := *f.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)

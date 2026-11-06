@@ -203,6 +203,30 @@ OAuth日志区分：`TokenHarbor OAuth入口 POST` 是官网 `/api/auth/oauth-ur
 - 受限账号提示完整Retry-After秒数/HTTP日期；未给有效时间则提示至少等待5分钟后人工重试该账号。该提示不设全局倒计时，不自动重放失败任务；重新发起不代表官网已解除限制。验证码仍仅按原有显式开关处理，不以自动解码、改IP或指纹来应对注册限制。
 - 本次取消提交间隔已通过本地Mock回归：旧实现连续账号等待超时，移除后无需测试专用间隔即可连续处理，固定单并发和取消/停止检查保留。全仓Go普通/race/vet/build及JS行为/语法检查通过；尚未部署，不触发真实注册、验证码、推理或付款，不修改线上配置。
 
+### 注册机客户端身份一致性（2026-11-06 审计后修正）
+
+审计报告见 [fingerprint-ip-leak-audit-2026-11-06.md](fingerprint-ip-leak-audit-2026-11-06.md)。本轮修复的是**账号之间彼此可区分、且各账号内部自洽**的三处矛盾，不涉及 TLS 指纹伪造。
+
+- **时区不再全池 `UTC`**：注册表单的 `_1_timezone` 是浏览器 `Intl.DateTimeFormat().resolvedOptions().timeZone`，描述用户所在地而非账号。新增设置 `tokenHarbor.egressRegion`（ISO 国家码，如 `US`/`DE`/`SG`）；填写后按账号 ID 稳定选取该地区的一个 IANA 时区，并同步 `Accept-Language`。**不推断代理国家**：空值保持原 `UTC`，因为与出口 IP 矛盾的时区比平庸的默认值更可疑。非法地区码在配置校验阶段拒绝，不静默忽略。
+- **补齐 `Sec-Fetch-*`**：这些头由浏览器网络栈注入、页面脚本无法伪造，缺失比版本过旧更显著。按请求类型分别取值：页面加载（注册页、登录页、邮件验证链接）为 `site=none`/`mode=navigate`/`dest=document` 并带 `Sec-Fetch-User`、`Upgrade-Insecure-Requests`；注册与 GitHub finish 的表单 POST 为 `site=same-origin`/`mode=navigate`；站内 API 调用为 `site=same-origin`/`mode=cors`/`dest=empty`。同时补 `Priority`。
+- **不再无条件发送高熵 hint**：`sec-ch-ua-platform-version` 仅在服务端 `Accept-CH` 后由 Chrome 发送，无条件携带与该行为相反，已移除。
+- **Chrome 版本跟随当前稳定版**：表内改为 145/144。新增测试同时限制过新（>145）与过旧（<143），一次过时是特征，长期停留在旧版本同样是特征。
+- **multipart 边界改为浏览器形状**：注册与 GitHub finish 的表单由 `----WebKitFormBoundary` + 16 位字母数字构成，不再暴露 Go `mime/multipart` 的 60 位十六进制边界。
+
+第二轮查漏补缺修正（同日）：
+
+- **GitHub 账号不再全程自称程序**：`RunGitHub` 曾把 `account-pool-balancer/tokenharbor-oauth` 装到 flow 的 transport 上，使该账号后续创建 Key、读 `/api/keys`、套餐检测、支付全部携带该 UA，却同时持有官网下发的浏览器会话 Cookie。现 OAuth 身份只留在授权跳转，站点请求沿用浏览器身份；`thRowUserAgent` 恒为空。
+- **推理转发补齐浏览器 hints**：`/v1/*` 只透传 UA，不补 `Sec-CH-UA`/`Accept-Language`/`Sec-Fetch-*`，浏览器 UA 因此自相矛盾。新增 `completeBrowserHints`，**仅**对 `Mozilla/` 开头的 UA 生效，Codex/Claude Code/OpenCode/Go 客户端不改动。
+- **`sec-ch-ua` 按账号变化**：Chrome 的品牌序与 GREASE 版本按安装随机，固定组合是全池共有指纹；现按 seed 稳定选取品牌、版本与位置。
+- **三处流程补 `EgressRegion`**：套餐检测、支付、订阅原先固定 `UTC`，与注册时区不一致。
+- **`egressid.Apply` 补 `Accept-Language`**：验证码、接码页、配额轮询、OpenCode 目录此前有浏览器 UA 而无语言头。
+- **时区表补充**：DE 增 Vienna/Zurich、GB 增 Dublin，避免单时区国家下同批账号完全相同。
+
+明确未做：不补 `accept-encoding`（需同时开压缩协商，属传输层改动）；不伪造 TLS、不重写头序、不伪造 JS 运行时；`device_fingerprint` 跨账号复用仍未验证。
+
+
+明确**未**做的：不伪造 TLS ClientHello（走代理时 `DialTLSContext` 拿不到隧道内握手，只在直连生效且成本高）、不重写 HTTP 头顺序（Go 的头是 map 序列化，无法保序）、不伪造 JS 运行时/Canvas/WebGL、不轮换出口。`device_fingerprint` 仍复用服务端下发值，其是否跨账号复用**未验证**（需真实注册流量，本轮未发起）。
+
 ### 同机 IPv6 出口代理排查
 
 IPv4入口的SOCKS代理可以提供IPv6出口，Docker未启用IPv6本身不是失败依据。如果代理就在OVH宿主机上，宿主机curl/Go成功而服务容器TCP连接超时，应先检查Docker网桥到宿主机代理端口的INPUT/UFW规则。测试必须使用同一代理和服务网络命名空间；不得用直连成功冒充代理恢复。只针对内网及必要代理端口的防火墙放行也需要用户明确授权，不擅自修改公网规则或禁用防火墙。

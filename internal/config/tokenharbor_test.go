@@ -68,3 +68,35 @@ func TestTokenHarborConfiguration(t *testing.T) {
 		t.Fatal("settings not persisted")
 	}
 }
+
+// The egress region decides each account's timezone, so a value the zone table
+// cannot describe must fail loudly rather than be silently dropped: an
+// operator who typed "USA" would otherwise keep a whole UTC pool.
+func TestTokenHarborEgressRegion(t *testing.T) {
+	c := Default()
+	c.TokenHarbor.EgressRegion = " us "
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.TokenHarbor.EgressRegion != "US" {
+		t.Fatalf("region not normalized: %q", c.TokenHarbor.EgressRegion)
+	}
+	for _, bad := range []string{"USA", "ZZ", "Atlantis", "1"} {
+		c := Default()
+		c.TokenHarbor.EgressRegion = bad
+		if err := c.Normalize(); err == nil {
+			t.Fatalf("region %q accepted", bad)
+		} else if !strings.Contains(err.Error(), "egressRegion") {
+			t.Fatalf("region %q: unhelpful error %v", bad, err)
+		}
+	}
+	// Empty stays empty: no region means no claim, never a guessed one.
+	c = Default()
+	c.TokenHarbor.EgressRegion = "   "
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.TokenHarbor.EgressRegion != "" {
+		t.Fatalf("blank region became %q", c.TokenHarbor.EgressRegion)
+	}
+}

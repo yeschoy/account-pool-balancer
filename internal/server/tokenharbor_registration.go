@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/thcaptcha"
 	"account-pool-balancer/internal/thmailbox"
 	"account-pool-balancer/internal/thregister"
@@ -382,7 +383,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		BaseURL:           thBaseURL(cfg.BaseURL),
 		ProxyURL:          proxy,
 		Seed:              id,
-		Timezone:          "UTC",
+		EgressRegion:      thEgressRegion(cfg, proxy),
 		Label:             thLabel(cfg),
 		VerificationSince: row.CreatedAt,
 		MailTimeout:       time.Duration(cfg.MailTimeoutSec) * time.Second,
@@ -788,7 +789,7 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		BaseURL:        thBaseURL(cfg.BaseURL),
 		ProxyURL:       proxy,
 		Seed:           row.ID,
-		Timezone:       "UTC",
+		EgressRegion:   thEgressRegion(cfg, proxy),
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
 		UserAgent:      thRowUserAgent(row),
@@ -996,6 +997,28 @@ func thLabel(cfg config.TokenHarbor) string {
 		return strings.TrimSpace(cfg.KeyLabel)
 	}
 	return "pool"
+}
+
+// thEgressRegion is the country the run's proxy exits from, which decides the
+// timezone and language the signup form claims. It is explicit configuration,
+// never inferred: guessing a country from a proxy hostname would produce a
+// zone that contradicts the exit IP, which is worse than no claim at all.
+//
+// An empty result is the safe default. The flow then keeps its own
+// unremarkable UTC value rather than inventing one this code cannot verify.
+func thEgressRegion(cfg config.TokenHarbor, proxy string) string {
+	region := strings.ToUpper(strings.TrimSpace(cfg.EgressRegion))
+	if region == "" || strings.TrimSpace(proxy) == "" {
+		// A direct run egresses from the host's own address, which the
+		// configured region does not describe.
+		return ""
+	}
+	for _, known := range egressid.Regions() {
+		if known == region {
+			return region
+		}
+	}
+	return ""
 }
 
 // thRedact keeps credentials out of a stored detail line.
