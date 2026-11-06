@@ -26,10 +26,13 @@ func (in CheckoutRequest) Validate() error {
 	return nil
 }
 
+// Stripe documents Session.url as an opaque hosted URL, not a fixed pathname:
+// https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url
+// Preserve the exact origin boundary; never infer trust in a custom domain.
 func ValidCheckoutURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme == "https" && u.Host == "checkout.stripe.com" &&
-		u.User == nil && strings.HasPrefix(u.Path, "/c/pay/") && len(u.Path) > len("/c/pay/") &&
+		u.User == nil && (strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "") &&
 		!strings.ContainsAny(raw, "\r\n\t ")
 }
 

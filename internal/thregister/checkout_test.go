@@ -10,10 +10,34 @@ import (
 	"testing"
 )
 
-const checkoutTestURL = "https://checkout.stripe.com/c/pay/cs_test_secret#session"
+const checkoutTestURL = "https://checkout.stripe.com/checkout/cs_test_secret#session"
 const freeAgentQuote = `{"quote":{"kind":"tier","fromTier":"free","oneTime":true,"period":"monthly","planName":"Agent Pass","payNowUsd":0.99}}`
 
 var agentCheckout = CheckoutRequest{Kind: "pass", Product: "starter_pass_monthly"}
+
+func TestCheckoutURLTreatsStripeSessionPathAsOpaque(t *testing.T) {
+	for _, raw := range []string{
+		checkoutTestURL, "https://checkout.stripe.com/pay/cs_mock_legacy",
+		"https://checkout.stripe.com/checkout/cs_mock_opaque#mock",
+		"https://checkout.stripe.com/new-format/opaque?session=mock",
+		"https://checkout.stripe.com/?session=mock", "https://checkout.stripe.com/#mock-session",
+	} {
+		if !ValidCheckoutURL(raw) {
+			t.Error("valid opaque Stripe URL rejected")
+		}
+	}
+	for _, raw := range []string{
+		"https://checkout.stripe.com", "https://checkout.stripe.com/", "https://checkout.stripe.com/?#",
+		"http://checkout.stripe.com/pay/mock", "https://checkout.stripe.com:443/pay/mock",
+		"https://checkout.stripe.com.evil.test/pay/mock", "https://invoice.stripe.com/i/mock",
+		"https://user@checkout.stripe.com/pay/mock", "https://@checkout.stripe.com/pay/mock",
+		"https://checkout.stripe.com/pay/mock\n", "https://checkout.stripe.com/pay/mock secret",
+	} {
+		if ValidCheckoutURL(raw) {
+			t.Error("unsafe/empty origin was accepted")
+		}
+	}
+}
 
 func TestCheckoutPreviewsFreeAccountThenCreatesOnlyHostedPage(t *testing.T) {
 	calls := 0

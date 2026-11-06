@@ -586,9 +586,11 @@ async function thBatchCheckout(rows) {
 
 // 支付链接只在显式打开的弹窗中读取，不进入列表或实时日志。
 function thCheckoutURL(raw) {
+  // Stripe Session.url paths are opaque; match the backend's exact origin guard.
+  if (typeof raw !== 'string' || !/^https:\/\/checkout\.stripe\.com(?:[/?#]|$)/.test(raw) || /[\r\n\t ]/.test(raw)) throw new Error('支付链接不可信');
   let u;
   try { u = new URL(raw); } catch { throw new Error('支付链接不可信'); }
-  if (u.protocol !== 'https:' || u.host !== 'checkout.stripe.com' || u.username || u.password || !u.pathname.startsWith('/c/pay/')) throw new Error('支付链接不可信');
+  if (u.protocol !== 'https:' || u.host !== 'checkout.stripe.com' || u.username || u.password || (!u.pathname.replace(/\//g, '') && !u.search && !u.hash)) throw new Error('支付链接不可信');
   return u;
 }
 

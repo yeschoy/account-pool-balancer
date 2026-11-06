@@ -159,7 +159,12 @@ func checkoutURLShape(raw string) string {
 			host = "site-subdomain"
 		}
 	}
-	path := "other-path"
+	path := "opaque-path"
+	if u.Path == "" {
+		path = "empty-path"
+	} else if strings.Trim(u.Path, "/") == "" {
+		path = "root-path"
+	}
 	for _, prefix := range []string{"/c/pay/", "/pay/", "/i/", "/p/"} {
 		if strings.HasPrefix(u.Path, prefix) {
 			path = prefix + "token:" + fmt.Sprint(len(u.Path) > len(prefix))

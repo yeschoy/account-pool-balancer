@@ -15,7 +15,7 @@ import (
 const testAgentBody = `{"kind":"pass","product":"starter_pass_monthly"}`
 
 func TestTHCheckoutPersistsAndDoesNotLeakOrDuplicate(t *testing.T) {
-	const link = "https://checkout.stripe.com/c/pay/cs_test_private#secret"
+	const link = "https://checkout.stripe.com/checkout/cs_test_private#secret"
 	calls := 0
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
