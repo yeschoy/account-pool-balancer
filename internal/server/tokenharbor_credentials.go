@@ -45,16 +45,32 @@ func thParseRegisterInput(in thRegisterInput) (email, password, mailbox string, 
 
 func thParseGitHubInput(in thRegisterInput) (thsignupstore.Row, error) {
 	login, password, secret, mailbox := strings.TrimSpace(in.Login), in.Password, in.TOTPSecret, strings.TrimSpace(in.MailboxURL)
+	email := strings.TrimSpace(in.GitHubEmail)
 	parts := strings.Split(strings.TrimSpace(in.Email), "----")
-	if len(parts) == 4 {
-		login, password, secret, mailbox = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
-	} else if len(parts) != 1 {
-		return thsignupstore.Row{}, errors.New("GitHub 格式：账号----密码----2FA密钥----邮箱接码地址")
-	} else if login == "" {
-		login = strings.TrimSpace(in.Email)
+	switch len(parts) {
+	case 4, 5:
+		login, password, secret = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+		mailbox = strings.TrimSpace(parts[len(parts)-1])
+		if len(parts) == 5 {
+			email = strings.TrimSpace(parts[3])
+			if email == "" {
+				return thsignupstore.Row{}, errors.New("GitHub 五段格式必须填写绑定邮箱")
+			}
+		}
+	case 1:
+		if login == "" {
+			login = strings.TrimSpace(in.Email)
+		} else if email == "" && strings.Contains(in.Email, "@") {
+			email = strings.TrimSpace(in.Email)
+		}
+	default:
+		return thsignupstore.Row{}, errors.New("GitHub 格式：账号----密码----2FA密钥----[绑定邮箱----]邮箱接码地址")
 	}
 	login = strings.ToLower(login)
 	if err := thregister.ValidateGitHub(login, password, secret); err != nil {
+		return thsignupstore.Row{}, err
+	}
+	if err := thregister.ValidateGitHubEmail(email); err != nil {
 		return thsignupstore.Row{}, err
 	}
 	if mailbox == "" {
@@ -62,6 +78,9 @@ func thParseGitHubInput(in thRegisterInput) (thsignupstore.Row, error) {
 	}
 	if err := thmailbox.Validate(mailbox); err != nil {
 		return thsignupstore.Row{}, err
+	}
+	if mailboxEmail := thmailbox.CodeMailboxEmail(mailbox); email != "" && mailboxEmail != "" && !strings.EqualFold(email, mailboxEmail) {
+		return thsignupstore.Row{}, errors.New("GitHub 绑定邮箱与接码接口邮箱不一致")
 	}
 	for _, proxy := range []string{in.ProxyURL, in.GitHubProxyURL} {
 		if err := thsignupstore.ValidateProxy(proxy); err != nil {
@@ -73,7 +92,12 @@ func thParseGitHubInput(in thRegisterInput) (thsignupstore.Row, error) {
 			return thsignupstore.Row{}, err
 		}
 	}
-	return thsignupstore.Row{Email: "github:" + login, Password: password, MailboxURL: mailbox,
+	if email == "" {
+		email = "github:" + login
+	} else {
+		email = strings.ToLower(email)
+	}
+	return thsignupstore.Row{Email: email, Password: password, MailboxURL: mailbox,
 		ProxyURL: strings.TrimSpace(in.ProxyURL), GitHub: &thsignupstore.GitHubAuth{
 			Login: login, TOTPSecret: strings.ToUpper(strings.ReplaceAll(secret, " ", "")), ProxyURL: strings.TrimSpace(in.GitHubProxyURL),
 		}}, nil

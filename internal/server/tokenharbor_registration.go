@@ -36,13 +36,14 @@ import (
 // thRegistrationJobs bounds how many attempts are kept in the list.
 const thRegistrationJobs = 50
 
-// thRegisterInput accepts legacy email input and GitHub's four-field format.
+// thRegisterInput accepts legacy email input and GitHub's four/five-field formats.
 type thRegisterInput struct {
 	Email           string  `json:"email"`
 	Password        string  `json:"password"`
 	MailboxURL      string  `json:"mailboxUrl,omitempty"`
 	Provider        string  `json:"provider,omitempty"`
 	Login           string  `json:"login,omitempty"`
+	GitHubEmail     string  `json:"githubEmail,omitempty"`
 	TOTPSecret      string  `json:"totpSecret,omitempty"`
 	GitHubProxyURL  string  `json:"githubProxyUrl,omitempty"`
 	SessionProxyURL *string `json:"sessionProxyUrl,omitempty"`
@@ -193,17 +194,18 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusBadRequest, errors.New("不支持的注册来源"))
 			return
 		}
-		if acct.Provider == "github" || acct.Login != "" || len(strings.Split(acct.Email, "----")) == 4 {
+		if fields := len(strings.Split(acct.Email, "----")); acct.Provider == "github" || acct.Login != "" || fields == 4 || fields == 5 {
 			row, err := thParseGitHubInput(acct)
 			if err != nil {
 				apiError(w, http.StatusBadRequest, err)
 				return
 			}
-			if seen[row.Email] {
+			identity := "github:" + row.GitHub.Login
+			if seen[identity] {
 				apiError(w, http.StatusBadRequest, errors.New("GitHub 账号重复"))
 				return
 			}
-			seen[row.Email] = true
+			seen[identity] = true
 			rows = append(rows, row)
 			continue
 		}
@@ -439,8 +441,12 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			err = r.checkSignup(ctx)
 		}
 		if err == nil {
+			email := ""
+			if strings.Contains(row.Email, "@") {
+				email = row.Email
+			}
 			res, err = flow.RunGitHub(ctx, thregister.GitHubCredentials{
-				Login: row.GitHub.Login, Password: row.Password,
+				Login: row.GitHub.Login, Password: row.Password, Email: email,
 				TOTPSecret: row.GitHub.TOTPSecret, ProxyURL: row.GitHub.ProxyURL,
 			}, res)
 		}
@@ -487,6 +493,8 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			stage = "验证码"
 		case errors.Is(err, thregister.ErrKeyRejected):
 			stage = "账号判定"
+		case errors.Is(err, thregister.ErrMailboxRejected):
+			stage = "接码接口"
 		case errors.Is(err, thregister.ErrLoginCredentialsMismatch):
 			stage = "登录被拒"
 		case errors.Is(err, thregister.ErrSessionRejected):

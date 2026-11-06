@@ -366,13 +366,17 @@ async function testGitHubFormatAndSessionProjection() {
   assert.equal(accounts[0].provider, 'github');
   assert.equal(accounts[0].login, 'mock-user');
   assert.equal(accounts[0].totpSecret, 'GEZDGNBVGY3TQOJQ');
+  const five = e.context.thParseAccounts('mock-user----mock-password----GEZDGNBVGY3TQOJQ----bound@icloud.com----https://mail.test/api/v1/mailboxes/bound@icloud.com/code?key=private-key');
+  assert.equal(five[0].githubEmail, 'bound@icloud.com');
+  assert.equal(five[0].mailboxUrl, 'https://mail.test/api/v1/mailboxes/bound@icloud.com/code?key=private-key');
+  assert.throws(() => e.context.thParseAccounts('mock-user----pw----GEZDGNBVGY3TQOJQ--------https://mail.test/api/v1/mailboxes/test@icloud.com/code?key=private-key'), /绑定邮箱/);
   e.context.renderTHJob({ id: 'github-job', rows: [{ id: 'gh-row', email: 'github:mock-user', status: 'saved', authProvider: 'github', githubLogin: 'mock-user', githubProxy: 'socks5://ipv4.local:5000', proxy: 'http://ipv6.local:6000', hasGithubSession: true, hasSession: false }] });
   const html = e.node('#th-register-rows').innerHTML;
   assert.match(html, /GitHub 会话 已保存/);
   assert.match(html, /TH 会话 未取得/);
   assert.match(html, /ipv4.local/);
   assert.match(html, /ipv6.local/);
-  assert.doesNotMatch(html, /mock-password|GEZDGNBV/);
+  assert.doesNotMatch(html, /mock-password|GEZDGNBV|private-key/);
 }
 
 (async () => {

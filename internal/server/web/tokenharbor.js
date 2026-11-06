@@ -168,13 +168,17 @@ function thParseAccounts(text) {
     const line = raw.trim();
     if (!line) continue;
     const parts = line.split('----');
-    if (parts.length === 4) {
-      const [login, password, totpSecret, mailboxUrl] = parts.map((p) => p.trim());
-      if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login) || !password || !totpSecret || !mailboxUrl.startsWith('https://')) throw new Error('GitHub 格式：账号----密码----2FA密钥----HTTPS邮箱接码地址');
-      out.push({ provider: 'github', login, password, totpSecret, mailboxUrl });
+    if (parts.length === 4 || parts.length === 5) {
+      const values = parts.map((p) => p.trim());
+      const [login, password, totpSecret] = values;
+      const mailboxUrl = values[values.length - 1];
+      const githubEmail = parts.length === 5 ? values[3] : '';
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login) || !password || !totpSecret || !mailboxUrl.startsWith('https://')) throw new Error('GitHub 格式：账号----密码----2FA密钥----[绑定邮箱----]HTTPS邮箱接码地址');
+      if (parts.length === 5 && !/^[^\s@]+@[^\s@]+$/.test(githubEmail)) throw new Error('GitHub 五段格式的绑定邮箱无效');
+      out.push({ provider: 'github', login, password, totpSecret, mailboxUrl, ...(githubEmail ? { githubEmail } : {}) });
       continue;
     }
-    if (parts.length > 3) throw new Error('邮箱用两/三段；GitHub 用四段：账号----密码----2FA密钥----邮箱接码地址');
+    if (parts.length > 3) throw new Error('邮箱用两/三段；GitHub 用四/五段：账号----密码----2FA密钥----[绑定邮箱----]接码地址');
     const email = (parts[0] || '').trim();
     if (!email.includes('@')) throw new Error(`邮箱格式有误：${email.slice(0, 40)}`);
     const twoPartMailbox = parts.length === 2 && parts[1].trim().startsWith('https://');

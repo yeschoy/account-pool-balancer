@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"sort"
@@ -31,6 +32,8 @@ const githubBase = "https://github.com"
 // GitHubCredentials and Result contain secrets. Never project either to logs.
 type GitHubCredentials struct {
 	Login, Password, TOTPSecret, ProxyURL string
+	// Email optionally pins the operator-provided GitHub mailbox identity.
+	Email string
 }
 
 func (GitHubCredentials) String() string   { return "[REDACTED]" }
@@ -45,6 +48,19 @@ func ValidateGitHub(login, password, secret string) error {
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.ReplaceAll(secret, " ", "")))
 	if err != nil || len(key) < 10 {
 		return errors.New("GitHub 2FA 密钥必须为有效 Base32")
+	}
+	return nil
+}
+
+// ValidateGitHubEmail accepts only an optional plain mailbox address, not a
+// display name, comment or reflected header content.
+func ValidateGitHubEmail(email string) error {
+	if email == "" {
+		return nil
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Name != "" || !strings.EqualFold(address.Address, email) {
+		return errors.New("GitHub 绑定邮箱格式无效")
 	}
 	return nil
 }
@@ -82,6 +98,16 @@ func githubTOTP(secret string, now time.Time) (string, error) {
 func (f *Flow) RunGitHub(ctx context.Context, c GitHubCredentials, res Result) (Result, error) {
 	if err := ValidateGitHub(c.Login, c.Password, c.TOTPSecret); err != nil {
 		return res, err
+	}
+	c.Email = strings.TrimSpace(c.Email)
+	if err := ValidateGitHubEmail(c.Email); err != nil {
+		return res, err
+	}
+	if c.Email != "" && HasSession(res.Cookies) {
+		email, _, _, _ := oauthProfile(res.Cookies)
+		if email != "" && !strings.EqualFold(email, c.Email) {
+			return res, errors.New("保存会话邮箱与 GitHub 绑定邮箱不一致，未继续授权或创建Key")
+		}
 	}
 	// The OAuth product identity belongs to the authorization hops only. An
 	// earlier version installed it on the flow's own transport, which then
@@ -127,7 +153,8 @@ func (f *Flow) RunGitHub(ctx context.Context, c GitHubCredentials, res Result) (
 		if login != "" && !strings.EqualFold(login, c.Login) {
 			return errors.New("GitHub 会话账号与导入账号不一致，未关联该会话")
 		}
-		if email != "" {
+		mismatch := email != "" && c.Email != "" && !strings.EqualFold(email, c.Email)
+		if email != "" && !mismatch {
 			res.Email = email
 		}
 		// Supabase refreshes can omit provider tokens. Keep the original grant
@@ -139,7 +166,12 @@ func (f *Flow) RunGitHub(ctx context.Context, c GitHubCredentials, res Result) (
 			res.GitHubRefreshToken = refreshToken
 		}
 		if f.cfg.Checkpoint != nil {
-			return f.cfg.Checkpoint(res)
+			if err := f.cfg.Checkpoint(res); err != nil {
+				return err
+			}
+		}
+		if mismatch {
+			return errors.New("OAuth 返回邮箱与 GitHub 绑定邮箱不一致，会话已保存，未继续finish或创建Key")
 		}
 		return nil
 	}
@@ -184,7 +216,8 @@ func (f *Flow) RunGitHub(ctx context.Context, c GitHubCredentials, res Result) (
 	} else if !strings.HasPrefix(page.url.Path, "/dashboard") {
 		return res, errors.New("OAuth 未进入 finish 或 dashboard；请人工核对登录/验证状态")
 	}
-	if !HasSession(auth.Session()) || !strings.Contains(res.Email, "@") {
+	profileEmail, _, _, _ := oauthProfile(auth.Session())
+	if !HasSession(auth.Session()) || !strings.Contains(profileEmail, "@") || !strings.Contains(res.Email, "@") {
 		return res, ErrSessionRejected
 	}
 	res.OAuthComplete = true

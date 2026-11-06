@@ -61,6 +61,10 @@ const (
 // Turnstile token (no solver configured, or the solver failed).
 var ErrCaptchaRequired = errors.New("turnstile token required")
 
+// ErrMailboxRejected stops a permanent/unsupported mailbox response without
+// discarding an already checkpointed account session or one-time API key.
+var ErrMailboxRejected = errors.New("mailbox verification unavailable")
+
 // ErrSessionRejected reports a signup the server refused (rate limit, closed
 // registration, a rejected captcha, a duplicate email).
 var ErrSessionRejected = errors.New("signup rejected")
@@ -539,6 +543,8 @@ func (f *Flow) finish(ctx context.Context, res Result) (Result, error) {
 			} else {
 				f.cfg.step("邮箱验证", "链接无效")
 			}
+		} else if errors.Is(err, ErrMailboxRejected) {
+			return res, err
 		} else {
 			// Not a failure: the account exists and its key is real. The
 			// mail simply arrived after the patience budget (measured ≈9m).
@@ -932,6 +938,9 @@ func (f *Flow) verificationLinkSince(ctx context.Context, since time.Time) (stri
 	started := since
 	for {
 		msgs, err := f.cfg.Mailbox.Messages(ctx)
+		if errors.Is(err, ErrMailboxRejected) {
+			return "", err
+		}
 		if err == nil {
 			// Newest first; the link in the newest matching mail wins.
 			sort.Slice(msgs, func(i, j int) bool { return msgs[i].ReceivedAt.After(msgs[j].ReceivedAt) })

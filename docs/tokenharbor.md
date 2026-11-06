@@ -125,7 +125,11 @@ Content-Type: application/json
 
 ## GitHub OAuth 注册
 
-注册机自动识别四段输入：`GitHub账号----GitHub密码----2FA密钥----邮箱接码地址`；原邮箱两/三段格式仍兼容。支持 `/mailbox/<token>` 的 MailCat 接码页（含 191006.xyz）以及原 iCloud 接码页。接码页必须返回可解析的邮件时间；不使用时间未知的旧邮件。
+注册机兼容原四段格式，并支持 `GitHub账号----密码----2FA密钥----GitHub绑定邮箱----接码地址` 五段格式；结构化输入可用 `githubEmail`。提供的邮箱用于绑定核对，不等于已经验证；按GitHub登录名去重，不覆盖同登录名的原凭据/接码地址。OAuth返回邮箱不一致时保存检查点并停止，不继续finish/创建Key。
+
+除原 MailCat HTML 和 iCloud 接码页外，支持 HTTPS `/api/v1/mailboxes/<邮箱>/code?key=...` JSON 接口。实际观测的 `success:false,code:"no_code",retryable:true` 表示暂无邮件，按原轮询继续；不可重试的错误立即停止并保留先前保存的会话/Key。成功数据需要TokenHarbor验证链接及有效 `received_at`；仅数字验证码不能代替链接型邮箱验证，不猜造链接或收信时间。接口key不回显，不跟随重定向转发。
+
+本轮已对用户提供的一个五段账号实测：IPv4直连走过密码登录、2FA并提交GitHub授权，但测试客户端等待授权响应30秒超时；已停止，未重放授权POST。11个GitHub Cookie（含user_session）和1个TH中间Cookie独立保留在 `.private/tokenharbor-github-fivefield/`，尚无API Key或完整OAuth/邮箱验证成功；也未取得新接码接口真实成功响应。代码/Mock回归通过不等于真实全流程通过，本次未部署。
 
 - GitHub、Supabase、TokenHarbor OAuth 回调和 `/oauth/finish` 全程使用保存时绑定的授权代理。直接连接/连接代理的本机套接字强制 IPv4，**代理本身也必须提供 IPv4 出口**，不能根据代理入口 IP 推断出口。GitHub 密码、TOTP 和授权表单各只提交一次；设备验证、额外权限、风控、拒绝或未知页面停止，不伪装指纹、不绕过验证、不自动重试。
 - 官网实际 OAuth 身份服务入口包含 `https://auth.tokenharbor.ai/auth/v1/authorize?provider=github`（Supabase 自定义域名），也兼容原 `*.supabase.co`。只放行确切官方域名/合法 Supabase 域名的 HTTPS 入口，并将后续身份服务跳转固定到返回的原始 origin；不放行相似域名、任意子域、额外端口、用户信息或 fragment。
