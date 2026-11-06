@@ -129,7 +129,13 @@ Content-Type: application/json
 
 除原 MailCat HTML 和 iCloud 接码页外，支持 HTTPS `/api/v1/mailboxes/<邮箱>/code?key=...` JSON 接口。实际观测的 `success:false,code:"no_code",retryable:true` 表示暂无邮件，按原轮询继续；不可重试的错误立即停止并保留先前保存的会话/Key。成功数据需要TokenHarbor验证链接及有效 `received_at`；仅数字验证码不能代替链接型邮箱验证，不猜造链接或收信时间。接口key不回显，不跟随重定向转发。
 
-本轮已对用户提供的一个五段账号实测：IPv4直连走过密码登录、2FA并提交GitHub授权，但测试客户端等待授权响应30秒超时；已停止，未重放授权POST。11个GitHub Cookie（含user_session）和1个TH中间Cookie独立保留在 `.private/tokenharbor-github-fivefield/`，尚无API Key或完整OAuth/邮箱验证成功；也未取得新接码接口真实成功响应。代码/Mock回归通过不等于真实全流程通过，本次未部署。
+最初对用户提供的单个五段账号实测：IPv4直连走过密码登录、2FA并提交GitHub授权，但测试客户端等待授权响应30秒超时；已停止，未重放授权POST。11个GitHub Cookie（含user_session）和1个TH中间Cookie独立保留在 `.private/tokenharbor-github-fivefield/`，尚无API Key或完整OAuth/邮箱验证成功；也未取得新接码接口真实成功响应。代码/Mock回归通过不等于真实全流程通过，本次未部署。
+
+### 后续代理实测与兼容修复
+
+4条新IP代理均通过SOCKS5认证及到GitHub的IPv4 CONNECT。4个账号已依次实测：第1、4个获得真正TH会话、GitHub授权token和API Key；第2个登录页读取超时，第3个保留GitHub登录Cookie但未完成TH回调。第1、4个官网发信动作成功，但各自2分钟等待内未收到TH验证邮件；因此没有声称邮箱验证完整通过。完整凭据和实际会话保存在 `.private/tokenharbor-github-proxy-batch-20261106-round3-live/` 与 `.private/tokenharbor-github-proxy-batch-20261106-round3-last/`，无入池、付款、部署或代理回退。
+
+实测发现：GitHub授权POST可能HTTP200且无Location，却已接受授权；现在只GET原授权URL核对一次，不重放POST，不将无跳转误报为拒绝。新建GitHub账号取得Key并落盘后，还需按官网按钮POST `/api/me/send-verification-email` 一次才会发验证邮件；已有Key恢复不自动重发。JSON接口成功响应也可能是GitHub通知的 `code/link`，明确的GitHub通知跳过，不误判验证或永久接口失败；未指定keyword时用tokenharbor筛选，保留用户显式keyword。
 
 - GitHub、Supabase、TokenHarbor OAuth 回调和 `/oauth/finish` 全程使用保存时绑定的授权代理。直接连接/连接代理的本机套接字强制 IPv4，**代理本身也必须提供 IPv4 出口**，不能根据代理入口 IP 推断出口。GitHub 密码、TOTP 和授权表单各只提交一次；设备验证、额外权限、风控、拒绝或未知页面停止，不伪装指纹、不绕过验证、不自动重试。
 - 官网实际 OAuth 身份服务入口包含 `https://auth.tokenharbor.ai/auth/v1/authorize?provider=github`（Supabase 自定义域名），也兼容原 `*.supabase.co`。只放行确切官方域名/合法 Supabase 域名的 HTTPS 入口，并将后续身份服务跳转固定到返回的原始 origin；不放行相似域名、任意子域、额外端口、用户信息或 fragment。

@@ -29,14 +29,17 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 	for _, tc := range []struct {
 		host          string
 		finishFailure bool
+		grantHTTP200  bool
 	}{
-		{"test.supabase.co", false}, {"auth.tokenharbor.ai", false}, {"auth.tokenharbor.ai", true},
+		{"test.supabase.co", false, false}, {"auth.tokenharbor.ai", false, false}, {"auth.tokenharbor.ai", true, false}, {"auth.tokenharbor.ai", false, true},
 	} {
 		host, finishFailure := tc.host, tc.finishFailure
-		t.Run(fmt.Sprintf("host=%s/finishFailure=%v", host, finishFailure), func(t *testing.T) {
+		t.Run(fmt.Sprintf("host=%s/finishFailure=%v/grantHTTP200=%v", host, finishFailure, tc.grantHTTP200), func(t *testing.T) {
 			const action = "1234567890abcdef1234567890abcdef12345678ab"
 			const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 			authCalls, finishPosts, keyPosts, verifyCalls, checkpoints := 0, 0, 0, 0, 0
+			grantPosts, grantGets, sendCalls := 0, 0, 0
+			keyCheckpointed := false
 			auth := githubMockTransport(func(r *http.Request) (*http.Response, error) {
 				authCalls++
 				if r.Header.Get("User-Agent") != OAuthUserAgent {
@@ -77,11 +80,20 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 					}
 					return redirect("/login/oauth/authorize?scope=user%3Aemail")
 				case "GET github.com/login/oauth/authorize":
+					grantGets++
+					if tc.grantHTTP200 && grantPosts > 0 {
+						return redirect("https://" + host + "/auth/v1/callback?code=mock")
+					}
 					response.Body = io.NopCloser(strings.NewReader(`<form method="post" action="/login/oauth/authorize"><input name="authenticity_token" value="mockcsrf"><button name="authorize" value="1">Authorize</button><button name="deny" value="1">Cancel</button></form>`))
 				case "POST github.com/login/oauth/authorize":
+					grantPosts++
 					_ = r.ParseForm()
 					if r.Form.Get("authorize") != "1" || r.Form.Has("deny") {
 						t.Fatal("wrong authorization button")
+					}
+					if tc.grantHTTP200 {
+						response.Body = io.NopCloser(strings.NewReader("consent response without Location"))
+						break
 					}
 					return redirect("https://" + host + "/auth/v1/callback?code=mock")
 				case "GET " + host + "/auth/v1/callback":
@@ -117,7 +129,11 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 				return response, nil
 			})
 			flow, err := New(Config{BaseURL: DefaultBase, UserAgent: OAuthUserAgent, Mailbox: githubMockMailbox{}, oauthRoundTripper: auth,
-				Checkpoint: func(res Result) error { checkpoints++; return nil }})
+				Checkpoint: func(res Result) error {
+					checkpoints++
+					keyCheckpointed = keyCheckpointed || res.APIKey != ""
+					return nil
+				}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,6 +148,12 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 				case "POST /api/keys":
 					keyPosts++
 					return githubMockResponse(r, 201, `{"key":"thk_live_mock_key_abcdefghijklmnopqrstuvwxyz0123456789"}`), nil
+				case "POST /api/me/send-verification-email":
+					sendCalls++
+					if keyPosts != 1 || !keyCheckpointed || r.Header.Get("Origin") != DefaultBase || r.Header.Get("Referer") != DefaultBase+"/dashboard" {
+						t.Fatal("verification send preceded the key checkpoint or missed origin")
+					}
+					return githubMockResponse(r, 200, `{"ok":true}`), nil
 				case "GET /verify-email":
 					verifyCalls++
 					return githubMockResponse(r, 200, "ok"), nil
@@ -154,14 +176,14 @@ func TestGitHubOAuthFinishAndIndependentSession(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.OAuthComplete || !res.VerifiedEmail || res.Email != "mock@local.test" || res.GitHubToken != "gho_mock_provider_token" || len(res.GitHubCookies) == 0 || keyPosts != 1 || verifyCalls != 1 {
+			if !res.OAuthComplete || !res.VerifiedEmail || res.Email != "mock@local.test" || res.GitHubToken != "gho_mock_provider_token" || len(res.GitHubCookies) == 0 || keyPosts != 1 || verifyCalls != 1 || sendCalls != 1 || grantPosts != 1 || (tc.grantHTTP200 && grantGets != 2) || (!tc.grantHTTP200 && grantGets != 1) {
 				t.Fatal("incomplete OAuth/mail result")
 			}
 			before := authCalls
 			if _, err = flow.RunGitHub(context.Background(), creds, res); err != nil {
 				t.Fatal(err)
 			}
-			if authCalls != before || finishPosts != 1 || keyPosts != 1 {
+			if authCalls != before || finishPosts != 1 || keyPosts != 1 || sendCalls != 1 {
 				t.Fatal("resume repeated OAuth/finish/key creation")
 			}
 		})

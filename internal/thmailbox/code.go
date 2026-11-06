@@ -87,6 +87,11 @@ func parseCodeMessages(raw []byte, email string) ([]thregister.Message, error) {
 	text := html.UnescapeString(strings.Join([]string{out.Code, out.VerificationURL, out.Link, out.Text, out.HTML, out.Body, out.Content}, "\n"))
 	link := sharedLinkRE.FindString(text)
 	if link == "" {
+		// The same mailbox also receives GitHub login/OAuth notifications.
+		// A successful extraction of one of those is not a mailbox failure.
+		if strings.Contains(strings.ToLower(out.Subject+"\n"+out.From), "github") {
+			return nil, nil
+		}
 		return nil, mailboxRejected("接码接口未提供 TokenHarbor 验证链接；数字验证码不能代替邮箱验证")
 	}
 	received := parseTime(out.ReceivedAt)
@@ -101,7 +106,13 @@ func (c *Client) codeMessages(ctx context.Context) ([]thregister.Message, error)
 	if err := Validate(c.URL); err != nil {
 		return nil, mailboxRejected("JSON 接码接口地址无效")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL, nil)
+	u, _ := url.Parse(c.URL) // Validate above has already checked the URL.
+	query := u.Query()
+	if !query.Has("keyword") {
+		query.Set("keyword", "tokenharbor")
+	}
+	u.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, mailboxRejected("JSON 接码接口请求格式无效")
 	}

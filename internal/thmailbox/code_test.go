@@ -25,6 +25,8 @@ func TestCodeMailboxResponseFormats(t *testing.T) {
 		{"denied", `{"success":false,"code":"invalid_key","message":"private-key","retryable":false}`, 0, true, false},
 		{"verification-link", `{"success":true,"code":"https://tokenharbor.ai/verify-email?token=mock-link","received_at":"2026-11-07T01:02:03Z","email":"test@icloud.com","subject":"Verify email"}`, 1, false, false},
 		{"html-link", `{"success":true,"code":"","html":"<a href=\"https://tokenharbor.ai/verify-email?token=mock-link\">verify</a>","received_at":"2026-11-07T01:02:03+00:00"}`, 1, false, false},
+		{"github-notification", `{"success":true,"code":"https://github.com/settings/security-log","link":"https://github.com/settings/security-log","subject":"GitHub login notification","received_at":"2026-11-07T01:02:03Z"}`, 0, false, false},
+		{"github-otp", `{"success":true,"code":"123456","subject":"Your GitHub verification code","received_at":"2026-11-07T01:02:03Z"}`, 0, false, false},
 		{"numeric-not-link", `{"success":true,"code":"123456","received_at":"2026-11-07T01:02:03Z"}`, 0, true, false},
 		{"foreign-link", `{"success":true,"code":"https://evil.test/verify-email?token=mock-link","received_at":"2026-11-07T01:02:03Z"}`, 0, true, false},
 		{"no-date", `{"success":true,"code":"https://tokenharbor.ai/verify-email?token=mock-link"}`, 0, true, false},
@@ -75,9 +77,13 @@ func TestCodeMailboxRequestsAndRedirectIsolation(t *testing.T) {
 			}))
 			defer evil.Close()
 			calls := 0
+			keyword := "tokenharbor"
+			if redirect {
+				keyword = "Token Harbor"
+			}
 			site := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if r.Method != "GET" || r.URL.Path != "/api/v1/mailboxes/test@icloud.com/code" || r.URL.Query().Get("key") != "private-key" || r.Header.Get("Accept") != "application/json" {
+				if r.Method != "GET" || r.URL.Path != "/api/v1/mailboxes/test@icloud.com/code" || r.URL.Query().Get("key") != "private-key" || r.URL.Query().Get("keyword") != keyword || r.Header.Get("Accept") != "application/json" {
 					t.Error("wrong code request")
 				}
 				if redirect {
@@ -89,6 +95,9 @@ func TestCodeMailboxRequestsAndRedirectIsolation(t *testing.T) {
 			}))
 			defer site.Close()
 			client := New(site.URL+"/api/v1/mailboxes/test@icloud.com/code?key=private-key", site.Client())
+			if redirect {
+				client.URL += "&keyword=Token%20Harbor"
+			}
 			messages, err := client.Messages(context.Background())
 			if calls != 1 || evilCalls != 0 || len(messages) != 0 || (err != nil) != redirect {
 				t.Fatalf("wrong request/redirect state: %v", err)

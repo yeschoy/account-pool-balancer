@@ -532,6 +532,16 @@ func (f *Flow) finish(ctx context.Context, res Result) (Result, error) {
 		if err := f.checkpoint(&res); err != nil {
 			return res, err
 		}
+		// OAuth finish does not send the site's verification mail. Request it
+		// only for this newly checkpointed key; resuming an existing key must
+		// not automatically replay an uncertain send action.
+		if res.OAuthComplete && f.cfg.Mailbox != nil && !res.VerifiedEmail {
+			f.cfg.step("发送验证邮件", "提交一次官网发信动作；不代表已验证")
+			res.VerifiedEmail, err = f.SendVerificationEmail(ctx)
+			if err != nil {
+				return res, err
+			}
+		}
 	}
 
 	if f.cfg.Mailbox != nil && !res.VerifiedEmail {

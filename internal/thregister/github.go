@@ -487,8 +487,22 @@ func (f *Flow) githubAuthorize(ctx context.Context, c GitHubCredentials, checkpo
 		if err != nil {
 			return page, err
 		}
+		if page.redirect == "" && action.Path == "/login/oauth/authorize" && page.status == http.StatusOK {
+			// GitHub can commit consent but return HTTP200 without Location.
+			// Reconcile with one GET of the original authorization URL, never
+			// another password/TOTP/consent POST. A fresh redirect is still
+			// checked by the allowlist on the next iteration.
+			f.cfg.step("核对 GitHub 授权", "仅GET核对已提交结果，不重放授权表单")
+			page, err = f.oauthRequest(ctx, "GET", u.String(), nil, "")
+			if saveErr := checkpoint(); saveErr != nil {
+				return page, saveErr
+			}
+			if err != nil {
+				return page, err
+			}
+		}
 		if page.redirect == "" {
-			return page, errors.New("GitHub 未接受登录/2FA/授权表单；未自动重试")
+			return page, errors.New("GitHub 表单响应未提供HTTP跳转，结果尚未确认；会话已保存，未重复提交")
 		}
 		u = action.ResolveReference(mustURL(page.redirect))
 	}
