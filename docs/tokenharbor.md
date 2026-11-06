@@ -123,6 +123,19 @@ Content-Type: application/json
 
 支持已有批量、冲突暂存与导入记录。Token Harbor 导入密钥不跨池使用。合入本地主分支时保留了主分支已有的「TokenHarbor 注册机 / 设置 / 实时注册日志」及补验证、待验证状态、入池流程；没有新增自动补号。普通「概览 / 账号 / 下游密钥 / 路由设置 / 请求日志 / 错误日志」仍用于本池推理管理。注册设置保存不会重置独立路由或模型刷新间隔，验证码 Key 和带认证的代理不回显。
 
+## GitHub OAuth 注册
+
+注册机自动识别四段输入：`GitHub账号----GitHub密码----2FA密钥----邮箱接码地址`；原邮箱两/三段格式仍兼容。支持 `/mailbox/<token>` 的 MailCat 接码页（含 191006.xyz）以及原 iCloud 接码页。接码页必须返回可解析的邮件时间；不使用时间未知的旧邮件。
+
+- GitHub、Supabase、TokenHarbor OAuth 回调和 `/oauth/finish` 全程使用保存时绑定的授权代理。直接连接/连接代理的本机套接字强制 IPv4，**代理本身也必须提供 IPv4 出口**，不能根据代理入口 IP 推断出口。GitHub 密码、TOTP 和授权表单各只提交一次；设备验证、额外权限、风控、拒绝或未知页面停止，不伪装指纹、不绕过验证、不自动重试。
+- finish 从当前页面动态读取 Action ID/Key，提交实际 URL（保留 next 查询串）的 multipart server action；不硬编码捕获的 Cookie、Action ID、Sentry、客户端指纹或部署头。只有官网确认 dashboard 跳转才记完成，HTTP200 不等于成功；不默认同意免费模型的数据条款。
+- 「GitHub 授权后 TokenHarbor 代理」可填写独立 IPv6 出口代理，按账号顺序绑定；留空沿用授权代理。仅确认 OAuth/finish 后切换，创建 Key、邮箱验证、套餐检测走 TH 代理；接码服务显式直连。行内“改代理”只改 TH 出口，不改 GitHub 授权出口。两个域的 Cookie 不互相转发，GitHub Cookie 与 OAuth `provider_token`（如有 refresh token 也保留）独立记录，TH Cookie 续期不会擦掉原 GitHub 授权令牌；失败不换路。
+- OAuth 完成不代表 TokenHarbor 邮箱已验证；继续原有创建 Key、邮件验证流程，等待超时保留双会话和 Key，之后可补验证。已完成 OAuth 的重试复用 TH 会话，不重复授权/finish/创建已有 Key，仍须已验证邮箱和有效付费套餐才可手动入池。
+- **用户明确选择：新增 GitHub 整行记录（密码、2FA、两套 Cookie、API Key 等）明文保存**在业务文件 `data/tokenharbor-signup.json` 的 `githubRows`；文件原子写入、0600，目录新建0700，不入 Git，管理 API/页面/日志不回显。旧邮箱记录及保存代理池继续使用原加密部分，不全库解密迁移。读取该文件即可取得 GitHub 会话，请限制备份/目录访问；回滚旧版前先备份，旧版写文件会丢弃不认识的 GitHub 行。
+- API 附加字段：账号 `provider:"github",login,password,totpSecret,mailboxUrl,githubProxyUrl?,sessionProxyUrl?`；请求 `proxies` 为授权代理池、`sessionProxies` 为 TH 后续代理池。`sessionProxyUrl:""` 显式绑定后续直连。仅保存不会发起外部请求；按 GitHub login 去重，不因授权解析出真实邮箱而重复建行。
+
+验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。
+
 ## 注册记录保存、代理复用与套餐检测
 
 - **仅保存**：保存邮箱、密码、接码页、分组和分配好的代理，不访问官网、不注册、不解验证码、不付款，也不入池。任务显示“已保存（未注册）”，点击该行“开始注册”才执行；重复提交相同邮箱不会覆盖原密码/代理或自动启动。

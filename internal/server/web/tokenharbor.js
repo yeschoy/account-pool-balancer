@@ -122,9 +122,9 @@ function renderTHJob(job) {
   $('#th-register-job-status').textContent = job.running ? '进行中' : '已结束';
   $('#th-register-rows').innerHTML = thState.rows.map((r) => `<tr>
     <td><input type="checkbox" class="th-row-select" data-id="${esc(r.id)}" aria-label="选择 ${esc(r.email)}" ${thState.selected.has(r.id) ? 'checked' : ''} ${thRowLocked(r.id) || ['queued', 'running'].includes(r.status) ? 'disabled' : ''}></td>
-    <td>${esc(r.email)}</td>
+    <td>${r.authProvider === 'github' ? `<strong>${esc(r.githubLogin)}</strong><br><span class="small">${esc(r.email.startsWith('github:') ? '等待授权邮箱' : r.email)}</span><br><span class="muted small">GitHub 会话 ${r.hasGithubSession ? '已保存' : '未取得'} · TH 会话 ${r.hasSession ? '已保存' : '未取得'}</span>` : esc(r.email)}</td>
     <td>${thLabel(r.status)}</td>
-    <td><span class="small">${esc(r.proxy || '直连')}</span> ${!['running', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
+    <td>${r.authProvider === 'github' ? `<span class="small">授权：${esc(r.githubProxy || '直连 IPv4')}<br>TH：</span>` : ''}<span class="small">${esc(r.proxy || '直连')}</span> ${!['running', 'queued'].includes(r.status) ? `<button type="button" class="btn small th-row-proxy" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>改代理</button>` : ''}</td>
     <td><span class="small mono">${esc(r.keyMasked || '—')}</span></td>
     <td class="small">${thSubscriptionLabel(r)}<br>${thSafe(r.detail)}${r.verified ? ' · 已验证邮箱' : ''}${r.freeModels ? ' · 免费模型已开' : ''}</td>
     <td>${thRowActions(r)}</td>
@@ -168,7 +168,13 @@ function thParseAccounts(text) {
     const line = raw.trim();
     if (!line) continue;
     const parts = line.split('----');
-    if (parts.length > 3) throw new Error('每行最多三段：邮箱----密码----接码页');
+    if (parts.length === 4) {
+      const [login, password, totpSecret, mailboxUrl] = parts.map((p) => p.trim());
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login) || !password || !totpSecret || !mailboxUrl.startsWith('https://')) throw new Error('GitHub 格式：账号----密码----2FA密钥----HTTPS邮箱接码地址');
+      out.push({ provider: 'github', login, password, totpSecret, mailboxUrl });
+      continue;
+    }
+    if (parts.length > 3) throw new Error('邮箱用两/三段；GitHub 用四段：账号----密码----2FA密钥----邮箱接码地址');
     const email = (parts[0] || '').trim();
     if (!email.includes('@')) throw new Error(`邮箱格式有误：${email.slice(0, 40)}`);
     const twoPartMailbox = parts.length === 2 && parts[1].trim().startsWith('https://');
@@ -192,11 +198,12 @@ async function thSubmitRegistration(ev, saveOnly = false) {
   const error = $('#th-register-error');
   error.textContent = '';
   if (thState.busy || thState.batchBusy || thState.batchPrompt) return;
-  let accounts, proxies;
+  let accounts, proxies, sessionProxies;
   try {
     accounts = thParseAccounts($('#th-register-accounts').value);
     if (!accounts.length || accounts.length > 100) throw new Error('请填写 1-100 个邮箱');
     proxies = thParseProxies($('#th-register-proxies').value);
+    sessionProxies = thParseProxies($('#th-register-session-proxies').value);
   } catch (e) {
     error.textContent = e.message;
     return;
@@ -209,6 +216,7 @@ async function thSubmitRegistration(ev, saveOnly = false) {
     const out = await api('POST', '/api/tokenharbor/registrations', {
       accounts,
       proxies,
+      sessionProxies,
       group: $('#th-register-group').value.trim() || 'tokenharbor',
       saveOnly,
       proxyMode: $('#th-register-proxy-mode').value,
@@ -218,6 +226,7 @@ async function thSubmitRegistration(ev, saveOnly = false) {
     if (!out || !out.id) throw new Error('后台没有返回任务 ID，请先刷新任务列表确认');
     $('#th-register-accounts').value = '';
     $('#th-register-proxies').value = '';
+    $('#th-register-session-proxies').value = '';
     thState.job = out.id;
     thLogShow();
     if (currentPage === 'thregister') loadTHRegistrations();

@@ -1,5 +1,7 @@
 # 运行数据（含密钥）
 /data/
+# 注册业务文件含 GitHub 明文会话；移出 data 的同名副本也不得提交
+tokenharbor-signup.json
 /odb
 /bin/
 *.tmp

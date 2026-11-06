@@ -46,6 +46,12 @@ func Validate(raw string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return errors.New("接码页地址无效")
 	}
+	if sharedMailbox(u) {
+		if u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("共享接码页必须为 HTTPS 且不含额外凭据/查询参数")
+		}
+		return nil
+	}
 	if u.Hostname() == "" || !strings.Contains(u.Path, "/messages/") {
 		return errors.New("接码页地址应是 …/messages/<邮箱>?token=… 的形式")
 	}
@@ -92,6 +98,9 @@ type messagesResponse struct {
 func (c *Client) Messages(ctx context.Context) ([]thregister.Message, error) {
 	if c.URL == "" {
 		return nil, errors.New("未配置接码页")
+	}
+	if u, err := url.Parse(c.URL); err == nil && sharedMailbox(u) {
+		return c.sharedMessages(ctx)
 	}
 	api, err := apiURL(c.URL)
 	if err != nil {

@@ -30,7 +30,7 @@ func (s *Server) fetchTHObservation(ctx context.Context, cfg *config.Config, a c
 	// Registration supplies the uniquely linked session, not the pool egress.
 	// After admission each side owns its route; observe permissions through the
 	// same account proxy as inference, with the usual source/late-write guards.
-	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.TokenHarbor.BaseURL), ProxyURL: a.ProxyURL, RequestTimeout: 40 * time.Second})
+	flow, err := thregister.New(thregister.Config{BaseURL: thBaseURL(cfg.TokenHarbor.BaseURL), ProxyURL: a.ProxyURL, UserAgent: thRowUserAgent(row), RequestTimeout: 40 * time.Second})
 	if err != nil {
 		return nil, errors.New("账号固定代理无效")
 	}
@@ -55,7 +55,7 @@ func (s *Server) fetchTHObservation(ctx context.Context, cfg *config.Config, a c
 			return nil
 		})
 		if err != nil {
-			return nil, errors.New("官网已更新会话，但加密保存失败；暂不放行")
+			return nil, errors.New("官网已更新会话，但保存失败；暂不放行")
 		}
 	}
 	if observeErr != nil {

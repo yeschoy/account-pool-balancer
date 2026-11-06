@@ -35,11 +35,16 @@ import (
 // thRegistrationJobs bounds how many attempts are kept in the list.
 const thRegistrationJobs = 50
 
-// thRegisterInput is one pasted line: 邮箱----密码----接码页
+// thRegisterInput accepts legacy email input and GitHub's four-field format.
 type thRegisterInput struct {
-	Email      string `json:"email"`
-	Password   string `json:"password"`
-	MailboxURL string `json:"mailboxUrl,omitempty"`
+	Email           string  `json:"email"`
+	Password        string  `json:"password"`
+	MailboxURL      string  `json:"mailboxUrl,omitempty"`
+	Provider        string  `json:"provider,omitempty"`
+	Login           string  `json:"login,omitempty"`
+	TOTPSecret      string  `json:"totpSecret,omitempty"`
+	GitHubProxyURL  string  `json:"githubProxyUrl,omitempty"`
+	SessionProxyURL *string `json:"sessionProxyUrl,omitempty"`
 	// ProxyURL overrides the egress for this one mailbox.
 	ProxyURL string `json:"proxyUrl,omitempty"`
 }
@@ -47,7 +52,9 @@ type thRegisterInput struct {
 type thRegisterRequest struct {
 	Accounts []thRegisterInput `json:"accounts"`
 	Proxies  []string          `json:"proxies,omitempty"`
-	Group    string            `json:"group,omitempty"`
+	// GitHub authorization uses Proxies; these are only for the later TH session.
+	SessionProxies []string `json:"sessionProxies,omitempty"`
+	Group          string   `json:"group,omitempty"`
 	// Retained only to reject stale clients instead of silently auto-importing.
 	AutoImport bool   `json:"autoImport"`
 	SaveOnly   bool   `json:"saveOnly"`
@@ -171,9 +178,37 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		proxies = append(proxies, p)
 	}
+	if len(in.SessionProxies) > 1000 {
+		apiError(w, http.StatusBadRequest, errors.New("最多 1000 个 TokenHarbor 后续代理"))
+		return
+	}
+	for _, p := range in.SessionProxies {
+		if err := thsignupstore.ValidateProxy(p); err != nil || strings.TrimSpace(p) == "" {
+			apiError(w, http.StatusBadRequest, errors.New("TokenHarbor 后续代理地址无效"))
+			return
+		}
+	}
 	rows := make([]thsignupstore.Row, 0, len(in.Accounts))
 	seen := map[string]bool{}
 	for _, acct := range in.Accounts {
+		if acct.Provider != "" && acct.Provider != "email" && acct.Provider != "github" {
+			apiError(w, http.StatusBadRequest, errors.New("不支持的注册来源"))
+			return
+		}
+		if acct.Provider == "github" || acct.Login != "" || len(strings.Split(acct.Email, "----")) == 4 {
+			row, err := thParseGitHubInput(acct)
+			if err != nil {
+				apiError(w, http.StatusBadRequest, err)
+				return
+			}
+			if seen[row.Email] {
+				apiError(w, http.StatusBadRequest, errors.New("GitHub 账号重复"))
+				return
+			}
+			seen[row.Email] = true
+			rows = append(rows, row)
+			continue
+		}
 		email, password, mailbox, err := thParseRegisterInput(acct)
 		if err != nil {
 			apiError(w, http.StatusBadRequest, err)
@@ -214,6 +249,22 @@ func (s *Server) apiTHRegister(w http.ResponseWriter, r *http.Request) {
 	if err := thAssignProxies(rows, proxies, cfg.ProxyURL, in.ProxyMode); err != nil {
 		apiError(w, http.StatusBadRequest, err)
 		return
+	}
+	for i := range rows {
+		if rows[i].GitHub == nil {
+			continue
+		}
+		if rows[i].GitHub.ProxyURL == "" {
+			rows[i].GitHub.ProxyURL = rows[i].ProxyURL
+		}
+		// The post-OAuth route may be IPv6, but is never used for GitHub.
+		rows[i].ProxyURL = rows[i].GitHub.ProxyURL
+		if len(in.SessionProxies) > 0 {
+			rows[i].ProxyURL = strings.TrimSpace(in.SessionProxies[i%len(in.SessionProxies)])
+		}
+		if in.Accounts[i].SessionProxyURL != nil {
+			rows[i].ProxyURL = strings.TrimSpace(*in.Accounts[i].SessionProxyURL)
+		}
 	}
 	group := strings.TrimSpace(in.Group)
 	if group == "" {
@@ -297,6 +348,11 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if err != nil {
 		return err
 	}
+	proxy := row.Egress(cfg.ProxyURL)
+	logProxy := proxy
+	if row.GitHub != nil && !row.GitHub.OAuthComplete {
+		logProxy = row.GitHub.ProxyURL
+	}
 	fail := func(stage string, err error) error {
 		detail := stage + "失败：" + thRedact(err.Error())
 		_, _ = store.Update(id, func(rw *thsignupstore.Row) error {
@@ -304,8 +360,8 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			rw.Detail = detail
 			return nil
 		})
-		s.logTHDiagnostic(row.Email, stage, row.ProxyURL, err)
-		s.thLive(row.Email, stage, err.Error(), row.ProxyURL, "error")
+		s.logTHDiagnostic(row.Email, stage, logProxy, err)
+		s.thLive(row.Email, stage, err.Error(), logProxy, "error")
 		return errors.New(detail)
 	}
 
@@ -318,7 +374,6 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		return fail("排队", errors.New("等待单并发名额超过24小时；未发起注册，请人工核对后重新排队"))
 	}
 
-	proxy := row.Egress(cfg.ProxyURL)
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
 		ProxyURL:          proxy,
@@ -338,15 +393,21 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 			return err
 		},
 		Log: func(stage, detail string) {
-			s.thLive(row.Email, stage, detail, proxy, "info")
+			if stage == "TokenHarbor 会话" {
+				logProxy = proxy
+			}
+			s.thLive(row.Email, stage, detail, logProxy, "info")
 		},
+	}
+	if row.GitHub != nil {
+		flowCfg.UserAgent = thregister.OAuthUserAgent
 	}
 	if row.MailboxURL != "" {
 		// The mailbox is a separate HTTPS service, not the account's upstream.
 		// Select direct delivery explicitly; never fall back after proxy failure.
 		flowCfg.Mailbox = thmailbox.New(row.MailboxURL, s.thHTTPClient(""))
 	}
-	if solve {
+	if solve && row.GitHub == nil {
 		flowCfg.Solver = thcaptcha.New(thcaptcha.Config{
 			BaseURL:    cfg.CaptchaBase,
 			APIKey:     cfg.CaptchaKey,
@@ -361,12 +422,23 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	}
 	defer flow.Close()
 
-	s.thLive(row.Email, "开始注册", "", proxy, "info")
+	s.thLive(row.Email, "开始注册", "", logProxy, "info")
 	// 12m of work + the mail budget, which the flow spends inside this window.
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
 	defer cancel()
 	var res thregister.Result
-	if len(row.Cookies) > 0 {
+	if row.GitHub != nil {
+		res = thStoredResult(row)
+		if !res.OAuthComplete {
+			err = r.awaitSignup(ctx, true)
+		}
+		if err == nil {
+			res, err = flow.RunGitHub(ctx, thregister.GitHubCredentials{
+				Login: row.GitHub.Login, Password: row.Password,
+				TOTPSecret: row.GitHub.TOTPSecret, ProxyURL: row.GitHub.ProxyURL,
+			}, res)
+		}
+	} else if len(row.Cookies) > 0 {
 		res = thStoredResult(row)
 		if thregister.HasSession(res.Cookies) {
 			s.thLive(row.Email, "恢复会话", "继续已保存登录会话，不重复注册", proxy, "info")
@@ -704,6 +776,7 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		Timezone:       "UTC",
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
+		UserAgent:      thRowUserAgent(row),
 		Mailbox:        thmailbox.New(row.MailboxURL, s.thHTTPClient("")),
 		Log: func(stage, detail string) {
 			s.thLive(row.Email, stage, detail, proxy, "info")

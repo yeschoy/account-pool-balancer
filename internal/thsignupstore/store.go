@@ -2,8 +2,9 @@
 //
 // The file holds the credentials of every attempt — the mailbox password, the
 // API key, the browser session — so it is written exactly like the Perch
-// signup store: one AES-GCM envelope keyed from the routing secret, published
-// atomically with a 0600 permission. Nothing in this package prints a
+// signup store: legacy email rows use an AES-GCM envelope keyed from the
+// routing secret. Explicitly opted-in GitHub rows are plaintext alongside it.
+// Both are published atomically with 0600 permissions. Nothing prints a
 // credential; summaries carry a masked key and the mailbox address only.
 //
 // Attempts are calls of the registration machine. An attempt may register
@@ -79,13 +80,29 @@ type Checkout struct {
 func (Checkout) String() string   { return "[REDACTED]" }
 func (Checkout) GoString() string { return "[REDACTED]" }
 
+// GitHubAuth keeps the authorization identity and its independent IPv4 route.
+// GitHub rows are deliberately stored as plaintext (0600), by operator choice.
+type GitHubAuth struct {
+	Login                string   `json:"login"`
+	TOTPSecret           string   `json:"totpSecret,omitempty"`
+	ProxyURL             string   `json:"proxyUrl,omitempty"`
+	Cookies              []Cookie `json:"cookies,omitempty"`
+	ProviderToken        string   `json:"providerToken,omitempty"`
+	ProviderRefreshToken string   `json:"providerRefreshToken,omitempty"`
+	OAuthComplete        bool     `json:"oauthComplete,omitempty"`
+}
+
+func (GitHubAuth) String() string   { return "[REDACTED]" }
+func (GitHubAuth) GoString() string { return "[REDACTED]" }
+
 // Row is one mailbox's attempt. It carries credentials; JSON never shows them.
 type Row struct {
-	ID       string `json:"id"`
-	Attempt  string `json:"attempt"`
-	Email    string `json:"email"`
-	Password string `json:"password,omitempty"`
-	// MailboxURL is the iCloud HME receive page ("…/messages/<alias>?token=…").
+	ID       string      `json:"id"`
+	Attempt  string      `json:"attempt"`
+	Email    string      `json:"email"`
+	Password string      `json:"password,omitempty"`
+	GitHub   *GitHubAuth `json:"github,omitempty"`
+	// MailboxURL is an iCloud HME or MailCat shared receive page.
 	MailboxURL string `json:"mailboxUrl,omitempty"`
 	// ProxyBound distinguishes an explicitly bound direct route from legacy
 	// rows whose empty URL still inherits the settings default.
@@ -122,23 +139,27 @@ func (Row) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // Summary is the console's view: no password, no cookie, a masked key.
 type Summary struct {
-	ID           string                  `json:"id"`
-	Attempt      string                  `json:"attempt"`
-	Email        string                  `json:"email"`
-	Status       Status                  `json:"status"`
-	Detail       string                  `json:"detail,omitempty"`
-	Proxy        string                  `json:"proxy"`
-	Group        string                  `json:"group,omitempty"`
-	KeyMasked    string                  `json:"keyMasked,omitempty"`
-	HasMailbox   bool                    `json:"hasMailbox"`
-	HasSession   bool                    `json:"hasSession"`
-	HasCheckout  bool                    `json:"hasCheckout"`
-	Subscription thregister.Subscription `json:"subscription"`
-	Verified     bool                    `json:"verified"`
-	FreeModels   bool                    `json:"freeModels"`
-	AccountID    string                  `json:"accountId,omitempty"`
-	CreatedAt    time.Time               `json:"createdAt"`
-	UpdatedAt    time.Time               `json:"updatedAt"`
+	ID               string                  `json:"id"`
+	Attempt          string                  `json:"attempt"`
+	Email            string                  `json:"email"`
+	Status           Status                  `json:"status"`
+	Detail           string                  `json:"detail,omitempty"`
+	Proxy            string                  `json:"proxy"`
+	Group            string                  `json:"group,omitempty"`
+	KeyMasked        string                  `json:"keyMasked,omitempty"`
+	HasMailbox       bool                    `json:"hasMailbox"`
+	HasSession       bool                    `json:"hasSession"`
+	AuthProvider     string                  `json:"authProvider,omitempty"`
+	GitHubLogin      string                  `json:"githubLogin,omitempty"`
+	GitHubProxy      string                  `json:"githubProxy,omitempty"`
+	HasGitHubSession bool                    `json:"hasGithubSession,omitempty"`
+	HasCheckout      bool                    `json:"hasCheckout"`
+	Subscription     thregister.Subscription `json:"subscription"`
+	Verified         bool                    `json:"verified"`
+	FreeModels       bool                    `json:"freeModels"`
+	AccountID        string                  `json:"accountId,omitempty"`
+	CreatedAt        time.Time               `json:"createdAt"`
+	UpdatedAt        time.Time               `json:"updatedAt"`
 }
 
 // diskRow is Row's storage shape. Row deliberately marshals to a redacted
@@ -149,6 +170,7 @@ type diskRow struct {
 	Attempt      string                  `json:"attempt"`
 	Email        string                  `json:"email"`
 	Password     string                  `json:"password,omitempty"`
+	GitHub       *GitHubAuth             `json:"github,omitempty"`
 	MailboxURL   string                  `json:"mailboxUrl,omitempty"`
 	ProxyURL     string                  `json:"proxyUrl,omitempty"`
 	ProxyBound   bool                    `json:"proxyBound,omitempty"`
@@ -168,7 +190,7 @@ type diskRow struct {
 
 func (r Row) disk() diskRow {
 	return diskRow{
-		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Password: r.Password,
+		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Password: r.Password, GitHub: r.GitHub,
 		MailboxURL: r.MailboxURL, ProxyURL: r.ProxyURL, ProxyBound: r.ProxyBound, Status: r.Status,
 		Detail: r.Detail, APIKey: r.APIKey, Account: r.Account,
 		Cookies: r.Cookies, Checkout: r.Checkout, Subscription: r.Subscription, Group: r.Group, Verified: r.Verified,
@@ -178,7 +200,7 @@ func (r Row) disk() diskRow {
 
 func (d diskRow) row() Row {
 	return Row{
-		ID: d.ID, Attempt: d.Attempt, Email: d.Email, Password: d.Password,
+		ID: d.ID, Attempt: d.Attempt, Email: d.Email, Password: d.Password, GitHub: d.GitHub,
 		MailboxURL: d.MailboxURL, ProxyURL: d.ProxyURL, ProxyBound: d.ProxyBound, Status: d.Status,
 		Detail: d.Detail, APIKey: d.APIKey, Account: d.Account,
 		Cookies: d.Cookies, Checkout: d.Checkout, Subscription: d.Subscription, Group: d.Group, Verified: d.Verified,
@@ -196,6 +218,9 @@ type envelope struct {
 	Version int    `json:"version"`
 	Nonce   []byte `json:"nonce"`
 	Data    []byte `json:"data"`
+	// Do not migrate/decrypt legacy email rows. Only new GitHub rows opt into
+	// plaintext; one atomic file publication still covers both row kinds.
+	GitHubRows []diskRow `json:"githubRows,omitempty"`
 }
 
 // Store is one file, one process. Methods are goroutine-safe.
@@ -247,9 +272,18 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 	if json.Unmarshal(plain, &data) != nil || data.Version != 1 {
 		return nil, ErrCorrupt
 	}
-	rows := make([]Row, len(data.Rows))
-	for i, d := range data.Rows {
-		rows[i] = d.row()
+	rows := make([]Row, 0, len(data.Rows)+len(e.GitHubRows))
+	for _, d := range data.Rows {
+		if d.GitHub != nil {
+			return nil, ErrCorrupt
+		}
+		rows = append(rows, d.row())
+	}
+	for _, d := range e.GitHubRows {
+		if d.GitHub == nil || d.GitHub.Login == "" {
+			return nil, ErrCorrupt
+		}
+		rows = append(rows, d.row())
 	}
 	if !validRows(rows) {
 		return nil, ErrCorrupt
@@ -289,13 +323,20 @@ func validStatus(s Status) bool {
 func validRows(rs []Row) bool {
 	ids, emails := map[string]bool{}, map[string]bool{}
 	for _, r := range rs {
-		key := strings.ToLower(strings.TrimSpace(r.Email))
+		key := rowIdentity(r)
 		if r.ID == "" || ids[r.ID] || key == "" || emails[key] || !validStatus(r.Status) {
 			return false
 		}
 		ids[r.ID], emails[key] = true, true
 	}
 	return true
+}
+
+func rowIdentity(r Row) string {
+	if r.GitHub != nil {
+		return "github:" + strings.ToLower(strings.TrimSpace(r.GitHub.Login))
+	}
+	return strings.ToLower(strings.TrimSpace(r.Email))
 }
 
 // Add inserts rows from one attempt. A mailbox that already has a row is
@@ -315,7 +356,7 @@ func (s *Store) add(attempt string, rows []Row, status Status) ([]Summary, error
 	defer s.mu.Unlock()
 	seen := map[string]bool{}
 	for _, r := range s.rows {
-		seen[strings.ToLower(strings.TrimSpace(r.Email))] = true
+		seen[rowIdentity(r)] = true
 	}
 	next := append([]Row(nil), s.rows...)
 	now := time.Now()
@@ -325,17 +366,18 @@ func (s *Store) add(attempt string, rows []Row, status Status) ([]Summary, error
 		if email == "" || strings.Contains(email, " ") {
 			return nil, ErrInvalid
 		}
-		if seen[email] {
+		identity := rowIdentity(r)
+		if seen[identity] {
 			for _, old := range next {
-				if strings.EqualFold(old.Email, email) {
+				if rowIdentity(old) == identity {
 					out = append(out, SummaryOf(old))
 					break
 				}
 			}
 			continue
 		}
-		seen[email] = true
-		nr := r
+		seen[identity] = true
+		nr := cloneRow(r)
 		nr.Email = email
 		nr.Attempt = attempt
 		nr.Status = status
@@ -522,7 +564,7 @@ func SummaryOf(r Row) Summary {
 			break
 		}
 	}
-	return Summary{
+	out := Summary{
 		ID: r.ID, Attempt: r.Attempt, Email: r.Email, Status: r.Status, Detail: r.Detail,
 		Proxy:        ProxyLabel(r.ProxyURL),
 		Group:        r.Group,
@@ -534,6 +576,17 @@ func SummaryOf(r Row) Summary {
 		Verified:     r.Verified, FreeModels: r.FreeModels, AccountID: r.Account,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
+	if r.GitHub != nil {
+		out.AuthProvider, out.GitHubLogin = "github", r.GitHub.Login
+		out.GitHubProxy = ProxyLabel(r.GitHub.ProxyURL)
+		out.HasGitHubSession = r.GitHub.ProviderToken != ""
+		for _, c := range r.GitHub.Cookies {
+			if c.Name == "user_session" && c.Value != "" {
+				out.HasGitHubSession = true
+			}
+		}
+	}
+	return out
 }
 
 // MaskKey shows the shape of a key and its last four characters.
@@ -599,6 +652,11 @@ func (s *Store) save(rows []Row) error {
 
 func cloneRow(r Row) Row {
 	r.Cookies = append([]Cookie(nil), r.Cookies...)
+	if r.GitHub != nil {
+		gh := *r.GitHub
+		gh.Cookies = append([]Cookie(nil), gh.Cookies...)
+		r.GitHub = &gh
+	}
 	if r.Checkout != nil {
 		checkout := *r.Checkout
 		r.Checkout = &checkout
@@ -607,9 +665,13 @@ func cloneRow(r Row) Row {
 }
 
 func (s *Store) write(rows []Row, proxies []string, aad string) error {
-	disk := make([]diskRow, len(rows))
-	for i, r := range rows {
-		disk[i] = r.disk()
+	var disk, githubRows []diskRow
+	for _, r := range rows {
+		if r.GitHub != nil {
+			githubRows = append(githubRows, r.disk())
+		} else {
+			disk = append(disk, r.disk())
+		}
 	}
 	plain, err := json.Marshal(diskData{Version: 1, Rows: disk, Proxies: proxies})
 	if err != nil {
@@ -619,7 +681,7 @@ func (s *Store) write(rows []Row, proxies []string, aad string) error {
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return err
 	}
-	b, err := json.Marshal(envelope{Version: 1, Nonce: nonce, Data: s.aead.Seal(nil, nonce, plain, []byte(aad))})
+	b, err := json.Marshal(envelope{Version: 1, Nonce: nonce, Data: s.aead.Seal(nil, nonce, plain, []byte(aad)), GitHubRows: githubRows})
 	if err != nil {
 		return err
 	}

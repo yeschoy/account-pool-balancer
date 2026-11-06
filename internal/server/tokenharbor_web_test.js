@@ -358,7 +358,24 @@ async function testRegistrationPacingControls() {
   assert.match(html, /不会自动重试/);
 }
 
+async function testGitHubFormatAndSessionProjection() {
+  const e = environment(async () => ({}));
+  const accounts = e.context.thParseAccounts('mock-user----mock-password----GEZDGNBVGY3TQOJQ----https://191006.xyz/mailbox/mock-token');
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].provider, 'github');
+  assert.equal(accounts[0].login, 'mock-user');
+  assert.equal(accounts[0].totpSecret, 'GEZDGNBVGY3TQOJQ');
+  e.context.renderTHJob({ id: 'github-job', rows: [{ id: 'gh-row', email: 'github:mock-user', status: 'saved', authProvider: 'github', githubLogin: 'mock-user', githubProxy: 'socks5://ipv4.local:5000', proxy: 'http://ipv6.local:6000', hasGithubSession: true, hasSession: false }] });
+  const html = e.node('#th-register-rows').innerHTML;
+  assert.match(html, /GitHub 会话 已保存/);
+  assert.match(html, /TH 会话 未取得/);
+  assert.match(html, /ipv4.local/);
+  assert.match(html, /ipv6.local/);
+  assert.doesNotMatch(html, /mock-password|GEZDGNBV/);
+}
+
 (async () => {
+  await testGitHubFormatAndSessionProjection();
   await testRegistrationPacingControls();
   await testIndependentProxyEditing();
   await testLogSingleFlightAndSequenceDedupe();

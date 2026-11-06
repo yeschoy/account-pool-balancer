@@ -85,7 +85,11 @@ type Result struct {
 	// e-mail, so two runs of the same mailbox map to one pool account.
 	UserID string
 	// Cookies is the logged-in browser session, for later re-reads.
-	Cookies []NamedCookie
+	Cookies            []NamedCookie
+	GitHubCookies      []NamedCookie
+	GitHubToken        string
+	GitHubRefreshToken string
+	OAuthComplete      bool
 	// VerifiedEmail records whether step 5 completed within this run.
 	VerifiedEmail bool
 	// FreeModelsEnabled records whether step 4 succeeded.
@@ -203,6 +207,11 @@ type Message struct {
 type Config struct {
 	BaseURL  string
 	ProxyURL string
+	// UserAgent overrides legacy requests for an honestly identified OAuth client.
+	UserAgent string
+	// Tests can intercept only the authorization transport, independently of
+	// the post-OAuth session transport. Never configurable through HTTP APIs.
+	oauthRoundTripper http.RoundTripper
 	// Solver resolves Turnstile when the site asks for it; nil means "fail
 	// with ErrCaptchaRequired instead of submitting blind".
 	Solver Solver
@@ -293,8 +302,12 @@ func New(cfg Config) (*Flow, error) {
 	if err != nil {
 		return nil, err
 	}
+	var transport http.RoundTripper = tr
+	if cfg.UserAgent != "" {
+		transport = &oauthTransport{Transport: tr, userAgent: cfg.UserAgent}
+	}
 	f := &Flow{cfg: cfg, jar: jar, client: &http.Client{
-		Transport: tr,
+		Transport: transport,
 		Jar:       jar,
 		Timeout:   cfg.timeout(),
 		// Redirects are followed by default; the auth endpoints redirect on
@@ -305,9 +318,7 @@ func New(cfg Config) (*Flow, error) {
 
 // Close releases idle connections.
 func (f *Flow) Close() {
-	if tr, ok := f.client.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
+	f.client.CloseIdleConnections()
 }
 
 // Transport is the egress transport of one registration. proxyUrl accepts
