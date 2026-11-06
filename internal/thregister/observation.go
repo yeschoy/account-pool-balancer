@@ -104,7 +104,7 @@ func (f *Flow) readAccount(ctx context.Context, path, accept string) ([]byte, er
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Cache-Control", "no-cache, no-store")
-	req.Header.Set("User-Agent", userAgent)
+	f.applyIdentity(req)
 	client := *f.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)

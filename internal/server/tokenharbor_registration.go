@@ -353,6 +353,13 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if row.GitHub != nil && !row.GitHub.OAuthComplete {
 		logProxy = row.GitHub.ProxyURL
 	}
+	if strings.TrimSpace(logProxy) == "" {
+		// Everything this run touches — the site, the mailbox, the captcha
+		// service — would see this host's own address. Say so once, before any
+		// request leaves, instead of leaving it to be inferred from upstream
+		// dashboards later.
+		s.thLive(row.Email, "出口", NoEgressWarning, "", "warn")
+	}
 	fail := func(stage string, err error) error {
 		detail := stage + "失败：" + thRedact(err.Error())
 		_, _ = store.Update(id, func(rw *thsignupstore.Row) error {
@@ -377,6 +384,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	flowCfg := thregister.Config{
 		BaseURL:           thBaseURL(cfg.BaseURL),
 		ProxyURL:          proxy,
+		Seed:              id,
 		Timezone:          "UTC",
 		Label:             thLabel(cfg),
 		VerificationSince: row.CreatedAt,
@@ -405,13 +413,14 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if row.MailboxURL != "" {
 		// The mailbox is a separate HTTPS service, not the account's upstream.
 		// Select direct delivery explicitly; never fall back after proxy failure.
-		flowCfg.Mailbox = thmailbox.New(row.MailboxURL, s.thHTTPClient(""))
+		flowCfg.Mailbox = &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: id}
 	}
 	if solve && row.GitHub == nil {
 		flowCfg.Solver = thcaptcha.New(thcaptcha.Config{
 			BaseURL:    cfg.CaptchaBase,
 			APIKey:     cfg.CaptchaKey,
 			HTTPClient: s.thHTTPClient(proxy),
+			Seed:       id,
 			PollEvery:  time.Duration(cfg.SolverPollMs) * time.Millisecond,
 			Timeout:    time.Duration(cfg.SolveTimeoutSec) * time.Second,
 		})
@@ -785,11 +794,12 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 	flowCfg := thregister.Config{
 		BaseURL:        thBaseURL(cfg.BaseURL),
 		ProxyURL:       proxy,
+		Seed:           row.ID,
 		Timezone:       "UTC",
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
 		UserAgent:      thRowUserAgent(row),
-		Mailbox:        thmailbox.New(row.MailboxURL, s.thHTTPClient("")),
+		Mailbox:        &thmailbox.Client{URL: strings.TrimSpace(row.MailboxURL), HTTPClient: s.thHTTPClient(""), Seed: row.ID},
 		Log: func(stage, detail string) {
 			s.thLive(row.Email, stage, detail, proxy, "info")
 		},

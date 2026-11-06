@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"account-pool-balancer/internal/egressid"
 	"net/url"
 	"time"
 )
@@ -39,6 +41,9 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	if err != nil {
 		return err
 	}
+	// The device authorisation is the control plane's first impression of this
+	// host, so it carries an identity rather than the Go default.
+	egressid.Apply(req.Header, egressid.For(c.Base))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)

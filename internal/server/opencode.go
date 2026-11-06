@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/quota"
 )
@@ -250,6 +251,7 @@ func (s *Server) testOpenCode(ctx context.Context, cfg *config.Config, a config.
 	}
 	b, _ := json.Marshal(payload)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.InferenceBase(a, string(native))+opencode.Path(native), strings.NewReader(string(b)))
+	egressid.Apply(req.Header, egressid.For(a.ID))
 	req.Header.Set("Content-Type", "application/json")
 	if native == opencode.Messages {
 		req.Header.Set("X-Api-Key", a.RuntimeKey)

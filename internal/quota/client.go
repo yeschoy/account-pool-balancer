@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"account-pool-balancer/internal/egressid"
 )
 
 // HTTPError is a non-2xx control-plane answer. Only the status and a fixed
@@ -57,11 +59,15 @@ var codeRe = func(s string) string {
 	return s
 }
 
-func (c *Client) get(ctx context.Context, key, path, workspace string, out any) error {
+// get reads one control-plane path for an account. seed is the account's
+// stable id; it selects the client identity that accompanies the key, so the
+// poller never presents the Go default User-Agent next to a real account.
+func (c *Client) get(ctx context.Context, key, path, workspace, seed string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
 	if err != nil {
 		return err
 	}
+	egressid.Apply(req.Header, egressid.For(seed))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
 	if workspace != "" {
@@ -115,9 +121,9 @@ func (w Workspace) WorkspaceID() string {
 	return w.ID
 }
 
-func (c *Client) Workspace(ctx context.Context, key string) (Workspace, error) {
+func (c *Client) Workspace(ctx context.Context, key, seed string) (Workspace, error) {
 	var w Workspace
-	err := c.get(ctx, key, "/api/v1/workspaces/current", "", &w)
+	err := c.get(ctx, key, "/api/v1/workspaces/current", "", seed, &w)
 	if err == nil && w.WorkspaceID() == "" {
 		err = errors.New("workspace id missing")
 	}
@@ -180,13 +186,13 @@ func parseCredits(s string) (int64, error) {
 	return int64(f), nil
 }
 
-func (c *Client) Preflight(ctx context.Context, key, workspace, model string) (Preflight, error) {
+func (c *Client) Preflight(ctx context.Context, key, workspace, model, seed string) (Preflight, error) {
 	path := "/api/v1/workspaces/" + url.PathEscape(workspace) + "/billing/preflight"
 	if model != "" {
 		path += "?modelId=" + url.QueryEscape(model)
 	}
 	var raw rawPreflight
-	if err := c.get(ctx, key, path, workspace, &raw); err != nil {
+	if err := c.get(ctx, key, path, workspace, seed, &raw); err != nil {
 		return Preflight{}, err
 	}
 	p := Preflight{Funding: raw.Funding, ModelCovered: raw.ModelCovered, BalanceUSD: raw.BalanceUSD, Windows: []Window{}}
@@ -255,9 +261,9 @@ func str(v any) string {
 	return ""
 }
 
-func (c *Client) Summary(ctx context.Context, key, workspace string) (Summary, error) {
+func (c *Client) Summary(ctx context.Context, key, workspace, seed string) (Summary, error) {
 	var raw rawSummary
-	if err := c.get(ctx, key, "/api/v1/billing/summary", workspace, &raw); err != nil {
+	if err := c.get(ctx, key, "/api/v1/billing/summary", workspace, seed, &raw); err != nil {
 		return Summary{}, err
 	}
 	s := raw.Summary
@@ -273,9 +279,9 @@ type Wallet struct {
 	BalanceUSD string `json:"balanceUsd"`
 }
 
-func (c *Client) Wallet(ctx context.Context, key, workspace string) (Wallet, error) {
+func (c *Client) Wallet(ctx context.Context, key, workspace, seed string) (Wallet, error) {
 	var w Wallet
-	err := c.get(ctx, key, "/api/v1/workspaces/"+url.PathEscape(workspace)+"/wallet/balance", workspace, &w)
+	err := c.get(ctx, key, "/api/v1/workspaces/"+url.PathEscape(workspace)+"/wallet/balance", workspace, seed, &w)
 	if err == nil && strings.TrimSpace(w.BalanceUSD) == "" {
 		err = errors.New("balanceUsd missing")
 	}
@@ -357,11 +363,12 @@ func percentOf(n *float64) *int {
 // the native API hangs off (https://ollama.com for the cloud, the inference
 // base without /v1 for a self-hosted server). The endpoint allows 10 requests
 // a minute per user across all keys, so callers poll it sparingly.
-func (c *Client) Balance(ctx context.Context, apiRoot, key string) (OllamaBalance, error) {
+func (c *Client) Balance(ctx context.Context, apiRoot, key, seed string) (OllamaBalance, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiRoot+"/api/balance", nil)
 	if err != nil {
 		return OllamaBalance{}, err
 	}
+	egressid.Apply(req.Header, egressid.For(seed))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
@@ -416,8 +423,8 @@ func (c *Client) Balance(ctx context.Context, apiRoot, key string) (OllamaBalanc
 // /v1/models: the catalogue carries plan entitlement (a model above the
 // key's plan is absent or `enabled: false`), which is what the official
 // client gates its model picker on. It costs nothing.
-func FetchCatalog(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey string) (map[string]bool, error) {
-	c, err := FetchCatalogFull(ctx, hc, runtimeBase, runtimeKey)
+func FetchCatalog(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey, seed string) (map[string]bool, error) {
+	c, err := FetchCatalogFull(ctx, hc, runtimeBase, runtimeKey, seed)
 	if err != nil {
 		return nil, err
 	}
@@ -466,11 +473,15 @@ func PublicModelID(id, base string) string {
 // FetchCatalogFull is FetchCatalog with the alias information kept: ids
 // that are aliases of another model and the display names, which is what a
 // pool publishing one name for several accounts' endpoints needs.
-func FetchCatalogFull(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey string) (*Catalog, error) {
+func FetchCatalogFull(ctx context.Context, hc *http.Client, runtimeBase, runtimeKey, seed string) (*Catalog, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, runtimeBase+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
+	// This is the hottest Token Harbor request there is: the poller re-reads
+	// each account's catalogue every ten minutes, so an unset identity here is
+	// the one an upstream sees most often for that key.
+	egressid.Apply(req.Header, egressid.For(seed))
 	req.Header.Set("Authorization", "Bearer "+runtimeKey)
 	req.Header.Set("Accept", "application/json")
 	resp, err := hc.Do(req)

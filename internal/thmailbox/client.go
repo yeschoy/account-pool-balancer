@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"account-pool-balancer/internal/egressid"
 	"net/url"
 	"strings"
 	"time"
@@ -65,6 +67,11 @@ func Validate(raw string) error {
 type Client struct {
 	URL        string
 	HTTPClient *http.Client
+	// Seed selects the identity this reader presents to the mail host. Like
+	// the registration it serves, it must look like the same browser, or the
+	// mail host sees a different client at exactly the moment the account is
+	// being created.
+	Seed string
 }
 
 // New builds a reader for a mailbox share page.
@@ -111,6 +118,7 @@ func (c *Client) Messages(ctx context.Context) ([]thregister.Message, error) {
 		return nil, err
 	}
 	req.Header.Set("accept", "application/json")
+	egressid.Apply(req.Header, egressid.For(c.Seed))
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("接码页请求失败: %v", err)

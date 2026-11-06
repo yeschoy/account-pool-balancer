@@ -50,7 +50,7 @@ func (p *Poller) fetchOpenCodeForce(ctx context.Context, cfg *config.Config, a c
 	ttl := time.Duration(cfg.OpenCode.RefreshSec) * time.Second
 	var partErr error
 	if force || s.CatalogAt.IsZero() || now.Sub(s.CatalogAt) >= ttl {
-		c, err := FetchCatalogFull(ctx, client, cfg.RuntimeBase(a), a.RuntimeKey)
+		c, err := FetchCatalogFull(ctx, client, cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
 		if err != nil {
 			s.CatalogError = err.Error()
 			partErr = err

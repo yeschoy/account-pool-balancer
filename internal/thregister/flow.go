@@ -41,6 +41,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"account-pool-balancer/internal/egressid"
 )
 
 // Endpoints of the live site. Tests override them through Config.
@@ -211,6 +213,11 @@ type Message struct {
 type Config struct {
 	BaseURL  string
 	ProxyURL string
+	// Seed selects this account's client identity (User-Agent and the client
+	// hints that must agree with it). Pass the account's stable id: the same
+	// account then looks the same across restarts, while two accounts in one
+	// pool never present the same string. Empty keeps the first table row.
+	Seed string
 	// UserAgent overrides legacy requests for an honestly identified OAuth client.
 	UserAgent string
 	// Tests can intercept only the authorization transport, independently of
@@ -294,6 +301,9 @@ type Flow struct {
 	cfg    Config
 	client *http.Client
 	jar    *cookiejar.Jar
+	// id is the browser this registration presents. It is chosen once per flow
+	// from cfg.Seed so every step of one run agrees with every other.
+	id egressid.Identity
 }
 
 // New builds a flow with a fresh cookie jar and one transport.
@@ -310,7 +320,16 @@ func New(cfg Config) (*Flow, error) {
 	if cfg.UserAgent != "" {
 		transport = &oauthTransport{Transport: tr, userAgent: cfg.UserAgent}
 	}
-	f := &Flow{cfg: cfg, jar: jar, client: &http.Client{
+	if strings.TrimSpace(cfg.ProxyURL) == "" {
+		// A direct flow runs from this host's own address. That is sometimes
+		// intended (a telemetry or metadata read), so it is not refused here,
+		// but it must never happen silently: the caller's log is told which
+		// run it is and that its egress is the host.
+		if cfg.Log != nil {
+			cfg.Log("出口", "未配置代理，本次运行将从本机 IP 出网")
+		}
+	}
+	f := &Flow{cfg: cfg, jar: jar, id: egressid.For(cfg.Seed), client: &http.Client{
 		Transport: transport,
 		Jar:       jar,
 		Timeout:   cfg.timeout(),
@@ -602,8 +621,7 @@ func (f *Flow) loadSignupPage(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("accept-language", "en-US,en;q=0.9")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("打开注册页失败: %v", err)
@@ -653,7 +671,7 @@ func (f *Flow) precheck(ctx context.Context, fingerprint string) (bool, error) {
 	}
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("referer", f.cfg.base()+"/login?mode=signup")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("注册预检失败: %v", err)
@@ -731,7 +749,7 @@ func (f *Flow) submitAuth(ctx context.Context, form signupForm, in signupFields,
 	req.Header.Set("next-action", form.actionID)
 	req.Header.Set("origin", f.cfg.base())
 	req.Header.Set("referer", pageURL)
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("提交认证失败（结果待核对，未自动重试）: %v", err)
@@ -809,7 +827,7 @@ func (f *Flow) enableFreeModels(ctx context.Context) error {
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("origin", f.cfg.base())
 	req.Header.Set("referer", f.cfg.base()+"/dashboard")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return err
@@ -898,7 +916,7 @@ func (f *Flow) verifyEmail(ctx context.Context, link string) error {
 		return err
 	}
 	req.Header.Set("referer", f.cfg.base()+"/dashboard")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return err
@@ -929,7 +947,7 @@ func (f *Flow) probeAPIKey(ctx context.Context) error {
 	}
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("referer", f.cfg.base()+"/dashboard/api-keys")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrKeyRejected, err)
@@ -1015,7 +1033,7 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("origin", f.cfg.base())
 	req.Header.Set("referer", f.cfg.base()+"/dashboard/api-keys")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("创建 API Key 失败: %v", err)
@@ -1036,7 +1054,18 @@ func (f *Flow) createAPIKey(ctx context.Context) (string, error) {
 
 // ---- helpers -------------------------------------------------------------------
 
-const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+// applyIdentity stamps this flow's client identity on one request. Every
+// browser-facing step goes through it, so a run cannot present one build on
+// /login and a different one on /api/keys, and the hints always agree with the
+// User-Agent they travel with.
+func (f *Flow) applyIdentity(req *http.Request) {
+	egressid.Apply(req.Header, f.id)
+	req.Header.Set("accept-language", f.id.AcceptLanguage)
+}
+
+// UserAgent reports the identity this flow presents, for logging and tests.
+// It is not a credential.
+func (f *Flow) UserAgent() string { return f.id.UserAgent }
 
 // MaskKey shows a key's prefix and last four characters.
 func MaskKey(k string) string {
@@ -1134,7 +1163,7 @@ func (f *Flow) loadLoginPage(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("accept", "text/html,application/xhtml+xml")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("打开登录页失败: %v", err)
@@ -1161,7 +1190,7 @@ func (f *Flow) ListKeys(ctx context.Context) ([]ExistingKey, error) {
 	}
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("referer", f.cfg.base()+"/dashboard/api-keys")
-	req.Header.Set("user-agent", userAgent)
+	f.applyIdentity(req)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Key 列表失败: %v", err)
@@ -1208,6 +1237,10 @@ func (f *Flow) KeyUsable(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
+	// This probe reads /v1/models with the new key, so it meets the same
+	// inference edge the pool later calls: it must carry the run's identity
+	// rather than the Go default.
+	f.applyIdentity(req)
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("accept", "application/json")
 	resp, err := f.client.Do(req)

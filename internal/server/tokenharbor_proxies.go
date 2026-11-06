@@ -9,6 +9,14 @@ import (
 	"account-pool-balancer/internal/thsignupstore"
 )
 
+// NoEgressWarning is the log line queued when a registration has no proxy at
+// all and will therefore run from this host's own address. Such a run exposes
+// the host to the site and to every third party the flow touches (mailbox,
+// captcha), and the exposure is what an operator needs to notice; it is
+// reported rather than refused because a deployment may deliberately register
+// from a region the API serves directly.
+const NoEgressWarning = "未绑定代理且无默认代理：本次注册将从本机 IP 出网"
+
 func thAssignProxies(rows []thsignupstore.Row, proxies []string, fallback, mode string) error {
 	for i := range rows {
 		if rows[i].ProxyURL != "" {

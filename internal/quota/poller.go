@@ -960,7 +960,7 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 	}
 
 	if catalogDue(s, now, a.RuntimeKey != "", false) {
-		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
+		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID); err == nil {
 			applyCatalog(s, cat, now)
 		} else {
 			s.CatalogError = err.Error() // the last good catalogue stays
@@ -974,7 +974,7 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 
 	ws := s.WorkspaceID
 	if ws == "" || now.Sub(s.WorkspaceAt) > 10*time.Minute {
-		w, err := client.Workspace(ctx, a.ControlKey)
+		w, err := client.Workspace(ctx, a.ControlKey, a.ID)
 		if err != nil {
 			return fail(err)
 		}
@@ -988,7 +988,7 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		ws = s.WorkspaceID
 	}
 
-	pf, err := client.Preflight(ctx, a.ControlKey, ws, "")
+	pf, err := client.Preflight(ctx, a.ControlKey, ws, "", a.ID)
 	if err != nil {
 		return fail(err)
 	}
@@ -997,7 +997,7 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 	s.AuthFailed = false
 
 	var partErr error
-	if w, err := client.Wallet(ctx, a.ControlKey, ws); err == nil {
+	if w, err := client.Wallet(ctx, a.ControlKey, ws, a.ID); err == nil {
 		s.WalletUSD, s.WalletSource, s.WalletAt = w.BalanceUSD, "wallet", now
 	} else {
 		partErr = err
@@ -1005,14 +1005,14 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 			s.WalletUSD, s.WalletSource, s.WalletAt = pf.BalanceUSD, "preflight", now
 		}
 	}
-	if sum, err := client.Summary(ctx, a.ControlKey, ws); err == nil {
+	if sum, err := client.Summary(ctx, a.ControlKey, ws, a.ID); err == nil {
 		s.Summary, s.SummaryAt = &sum, now
 	} else if partErr == nil {
 		partErr = err
 	}
 	// which requested models are Design Plan models on this tier
 	for _, m := range p.coverageDue(s, 6, now) {
-		mp, err := client.Preflight(ctx, a.ControlKey, ws, m)
+		mp, err := client.Preflight(ctx, a.ControlKey, ws, m, a.ID)
 		if err != nil {
 			if partErr == nil {
 				partErr = err
@@ -1123,14 +1123,14 @@ func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.A
 	}
 
 	if catalogDue(s, now, a.RuntimeKey != "", false) {
-		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey); err == nil {
+		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID); err == nil {
 			applyCatalog(s, cat, now)
 		} else {
 			s.CatalogError = err.Error() // the last good catalogue stays
 		}
 	}
 
-	b, err := client.Balance(ctx, cfg.ControlBase(a), a.RuntimeKey)
+	b, err := client.Balance(ctx, cfg.ControlBase(a), a.RuntimeKey, a.ID)
 	if err != nil {
 		return fail(err)
 	}
@@ -1166,7 +1166,7 @@ func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a con
 	// to a bad token as well, so a request can't tell a dead token from a
 	// wrong model name.
 	if catalogDue(s, now, a.RuntimeKey != "", true) {
-		cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey)
+		cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
 		switch {
 		case err == nil:
 			applyCatalog(s, cat, now)

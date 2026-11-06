@@ -36,18 +36,18 @@ func TestClientParsesControlPlane(t *testing.T) {
 	defer srv.Close()
 	c := &Client{Base: srv.URL, HTTP: srv.Client()}
 	ctx := context.Background()
-	pf, err := c.Preflight(ctx, "vela_ctrl_good", "ws1", "")
+	pf, err := c.Preflight(ctx, "vela_ctrl_good", "ws1", "", "acct-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !pf.Eligible || len(pf.Windows) != 1 || pf.Windows[0].Remaining != 169298 || pf.Windows[0].ResetsAt.IsZero() {
 		t.Fatalf("preflight = %+v", pf)
 	}
-	sum, err := c.Summary(ctx, "vela_ctrl_good", "ws1")
+	sum, err := c.Summary(ctx, "vela_ctrl_good", "ws1", "acct-1")
 	if err != nil || sum.SubscriptionCredits != "0" || sum.UsageCount != 8313 || sum.CreditsPerUSD != 10000 {
 		t.Fatalf("summary = %+v %v", sum, err)
 	}
-	_, err = c.Workspace(ctx, "vela_ctrl_bad")
+	_, err = c.Workspace(ctx, "vela_ctrl_bad", "acct-1")
 	if !IsAuth(err) || err.Error() != "HTTP 401 unauthenticated" {
 		t.Fatalf("auth error = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestOllamaBalance(t *testing.T) {
 	c := &Client{Base: srv.URL, HTTP: srv.Client()}
 	ctx := context.Background()
 
-	b, err := c.Balance(ctx, srv.URL, "good")
+	b, err := c.Balance(ctx, srv.URL, "good", "acct-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,13 +118,13 @@ func TestOllamaBalance(t *testing.T) {
 		t.Fatalf("a plan without legacy limits reports none: %+v", b)
 	}
 
-	b, err = c.Balance(ctx, srv.URL, "legacy")
+	b, err = c.Balance(ctx, srv.URL, "legacy", "acct-1")
 	if err != nil || b.SessionPercent == nil || *b.SessionPercent != 75 || b.WeeklyPercent == nil || *b.WeeklyPercent != 40 || b.SessionResetsAt.IsZero() {
 		t.Fatalf("legacy balance = %+v %v", b, err)
 	}
 
 	// a refused key is an auth error, so the poller can quarantine the account
-	if _, err := c.Balance(ctx, srv.URL, "bad"); !IsAuth(err) {
+	if _, err := c.Balance(ctx, srv.URL, "bad", "acct-1"); !IsAuth(err) {
 		t.Fatalf("bad key = %v", err)
 	}
 

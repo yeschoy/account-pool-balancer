@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/opencode"
 )
 
@@ -98,6 +99,7 @@ func (s *Server) apiOpenCodeProxyTest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.RuntimeBase(a)+"/models", nil)
+	egressid.Apply(req.Header, egressid.For(a.ID))
 	req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 	resp, err := opencode.NoRedirect(s.httpClient(a.ProxyURL)).Do(req)
 	if err != nil {

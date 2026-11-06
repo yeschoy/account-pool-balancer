@@ -8,6 +8,8 @@ import (
 	"html"
 	"io"
 	"net/http"
+
+	"account-pool-balancer/internal/egressid"
 	"net/url"
 	"regexp"
 	"strings"
@@ -94,6 +96,7 @@ func (c *Client) sharedMessages(ctx context.Context) ([]thregister.Message, erro
 	}
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("Cache-Control", "no-cache")
+	egressid.Apply(req.Header, egressid.For(c.Seed))
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("共享接码页网络读取失败")

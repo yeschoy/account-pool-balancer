@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/logstore"
 	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/perchstore"
@@ -711,6 +712,7 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	t0 := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.RuntimeBase(a)+"/models", nil)
+	egressid.Apply(req.Header, egressid.For(a.ID))
 	req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 	if resp, err := client.Do(req); err != nil {
 		out["runtime"] = map[string]any{"ok": false, "error": redactSecrets(cfg, err.Error())}
@@ -726,7 +728,7 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.ControlKey != "" {
 		qc := &quota.Client{Base: cfg.Upstream.ControlBase, HTTP: client}
-		if ws, err := qc.Workspace(ctx, a.ControlKey); err != nil {
+		if ws, err := qc.Workspace(ctx, a.ControlKey, a.ID); err != nil {
 			out["control"] = map[string]any{"ok": false, "error": err.Error()}
 		} else {
 			out["control"] = map[string]any{"ok": true, "workspaceId": ws.WorkspaceID(), "workspaceName": ws.Name, "tier": ws.PersonalMembershipTier}
@@ -735,7 +737,7 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 	if a.Provider == config.ProviderOllama {
 		// the API key reads its own balance; a refused read is the key itself
 		qc := &quota.Client{Base: cfg.ControlBase(a), HTTP: client}
-		if b, err := qc.Balance(ctx, cfg.ControlBase(a), a.RuntimeKey); err != nil {
+		if b, err := qc.Balance(ctx, cfg.ControlBase(a), a.RuntimeKey, a.ID); err != nil {
 			out["balance"] = map[string]any{"ok": false, "error": err.Error()}
 		} else {
 			out["balance"] = map[string]any{"ok": true, "includedUsd": b.IncludedUSD, "allowanceUsd": b.AllowanceUSD,
@@ -772,6 +774,7 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 1, "messages": []map[string]string{{"role": "user", "content": "ping"}}})
 		t1 := time.Now()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.RuntimeBase(a)+"/chat/completions", bytes.NewReader(payload))
+		egressid.Apply(req.Header, egressid.For(a.ID))
 		req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 		req.Header.Set("Content-Type", "application/json")
 		if resp, err := client.Do(req); err != nil {

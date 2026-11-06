@@ -106,7 +106,7 @@ func (p *Poller) fetchTokenHarbor(ctx context.Context, cfg *config.Config, a con
 	// observations reuse it on its separate cadence, never from inference.
 	modelInterval := time.Duration(cfg.TokenHarbor.ModelSyncSec) * time.Second
 	if err == nil && (force || observed.DirectoryAt.IsZero() || (modelInterval > 0 && now.Sub(observed.DirectoryAt) >= modelInterval)) {
-		cat, readErr := FetchCatalogFull(ctx, opencode.NoRedirect(p.HTTPFor(a.ProxyURL)), cfg.RuntimeBase(a), a.RuntimeKey)
+		cat, readErr := FetchCatalogFull(ctx, opencode.NoRedirect(p.HTTPFor(a.ProxyURL)), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
 		if readErr != nil {
 			err = readErr
 			if he, ok := readErr.(*HTTPError); ok {

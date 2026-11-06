@@ -111,7 +111,7 @@ func (f *Flow) checkoutCall(ctx context.Context, payload map[string]any) (checko
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Origin", f.cfg.base())
 	req.Header.Set("Referer", f.cfg.base()+"/pricing")
-	req.Header.Set("User-Agent", userAgent)
+	f.applyIdentity(req)
 	client := *f.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)

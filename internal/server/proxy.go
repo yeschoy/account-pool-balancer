@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
@@ -1133,6 +1134,12 @@ var skipRequestHeaders = map[string]bool{
 	"te": true, "trailer": true, "transfer-encoding": true, "upgrade": true, "host": true, "content-length": true,
 	"authorization": true, "x-api-key": true, "api-key": true, "x-goog-api-key": true, "cookie": true,
 	"accept-encoding": true, "forwarded": true, "x-real-ip": true, "true-client-ip": true, "x-request-id": true,
+	// Every other spelling a reverse proxy or CDN uses to describe the
+	// downstream peer. The upstream must see our egress, never the client's
+	// address, so these are dropped by name rather than by prefix.
+	"x-client-ip": true, "client-ip": true, "x-originating-ip": true, "x-cluster-client-ip": true,
+	"x-remote-ip": true, "x-remote-addr": true, "x-host": true, "via": true, "x-proxyuser-ip": true,
+	"fastly-client-ip": true, "x-akamai-client-ip": true, "x-bluecoat-via": true, "x-hermes-client-ip": true,
 }
 
 func copyRequestHeaders(dst, src http.Header) {
@@ -1974,6 +1981,7 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 		}
 		c, cancel := context.WithTimeout(ctx, 30*time.Second)
 		req, _ := http.NewRequestWithContext(c, http.MethodGet, cfg.RuntimeBase(a)+"/models", nil)
+		egressid.Apply(req.Header, egressid.For(a.ID))
 		req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 		req.Header.Set("Accept", "application/json")
 		client := s.httpClient(a.ProxyURL)
