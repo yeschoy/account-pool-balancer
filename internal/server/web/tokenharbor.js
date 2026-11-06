@@ -12,7 +12,7 @@ const TH_STATUS = {
   uncertain: ['中断', 'warn'],
 };
 
-const thState = { job: '', filter: 'pending', jobs: [], rows: [], busy: false, timer: null, generation: 0, selected: new Set(), pending: new Set(), batchBusy: false, batchPrompt: false, batchMessage: '' };
+const thState = { job: '', filter: 'pending', jobs: [], rows: [], busy: false, timer: null, generation: 0, selected: new Set(), pending: new Set(), batchBusy: false, batchPrompt: false, batchMessage: '', noteEditing: false };
 // 右下角注册日志：轮询增量，暂停时只累积不渲染。
 const thLog = { seq: 0, lines: [], timer: null, inFlight: false, paused: false, visible: false, started: false };
 
@@ -99,8 +99,47 @@ function renderTHJobs() {
   $('#th-register-jobs').innerHTML = jobs.map((job) => {
     const c = job.counts || {};
     const parts = Object.entries(c).filter(([, n]) => n > 0).map(([k, n]) => `${TH_STATUS[k] ? TH_STATUS[k][0] : k} ${n}`).join(' · ');
-    return `<button type="button" ${thState.batchBusy || thState.batchPrompt ? 'disabled' : ''} class="pc-register-job ${job.id === thState.job ? 'active' : ''}" data-job="${esc(job.id)}" aria-pressed="${job.id === thState.job}"><span>${esc(job.id)}</span><span class="muted small">${esc(fmtTime(job.createdAt, true))} · ${job.running ? '进行中' : '已结束'} · ${esc(parts || '无账号')}</span></button>`;
+    const locked = thState.batchBusy || thState.batchPrompt;
+    const name = job.note ? `<strong>${esc(job.note)}</strong><span class="muted small">${esc(job.id)}</span>` : esc(job.id);
+    return `<div class="th-register-job-row"><button type="button" ${locked ? 'disabled' : ''} class="pc-register-job ${job.id === thState.job ? 'active' : ''}" data-job="${esc(job.id)}" aria-pressed="${job.id === thState.job}"><span class="th-register-job-name">${name}</span><span class="muted small">${esc(fmtTime(job.createdAt, true))} · ${job.running ? '进行中' : '已结束'} · ${esc(parts || '无账号')}</span></button><button type="button" class="btn small" data-job-note="${esc(job.id)}" aria-label="备注任务 ${esc(job.id)}" ${locked || thState.noteEditing ? 'disabled' : ''}>${job.note ? '改备注' : '备注'}</button></div>`;
   }).join('') || '<p class="muted">暂无任务。</p>';
+}
+
+async function thEditJobNote(id) {
+  if (thState.noteEditing || thState.batchBusy || thState.batchPrompt) return;
+  const job = thState.jobs.find((j) => j.id === id);
+  if (!job) throw new Error('注册任务不存在，请刷新重试');
+  thState.noteEditing = true;
+  renderTHJobs();
+  let saved = false, saving = false;
+  try {
+    await modal({
+      title: '任务备注',
+      body: `<div class="form"><p class="muted small">${esc(id)}</p><label for="th-job-note">备注（最多200个字符）</label><textarea id="th-job-note" rows="3" autocomplete="off" placeholder="例如：11月6日美国代理测试批次">${esc(job.note || '')}</textarea><p class="hint">仅备注当前任务；留空保存可清除，不会启动注册或修改账号。</p></div>`,
+      buttons: [{ label: '取消', value: 'cancel' }, { label: '保存', value: 'save', primary: true, action: async () => {
+        if (saved || saving) return;
+        const note = $('#th-job-note').value.trim();
+        if (Array.from(note).length > 200) throw new Error('任务备注最多200个字符');
+        saving = true;
+        try {
+          const out = await api('PUT', '/api/tokenharbor/registrations/' + encodeURIComponent(id) + '/note', { note });
+          saved = true;
+          const current = thState.jobs.find((j) => j.id === id);
+          if (current) {
+            current.note = out.note;
+            renderTHJobs();
+            if (thState.job === id) renderTHJob(current);
+          }
+        } finally {
+          saving = false;
+        }
+      } }],
+    });
+  } finally {
+    thState.noteEditing = false;
+    renderTHJobs();
+    if (saved && currentPage === 'thregister') await loadTHRegistrations();
+  }
 }
 
 function renderTHJob(job) {
@@ -118,7 +157,7 @@ function renderTHJob(job) {
   const ids = new Set(thState.rows.map((r) => r.id));
   for (const id of thState.selected) if (!ids.has(id)) thState.selected.delete(id);
   $('#th-register-detail').classList.remove('hidden');
-  $('#th-register-job-title').textContent = '任务 ' + job.id;
+  $('#th-register-job-title').textContent = '任务 ' + (job.note ? job.note + ' · ' : '') + job.id;
   $('#th-register-job-status').textContent = job.running ? '进行中' : '已结束';
   $('#th-register-rows').innerHTML = thState.rows.map((r) => `<tr>
     <td><input type="checkbox" class="th-row-select" data-id="${esc(r.id)}" aria-label="选择 ${esc(r.email)}" ${thState.selected.has(r.id) ? 'checked' : ''} ${thRowLocked(r.id) || ['queued', 'running'].includes(r.status) ? 'disabled' : ''}></td>
@@ -746,6 +785,8 @@ function thInstall() {
     on('#th-batch-' + id, 'click', () => thBatchAction(kind).catch((e) => toast(e.message)));
   }
   on('#th-register-jobs', 'click', (e) => {
+    const note = e.target.closest('[data-job-note]');
+    if (note) { thEditJobNote(note.dataset.jobNote).catch((err) => toast(err.message)); return; }
     const b = e.target.closest('[data-job]');
     if (!b || thState.batchBusy || thState.batchPrompt) return;
     if (thState.job !== b.dataset.job) {

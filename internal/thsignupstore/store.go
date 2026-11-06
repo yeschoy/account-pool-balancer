@@ -24,12 +24,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/thregister"
@@ -208,10 +210,14 @@ func (d diskRow) row() Row {
 	}
 }
 
+// MaxAttemptNoteLength bounds administrator-authored task notes, in Unicode characters.
+const MaxAttemptNoteLength = 200
+
 type diskData struct {
-	Version int       `json:"version"`
-	Rows    []diskRow `json:"rows"`
-	Proxies []string  `json:"proxies,omitempty"`
+	Version      int               `json:"version"`
+	Rows         []diskRow         `json:"rows"`
+	Proxies      []string          `json:"proxies,omitempty"`
+	AttemptNotes map[string]string `json:"attemptNotes,omitempty"`
 }
 
 type envelope struct {
@@ -230,6 +236,8 @@ type Store struct {
 	aead    cipher.AEAD
 	rows    []Row
 	proxies []string
+	// Notes are task metadata, separate from row UpdatedAt/source guards.
+	attemptNotes map[string]string
 }
 
 func (*Store) String() string               { return "[REDACTED]" }
@@ -295,6 +303,12 @@ func Open(path string, routingSecret []byte) (*Store, error) {
 		}
 	}
 	s.proxies = append([]string(nil), data.Proxies...)
+	s.attemptNotes = data.AttemptNotes
+	for _, note := range s.attemptNotes {
+		if !utf8.ValidString(note) || utf8.RuneCountInString(note) > MaxAttemptNoteLength {
+			return nil, ErrCorrupt
+		}
+	}
 	dirty := false
 	for i := range s.rows {
 		if s.rows[i].Status == Running {
@@ -537,13 +551,66 @@ func (s *Store) Delete(id string) error {
 		next := make([]Row, 0, len(s.rows)-1)
 		next = append(next, s.rows[:i]...)
 		next = append(next, s.rows[i+1:]...)
-		if err := s.save(next); err != nil {
+		notes := maps.Clone(s.attemptNotes)
+		remaining := false
+		for _, row := range next {
+			if row.Attempt == r.Attempt {
+				remaining = true
+				break
+			}
+		}
+		if !remaining {
+			delete(notes, r.Attempt)
+		}
+		if err := s.write(next, s.proxies, notes, "thsignupstore/v1"); err != nil {
 			return err
 		}
-		s.rows = next
+		s.rows, s.attemptNotes = next, notes
 		return nil
 	}
 	return ErrNotFound
+}
+
+// AttemptNote returns the administrator's note for a registration task.
+func (s *Store) AttemptNote(attempt string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attemptNotes[attempt]
+}
+
+// SetAttemptNote changes only task metadata, even while its rows are running.
+// Empty notes clear the annotation; an unknown task never creates orphan data.
+func (s *Store) SetAttemptNote(attempt, note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if !utf8.ValidString(note) || utf8.RuneCountInString(note) > MaxAttemptNoteLength {
+		return "", ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := false
+	for _, row := range s.rows {
+		if row.Attempt == attempt {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", ErrNotFound
+	}
+	notes := maps.Clone(s.attemptNotes)
+	if notes == nil {
+		notes = make(map[string]string)
+	}
+	if note == "" {
+		delete(notes, attempt)
+	} else {
+		notes[attempt] = note
+	}
+	if err := s.write(s.rows, s.proxies, notes, "thsignupstore/v1"); err != nil {
+		return "", err
+	}
+	s.attemptNotes = notes
+	return note, nil
 }
 
 // Summaries groups the console view by attempt, newest first.
@@ -639,7 +706,7 @@ func (s *Store) SaveProxies(proxies []string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.write(s.rows, next, "thsignupstore/v1"); err != nil {
+	if err := s.write(s.rows, next, s.attemptNotes, "thsignupstore/v1"); err != nil {
 		return err
 	}
 	s.proxies = next
@@ -647,7 +714,7 @@ func (s *Store) SaveProxies(proxies []string) error {
 }
 
 func (s *Store) save(rows []Row) error {
-	return s.write(rows, s.proxies, "thsignupstore/v1")
+	return s.write(rows, s.proxies, s.attemptNotes, "thsignupstore/v1")
 }
 
 func cloneRow(r Row) Row {
@@ -664,7 +731,7 @@ func cloneRow(r Row) Row {
 	return r
 }
 
-func (s *Store) write(rows []Row, proxies []string, aad string) error {
+func (s *Store) write(rows []Row, proxies []string, notes map[string]string, aad string) error {
 	var disk, githubRows []diskRow
 	for _, r := range rows {
 		if r.GitHub != nil {
@@ -673,7 +740,7 @@ func (s *Store) write(rows []Row, proxies []string, aad string) error {
 			disk = append(disk, r.disk())
 		}
 	}
-	plain, err := json.Marshal(diskData{Version: 1, Rows: disk, Proxies: proxies})
+	plain, err := json.Marshal(diskData{Version: 1, Rows: disk, Proxies: proxies, AttemptNotes: notes})
 	if err != nil {
 		return err
 	}

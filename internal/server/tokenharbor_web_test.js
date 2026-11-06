@@ -385,6 +385,77 @@ async function testRegistrationPacingControls() {
   assert.match(html, /不会自动重试/);
 }
 
+async function testTaskNotesAreEscapedScopedAndExplicitlySaved() {
+  const calls = [];
+  let fail = true;
+  const e = environment(async (method, url, body) => {
+    calls.push({ method, url, body });
+    if (fail) throw new Error('mock save failed');
+    return { id: 'job/one', note: body.note };
+  });
+  const malicious = '</textarea><img src=x onerror=alert(1)>';
+  const job = { id: 'job/one', note: malicious, rows: [{ id: 'row-one', email: 'one@mock.test', status: 'saved' }] };
+  const other = { id: 'job-two', note: '另一批次', rows: [] };
+  e.context.state.jobs = [job, other];
+  e.context.state.job = job.id;
+  e.context.state.selected.add('row-one');
+  e.context.renderTHJobs();
+  assert.match(e.node('#th-register-jobs').innerHTML, /data-job-note="job\/one"/);
+  assert.match(e.node('#th-register-jobs').innerHTML, /&lt;\/textarea&gt;&lt;img/);
+  assert.doesNotMatch(e.node('#th-register-jobs').innerHTML, /<img/);
+  e.context.renderTHJob(job);
+  assert.ok(e.node('#th-register-job-title').textContent.includes(malicious), 'detail title is assigned as text, not HTML');
+
+  let dialog, close;
+  e.context.modal = (options) => { dialog = options; return new Promise((resolve) => { close = resolve; }); };
+  const edit = e.context.thEditJobNote(job.id);
+  assert.equal(e.context.state.noteEditing, true);
+  assert.match(dialog.body, /&lt;\/textarea&gt;&lt;img/);
+  assert.doesNotMatch(dialog.body, /<img/);
+  assert.equal(calls.length, 0, 'opening a note must not submit a write');
+  const firstDialog = dialog;
+  await e.context.thEditJobNote(other.id);
+  assert.equal(dialog, firstDialog, 'double clicks cannot replace an active note modal');
+  const save = dialog.buttons.find((b) => b.value === 'save').action;
+  e.node('#th-job-note').value = ' new note ';
+  await assert.rejects(save(), /mock save failed/);
+  assert.equal(job.note, malicious, 'failed save cannot update the visible note');
+  e.node('#th-job-note').value = '测'.repeat(201);
+  await assert.rejects(save(), /最多200/);
+  assert.equal(calls.length, 1, 'oversized note is rejected before a request');
+
+  // Polling may replace task objects while the modal is open. Save must target
+  // its captured task ID, not the current selection or an obsolete object.
+  const polled = { ...job, note: malicious };
+  e.context.state.jobs = [polled, other];
+  e.context.state.job = other.id;
+  fail = false;
+  e.node('#th-job-note').value = '  美国代理测试 😀  ';
+  await save();
+  await save();
+  assert.equal(calls.length, 2, 'successful modal saves are not repeated');
+  assert.equal(calls[1].method, 'PUT');
+  assert.equal(calls[1].url, '/api/tokenharbor/registrations/job%2Fone/note');
+  assert.equal(calls[1].body.note, '美国代理测试 😀');
+  assert.equal(polled.note, '美国代理测试 😀');
+  assert.equal(other.note, '另一批次');
+  assert.equal(e.context.state.job, other.id, 'saving must not switch the selected task');
+  assert.equal(e.context.state.selected.has('row-one'), true);
+  close('save');
+  await edit;
+  assert.equal(e.context.state.noteEditing, false);
+
+  e.context.modal = async (options) => { dialog = options; return 'cancel'; };
+  await e.context.thEditJobNote(job.id);
+  assert.equal(calls.length, 2, 'cancel cannot save a note');
+  assert.match(dialog.body, /美国代理测试 😀/);
+  e.node('#th-job-note').value = '';
+  await dialog.buttons.find((b) => b.value === 'save').action();
+  assert.equal(calls[2].body.note, '');
+  assert.equal(polled.note, '', 'empty explicit save clears the note');
+  assert.ok(calls.every((c) => c.method === 'PUT' && c.url.endsWith('/note')), 'notes never start registration or other account work');
+}
+
 async function testGitHubFormatAndSessionProjection() {
   const e = environment(async () => ({}));
   const accounts = e.context.thParseAccounts('mock-user----mock-password----GEZDGNBVGY3TQOJQ----https://191006.xyz/mailbox/mock-token');
@@ -407,6 +478,7 @@ async function testGitHubFormatAndSessionProjection() {
 
 (async () => {
   await testResendVerificationAndVisibleInputs();
+  await testTaskNotesAreEscapedScopedAndExplicitlySaved();
   await testGitHubFormatAndSessionProjection();
   await testRegistrationPacingControls();
   await testIndependentProxyEditing();

@@ -213,6 +213,11 @@ tr[data-id]:hover { background: var(--line2); }
 .pc-register-jobs { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin-top: 12px; }
 .pc-register-job { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); text-align: left; font: inherit; cursor: pointer; overflow-wrap: anywhere; }
 .pc-register-job.active { border-color: var(--accent); background: var(--accent-soft); }
+.th-register-job-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.th-register-job-row > .pc-register-job { flex: 1; min-width: 0; }
+.th-register-job-row > .btn { flex-shrink: 0; }
+.th-register-job-name strong, .th-register-job-name .small { display: block; }
+#th-job-note { width: 100%; resize: vertical; }
 .pc-register-detail-head { margin-top: 20px; }
 .pc-register-detail-head h2 { overflow-wrap: anywhere; }
 .pc-register-import { margin-top: 14px; }

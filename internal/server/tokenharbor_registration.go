@@ -77,6 +77,7 @@ const thRegistrationConcurrency = 1
 // thRegistrationView is the console's attempt row: counts plus summaries.
 type thRegistrationView struct {
 	ID        string                  `json:"id"`
+	Note      string                  `json:"note,omitempty"`
 	CreatedAt time.Time               `json:"createdAt"`
 	Group     string                  `json:"group"`
 	Running   bool                    `json:"running"`
@@ -119,6 +120,7 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("GET /api/tokenharbor/registrations", s.apiTHRegistrations)
 	a("GET /api/tokenharbor/overview", s.apiTHOverview)
 	a("GET /api/tokenharbor/registrations/{id}", s.apiTHRegistration)
+	a("PUT /api/tokenharbor/registrations/{id}/note", s.apiTHJobNote)
 	a("PUT /api/tokenharbor/registrations/{id}/proxy", s.apiTHRowProxy)
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)
 	a("POST /api/accounts/{id}/return-to-registration", s.apiTHReturn)
@@ -636,7 +638,7 @@ func (s *Server) apiTHRegistrations(w http.ResponseWriter, r *http.Request) {
 	out := make([]thRegistrationView, 0, len(groups))
 	for _, k := range groups {
 		rows := grouped[k]
-		view := thRegistrationView{ID: k, Rows: rows, Counts: map[string]int{}}
+		view := thRegistrationView{ID: k, Note: store.AttemptNote(k), Rows: rows, Counts: map[string]int{}}
 		for _, row := range rows {
 			view.Counts[string(row.Status)]++
 			if row.CreatedAt.After(view.CreatedAt) {
@@ -663,7 +665,7 @@ func (s *Server) apiTHRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	var rows []thsignupstore.Summary
-	view := thRegistrationView{ID: id, Counts: map[string]int{}}
+	view := thRegistrationView{ID: id, Note: store.AttemptNote(id), Counts: map[string]int{}}
 	for _, row := range store.List() {
 		if row.Attempt != id {
 			continue
@@ -680,6 +682,34 @@ func (s *Server) apiTHRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	view.Rows = rows
 	writeJSON(w, http.StatusOK, view)
+}
+
+// Notes belong to the task ID, not an individual registration row.
+func (s *Server) apiTHJobNote(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var in struct {
+		Note *string `json:"note"`
+	}
+	if err := readBody(r, &in); err != nil || in.Note == nil {
+		apiError(w, http.StatusBadRequest, errors.New("请提供 note；留空可清除任务备注"))
+		return
+	}
+	store, err := s.thStore()
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err)
+		return
+	}
+	id := r.PathValue("id")
+	note, err := store.SetAttemptNote(id, *in.Note)
+	if errors.Is(err, thsignupstore.ErrInvalid) {
+		apiError(w, http.StatusBadRequest, fmt.Errorf("任务备注最多 %d 个字符", thsignupstore.MaxAttemptNoteLength))
+		return
+	}
+	if err != nil {
+		s.thStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "note": note})
 }
 
 func (s *Server) apiTHRowProxy(w http.ResponseWriter, r *http.Request) {

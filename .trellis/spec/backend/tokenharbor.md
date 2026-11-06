@@ -76,6 +76,43 @@ Assert saved-only zero HTTP/imports; sequential/random reuse and explicit overri
 Wrong: register → verified → enabled pool account, or create checkout → mark paid.
 Correct: save/register → separate current-plan observation → user payment → fresh active-plan check on explicit import; failures deny admission without deleting credentials.
 
+## Per-task registration notes
+
+### 1. Scope / Trigger
+Administrator-authored annotations belong to a registration task, not its account rows; editing metadata must not interrupt active work.
+
+### 2. Signatures
+- `PUT /api/tokenharbor/registrations/{taskId}/note`: request `{"note":"batch label"}`, response `{"id":"taskId","note":"batch label"}`.
+- `Store.AttemptNote(attempt string) string`; `Store.SetAttemptNote(attempt, note string) (string, error)`.
+- List/detail task projections add optional `note`.
+
+### 3. Contracts
+- Require an explicitly present string; trim surrounding whitespace, permit at most200 Unicode characters, and clear on an empty value. Standard admin authentication, CSRF and no-store apply.
+- Keep notes in the existing encrypted v1 signup payload's optional `attemptNotes` map, including notes for plaintext-opted-in GitHub tasks. Older files remain readable. Older binaries can discard this metadata when saving: back up before downgrade if notes must be retained.
+- Share the store lock and atomic publication with row/proxy writes, but never alter row UpdatedAt, status, proxy, credentials, session, checkout or admission state. Running tasks may be annotated; failed saves preserve memory and disk state. Deleting one row retains the task note; deleting its last row removes only that task's note.
+- Each list entry has an independent editor. Render with esc()/textContent, keep the immutable task ID visible, and capture that ID even if polling replaces objects or selection changes. Opening/cancelling makes no mutation; acknowledgement precedes visible updates; duplicate saves are guarded. Notes never schedule registration or upstream/account actions.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| Missing/null/non-string/overlong note | 400, existing metadata unchanged |
+| Unknown task or individual row ID | 404, no orphan metadata |
+| No administrator session / missing CSRF | 401 / 403, no write |
+| Trimmed empty string | 200, only that task note cleared |
+| Persistence failure | Error, previous in-memory and on-disk metadata retained |
+
+### 5. Good / Base / Bad Cases
+- Good: annotate two existing tasks independently, refresh, then clear one.
+- Base: legacy file without attemptNotes loads with blank notes.
+- Bad: attaching notes to every account row or using its Update method, which invalidates worker source guards.
+
+### 6. Tests Required
+Store tests cover encrypted reopen, Unicode bounds, isolation, failed-save atomicity, concurrent checkpoint/proxy writes and last-row cleanup. API tests assert admin/CSRF/no-store, unchanged full rows and zero upstream calls. Web tests cover escaping, polling/selection changes, cancel/clear/failure and one-shot saves. Real-browser acceptance uses saveOnly fake tasks and verifies refresh retention plus backend statuses.
+
+### 7. Wrong vs Correct
+Wrong: save against the currently selected task after the modal opens, or update row timestamps to persist a label.
+Correct: save against the captured task ID in the store's independent encrypted metadata map.
+
 ## Independent per-account proxies
 
 - User-approved rule: registration Row.ProxyURL/ProxyBound and pool Account.ProxyURL are independent after admission. New admission copies row.Egress(default); existing full-Key deduplication never overwrites the pool's separately configured proxy. No bidirectional sync or migration.
