@@ -24,25 +24,22 @@ func TestTHRegistrationBudgetCannotBeRebuiltByLegacyConcurrency(t *testing.T) {
 	}
 }
 
-func TestTHSignupGateHasMinuteFloorAndCancellation(t *testing.T) {
+func TestTHSignupCheckHonorsCancellationWithoutReservingDelay(t *testing.T) {
 	s := &Server{thStopping: make(chan struct{})}
 	r := &thRegistrar{srv: s}
-	before := time.Now()
-	if err := r.awaitSignup(context.Background(), true); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := r.checkSignup(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if r.nextSignup.Before(before.Add(time.Minute)) {
-		t.Fatal("actual submission reservation must impose the 60-second floor")
-	}
-	reserved := r.nextSignup
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.awaitSignup(ctx, true); !errors.Is(err, context.Canceled) || r.nextSignup != reserved {
-		t.Fatal("cancelled wait must not reserve another signup")
+	if err := r.checkSignup(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled work must stop before signup")
 	}
 	close(s.thStopping)
-	if err := r.awaitSignup(context.Background(), false); err == nil || r.nextSignup != reserved {
-		t.Fatal("shutdown must cancel waiting before site/captcha work")
+	if err := r.checkSignup(context.Background()); err == nil {
+		t.Fatal("shutdown must stop site/captcha work and submission")
 	}
 }
 
@@ -66,6 +63,11 @@ func TestTHRateLimitOnlyFailsCurrentRow(t *testing.T) {
 					w.Header().Set("Retry-After", "7200")
 					fmt.Fprint(w, "1:{\"error\":\"We're receiving an unusually high number of sign-ups right now.\"}\n")
 				case 2:
+					select {
+					case <-release:
+					default:
+						t.Error("the next account started before the single worker was released")
+					}
 					fmt.Fprint(w, "1:{\"error\":\"Account registration refused\"}\n")
 				default:
 					t.Error("registration must not automatically retry either row")
@@ -90,15 +92,22 @@ func TestTHRateLimitOnlyFailsCurrentRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := s.thRegistrar()
-	r.signupInterval = time.Millisecond // Keep the production floor covered separately.
 	done := make(chan error, 2)
-	go func() { done <- r.run(rows[0].ID, false, 10) }()
+	s.thTasks.Add(1)
+	go func() {
+		defer s.thTasks.Done()
+		done <- r.run(rows[0].ID, false, 10)
+	}()
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
 		t.Fatal("first registration never submitted")
 	}
-	go func() { done <- r.run(rows[1].ID, false, 2) }()
+	s.thTasks.Add(1)
+	go func() {
+		defer s.thTasks.Done()
+		done <- r.run(rows[1].ID, false, 2)
+	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		row, _ := store.Get(rows[1].ID)
@@ -118,7 +127,7 @@ func TestTHRateLimitOnlyFailsCurrentRow(t *testing.T) {
 				t.Fatal("each row must report its own upstream rejection")
 			}
 		case <-time.After(3 * time.Second):
-			t.Fatal("the queued row must not wait for another account's Retry-After")
+			t.Fatal("the queued row must not wait for a local signup interval or another account's Retry-After")
 		}
 	}
 	if posts.Load() != 2 || requests.Load() != 6 {

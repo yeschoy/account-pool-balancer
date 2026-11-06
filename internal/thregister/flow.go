@@ -252,8 +252,8 @@ type Config struct {
 	// Checkpoint persists credentials immediately after each irreversible step.
 	// An error stops the flow before it performs any further mutations.
 	Checkpoint func(Result) error
-	// BeforeSignup checks/reserves the shared pacing gate immediately before
-	// the single signup POST. Resume and Login never invoke it.
+	// BeforeSignup checks cancellation/shutdown immediately before the single
+	// signup POST. Resume and Login never invoke it.
 	BeforeSignup func(context.Context) error
 	// Enabling free models changes the site's data-use consent. Never opt in
 	// as an incidental side effect of creating an account or a payment link.

@@ -88,9 +88,6 @@ type thRegistrar struct {
 	srv *Server
 	mu  sync.Mutex
 	sem chan struct{}
-	// Only submission spacing is shared; a refusal never pauses other rows.
-	nextSignup     time.Time
-	signupInterval time.Duration // zero uses the production 60-second floor
 }
 
 func (s *Server) thRegistrar() *thRegistrar {
@@ -390,9 +387,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		VerificationSince: row.CreatedAt,
 		MailTimeout:       time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout:    40 * time.Second,
-		BeforeSignup: func(ctx context.Context) error {
-			return r.awaitSignup(ctx, true)
-		},
+		BeforeSignup:      r.checkSignup,
 		Checkpoint: func(res thregister.Result) error {
 			_, err := store.Update(id, func(rw *thsignupstore.Row) error {
 				thSaveResult(rw, res)
@@ -440,7 +435,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if row.GitHub != nil {
 		res = thStoredResult(row)
 		if !res.OAuthComplete {
-			err = r.awaitSignup(ctx, true)
+			err = r.checkSignup(ctx)
 		}
 		if err == nil {
 			res, err = flow.RunGitHub(ctx, thregister.GitHubCredentials{
@@ -461,7 +456,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 				row.APIKey == "" && !row.Verified && row.Account == "" && row.Checkout == nil &&
 				!thregister.HasSession(flow.Session()) {
 				// User-authorized exception for this precise login rejection.
-				// Preserve the row/credentials/route and share the ordinary gate;
+				// Preserve the row/credentials/route and the single worker;
 				// a rejected or uncertain signup is never repeated in this run.
 				newSignup = true
 				s.thLive(row.Email, "重新注册", "官网返回邮箱密码不匹配；按原凭据、原出口重新注册一次", proxy, "warn")
@@ -472,10 +467,8 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		}
 	}
 	if newSignup {
-		s.thLive(row.Email, "注册限速", "固定单并发；新注册提交至少间隔60秒，受限仅结束当前账号，不暂停其他账号", proxy, "info")
-		// Wait before any site/captcha work; the submission hook records the
-		// actual POST timestamp so a slow solver cannot collapse the gap.
-		err = r.awaitSignup(ctx, false)
+		s.thLive(row.Email, "注册调度", "固定单并发；不额外设置注册提交间隔，受限仅结束当前账号，不暂停其他账号", proxy, "info")
+		err = r.checkSignup(ctx)
 		if err == nil {
 			res, err = flow.Run(ctx, thregister.Credentials{
 				Email: row.Email, Password: row.Password, MailboxURL: row.MailboxURL, ProxyURL: proxy,

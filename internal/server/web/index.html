@@ -328,7 +328,7 @@
             <label class="check"><input type="checkbox" id="th-register-solve" checked> 需要时自动解 Turnstile（captcha-run 计费）</label>
             <label for="th-register-conc">本次并发</label>
             <input id="th-register-conc" type="number" min="1" max="1" step="1" value="1" readonly>
-            <span class="hint">固定单并发，新注册提交至少间隔60秒。官网拒绝或限流时仅结束当前账号，按 Retry-After 等待后人工重试；不会自动重试或切换出口。</span>
+            <span class="hint">固定单并发，不额外设置注册提交间隔。官网拒绝或限流时仅结束当前账号，按 Retry-After 等待后人工重试；不会自动重试或切换出口。</span>
             <div class="actions"><button type="button" class="btn" id="th-register-save">仅保存</button><button type="submit" class="btn primary" id="th-register-submit">启动注册</button></div>
             <span class="hint">仅保存账号凭据、接码页与两个阶段的绑定代理，不注册、不解验证码、不付款；之后可在任务中开始注册。GitHub 不使用自动验证码服务。</span>
             <p id="th-register-error" class="error" role="alert"></p>
@@ -390,8 +390,8 @@
           <ul class="muted small">
             <li>注册是纯 HTTP 流程，不模拟人工操作，不伪装 IP、设备或浏览器来绕过限制；真实推理客户端标识原样保留，通用库标识使用本项目真实名称。</li>
             <li>保持账号已绑定出口，不因限流轮换代理。官网未公开限制维度，不能仅凭提示断言 IP 被封或账号不存在。</li>
-            <li>全局单并发，提交至少间隔60秒；收到注册过多、429或服务繁忙即停止，不自动解码应对限制。遵守完整 Retry-After，缺省暂停至少5分钟。</li>
-            <li>冷却到期也不会自动重放旧任务，需要人工确认后重新发起。已有会话优先恢复；注册响应不确定时先核对官网，不重复提交。</li>
+            <li>全局单并发，不额外设置注册提交间隔；收到注册过多、429或服务繁忙仅结束当前账号，不自动解码应对限制。该账号按完整 Retry-After 等待后人工重试，缺省至少5分钟；不暂停其他账号。</li>
+            <li>不会自动重放失败任务，需要人工确认后重新发起。已有会话优先恢复；注册响应不确定时先核对官网，不重复提交。</li>
           </ul>
         </section>
       </div>

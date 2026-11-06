@@ -354,7 +354,8 @@ async function testRegistrationPacingControls() {
   for (const id of ['th-register-conc', 'th-set-conc']) {
     assert.match(html, new RegExp('<input id="' + id + '"[^>]*max="1"[^>]*value="1"[^>]*readonly'));
   }
-  assert.match(html, /新注册提交至少间隔60秒/);
+  assert.match(html, /固定单并发，不额外设置注册提交间隔/);
+  assert.doesNotMatch(html, /(?:注册提交|提交)至少间隔60秒/);
   assert.match(html, /不会自动重试/);
 }
 

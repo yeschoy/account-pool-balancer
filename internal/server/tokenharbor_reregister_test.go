@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/thsignupstore"
@@ -30,16 +29,12 @@ func TestTHIntermediateCookieMismatchReregistersOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTHTestServer(t)
 			signins, signupPages, prechecks, signups, keyCreates := 0, 0, 0, 0, 0
-			var notBefore time.Time
 			site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/login":
 					if r.Method == http.MethodGet {
 						if r.URL.Query().Get("mode") == "signup" {
 							signupPages++
-							if time.Now().Before(notBefore) {
-								t.Error("signup/captcha work bypassed the shared pacing gate")
-							}
 						}
 						fmt.Fprint(w, `<input name="$ACTION_1:0" value="1234567890123456789012345678901234567890"><input name="$ACTION_KEY" value="key">`)
 						return
@@ -116,8 +111,6 @@ func TestTHIntermediateCookieMismatchReregistersOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			registrar := s.thRegistrar()
-			notBefore = time.Now().Add(20 * time.Millisecond)
-			registrar.nextSignup = notBefore
 			err = registrar.run(id, false, 1)
 			row, _ := store.Get(id)
 			fresh := !tc.key && !tc.verified && !tc.linked && !tc.checkout && !tc.loginSession
@@ -144,9 +137,6 @@ func TestTHIntermediateCookieMismatchReregistersOnce(t *testing.T) {
 			}
 			if tc.key && row.APIKey != "original-key" || tc.verified && !row.Verified || tc.linked && row.Account != "original-account" || tc.checkout && row.Checkout == nil {
 				t.Fatal("existing account assets were overwritten")
-			}
-			if signups > 0 && !registrar.nextSignup.After(notBefore.Add(59*time.Second)) {
-				t.Fatal("signup did not reserve the ordinary 60-second gate")
 			}
 			logs, _ := s.thLog().since(0)
 			freshLogs := 0
