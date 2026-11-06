@@ -29,6 +29,32 @@ function environment(api) {
   return { context, nodes, timers, node };
 }
 
+async function testResendVerificationAndVisibleInputs() {
+  const calls = [];
+  const e = environment(async (method, url) => {
+    calls.push({ method, url });
+    return { seq: 0, entries: [] };
+  });
+  const notices = [];
+  e.context.toast = (text) => notices.push(text);
+  const row = { id: 'mail/one', status: 'unverified', hasSession: true, verified: false };
+  assert.match(e.context.thRowActions(row), /重发验证码/);
+  assert.doesNotMatch(e.context.thRowActions({ ...row, verified: true }), /重发验证码/);
+  assert.doesNotMatch(e.context.thRowActions({ ...row, hasSession: false }), /重发验证码/);
+  assert.doesNotMatch(e.context.thRowActions({ ...row, status: 'running' }), /重发验证码/);
+  await e.context.thRowAction('resend-verification', row.id);
+  const writes = calls.filter((c) => c.method === 'POST');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].url, '/api/tokenharbor/registrations/mail%2Fone/resend-verification');
+  assert.match(notices[0], /补验证/);
+  const html = fs.readFileSync(path.join(__dirname, 'web', 'index.html'), 'utf8');
+  for (const id of ['th-register-accounts', 'th-register-proxies', 'th-register-session-proxies']) {
+    const tag = html.match(new RegExp(`<textarea id="${id}"[^>]*>`))?.[0];
+    assert.ok(tag, `${id} input exists`);
+    assert.doesNotMatch(tag, /pc-secret-input/, `${id} must not render pasted text transparent`);
+  }
+}
+
 async function testLogSingleFlightAndSequenceDedupe() {
   const pending = [];
   const e = environment(() => new Promise((resolve) => pending.push(resolve)));
@@ -380,6 +406,7 @@ async function testGitHubFormatAndSessionProjection() {
 }
 
 (async () => {
+  await testResendVerificationAndVisibleInputs();
   await testGitHubFormatAndSessionProjection();
   await testRegistrationPacingControls();
   await testIndependentProxyEditing();
