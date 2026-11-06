@@ -32,6 +32,58 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署（2026-11-06 UTC，master：c88bc2a）
+
+- 用户授权推送并部署；`master` 已推送 `c88bc2ac443ae0eef1e65b0fa9e27f2c2c2c69b2`。
+- 本次上线两个提交：`6c69145`（登录不匹配恢复与 OAuth 失败说明）与
+  `c88bc2a`（每账号独立一致的客户端身份）。后者新增 `internal/egressid`，
+  修复号池与注册机多处未设置 User-Agent、从而以 `Go-http-client/1.1` 出网的问题，
+  并让注册机的 UA 按账号确定性随机、同时补齐与之自洽的 `sec-ch-ua*` 与
+  `accept-language`；邮箱与验证码读取也复用同一账号种子。
+- 从干净 `git archive` 快照构建，源码目录
+  `/home/ubuntu/project/account-pool-balancer-releases/20261106T094136Z-c88bc2a`，
+  快照 SHA-256 `e1d5e66fda925bb7daf44880879a886dc476eff58da8be59651a7a331e8d7739`；
+  不含本地未跟踪产物。
+- 固定镜像 `account-pool-balancer:release-c88bc2a-20261106T094136Z`，镜像ID
+  `sha256:3fa0ae5611d68761d65453c76091742f5705054e594302298b0832c397380f79`。
+  构建一次耗时 7.27 秒，未重复运行本提交已通过的本地全量测试。
+- 因注册存储与身份逻辑变更做断网副本预检：复用线上 UID/GID 1000:1000、
+  `--network none`、仅挂载副本；容器健康、healthz 返回 `{"ok":true}`、
+  无解密或 panic 报错，随后清理预检容器与副本。
+- 切换前以 25 秒×8 次采样确认注册库 mtime 与大小稳定（17:38:25 / 283848 字节），
+  判定无排队或运行中注册任务。旧进程停止前完整备份 data（gzip 校验通过，
+  SHA-256 `2f9e31ebda5375118f89a7fd60b2a4259a1e117684705672f4f0e22098aeecea`），
+  再复用原 Compose 仅切换本服务；配置、用户、挂载、端口、网络别名、健康检查与
+  资源参数保持不变。
+- 新容器 healthy、restartCount=0、未 OOM，运行镜像 ID 与目标一致。
+  `/healthz` 返回 200，首页四项资源（`app.css`/`app.js`/`perch.js`/`tokenharbor.js`，
+  `?v=363aafdcf3`）HTTP 200，本地与远端的 SHA-256 逐一相同。
+  `config.json`（82688 字节）与 `tokenharbor-signup.json`（283848 字节）保持原样。
+- **本次验收不包含上游真实注册或推理**：`egressid` 的实际效果需要等下一次
+  TokenHarbor 请求发生后才可在其面板上观察，本轮未主动注册、未解验证码、
+  未付款、未推理。
+
+### 时间记录（UTC）
+
+| 阶段 | 时间 / 时长 |
+|---|---|
+| 构建 | 09:46:27.611–09:46:34.881，7.27 秒 |
+| 备份 | 09:50:49.123–09:50:50.830，1.71 秒 |
+| 切换请求 | 09:51:24.194 |
+| Docker 健康确认 | 09:51:57.472，约 33 秒 |
+| 验收完成 | 09:53:26 |
+
+### 备份、回退与临时产物
+
+- 受限目录 `/home/ubuntu/backups/account-pool-balancer/20261106T094136Z-pre-c88bc2a`，
+  含 `data.tar.gz`、`docker-compose.yml`、`.env`；目录 0700、文件 0600，
+  不下载、不入 Git。
+- 保留旧镜像 `account-pool-balancer:rollback-20261106T094136Z`（`b7e751723905`，
+  对应 `111ba2c`）。若需降级，先确认新版是否已写入旧版无法识别的记录，
+  不能直接用旧 data 覆盖线上新写入。
+- 临时产物：`/tmp/apb-c88bc2a.tar.gz`、`/tmp/preflight-c88bc2a/`（副本已删）、
+  `/tmp/build-c88bc2a.log`，已登记，待用户同意后清理。
+
 ## 当前部署（2026-11-06 UTC，master：111ba2c）
 
 - 用户授权推送部署；`master` 已推送业务版本
