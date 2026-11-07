@@ -32,7 +32,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek medium 档位兼容（2026-11-07 21:16 UTC，02c61a8）
+## 当前部署：Mistral DeepSeek 无状态 store 兼容（2026-11-07 21:23 UTC，8d41516）
+
+- 用户要求观察中发现错误则修复、部署并重新观察10分钟。02c61a8窗口内已有真实流式DONE/completed且缓存44416/44816（99.11%），同时另一请求出现上游422 `extra_forbidden / body.store`。`8d41516407abe2f560b5d0f832e058019c7b9877`已正常推送master：仅精确DeepSeek Chat模型省略root store=false/null，true/非法/重复store本地拒绝，保留nested metadata.store；不假装支持持久化，不承诺上游平台的数据留存政策。保留此前medium→high及逐帧内容块兼容，不改账号调度或NewAPI配置。
+- 只跑Mistral定向Mock测试、gofmt和必要build，未重复全仓/race/vet或主动生产推理。一次预检原02c61a8健康，旧e6f063b工作树干净、余量286.5GiB；源码为干净git archive：`/home/ubuntu/project/account-pool-balancer-releases/20261107T212114Z-8d41516`，镜像`account-pool-balancer:release-8d41516-20261107T212114Z`，ID`sha256:66ddacf96e36ce5ce1b68ed340b6606eb65fac084e65811f3ca418541ca088ef`。
+- 复用既有脚本，仅内存适配；无存储格式变化，不额外复制敏感数据预检。新镜像就绪且无queued/running注册任务才停止旧服务，退出0后完整一致备份data并gzip/SHA256核验，仅image覆盖更新Balancer。**161账号、186注册记录核心资产及凭据/Key/代理/支付/备注、routingSecret、完整config和原用户/环境/挂载/端口/网络/资源/健康策略均保留**，未改在线功能开关。
+- 本机healthz/版本/四资源通过，healthy/零重启/无OOM；真实未登录公网登录页正常，healthz/四资源均200，保留`?v=e02f22dc28`资源SHA256逐项匹配；21:23:09.909 UTC公网验收通过。上线后已立即反馈；专用浏览器关闭，最终10分钟自然业务观察重新计时为21:23:09.909–21:33:09.909 UTC，不将中断的旧观察冒充完整窗口。
+- **完整10分钟观察完成**：约每15秒轮询（40次），两服务始终healthy/零重启/无OOM；NewAPI与Balancer一致确认Mistral10次成功，其中6次流式正常DONE/completed、4次非流式，零Mistral错误，未再见content数组解析/medium/store错误。结束后只读SQL复核计数一致，没有额外推理或再次部署。
+- 缓存为真实input912330/cached124288，token加权约13.62%，2/10请求有缓存、3/10绑定命中。此前99.11%是单次请求，不是全池命中率；**整体缓存仍偏低，不能宣称已整体改善或保证命中**。缺少稳定显式会话ID、新绑定/不同前缀/上游缓存路由仍需区分，不改调度或删除提示词来虚增数字。
+- 同窗口Modal有11次最终上游429（28条上游429尝试）、15次成功；OpenCode25次成功（NewAPI19条流式正常DONE/6条非流式）。另有独立cctoken渠道164的一条response.failed及cline-pass-console渠道71两条错误，不经过本Balancer；不将它们掩盖成零错误或通过无关重启/放宽限流处理。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 21:21:40.460–21:21:47.290（6.83秒） |
+| 请求停止 / 旧进程退出 | 21:21:47.391 / 21:21:47.494 |
+| 完整一致备份及核验 | 21:21:47.762–21:21:51.098 |
+| 切换请求 / 新容器启动 | 21:21:51.098 / 21:21:51.416 |
+| 首次HTTP可达 / Docker healthy | 21:21:52.556 / 21:22:21.801 |
+| 本机验收 / 公网验收 | 21:22:21.911 / 21:23:09.909 |
+
+未采样精确停机；旧退出至首HTTP可达观测间隔约5.1秒。受限正式备份`/home/ubuntu/backups/account-pool-balancer/20261107T212114Z-stateless-8d41516/`（0700/0600）保留data、原Compose/.env、构建/切换日志及回执，data SHA256`d6e2a6fe600c5dd36cb56cf8ee717be5d5cd3ad963b3cfc6a3a47ee448e40c74`。回退镜像`account-pool-balancer:rollback-20261107T212114Z`保留原02c61a8，回退前先核查新写入，不用旧data覆盖在线变化。无新增临时部署脚本/预检副本/容器或凭据下载；只补记录不再次部署。
+
+## 历史部署：Mistral DeepSeek medium 档位兼容（2026-11-07 21:16 UTC，02c61a8）
 
 - 用户授权解决后部署、再观察10分钟；`02c61a80f6a699e432f0a541581a98d81bed3532`已正常推送master。确定性错误为DeepSeek Chat上游400/3051拒绝medium：仅精确模型`deepseek-v4-1-flash-1017`将medium映射到high，已披露可能增加思考token；不降级/关闭思考，不改其他模型/档位/协议，不声称能保证缓存命中。保留a2ffae2流式内容块兼容。
 - 只复用/运行Mistral定向Mock测试及必要build，不重复全仓/race/vet、不主动生产推理。一次预检原a2ffae2健康，旧e6f063b工作树干净，磁盘余量286.7GiB。从干净git archive构建源码`/home/ubuntu/project/account-pool-balancer-releases/20261107T211431Z-02c61a8`；镜像`account-pool-balancer:release-02c61a8-20261107T211431Z`，ID`sha256:28004aa53424a316e8339d29db3218b4f6fb850bbc963f5605538c872676cdd4`。
