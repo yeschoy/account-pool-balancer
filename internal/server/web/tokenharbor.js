@@ -1,5 +1,5 @@
 // TokenHarbor 号池管理台。与 app.js 共用 $ / api / esc / modal，加载顺序在 app.js 之后。
-// 账号凭证是 thk_live_ Key；页面只显示掩码，从不回显密码、Cookie 或完整 Key。
+// 普通列表只显示 Key 掩码；完整 Key 仅在显式获取/复制窗口读取，不回显密码或 Cookie。
 
 const TH_STATUS = {
   saved: ['已保存（未注册）', 'warn'],
@@ -202,6 +202,7 @@ function thSubscriptionLabel(r) {
 function thRowActions(r) {
   const out = [];
   const button = (kind, text, primary = false) => `<button type="button" class="btn small ${primary ? 'primary' : ''} th-row-${kind}" data-id="${esc(r.id)}" ${thRowLocked(r.id) ? 'disabled' : ''}>${esc(text)}</button>`;
+  if (r.keyMasked) out.push(button('keys', '复制 Key'));
   if (r.status === 'saved') out.push(button('retry', '开始注册', true));
   if (thBatchEligible('subscription', r)) out.push(button('subscription', '检测套餐'));
   if (r.status === 'unverified' || (r.status === 'registered' && !r.verified)) out.push(button('reverify', '补验证'));
@@ -434,6 +435,7 @@ function thSessionActionEligible(row) {
 }
 
 function thBatchEligible(kind, row) {
+  if (kind === 'keys') return !!row.keyMasked;
   if (kind === 'import') return row.status === 'registered' && row.verified && row.subscription?.status === 'active';
   if (kind === 'retry') return ['saved', 'failed', 'uncertain'].includes(row.status);
   return thSessionActionEligible(row) && (kind !== 'checkout' || !row.checkoutPending);
@@ -453,7 +455,7 @@ function thUpdateSelection() {
   all.indeterminate = count > 0 && count < selectable.length;
   all.disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || selectable.length === 0;
   $('#th-selected-count').textContent = `已选 ${thState.selected.size} 个（仅本任务）`;
-  for (const [kind, id] of [['retry', 'register'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import']]) {
+  for (const [kind, id] of [['retry', 'register'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import'], ['keys', 'keys']]) {
     $(`#th-batch-${id}`).disabled = thState.batchBusy || thState.batchPrompt || thState.pending.size > 0 || !thState.rows.some((r) => thState.selected.has(r.id) && thBatchEligible(kind, r));
   }
   $('#th-batch-progress').textContent = thState.batchMessage;
@@ -537,6 +539,7 @@ async function thBatchAction(kind) {
   thState.batchPrompt = true;
   thRenderCurrentJob();
   try {
+    if (kind === 'keys') return await thShowKeys(rows);
     if (kind === 'checkout') return await thBatchCheckout(rows);
     if (kind === 'import') {
       const eligible = rows.filter((r) => thBatchEligible(kind, r)).length;
@@ -558,6 +561,10 @@ async function thBatchAction(kind) {
     thState.batchPrompt = false;
     thRenderCurrentJob();
   }
+}
+
+function thShowKeys(rows) {
+  return showStoredAPIKeys(rows.map((r) => ({ name: r.email || r.id, path: r.keyMasked ? '/api/tokenharbor/registrations/' + encodeURIComponent(r.id) + '/keys' : null })));
 }
 
 async function thBatchCheckout(rows) {
@@ -846,7 +853,7 @@ function thInstall() {
     if (checkbox.checked) thState.selected.add(checkbox.dataset.id); else thState.selected.delete(checkbox.dataset.id);
     thUpdateSelection();
   });
-  for (const [id, kind] of [['register', 'retry'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import']]) {
+  for (const [id, kind] of [['register', 'retry'], ['subscription', 'subscription'], ['checkout', 'checkout'], ['import', 'import'], ['keys', 'keys']]) {
     on('#th-batch-' + id, 'click', () => thBatchAction(kind).catch((e) => toast(e.message)));
   }
   on('#th-register-jobs', 'click', (e) => {
@@ -872,6 +879,8 @@ function thInstall() {
     thLogStatus(0);
   });
   on('#th-register-rows', 'click', (e) => {
+    const keys = e.target.closest('.th-row-keys');
+    if (keys) { thGuardRow(keys.dataset.id, () => thShowKeys(thState.rows.filter((r) => r.id === keys.dataset.id))).catch((err) => toast(err.message)); return; }
     const proxy = e.target.closest('.th-row-proxy');
     if (proxy) { thGuardRow(proxy.dataset.id, () => thRowProxy(proxy.dataset.id)).catch((err) => toast(err.message)); return; }
     const checkout = e.target.closest('.th-row-checkout');

@@ -574,7 +574,34 @@ async function testGitHubFormatAndSessionProjection() {
   assert.doesNotMatch(html, /mock-password|GEZDGNBV|private-key/);
 }
 
+async function testSavedKeySelectionAndExplicitRead() {
+  const e = environment(async () => { throw new Error('key selection must not call an upstream mutation'); });
+  const shown = [];
+  e.context.showStoredAPIKeys = async (entries) => shown.push(entries);
+  const selected = { id: 'row/one', email: '<mock>@test.local', status: 'failed', keyMasked: 'thk_…mask' };
+  const missing = { id: 'missing', email: 'missing@test.local', status: 'saved' };
+  const hidden = { id: 'hidden', email: 'hidden@test.local', status: 'imported', keyMasked: 'thk_…other' };
+  e.context.state.job = 'job';
+  e.context.state.jobs = [{id:'job', rows:[selected, missing, hidden]}];
+  e.context.state.selected.add(selected.id);
+  e.context.state.selected.add(missing.id);
+  e.context.state.selected.add(hidden.id);
+  e.context.renderTHJob(e.context.state.jobs[0]);
+  assert.equal(e.context.state.selected.has(hidden.id), false, 'other tab selection must not leak');
+  assert.match(e.node('#th-register-rows').innerHTML, /th-row-keys/);
+  assert.equal(e.node('#th-batch-keys').disabled, false);
+  await e.context.thBatchAction('keys');
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].length, 2);
+  assert.equal(shown[0][0].path, '/api/tokenharbor/registrations/row%2Fone/keys');
+  assert.equal(shown[0][1].path, null, 'no-key row is skipped, not resumed');
+  assert.equal(e.context.state.batchPrompt, false);
+  assert.doesNotMatch(JSON.stringify(e.context.state), /runtimeKey|thk_live_/);
+  assert.doesNotMatch(e.context.thRowActions(missing), /th-row-keys/);
+}
+
 (async () => {
+  await testSavedKeySelectionAndExplicitRead();
   await testResendVerificationAndVisibleInputs();
   await testTaskNotesAreEscapedScopedAndExplicitlySaved();
   await testGitHubFormatAndSessionProjection();

@@ -666,13 +666,18 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 // sends one tiny real request, which costs credits.
 // apiAccountKeys returns the unmasked keys so the admin can copy them from the edit dialog.
 func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	a, ok := s.cfg.Get().Account(r.PathValue("id"))
 	if !ok {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
-	if config.StrictResponses(a.Provider) {
+	if config.IsOpenCode(a.Provider) {
 		apiError(w, http.StatusForbidden, errors.New("upstream credentials are write-only"))
+		return
+	}
+	if a.Provider == config.ProviderTokenHarbor {
+		writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey})

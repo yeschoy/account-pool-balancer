@@ -348,6 +348,7 @@
               <span id="th-selected-count" class="muted small">已选 0 个</span>
               <button type="button" class="btn" id="th-batch-register" disabled>注册所选</button>
               <button type="button" class="btn" id="th-batch-subscription" disabled>刷新所选套餐</button>
+              <button type="button" class="btn" id="th-batch-keys" disabled>批量获取 API Key</button>
               <button type="button" class="btn" id="th-batch-checkout" disabled>获取所选订阅链接</button>
               <button type="button" class="btn primary" id="th-batch-import" disabled>校验并入池所选</button>
             </div>
@@ -492,7 +493,7 @@
         </div>
       </header>
       <div class="panel hidden" id="oc-batch">
-        <div class="actions"><button class="btn small" data-oc-batch="select">全选当前列表</button><button class="btn small" data-oc-batch="clear">取消选择</button><button class="btn small" data-oc-batch="enable">批量启用</button><button class="btn small" data-oc-batch="disable">批量禁用</button><button class="btn small" data-oc-batch="recover">批量恢复</button><button class="btn small" data-oc-batch="refresh">同步模型 / 额度</button><button class="btn small" data-oc-batch="proxy">检测出口</button><button class="btn small danger" data-oc-batch="delete">批量删除</button></div>
+        <div class="actions"><button class="btn small" data-oc-batch="select">全选当前列表</button><button class="btn small" data-oc-batch="clear">取消选择</button><button class="btn small" data-oc-batch="enable">批量启用</button><button class="btn small" data-oc-batch="disable">批量禁用</button><button class="btn small" data-oc-batch="recover">批量恢复</button><button class="btn small" data-oc-batch="refresh">同步模型 / 额度</button><button class="btn small hidden" data-oc-batch="keys">批量复制 Key</button><button class="btn small" data-oc-batch="proxy">检测出口</button><button class="btn small danger" data-oc-batch="delete">批量删除</button></div>
         <p class="muted small" id="oc-batch-result">在账号名前勾选；复用已有账号 API，顺序执行，逐项报告结果。</p>
       </div>
       <div class="panel flush"><div class="table-wrap"><table class="table" id="acc-table">

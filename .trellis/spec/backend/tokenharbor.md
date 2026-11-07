@@ -6,7 +6,7 @@
 - `config.StrictResponses` selects the native-key pools' strict state/replay safeguards. `quota.ResponseBindingSource` preserves existing OpenCode source hashes and adds Token Harbor credential/base/proxy hashes. Confirmed Responses bindings persist; ordinary session bindings do not. Missing/expired/wrong-source continuation fails 409, busy fails 429.
 - Inference/model-list hot paths never read websites. Background metadata uses the uniquely linked original imported row (exact accountId + full key), saved session through the pool account's own fixed proxy for GET `/pricing` + `/api/me/free-tier`, and native `/v1/models`. Source-bound TTL and late-store checks prevent stale permission reuse. Catalog presence/API tier never proves Pass coverage and never teaches OpenDesign funding classification.
 - No credential redirects, proxy-to-direct fallback or uncertain/post-commit replay. Recognized spend-confirmation responses hard-stop before editable rules and retain the upstream approval prompt.
-- Settings API projects inference base, directory sync and independent account sync intervals; do not serialize registration captcha credentials. Inference saves preserve registration settings and other pools' routing/rules. Registration saves preserve pool routing/model polling; both settings endpoints hide captcha credentials and proxy authentication. Upstream keys write-only in admin API.
+- Settings API projects inference base, directory sync and independent account sync intervals; do not serialize registration captcha credentials. Inference saves preserve registration settings and other pools' routing/rules. Registration saves preserve pool routing/model polling; both settings endpoints hide captcha credentials and proxy authentication. Ordinary admin projections mask upstream keys; only explicit authenticated /keys reads may reveal a saved TokenHarbor API key (see tokenharbor-keys.md). Other secrets remain write-only.
 - Cache usage stays nullable. Messages prompt includes cache reads AND writes; request/overview ratio uses that denominator. Token Harbor overview rates use measured-only cp/ck/ckr counters. cw/CacheWrite is the shared reported-write counter; kw/CacheCreation is a compatibility alias. Update both from one measurement without double-counting known-write requests. Price table has no write price: requests with measured writes have unknown cost, not understated bills.
 - Registration checkpoints persist the session immediately after signup. New rows with a mailbox persist a random key-first or verify-first completion order; checkpoint the one-time key immediately when obtained and verification immediately when confirmed. Legacy rows remain key-first. Retry preserves credentials; Resume reuses cookies/key, never repeats signup. Mail selection on resume uses the original CreatedAt. Free-model data consent is opt-in, never a registration side effect. Mailbox delivery is an explicitly separate direct HTTPS transport, not a proxy fallback for Token Harbor.
 - Agent Pass checkout is monthly/one-time for a Free account only: preview /api/billing/subscribe, validate fromTier=free/kind=tier/oneTime/planName/period and observed <=$1.99 price, then create hosted checkout with expectedPayNowCents and autoRenew=false. Never confirm paid-tier upgrades, region acknowledgements, balance spending or captures. No redirect/automatic retry. Lock the row before preview, but persist the pending marker only after validated preview, immediately before hosted creation via `CreateCheckoutGuarded`; failed preview must leave a new row retryable, while legacy uncertain markers survive failed recovery previews. Block uncertain replay unless a single-account request explicitly attests `confirmNoPendingOrder:true` after the user checks the website for no payment/pending order. Never infer that attestation, persist it, send it upstream or use it for batch recovery; existing valid links always win and cannot be overwritten. Encrypted checkout URL appears only in explicit authenticated no-store GET/POST checkout responses, never row summaries/live logs. Accept only absolute HTTPS links on exact checkout.stripe.com (no userinfo, explicit port, whitespace or empty root-only address); treat the returned path/query/fragment as opaque, not a fixed /c/pay prefix. Backend and modal validators must agree. Stripe's documented Session.url contract specifies the host but not a pathname: https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url. Do not expand to custom domains or invoice links implicitly.
@@ -79,32 +79,33 @@ Correct: save/register → separate current-plan observation → user payment �
 ## Observed weekly allowance and monthly-total display
 
 ### 1. Scope / Trigger
-Extend per-account balance display without changing Pass eligibility or the overview's user-approved2× equivalents.
+Extend per-account balance display without changing Pass eligibility. User now requests the account table to use the same Agent $5/week and $20/month-total equivalent display basis as the overview.
 
 ### 2. Signatures
 `PassUsage.weeklyLimitUsd` comes only from authenticated `/api/me/free-tier` `plan.window_allowance_usd`; `monthlyLimitUsd` comes from `plan.allowance_usd`. Both are optional finite positive numbers, consistent with window_days=7 and the matched plan.
 
 ### 3. Contracts
 - The observed response gives weekly used percentage and monthly nominal allowance (`windows_per_month=4`), not an independently measured monthly balance. The observed dashboard likewise renders weekly usage. Never infer month remaining from one week, multiply weekly remaining by4 or substitute wallet/checkout price.
-- UI shows remaining percent, approximate actual USD weekly balance (`limit × (100-usedPct)/100`), weekly reset, and `月限余额：未知（官网未提供月剩余）` with the known monthly total. Clone optional amount pointers in quota snapshots; optional display fields must not change the weekly eligibility gate.
+- UI shows remaining percent and weekly reset. Confirmed active Agent (`status=active,tier=plus`, never a guessed name) uses5 as weekly display limit and20 as monthly equivalent total, with an explicit non-upstream-currency label. Other tiers use observed optional limits. Weekly balance is `displayLimit × (100-usedPct)/100`; stale/expired/error/unknown percentage never becomes a current balance. `月限余额：未知（官网未提供月剩余）` stays unknown, with nominal/equivalent monthly total separate. Do not rewrite raw measurements or change eligibility. Clone optional amount pointers in quota snapshots.
 
 ### 4. Validation & Error Matrix
 | Condition | Display / behavior |
 |---|---|
-| Valid week limit + fresh percentage | Approximate USD remainder and remaining percentage |
-| Missing/invalid/inconsistent money fields | Amount unknown; established weekly gate unchanged |
+| Confirmed Agent + fresh percentage | $5/week equivalent remainder; $20/month equivalent total, even if optional measured amount fields are absent |
+| Other tier + valid week limit + fresh percentage | Approximate measured-USD remainder and remaining percentage |
+| Other tier + missing/invalid/inconsistent money fields | Amount unknown; established weekly gate unchanged |
 | Expired/failed/unknown usage | Current balance unknown; old percentage clearly labelled |
 | Monthly total only | Show total separately; monthly remaining stays unknown |
 
 ### 5. Good / Base / Bad Cases
-Good: observed weekly2.5/monthly-total10 and29% weekly usage ⇒ approximate weekly1.78, month remaining unknown. Base: old cached observations retain percentages with unknown amounts. Bad: presenting10 or `10×(1−29%)` as monthly remaining.
+Good: confirmed Agent, observed weekly2.5/monthly-total10 and29% weekly usage ⇒ equivalent weekly3.55/5, monthly equivalent total20 but month remaining unknown. Base: other tiers retain actual observed amounts; missing/expired usage remains unknown. Bad: treating the equivalent display as an upstream measurement or deriving a monthly remainder from weekly usage.
 
 ### 6. Tests Required
-Cover observed2.5/10 amounts, absent/invalid money fields with unchanged weekly gate, exhausted/expired/unknown views, rounding/escaping and detached snapshots. Run `node internal/server/tokenharbor_quota_web_test.js` and Go normal/race tests.
+Cover Agent5/20 equivalent versus other-tier actual amounts, missing/invalid measurements with unchanged weekly gate, exhausted/expired/unknown views, name-only non-proof, rounding/escaping and detached snapshots. Run `node internal/server/tokenharbor_quota_web_test.js` and Go normal/race tests.
 
 ### 7. Wrong vs Correct
-Wrong: fabricate a monthly balance or reuse the overview2× equivalent as actual per-account USD.
-Correct: expose only independently measured fields, label weekly estimates, and keep unsupported monthly remainder unknown.
+Wrong: fabricate a monthly balance, relabel equivalents as measured upstream USD, or rewrite stored limits.
+Correct: label the user-requested Agent5/20 equivalents, keep other tiers measured and preserve unknown monthly remainder.
 
 ## Read-only checkout diagnostics and first-failure preservation
 

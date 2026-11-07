@@ -7,6 +7,8 @@ introduce a new frontend build system. Keep node/pnpm artifacts ignored.
 - Escape dynamic HTML with esc(); use textContent for diagnostic strings.
 - OpenCode upstream credentials are write-only. Only masked suffixes may be
   rendered. Never fetch /keys for these providers or include raw config secrets.
+- TokenHarbor explicit saved-Key reveal/copy follows `../backend/tokenharbor-keys.md`;
+  ordinary lists remain masked, modal close clears secrets, OpenCode remains write-only.
 - Preserve separate pool filters and explicit provider declarations on import.
 - Batch controls call the existing account APIs, keep provider/selection scope,
   report partial failures and require explicit confirmation for deletion.

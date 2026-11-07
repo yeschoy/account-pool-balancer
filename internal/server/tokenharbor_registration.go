@@ -28,10 +28,9 @@ import (
 // separate for the same reason they do in the Perch pool: a batch can be
 // registered ahead of time and imported later, deliberately.
 //
-// Credentials never cross this file's HTTP boundary: rows carry a password
-// and a key, the API returns thsignupstore.Summary (masked key, credential-free
-// proxy label) and the pool account gets the key through config, as any pool's
-// account would.
+// Ordinary responses use thsignupstore.Summary (masked key, credential-free
+// proxy label). Only the explicit authenticated /keys action reveals a saved
+// API key; passwords, sessions and other credentials are never projected.
 
 // thRegistrationJobs bounds how many attempts are kept in the list.
 const thRegistrationJobs = 50
@@ -180,6 +179,7 @@ func (s *Server) registerTokenHarbor(mux *http.ServeMux, a func(string, http.Han
 	a("GET /api/tokenharbor/registrations", s.apiTHRegistrations)
 	a("GET /api/tokenharbor/overview", s.apiTHOverview)
 	a("GET /api/tokenharbor/registrations/{id}", s.apiTHRegistration)
+	a("GET /api/tokenharbor/registrations/{id}/keys", s.apiTHRowKeys)
 	a("PUT /api/tokenharbor/registrations/{id}/note", s.apiTHJobNote)
 	a("PUT /api/tokenharbor/registrations/{id}/proxy", s.apiTHRowProxy)
 	a("POST /api/tokenharbor/registrations/{id}/import", s.apiTHImport)

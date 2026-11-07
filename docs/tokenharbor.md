@@ -6,7 +6,7 @@
 
 1. 管理台切换 **Token Harbor 号池**。建议由注册机原记录显式校验入池，以关联保存的登录会话；手动/批量导入 `thk_…` Key 仍可保存，但没有唯一原会话时套餐未知、暂停调度。默认分组 `tokenharbor`，自定义分组不能混用其他供应商。
 2. 在本池「下游密钥」新建 `sk-odb-…`，分组与账号一致。此密钥只调度该分组，不能借其他池账号。
-3. 默认上游 `https://tokenharbor.ai/v1`，可在本池路由设置修改（必须含 `/v1`，无 URL 凭据、查询串或 fragment）。上游 key 在管理 API 只显示掩码，不提供原文读取。
+3. 默认上游 `https://tokenharbor.ai/v1`，可在本池路由设置修改（必须含 `/v1`，无 URL 凭据、查询串或 fragment）。普通管理列表只显示上游 Key 掩码；管理员可在显式获取/复制操作中读取已保存的完整 API Key，密码和 Cookie 仍不回显。
 4. 通过中转站时开启会话/缓存头透传。账号可设固定 HTTP/SOCKS 代理、并发/RPM、优先级和权重；代理失败不会自动直连。
 
 ### Codex
@@ -91,6 +91,14 @@ pi 当前 SDK 支持 `x-session-id` / `session_id` / `x-session-affinity`，但�
 - **大额消费确认硬停止**，优先于可编辑错误规则。保留原始确认提示，不自动确认、不通过换 key 绕过。仅原样透传调用方明确提供的 `x-th-confirm-spend`。该头会允许单次花掉大部分余额，应由用户自行决定。
 - 从基础代码版本升级时，已有非空规则不被覆盖；在「路由设置 → Token Harbor → 恢复默认规则 → 保存」获得新增 429/5xx/余额冷却规则。
 
+## 获取与复制已保存的 API Key
+
+- **注册机**：在当前任务、当前分类勾选账号，点击「批量获取 API Key」；有 Key 的记录也可逐行点击「复制 Key」。尚未保存 Key 的记录跳过，不会因此注册、恢复流程或重新创建 Key。
+- **号池 → 账号**：每行有「复制 Key」；勾选后点「批量复制 Key」。只处理当前号池、当前分组筛选下的选中账号，不跨池导出。
+- 显式管理员 GET `/api/tokenharbor/registrations/{rowId}/keys` 和 `/api/accounts/{accountId}/keys` 返回 `{"runtimeKey":"已保存的Key"}`，带 `Cache-Control: no-store`。注册记录不存在返回404，尚无 Key 返回409；OpenCode 的同名接口仍为403、凭据仅写入。
+- 统一窗口最多3个并行只读请求，按选择顺序输出、一行一把、完整 Key 去重；展示成功/失败/跳过数量，不自动重试。点击复制才写入剪贴板，窗口关闭清除页面明文并停止后续读取，已发出请求的迟到结果不再显示。剪贴板需自行清理；普通轮询、日志和 localStorage 不保存明文。
+- Agent Pass 账号表与概览统一使用 **$5/周、$20/月等效总额**。例如周已用29%显示周余额约 `$3.55 / $5.00`；这不是官网原始美元额度，也不改变上游读数或调度门禁。月剩余继续显示未知，不将周余额乘4冒充月余额；其他套餐保持官网实测口径。
+
 ## 概览与日志
 
 复用现有概览、账号状态、请求/错误/详细日志，按 provider 过滤。请求日志包括选中账号、会话依据、绑定命中/换号、各次尝试、状态、耗时、首字时间、输入/输出、缓存读取与写入 token。
@@ -142,7 +150,7 @@ Content-Type: application/json
 - finish 从当前页面动态读取 Action ID/Key，提交实际 URL（保留 next 查询串）的 multipart server action；不硬编码捕获的 Cookie、Action ID、Sentry、客户端指纹或部署头。只有官网确认 dashboard 跳转才记完成，HTTP200 不等于成功；不默认同意免费模型的数据条款。
 - 「GitHub 授权后 TokenHarbor 代理」可填写独立 IPv6 出口代理，按账号顺序绑定；留空沿用授权代理。仅确认 OAuth/finish 后切换，创建 Key、邮箱验证、套餐检测走 TH 代理；接码服务显式直连。行内“改代理”只改 TH 出口，不改 GitHub 授权出口。两个域的 Cookie 不互相转发，GitHub Cookie 与 OAuth `provider_token`（如有 refresh token 也保留）独立记录，TH Cookie 续期不会擦掉原 GitHub 授权令牌；失败不换路。
 - OAuth 完成不代表 TokenHarbor 邮箱已验证；继续原有创建 Key、邮件验证流程，等待超时保留双会话和 Key，之后可补验证。已完成 OAuth 的重试复用 TH 会话，不重复授权/finish/创建已有 Key，仍须已验证邮箱和有效付费套餐才可手动入池。
-- **用户明确选择：新增 GitHub 整行记录（密码、2FA、两套 Cookie、API Key 等）明文保存**在业务文件 `data/tokenharbor-signup.json` 的 `githubRows`；文件原子写入、0600，目录新建0700，不入 Git，管理 API/页面/日志不回显。旧邮箱记录及保存代理池继续使用原加密部分，不全库解密迁移。读取该文件即可取得 GitHub 会话，请限制备份/目录访问；回滚旧版前先备份，旧版写文件会丢弃不认识的 GitHub 行。
+- **用户明确选择：新增 GitHub 整行记录（密码、2FA、两套 Cookie、API Key 等）明文保存**在业务文件 `data/tokenharbor-signup.json` 的 `githubRows`；文件原子写入、0600，目录新建0700，不入 Git，普通管理 API/页面/日志不回显（完整 API Key 仅在上述显式复制窗口读取）。旧邮箱记录及保存代理池继续使用原加密部分，不全库解密迁移。读取该文件即可取得 GitHub 会话，请限制备份/目录访问；回滚旧版前先备份，旧版写文件会丢弃不认识的 GitHub 行。
 - API 附加字段：账号 `provider:"github",login,password,totpSecret,mailboxUrl,githubProxyUrl?,sessionProxyUrl?`；请求 `proxies` 为授权代理池、`sessionProxies` 为 TH 后续代理池。`sessionProxyUrl:""` 显式绑定后续直连。仅保存不会发起外部请求；按 GitHub login 去重，不因授权解析出真实邮箱而重复建行。
 
 验证范围：本地 Mock 覆盖 GitHub 密码/TOTP/授权、动态 finish、分离的授权/会话传输、邮箱验证、失败不重放、恢复不重建 Key、明文与旧加密共存及不回显；未将 Mock 当成真实账号注册/代理出口验收。后续单真实账号实测在固定代理入口即遇 HTTP403（`forbidden ip … not supported`），未到 GitHub 登录、未取得会话/Key，不算完整注册验收。SOCKS5 收到 HTTP 响应、CONNECT 拒绝、DNS/超时等现按固定服务阶段和安全错误类别报告，不输出原始 URL/state 或代理认证信息；不自动改协议、换节点或重试。随后第二个账号经用户明确授权以 IPv4 直连，实测修复了官方自定义鉴权域名漏白名单；到达官网/鉴权服务和 GitHub 授权入口，但上下文登录页超时或返回未识别表单，仍未完成登录、finish、邮箱验证或生成 Key。5个 GitHub 中间 Cookie 与1个 TH PKCE 检查点已私下保存，不代表有效会话；未确认密码错误或平台风控。

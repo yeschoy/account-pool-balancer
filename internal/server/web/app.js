@@ -142,6 +142,56 @@ $('#modal-form').addEventListener('submit', (e) => e.preventDefault());
 const modalErr = (msg) => { $('#modal-error').textContent = msg; };
 function showJSON(title, obj) { modal({ title, body: `<pre>${esc(JSON.stringify(obj, null, 2))}</pre>`, wide: true }); }
 
+// Explicit secret read only: no polling/cache/localStorage, no upstream key creation.
+// Both pool and registration batches use bounded reads in the captured selection order.
+async function showStoredAPIKeys(entries, title = '批量获取 / 复制 API Key') {
+  let closed = false, next = 0;
+  const results = new Array(entries.length);
+  const keys = () => [...new Set(results.filter((r) => r?.key).map((r) => r.key))];
+  const render = () => {
+    if (closed) return;
+    const done = results.filter(Boolean);
+    const success = done.filter((r) => r.key).length;
+    const failed = done.filter((r) => r.status === 'failed').length;
+    const skipped = done.filter((r) => r.status === 'skipped').length;
+    $('#stored-keys-progress').textContent = `已处理 ${done.length}/${entries.length} · 成功 ${success} · 失败 ${failed} · 跳过 ${skipped} · 去重后 ${keys().length} 把 Key`;
+    $('#stored-keys-output').value = keys().join('\n');
+    $('#stored-keys-errors').textContent = results.map((r, i) => r && !r.key ? `${entries[i].name}：${r.status === 'skipped' ? '尚无已保存 Key，已跳过' : '获取失败，请核对账号后手动重试'}` : '').filter(Boolean).join('\n');
+    $('#modal-actions button[value="copy"]').disabled = done.length !== entries.length || success === 0;
+  };
+  const worker = async () => {
+    while (!closed && next < entries.length) {
+      const i = next++, entry = entries[i];
+      let result = { status: 'skipped' };
+      if (entry.path) {
+        try {
+          const out = await api('GET', entry.path);
+          if (typeof out?.runtimeKey !== 'string' || !out.runtimeKey.trim() || /[\r\n]/.test(out.runtimeKey)) throw new Error('missing key');
+          result = { status: 'success', key: out.runtimeKey };
+        } catch { result = { status: 'failed' }; }
+      }
+      if (closed) return;
+      results[i] = result;
+      render();
+    }
+  };
+  await modal({ title, wide: true,
+    body: '<p class="muted small">只读取已保存的 API Key，不会创建、替换密钥或启动注册。每行一把，按所选顺序去重；失败不自动重试。关闭窗口即清除本页明文（剪贴板内容需自行清除）。</p><p id="stored-keys-progress" role="status"></p><textarea id="stored-keys-output" rows="10" readonly autocomplete="off" spellcheck="false" aria-label="已获取的 API Key"></textarea><pre id="stored-keys-errors" class="muted small"></pre>',
+    buttons: [{ label: '关闭', value: 'close' }, { label: '复制全部 API Key', value: 'copy', primary: true, action: () => { if (keys().length) copyText(keys().join('\n')); return false; } }],
+    onOpen: (dlg) => {
+      dlg._onClose = () => {
+        closed = true;
+        results.fill(null);
+        $('#stored-keys-output').value = '';
+        $('#stored-keys-errors').textContent = '';
+        $('#modal-body').replaceChildren();
+      };
+      render();
+      void Promise.all(Array.from({ length: Math.min(3, entries.length) }, worker));
+    },
+  });
+}
+
 // ---- auth ----
 let authMode = 'login';
 async function boot() {
@@ -249,6 +299,7 @@ function renderPoolTabs() {
   $('#btn-add-device').classList.toggle('hidden', pool !== 'opendesign');
   $('#oc-batch').classList.toggle('hidden', !managedKeyPool());
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
+  $('#oc-batch [data-oc-batch="keys"]').classList.toggle('hidden', !isTokenHarbor());
   // the last two columns of the account table mean different things per pool
   const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', tokenharbor: '周限 / 月限余额', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
     wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', tokenharbor: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
@@ -432,15 +483,18 @@ function tokenHarborQuotaHTML(a) {
   const windowExpired = u.activated && (!u.resetsAt || !Number.isFinite(Date.parse(u.resetsAt)) || Date.parse(u.resetsAt) <= Date.now());
   const fresh = observed && pctKnown && !u.error && !windowExpired;
   const left = pctKnown ? 100 - u.usedPercent : null;
+  const agent = t?.plan?.status === 'active' && t.plan.tier === 'plus';
+  const weeklyLimit = agent ? 5 : u.weeklyLimitUsd;
+  const monthlyLimit = agent ? 20 : u.monthlyLimitUsd;
   let weekly = '未知';
   if (fresh) {
-    weekly = amount(u.weeklyLimitUsd) ? `约 $${(Math.round(u.weeklyLimitUsd * left) / 100).toFixed(2)} / $${u.weeklyLimitUsd.toFixed(2)}（剩余 ${num(left)}%）` : `剩余 ${num(left)}%（金额未知）`;
+    weekly = amount(weeklyLimit) ? `约 $${(Math.round(weeklyLimit * left) / 100).toFixed(2)} / $${weeklyLimit.toFixed(2)}（剩余 ${num(left)}%）` : `剩余 ${num(left)}%（金额未知）`;
   } else if (pctKnown) {
     weekly += `（上次剩余 ${num(left)}%，不可视为当前余额）`;
   }
   const reset = u.resetsAt ? ' · 重置 ' + esc(fmtTime(u.resetsAt, true)) : !pctKnown ? ' · 周窗口未知' : u.activated ? ' · 重置未知' : ' · 周窗口尚未激活';
-  const monthly = '未知（官网未提供月剩余）' + (amount(u.monthlyLimitUsd) ? ` · ${observed ? '' : '上次'}月总额度 $${u.monthlyLimitUsd.toFixed(2)}` : '');
-  return `<span class="badge ${observed ? 'ok' : 'warn'}">${esc(t?.plan?.name || '套餐未知')}${observed ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周限余额：${esc(weekly)}${reset}</div><div class="acc-sub">月限余额：${esc(monthly)}</div><div class="acc-sub">${esc(t?.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t?.checkedAt, true))} · 官网额度，非钱包余额；周金额按百分比估算</div>`;
+  const monthly = '未知（官网未提供月剩余）' + (amount(monthlyLimit) ? ` · ${observed ? '' : '上次'}月${agent ? '等效总额度' : '总额度'} $${monthlyLimit.toFixed(2)}` : '');
+  return `<span class="badge ${observed ? 'ok' : 'warn'}">${esc(t?.plan?.name || '套餐未知')}${observed ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周限余额：${esc(weekly)}${reset}</div><div class="acc-sub">月限余额：${esc(monthly)}</div><div class="acc-sub">${esc(t?.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t?.checkedAt, true))} · ${agent ? 'Agent Pass 按 $5/周、$20/月等效基准，非官网原始美元额度' : '官网额度'}，非钱包余额；周金额按百分比估算</div>`;
 }
 
 function windowsHTML(a) {
@@ -525,10 +579,16 @@ function accountRow(a) {
     <td class="num">${r.rpm} / ${effLimit(a.maxRpm, st.learnedRpm)}</td>
     <td class="num">${r.health === null || r.health === undefined ? '<span class="muted">—</span>' : pct(r.health)}<div class="acc-sub">${r.samples} 样本</div></td>
     <td class="num">${num(r.selections)} / ${num(r.bindings)}${pool === 'opencode-go' ? `<div class="acc-sub" title="当前分钟及前59分钟的网关已发送推理次数，包含会话命中；不含额度/诊断。分钟级窗口，新版本升级前的历史不回填。">近1h 已发 ${num(r.recentRequests1h ?? 0)} 次 · 待发 ${num(r.pendingRequests ?? 0)}</div>` : ''}</td>
-    <td><div class="menu"><button class="btn small" data-menu>操作 ▾</button></div></td>
+    <td>${a.provider === 'tokenharbor' ? `<button class="btn small" data-account-copy-key="${esc(a.id)}">复制 Key</button>` : ''}<div class="menu"><button class="btn small" data-menu>操作 ▾</button></div></td>
   </tr>`;
 }
 
+$('#acc-table').addEventListener('click', (ev) => {
+  const button = ev.target.closest('[data-account-copy-key]');
+  if (!button) return;
+  const account = accountsCache.find((a) => a.id === button.dataset.accountCopyKey && a.provider === 'tokenharbor');
+  if (account) accountAction(account, 'copy-key');
+});
 $('#acc-table').addEventListener('change', (ev) => {
   const id = ev.target.dataset.ocSelect; if (!id) return;
   if (ev.target.checked) ocSelected.add(id); else ocSelected.delete(id);
@@ -539,8 +599,16 @@ $('#oc-batch').addEventListener('click', async (ev) => {
   if (action === 'select' || action === 'clear') {
     $$('#acc-table [data-oc-select]').forEach((input) => { input.checked = action === 'select'; if (input.checked) ocSelected.add(input.dataset.ocSelect); else ocSelected.delete(input.dataset.ocSelect); }); return;
   }
-  const selected = accountsCache.filter((a) => a.provider === pool && ocSelected.has(a.id));
+  const group = $('#acc-group-filter').value;
+  const selected = accountsCache.filter((a) => a.provider === pool && (!group || a.group === group) && ocSelected.has(a.id));
   if (!selected.length) { toast('请先选择账号'); return; }
+  if (action === 'keys') {
+    if (!isTokenHarbor() || button.disabled) return;
+    button.disabled = true;
+    try { await showStoredAPIKeys(selected.map((a) => ({ name: a.name || a.id, path: `/api/accounts/${encodeURIComponent(a.id)}/keys` }))); }
+    finally { button.disabled = false; }
+    return;
+  }
   if (action === 'delete' && await modal({ title: '批量删除', body: `<p>删除选中的 ${selected.length} 个账号及其凭证？不能撤销；状态续传将失效。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '删除', value: 'delete', danger: true }] }) !== 'delete') return;
   $$('#oc-batch button').forEach((b) => { b.disabled = true; });
   const errors = []; let completed = 0;
@@ -568,6 +636,8 @@ async function loadAccounts() {
   const cur = sel.value;
   sel.innerHTML = '<option value="">全部分组</option>' + groups.map((g) => `<option ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
   const rows = d.accounts.filter((a) => !cur || a.group === cur);
+  const visible = new Set(rows.map((a) => a.id));
+  for (const id of ocSelected) if (!visible.has(id)) ocSelected.delete(id);
   $('#acc-table tbody').innerHTML = rows.map(accountRow).join('');
   $('#acc-empty').classList.toggle('hidden', d.accounts.length > 0);
   applyWidths($('#acc-table'));
@@ -615,7 +685,7 @@ async function stagingAction(it, act) {
     await loadAccounts();
   } catch (e) { toast(e.message); }
 }
-$('#acc-group-filter').addEventListener('change', loadAccounts);
+$('#acc-group-filter').addEventListener('change', () => { ocSelected.clear(); loadAccounts().catch((e) => toast(e.message)); });
 $('#btn-refresh-acc').addEventListener('click', () => loadAccounts().catch((e) => toast(e.message)));
 
 document.addEventListener('click', (ev) => {
@@ -645,6 +715,9 @@ window.addEventListener('scroll', () => { const m = $('.menu-list'); if (m) m.re
 async function accountAction(a, act) {
   try {
     switch (act) {
+      case 'copy-key':
+        if (a.provider !== 'tokenharbor' || $('#modal').open) return;
+        return await showStoredAPIKeys([{ name: a.name || a.id, path: `/api/accounts/${encodeURIComponent(a.id)}/keys` }], '复制 API Key');
       case 'edit': return editAccount(a);
       case 'test': return testAccount(a);
       case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
@@ -672,14 +745,14 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" placeholder="${a ? esc(a.runtimeKey) + '（留空不变）' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。Key 仅写入；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。完整 Key 仅通过显式获取/复制操作读取；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
         : 'River 直接使用 API Key（rv_…）推理，没有额度接口，没有控制密钥。'}</span>`
       : `<label>控制密钥</label><input id="f-ctrl" placeholder="${a && a.hasControlKey ? esc(a.controlKey) + '（留空不变）' : 'vela_ctrl_…（可选，用于读额度）'}" autocomplete="off">
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
-    ${a && !managedKeyPool() ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
+    ${a && !isOpenCode() ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
     <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', pool === 'opencode-go' ? 1 : 0)}">
     <span class="hint">0 表示不限</span>

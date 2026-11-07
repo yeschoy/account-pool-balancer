@@ -4,6 +4,8 @@ Read [OpenCode integration contracts](opencode.md) before modifying config,
 quota, pool, proxy, identity or admin code in this repository.
 Read [Token Harbor contracts](tokenharbor.md) for its native-key integration,
 cache accounting, strict continuation and write-only settings boundary.
+Read [Explicit saved API-key reads](tokenharbor-keys.md) before changing
+TokenHarbor Key reveal/copy or its admin credential boundary.
 Read [Registration profiles and workers](tokenharbor-registration-identity.md)
 for saved browser identities, completion order, task chronology and1–5 workers.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,
