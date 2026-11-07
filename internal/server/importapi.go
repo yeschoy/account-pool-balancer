@@ -338,7 +338,7 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 		declared = ik.Provider
 	}
 	provider := config.ResolveProvider(declared, runtimeKey)
-	if (config.StrictResponses(ik.Provider) || config.StrictResponses(provider)) && provider != ik.Provider {
+	if (config.WriteOnlyCredentials(ik.Provider) || config.WriteOnlyCredentials(provider)) && provider != ik.Provider {
 		return importResult{Status: "error", Name: name, Error: "import key cannot import into a different provider/tier"}
 	}
 	if group == "" {
@@ -354,6 +354,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 	case !config.ValidRuntimeKeyFor(provider, runtimeKey) || len(runtimeKey) > 512:
 		if provider == config.ProviderPerch {
 			return fail("perch accounts take no API key: POST the account export to /open/v1/perch/import instead")
+		}
+		if provider == config.ProviderMistral {
+			return fail("Mistral runtimeKey must be an 8..512 character ASCII API token without whitespace")
 		}
 		if config.IsOpenCode(provider) {
 			return fail("OpenCode runtimeKey must be an 8..512 character ASCII API token without whitespace")

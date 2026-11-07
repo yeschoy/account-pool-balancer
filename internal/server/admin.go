@@ -572,7 +572,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			switch {
-			case (provider == config.ProviderOllama || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
+			case (provider == config.ProviderOllama || provider == config.ProviderMistral || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
 				// an Ollama key has no prefix the pool can check, so the
 				// first free token of such a line is the key
 				a.RuntimeKey = field
@@ -616,7 +616,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, a := range added {
 			key := a.Provider + "\x00" + a.RuntimeKey
-			if config.StrictResponses(a.Provider) && seen[key] {
+			if config.WriteOnlyCredentials(a.Provider) && seen[key] {
 				continue
 			}
 			c.Accounts = append(c.Accounts, a)
@@ -671,7 +671,7 @@ func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
-	if config.StrictResponses(a.Provider) {
+	if config.WriteOnlyCredentials(a.Provider) {
 		apiError(w, http.StatusForbidden, errors.New("upstream credentials are write-only"))
 		return
 	}
@@ -698,7 +698,7 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.httpClient(a.ProxyURL)
-	if a.Provider == config.ProviderTokenHarbor {
+	if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
 	out := map[string]any{}
@@ -753,14 +753,14 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 				model = "deepseek-ai/DeepSeek-V4.1-Flash"
 			case config.ProviderOllama:
 				model = "gpt-oss:20b"
-			case config.ProviderModal, config.ProviderTokenHarbor:
+			case config.ProviderModal, config.ProviderTokenHarbor, config.ProviderMistral:
 				// Use the account catalog, never guess a model for these pools.
 				// a Modal model is an Endpoint hostname that differs per
 				// workspace: the account's own catalogue is the only source
 				model = s.firstCatalogModel(a)
 				if model == "" {
 					message := "没有读到该 token 的 Endpoint 列表（/v1/models）：Modal 的模型名就是 Endpoint 的 hostname，无法猜默认值，请手动填写"
-					if a.Provider == config.ProviderTokenHarbor {
+					if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 						message = "没有读到该账号的模型目录（/v1/models），不能猜默认模型，请刷新目录或手动填写"
 					}
 					out["inference"] = map[string]any{"ok": false, "error": message}
@@ -1143,6 +1143,7 @@ type settingsDoc struct {
 	RetryRules  []rules.RetryRule    `json:"retryRules"`
 	OpenCode    *config.OpenCode     `json:"opencode,omitempty"`
 	TokenHarbor *tokenHarborSettings `json:"tokenHarbor,omitempty"`
+	Mistral     *config.Mistral      `json:"mistral,omitempty"`
 }
 
 func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
@@ -1151,7 +1152,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1167,7 +1168,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
 		c.Upstream, c.Quota, c.Logs = in.Upstream, in.Quota, in.Logs
-		if !config.StrictResponses(prov) {
+		if !config.StrictResponses(prov) && prov != config.ProviderMistral {
 			c.Routing = in.Routing
 		}
 		c.Pricing = in.Pricing
@@ -1182,6 +1183,12 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch prov {
+		case config.ProviderMistral:
+			if in.Mistral != nil {
+				c.Mistral.BaseURL = in.Mistral.BaseURL
+			}
+			c.Mistral.Routing = &in.Routing
+			c.MistralErrorRules, c.MistralRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderTokenHarbor:
 			c.TokenHarbor.Routing = &in.Routing
 			c.TokenHarborErrorRules, c.TokenHarborRetryRules = in.ErrorRules, in.RetryRules

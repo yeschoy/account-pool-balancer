@@ -334,6 +334,8 @@ func poolPathOK(provider, path string) bool {
 	switch provider {
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 		return opencode.FromPath(path) != "" || path == "/v1/models"
+	case config.ProviderMistral:
+		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/responses/input_tokens" || path == "/v1/fim/completions" || path == "/v1/embeddings"
 	case config.ProviderTokenHarbor:
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
 	case config.ProviderPerch:
@@ -459,7 +461,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
 				capturedBody = goPrivateBody(reqBody)
 			}
-			if rec.Provider == config.ProviderTokenHarbor {
+			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 				d.RequestHeaders = maskHeaders(cfg, thPrivateHeaders(reqHeader))
 				for _, name := range cfg.Routing.SessionHeaders {
 					for key := range d.RequestHeaders {
@@ -479,7 +481,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			respBody, cut := cw.body()
 			if rec.Provider == config.ProviderOpenCodeGo {
 				respBody = goPrivateBody(respBody)
-			} else if rec.Provider == config.ProviderTokenHarbor {
+			} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 				respBody = thPrivateBody(respBody, detailIdentities)
 			}
 			d.ResponseBody, _ = maskBody(cfg, respBody, len(respBody))
@@ -570,22 +572,22 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqBody = body
-	obj, err := parseRoutingBody(body, rec.Provider == config.ProviderTokenHarbor)
+	obj, err := parseRoutingBody(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral)
 	if err != nil {
-		if rec.Provider == config.ProviderTokenHarbor {
+		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
 			detailIdentities = thIdentityValues(r.Header, redactionObject, cfg.Routing.SessionHeaders)
 		}
 		rec.ErrorCategory = "request"
 		message := "request body must be a JSON object"
-		if rec.Provider == config.ProviderTokenHarbor {
+		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 			message = "request body must be valid JSON with at most one lowercase model field"
 		}
 		writeLocalError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_json", message, 0)
 		finish(http.StatusBadRequest, "failed")
 		return
 	}
-	if rec.Provider == config.ProviderTokenHarbor {
+	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		detailIdentities = thIdentityValues(r.Header, obj, cfg.Routing.SessionHeaders)
 	}
 	rec.Model, _ = obj["model"].(string)
@@ -595,12 +597,28 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		finish(400, "failed")
 		return
 	}
+	if rec.Provider == config.ProviderMistral {
+		if rec.Model == "" {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_model", "Mistral requires a nonempty model", 0)
+			finish(400, "failed")
+			return
+		}
+		// Mistral Responses is stateless: never silently drop server-side
+		// continuation/storage fields or pick a different owner for them.
+		if strings.HasPrefix(r.URL.Path, "/v1/responses") && (obj["previous_response_id"] != nil || obj["store"] != nil && obj["store"] != false) {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "stateless_responses", "Mistral Responses is stateless; send full history in input, omit previous_response_id and use store=false", 0)
+			finish(400, "failed")
+			return
+		}
+	}
 	rec.Stream, _ = obj["stream"].(bool)
-	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor {
+	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
 	identityScope := ck.Group
-	if config.StrictResponses(rec.Provider) {
+	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral {
 		identityScope += "\x00" + ck.ID
 	}
 	ident := s.identity(cfg, identityScope, r.Header, obj)
@@ -792,7 +810,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		att.Action, att.RuleID = ev.action, ev.ruleID
 		rec.Attempts = append(rec.Attempts, att)
 		last = res
-		if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && res.status == http.StatusBadRequest && strippedTools < 3 {
+		if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && res.status == http.StatusBadRequest && strippedTools < 3 {
 			// the upstream refuses a hosted tool (e.g. web_search) on this route:
 			// drop that tool type and ask the same account again
 			if nb, ok := stripUnsupportedTool(body, res.body); ok {
@@ -888,7 +906,7 @@ type evaluation struct {
 func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string, res *attemptResult, rid string, idx int, keyID, keyName string) evaluation {
 	now := time.Now()
 	reasonBody := res.body
-	if acct.Provider == config.ProviderTokenHarbor {
+	if acct.Provider == config.ProviderTokenHarbor || acct.Provider == config.ProviderMistral {
 		reasonBody, _ = thBodyPreview(reasonBody, res.privateIdentities, 16<<10)
 	}
 	reason, truncated := errorReason(cfg, reasonBody, res.contentType)
@@ -1049,14 +1067,14 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	case "compatibility", "egress", "policy_pause":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
-		if config.StrictResponses(acct.Provider) {
+		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 			ev.switchAccount = !res.sent.Load()
 			sample, el.HealthAction = false, "none"
 		}
 	case "proxy", "network":
 		// never sent: another account can take it without double billing
 		ev.switchAccount = !res.sent.Load()
-		if config.StrictResponses(acct.Provider) && res.category == "proxy" {
+		if (config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral) && res.category == "proxy" {
 			sample, el.HealthAction = false, "none"
 		}
 	}
@@ -1283,7 +1301,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	trace := &httptrace.ClientTrace{WroteHeaders: func() {
 		// Partial body writes are uncertain too: once headers left the socket,
 		// OpenCode must not replay a network failure on another account.
-		if config.StrictResponses(acct.Provider) {
+		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 			markSent()
 		}
 	}, WroteRequest: func(i httptrace.WroteRequestInfo) {
@@ -1309,7 +1327,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// the caller names a model by the pool's public name (a base model when
 	// several accounts serve it under their own ids); this account may only
 	// know it by one of its own, so translate before sending
-	if acct.Provider != config.ProviderTokenHarbor {
+	if acct.Provider != config.ProviderTokenHarbor && acct.Provider != config.ProviderMistral {
 		body = s.upstreamBody(cfg, acct.ID, rec.Model, body)
 	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(actx, trace), http.MethodPost, target, bytes.NewReader(body))
@@ -1343,7 +1361,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 				req.Header.Set("Anthropic-Version", "2023-06-01")
 			}
 		}
-	case config.ProviderOllama, config.ProviderModal, config.ProviderTokenHarbor:
+	case config.ProviderOllama, config.ProviderModal, config.ProviderTokenHarbor, config.ProviderMistral:
 		// Token Harbor accepts Bearer on all native protocols.
 		// Ollama's /v1/messages explicitly refuses x-api-key on its own, and
 		// Modal authenticates a proxy token in Authorization only: neither
@@ -1373,7 +1391,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	req.ContentLength = int64(len(body))
 
 	client := s.httpClient(acct.ProxyURL)
-	if config.StrictResponses(acct.Provider) {
+	if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
 	resp, err := client.Do(req)
@@ -1422,7 +1440,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
 		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
 	}
-	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses")
+	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses") && acct.Provider != config.ProviderMistral
 	if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities)
 	}
@@ -2049,7 +2067,7 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 		req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 		req.Header.Set("Accept", "application/json")
 		client := s.httpClient(a.ProxyURL)
-		if a.Provider == config.ProviderTokenHarbor {
+		if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 			client = opencode.NoRedirect(client)
 		}
 		resp, err := client.Do(req)
@@ -2095,6 +2113,9 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 			// three accounts running DeepSeek offer three different names
 			base, _ := m["base_model_id"].(string)
 			id := quota.PublicModelID(mid, base)
+			if a.Provider == config.ProviderMistral {
+				id = mid // base_model_id is ancestry, not an alias (e.g. fine-tunes).
+			}
 			if seen[id] {
 				continue
 			}

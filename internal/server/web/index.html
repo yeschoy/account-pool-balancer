@@ -56,6 +56,7 @@
       <button class="pool-tab" data-pool="river" role="tab">River 号池</button>
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
+      <button class="pool-tab" data-pool="mistral" role="tab">Mistral 号池</button>
       <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
@@ -549,6 +550,11 @@
 
     <section id="page-routing" class="page hidden">
       <header class="page-head"><h1>路由设置</h1><div class="actions"><span class="muted" id="set-rev"></span><button class="btn primary" id="btn-save-settings">保存</button></div></header>
+      <div class="panel hidden" id="mistral-settings">
+        <h2>Mistral 独立设置</h2>
+        <p class="muted small">复用 OpenDesign 调度策略和会话粘性，支持 Codex / Claude / pi 等会话头及自定义会话头。原生 Chat / Responses / FIM / Embeddings，不做协议转换；Responses 为无状态预览接口，需发送完整历史，不支持 previous_response_id 或 store=true。余额未知，不将多个 Key 当成独立工作区额度。</p>
+        <div class="form"><label for="mistral-base">API Base（含 /v1）</label><input id="mistral-base" placeholder="https://api.mistral.ai/v1"></div>
+      </div>
       <div class="panel hidden" id="tokenharbor-settings">
         <h2>Token Harbor 独立设置</h2>
         <p class="muted small">原生 Chat Completions / Responses / Messages；不转换协议、不删除工具、不改缓存标记。默认会话亲和且忙碌不溢出；上游缓存命中不保证。只放行官网已确认的套餐模型，套餐/周用量未知或已过期、周额耗尽或官网钱包续费开启时暂停；不自动启用免费模型、不自动添加大额消费确认。钱包余额仍未知。</p>

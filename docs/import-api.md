@@ -2,7 +2,7 @@
 
 `POST https://ods.yeschoy.io/open/v1/accounts/import`
 
-把 OpenDesign / River / Ollama / Modal / Token Harbor 账号直接写入账号池。Token Harbor 使用本池专属导入密钥（不能跨池），Key 以 `thk_` 开头，见 [Token Harbor 接入](tokenharbor.md#自动导入)。只用导入密钥 `sk-odbimp-…`（管理台「下游密钥 → 导入密钥」创建）。下游密钥 `sk-odb-…` 和管理员登录都不能调用。
+把 OpenDesign / River / Ollama / Modal / Token Harbor / Mistral 账号直接写入账号池。Mistral 使用本池专属导入密钥，推荐显式带 `provider:"mistral"`，也支持 `mstrl_` 前缀识别，见 [Mistral 接入](mistral.md)。Token Harbor 使用本池专属导入密钥（不能跨池），Key 以 `thk_` 开头，见 [Token Harbor 接入](tokenharbor.md#自动导入)。只用导入密钥 `sk-odbimp-…`（管理台「下游密钥 → 导入密钥」创建）。下游密钥 `sk-odb-…` 和管理员登录都不能调用。
 
 ```sh
 curl -X POST https://ods.yeschoy.io/open/v1/accounts/import \
@@ -20,10 +20,10 @@ curl -X POST https://ods.yeschoy.io/open/v1/accounts/import \
 | 字段 | 必填 | 约束 |
 |---|---|---|
 | `runtimeKey` | 是 | ≤ 512 字符。也接受字段名 `apiKey`、`key`。OpenDesign 形如 `sk-amr-…`、River 以 `rv_` 开头、Modal 的 Proxy Token 以 `wk-` 开头且是完整形态 `wk-<id>.ws-<secret>`；Ollama 的 key 没有固定形态（自建服务填任意值如 `ollama`），此时必须带 `provider` |
-| `provider` | 否 | `opendesign` / `river` / `ollama` / `modal` / `tokenharbor`（OpenCode 套餐另见其文档）。不填时由 `runtimeKey` 的前缀推断（`sk-` / `rv_` / `oll-` / `wk-` / `thk_`），前缀识别不出的 key 才会用到它 |
-| `controlKey` | 否 | 只有 OpenDesign 有。有值时必须以 `vela_ctrl_` 开头，≤ 512 字符。有它才会自动刷新额度；River、Ollama、Modal 和 Token Harbor 账号不能带 |
+| `provider` | 否 | `opendesign` / `river` / `ollama` / `modal` / `tokenharbor` / `mistral`（OpenCode 套餐另见其文档）。不填时由 `runtimeKey` 的前缀推断（`sk-` / `rv_` / `oll-` / `wk-` / `thk_` / `mstrl_`）；Mistral 显式声明优先，也接受无固定前缀的官方 API Key |
+| `controlKey` | 否 | 只有 OpenDesign 有。有值时必须以 `vela_ctrl_` 开头，≤ 512 字符。有它才会自动刷新额度；River、Ollama、Modal、Token Harbor 和 Mistral 账号不能带 |
 | `name` | 否 | ≤ 50 字符 |
-| `group` | 否 | 不填则用这把导入密钥的默认分组；默认分组是 `default` 时按号池改为 `river` / `ollama` / `modal` / `tokenharbor` |
+| `group` | 否 | 不填则用这把导入密钥的默认分组；默认分组是 `default` 时按号池改为 `river` / `ollama` / `modal` / `tokenharbor` / `mistral` |
 | `note` | 否 | ≤ 400 字符。入池时会加上导入时间和密钥名 |
 | `proxyUrl` | 否 | `http` / `https` / `socks5` / `socks5h`，必须带 host，不能有空白 |
 
