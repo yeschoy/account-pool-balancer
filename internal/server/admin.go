@@ -302,9 +302,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 	out := make([]accountView, 0, len(cfg.Accounts))
 	for _, a := range cfg.Accounts {
 		v := accountView{ID: a.ID, Provider: a.Provider, Name: a.Name, Email: a.Email, UserID: a.UserID, Note: a.Note, Group: a.Group, Enabled: a.Enabled,
-			RuntimeKey: config.Mask(a.RuntimeKey), ControlKey: config.Mask(a.ControlKey), HasControlKey: a.ControlKey != "",
+			RuntimeKey: a.RuntimeKey, ControlKey: a.ControlKey, HasControlKey: a.ControlKey != "",
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
-			HasProxy: a.ProxyURL != "", ProxyURL: maskProxy(a.ProxyURL), CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
+			HasProxy: a.ProxyURL != "", ProxyURL: a.ProxyURL, CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
 		if config.IsOpenCode(a.Provider) {
 			ph := s.openCodeProxyView(a.ProxyURL)
@@ -379,6 +379,7 @@ func providerParam(r *http.Request) string {
 }
 
 func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	cfg := s.cfg.Get()
 	views := s.accountViews(cfg)
 	if p := providerParam(r); p != "" {
@@ -666,16 +667,13 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 // sends one tiny real request, which costs credits.
 // apiAccountKeys returns the unmasked keys so the admin can copy them from the edit dialog.
 func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	a, ok := s.cfg.Get().Account(r.PathValue("id"))
 	if !ok {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
-	if config.WriteOnlyCredentials(a.Provider) {
-		apiError(w, http.StatusForbidden, errors.New("upstream credentials are write-only"))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey})
+	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey, "proxyUrl": a.ProxyURL})
 }
 
 func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
@@ -1152,7 +1150,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1177,6 +1175,9 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TokenHarbor != nil && prov == config.ProviderTokenHarbor {
 			c.TokenHarbor.BaseURL, c.TokenHarbor.ModelSyncSec = in.TokenHarbor.BaseURL, in.TokenHarbor.ModelSyncSec
+			if in.TokenHarbor.DetailLog != nil {
+				c.TokenHarbor.DetailLog = *in.TokenHarbor.DetailLog
+			}
 			if in.TokenHarbor.AccountSyncSec != nil {
 				v := *in.TokenHarbor.AccountSyncSec
 				c.TokenHarbor.AccountSyncSec = &v

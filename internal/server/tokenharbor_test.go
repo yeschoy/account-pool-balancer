@@ -413,8 +413,8 @@ func TestTokenHarborSettingsAndImportIsolation(t *testing.T) {
 	r.SetPathValue("id", "th1")
 	w = httptest.NewRecorder()
 	e.s.apiAccountKeys(w, r)
-	if w.Code != 403 {
-		t.Fatal("upstream credential readable")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "thk_live_mock-secret-1") {
+		t.Fatal("administrator cannot read saved upstream credential")
 	}
 	req, _ := http.NewRequest("GET", e.front.URL+"/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer downstream-th")

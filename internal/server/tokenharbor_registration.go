@@ -1036,6 +1036,7 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Update(rev, func(c *config.Config) error {
 		// Registration settings do not own the pool scheduler or model polling.
 		next.Routing, next.ModelSyncSec, next.AccountSyncSec = c.TokenHarbor.Routing, c.TokenHarbor.ModelSyncSec, c.TokenHarbor.AccountSyncSec
+		next.DetailLog = c.TokenHarbor.DetailLog
 		if strings.TrimSpace(next.CaptchaKey) == "" && !in.ClearCaptchaKey {
 			next.CaptchaKey = c.TokenHarbor.CaptchaKey
 		}

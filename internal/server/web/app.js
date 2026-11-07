@@ -153,6 +153,10 @@ async function boot() {
   showAuth();
 }
 function showAuth() {
+  accountsCache = [];
+  $('#acc-table tbody').replaceChildren();
+  $('#modal').close();
+  $('#modal-body').replaceChildren();
   $('#app').classList.add('hidden');
   $('#auth').classList.remove('hidden');
   const setup = authMode === 'setup';
@@ -476,6 +480,16 @@ function windowsHTML(a) {
 
 const effLimit = (own, learned) => { const v = [own, learned].filter((x) => x > 0); return v.length ? Math.min(...v) : '∞'; };
 
+function accountCredentialHTML(a) {
+  return [['runtimeKey', 'Key'], ['controlKey', '控制 Key'], ['proxyUrl', '代理']]
+    .filter(([field]) => a[field])
+    .map(([field, label]) => `<div class="acc-sub account-credential">${label}：<code>${esc(a[field])}</code> <button type="button" class="btn small" data-account-copy="${field}">复制</button></div>`).join('');
+}
+function copyAccountField(id, field) {
+  if (!['runtimeKey', 'controlKey', 'proxyUrl'].includes(field)) return;
+  const value = accountsCache.find((a) => a.id === id)?.[field];
+  if (value) copyText(value); else toast('没有可复制的值');
+}
 function accountRow(a) {
   const r = a.runtime;
   const st = r.state || {};
@@ -519,7 +533,7 @@ function accountRow(a) {
   const tier = q && (q.tier || q.membershipTier) ? `<span class="badge accent">${esc(q.tier || q.membershipTier)}</span>` : '';
   const shared = a.sharedWorkspaceWith && a.sharedWorkspaceWith.length ? `<span class="badge warn" title="与其他账号同一工作区，额度共享">共享工作区</span>` : '';
   return `<tr data-id="${esc(a.id)}">
-    <td><div class="acc-name">${managedKeyPool() ? `<input type="checkbox" data-oc-select="${esc(a.id)}" aria-label="选择 ${esc(a.name)}" ${ocSelected.has(a.id) ? 'checked' : ''}> ` : ''}${esc(a.name)}</div><div class="acc-sub">${esc(a.email || a.id)}</div>
+    <td><div class="acc-name">${managedKeyPool() ? `<input type="checkbox" data-oc-select="${esc(a.id)}" aria-label="选择 ${esc(a.name)}" ${ocSelected.has(a.id) ? 'checked' : ''}> ` : ''}${esc(a.name)}</div><div class="acc-sub">${esc(a.email || a.id)}</div>${accountCredentialHTML(a)}
       <div class="chips"><span class="badge">${esc(a.group)}</span>${tier}${a.hasProxy ? '<span class="badge" title="' + esc(a.proxyUrl) + '">代理</span>' : ''}${a.priority !== 50 ? '<span class="badge">优先级 ' + a.priority + '</span>' : ''}${shared}</div></td>
     <td>${status}</td>
     <td>${windowsHTML(a)}</td>
@@ -532,6 +546,10 @@ function accountRow(a) {
   </tr>`;
 }
 
+$('#acc-table').addEventListener('click', (ev) => {
+  const button = ev.target.closest('[data-account-copy]');
+  if (button) copyAccountField(button.closest('tr').dataset.id, button.dataset.accountCopy);
+});
 $('#acc-table').addEventListener('change', (ev) => {
   const id = ev.target.dataset.ocSelect; if (!id) return;
   if (ev.target.checked) ocSelected.add(id); else ocSelected.delete(id);
@@ -674,15 +692,15 @@ function accountForm(a) {
     <label>邮箱</label><input id="f-email" value="${v('email')}">
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
-    <label>运行密钥</label><input id="f-rt" placeholder="${a ? esc(a.runtimeKey) + '（留空不变）' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isMistral() ? 'Mistral 独立号池，使用现有调度器；支持 Codex / Claude / pi 等会话头粘性。不转换协议，不改模型或工具。无控制密钥，余额未知；密钥仅写入。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。Key 仅写入；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。密钥仅写入，不回显原文。' : isModal()
+    <label>运行密钥</label><input id="f-rt" value="${v('runtimeKey')}" placeholder="${a ? '留空不变' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isMistral() ? 'Mistral 独立号池，使用现有调度器；支持 Codex / Claude / pi 等会话头粘性。仅兼容外来 reasoning_content，保留原生思考、模型与工具；自动补会话缓存 key。无控制密钥，余额未知；管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
         : 'River 直接使用 API Key（rv_…）推理，没有额度接口，没有控制密钥。'}</span>`
-      : `<label>控制密钥</label><input id="f-ctrl" placeholder="${a && a.hasControlKey ? esc(a.controlKey) + '（留空不变）' : 'vela_ctrl_…（可选，用于读额度）'}" autocomplete="off">
+      : `<label>控制密钥</label><input id="f-ctrl" value="${v('controlKey')}" placeholder="vela_ctrl_…（留空不变）" autocomplete="off">
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
-    ${a && !managedKeyPool() ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}</span>` : ''}
+    ${a ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && isOpenDesign() ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}${a.hasProxy ? '<button type="button" class="btn small" data-copy="proxyUrl">复制代理</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
     <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', pool === 'opencode-go' ? 1 : 0)}">
     <span class="hint">0 表示不限</span>
@@ -690,7 +708,7 @@ function accountForm(a) {
     <label>权重</label><input id="f-weight" type="number" min="1" max="100" value="${v('weight', 1)}">
     <label>优先级</label><input id="f-prio" type="number" min="1" max="100" value="${v('priority', 50)}">
     <span class="hint">数字越小越优先，同优先级内按策略排序</span>
-    <label>出站代理</label><input id="f-proxy" ${pool === 'tokenharbor' ? 'type="password" autocomplete="off"' : ''} placeholder="${a && a.hasProxy ? esc(a.proxyUrl) + '（留空不变）' : 'http:// 或 socks5://（可选）'}">
+    <label>出站代理</label><input id="f-proxy" type="text" autocomplete="off" value="${v('proxyUrl')}" placeholder="http:// 或 socks5://（留空不变）">
     ${pool === 'tokenharbor' ? '<span></span><span class="hint">号池与注册机代理独立设置，此处修改不影响原注册记录；新建入池时默认沿用注册代理。换出口后旧套餐/周用量失效，重新检测通过前暂停调度。</span>' : ''}
   ${pool === 'opencode-go' ? '<span></span><span class="hint">支持 HTTP/HTTPS、SOCKS5/SOCKS5H 的 IPv6 代理，例如 socks5h://[2001:db8::10]:1080（示例地址须替换）。IPv6 主机须带方括号；代理入口地址不代表它的实际出口。</span>' : ''}
     ${a && a.hasProxy ? '<span></span><label class="check"><input type="checkbox" id="f-clear-proxy">移除代理（直连）</label>' : ''}
@@ -716,7 +734,7 @@ let editingAccountId = null;
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-copy]');
   if (!b || !editingAccountId) return;
-  try { copyText((await api('GET', `/api/accounts/${editingAccountId}/keys`))[b.dataset.copy]); } catch (err) { toast(err.message); }
+  copyAccountField(editingAccountId, b.dataset.copy);
 });
 async function editAccount(a) {
   editingAccountId = a.id;
@@ -977,6 +995,7 @@ const LOG_FIELDS = [
   ['retentionDays', '日志保留天数（默认7天）', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
   ['detail', '详细日志', 'bool', '记录请求头/体、响应头/体（凭据已脱敏），排查完请关闭'], ['maxDetails', '详细日志条数', 'int'], ['detailBodyKB', '单个体上限（KB）', 'int', '超出时保留头尾各一半、省略中间；内存中的详细日志总量上限 256MB，超出自动淘汰最旧的'],
 ];
+const logFields = () => isTokenHarbor() ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
 function renderForm(el, fields, obj, prefix) {
   el.innerHTML = fields.map(([k, label, type, extra, hint]) => {
     const id = `${prefix}-${k}`;
@@ -1162,6 +1181,7 @@ async function loadSettings() {
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
   $('#th-sync').value = s.tokenHarbor?.modelSyncSec ?? 1800;
   $('#th-account-sync').value = s.tokenHarbor?.accountSyncSec ?? 300;
+  $('#th-detail-log').checked = s.tokenHarbor?.detailLog === true;
   $('#opencode-settings').classList.toggle('hidden', !isOpenCode());
   renderForm($('#form-opencode'), openCodeFields(), s.opencode || {}, 'oc');
   $('#oc-protocols').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocols : s.opencode?.zenProtocols) || {}, null, 2);
@@ -1169,7 +1189,7 @@ async function loadSettings() {
   renderForm($('#form-routing'), routingFields(), s.routing, 'rt');
   if (pool === 'opencode-go') $('#form-routing').insertAdjacentHTML('beforeend', '<span></span><span class="hint">Go 已绑定会话满载时有界等待后返回 429，不临时借号；最大并发/RPM 在账号编辑中配置。缓存亲和为尽量复用，不保证上游缓存命中。</span>');
   renderForm($('#form-quota'), QUOTA_FIELDS, s.quota, 'qt');
-  renderForm($('#form-logs'), LOG_FIELDS, s.logs, 'lg');
+  renderForm($('#form-logs'), logFields(), s.logs, 'lg');
   $('#rt-strategy').addEventListener('change', (e) => { $('#rt-strategy-hint').textContent = STRATEGY_HINTS[e.target.value] || ''; });
   errRules = clone(s.errorRules || []);
   retRules = clone(s.retryRules || []);
@@ -1185,9 +1205,9 @@ async function loadSettings() {
 $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
-  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
   if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim() };
-  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value) };
+  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});
     try {

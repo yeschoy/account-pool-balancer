@@ -333,10 +333,10 @@ async function thEditProxy({ title, name, currentProxy, hint, save }) {
     title,
     body: `<div class="form">
       <p class="muted small">${esc(name)}</p>
-      <p class="small">当前代理：${esc(currentProxy || '直连')}（认证信息不回显）</p>
+      <p class="small">当前代理：${esc(currentProxy || '直连')}</p>
       <p class="muted small">${esc(hint)} 代理失败不会自动直连；更换出口可能导致官网会话需要重新验证。</p>
       <label for="th-new-proxy">新代理地址</label>
-      <input id="th-new-proxy" type="password" autocomplete="off" placeholder="http(s)://用户:密码@主机:端口 或 socks5(h)://…">
+      <input id="th-new-proxy" type="text" autocomplete="off" placeholder="http(s)://用户:密码@主机:端口 或 socks5(h)://…">
       <label><input id="th-proxy-direct" type="checkbox"> 明确清除代理（直连）</label>
     </div>`,
     buttons: [{ label: '取消', value: 'cancel' }, { label: '保存', value: 'save', primary: true, action: async () => {

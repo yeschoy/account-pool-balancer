@@ -85,7 +85,7 @@ metadata persistence and console projections.
 - Settings: optional opencode object. Absent means preserve it, not reset it.
   Protocol names are chat/responses/messages. Protocol base maps contain URLs
   ending /v1; no userinfo/query/fragment; max 4096 characters per URL.
-- Account view: masked runtimeKey/proxyUrl; optional proxyHealth and
+- User-authorized administrator account view: full saved runtimeKey/controlKey/proxyUrl with admin-session/no-store boundaries; no new encryption or password/Cookie migration. Logs and non-admin/import projections remain redacted. The legacy WriteOnlyCredentials helper remains an import isolation/dedup marker, not display permission. Optional proxyHealth and
   routableModels. Do not equate Catalog size with supported protocol count.
 - Snapshot.opencode: Source, Models/ModelsAt, Usage/UsageAt, CheckedAt,
   CapabilityError, UsageError. Source is a hash, never a credential.

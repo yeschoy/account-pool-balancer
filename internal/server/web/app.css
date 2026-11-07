@@ -105,6 +105,8 @@ td.actions .btn + .btn { margin-left: 6px; }
 
 .acc-name { font-weight: 600; }
 .acc-sub { color: var(--muted); font-size: 12px; }
+.account-credential { white-space: normal; max-width: 420px; }
+.account-credential code { white-space: normal; overflow-wrap: anywhere; user-select: text; }
 .bar { height: 6px; background: var(--line2); border-radius: 99px; overflow: hidden; width: 160px; margin: 3px 0; }
 .bar > i { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
 .bar.warn > i { background: var(--warn); }

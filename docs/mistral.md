@@ -4,7 +4,7 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 ## 管理与接入
 
-1. 管理台选择 **Mistral 号池 → 账号**，手动添加或批量导入 API Key。每行 `API Key[,名称[,代理URL]]`。不需要控制密钥；密钥仅写入，界面不回显原文。
+1. 管理台选择 **Mistral 号池 → 账号**，手动添加或批量导入 API Key。每行 `API Key[,名称[,代理URL]]`。不需要控制密钥；按用户要求，已登录管理员可在账号列表/编辑窗口直接查看、复制完整 Key 和代理地址。它们沿用 config.json 明文存储，不新增加密或迁移密码/Cookie；接口仍需管理员会话并禁止缓存，普通日志继续脱敏。
 2. 在本池创建下游密钥，默认分组 `mistral`。下游使用网关地址和这把密钥，不使用上游 Key。分组与导入密钥均隔离，不能借其他池账号。
 3. **路由设置**可修改本池 API Base（必须含 `/v1`）、选号、粘性、并发等待与错误/重试规则。未单独保存路由前，继承 OpenDesign 现有路由配置；保存后独立生效，不改变 OpenDesign。
 
@@ -22,7 +22,9 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 - 识别 Codex 的 `Session_id` / `X-Codex-Session-Id` / `X-Codex-Thread-Id`，Claude 的 `X-Claude-Code-Session-Id` 与 `metadata.user_id` 中的会话，pi 可传的 `X-Session-Id` / `X-Session-Affinity` / `X-Pi-Session-Id` / `X-Pi-Session`，以及现有父会话、OpenCode 等会话头、正文会话字段和 `prompt_cache_key`。任意额外稳定头可在「额外会话头」配置。
 - 优先级沿用 OpenDesign：`previous_response_id`（本池不支持，Responses 请求会本地拒绝）、自定义头、父会话、正文身份、Claude 元数据、内置会话头、可选首条消息 HMAC 弱粘性。不会把每次变化的请求 ID 当成会话。客户端必须实际发送稳定标识；仅凭客户端名称不能保证粘性。
 - 会话 HMAC 按分组和下游密钥隔离。TTL 与忙时 `overflow` / `wait-overflow` / `reject` 策略沿用现有配置，临时借号不改原绑定。
-- 上游推理正文、工具、模型 ID、缓存标记和实际客户端 UA 不重写；会话粘性仅固定 Key，不保证上游缓存命中。
+- Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 且已识别会话时，自动填入 `apb-mistral-<现有会话HMAC>`；HMAC按分组与下游密钥隔离，不暴露原始会话或凭据。客户端已有字段（包括显式null/空串）原样保留；没有身份不随机生成。共享前缀与同一账号有利于缓存命中，但不保证命中；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
+- 仅 Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。不支持的类型本地400，不丢弃思考或换号重试。Responses和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
+- 除上述明确的缓存补齐与思考格式兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。不会顺便丢弃`thinking`、Chat `store`等其他外来字段；若客户端还带这些不兼容参数，需单独调整。
 - 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；临时 5xx 短冷却。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
 
 ## 原生接口与额度
@@ -36,6 +38,8 @@ Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整�
 参考：[官方文档](https://docs.mistral.ai/)、[Responses](https://docs.mistral.ai/inference/conversations/responses)、[用量和限制](https://docs.mistral.ai/admin/billing-usage/usage-limits)。
 
 ## 验证
+
+本轮缓存/思考兼容/凭据展示与TH日志开关只运行受影响Go定向用例、Mistral/TH Node行为与JS语法检查，并用一次本地构建、禁用假账号完成页面核对；未做真实推理或实际缓存命中验证，不重复全仓/race/vet。以下为原始号池接入时的历史验证记录：
 
 - `go test ./...`、`go test -race ./...`、`go vet ./...`、`go build ./cmd/odb`。
 - `node internal/server/mistral_web_test.js`；真实本地浏览器使用假账号与本地 Mock，检查管理、导入、独立设置和后端状态。

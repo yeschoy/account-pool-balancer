@@ -182,6 +182,7 @@ func TestTokenHarborStrictGateCannotBeBypassedAndModelsUseNoNetwork(t *testing.T
 
 func TestTokenHarborFailedAttemptRetainsDetailAfterSuccessfulFailover(t *testing.T) {
 	e := newTHEnv(t)
+	setTokenHarborDetail(t, e, true)
 	e.setHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.Header.Get("Authorization"), "secret-1") {
@@ -195,7 +196,7 @@ func TestTokenHarborFailedAttemptRetainsDetailAfterSuccessfulFailover(t *testing
 	if status != 200 || e.count() != 2 {
 		t.Fatal("expected a single native failover", status, e.count())
 	}
-	logs, _ := e.s.logs.Query("details", map[string]string{"requestId": headers.Get("X-Request-Id"), "attemptIndex": "0"}, time.Time{}, time.Time{}, 10, 0)
+	logs, _ := e.s.logs.Query("details", map[string]string{"requestId": headers.Get("X-Request-Id"), "attemptIndex": "0", "status": "503"}, time.Time{}, time.Time{}, 10, 0)
 	if len(logs.Items) != 1 || !bytes.Contains(logs.Items[0], []byte(`"context":"failed_attempt"`)) || !bytes.Contains(logs.Items[0], []byte("mock failure")) {
 		t.Fatal("successful fallback lost failed attempt detail")
 	}
@@ -203,6 +204,7 @@ func TestTokenHarborFailedAttemptRetainsDetailAfterSuccessfulFailover(t *testing
 
 func TestTHInvalidModelDetailsStillMaskAllKnownIdentitiesAndClientKey(t *testing.T) {
 	e := newTHEnv(t)
+	setTokenHarborDetail(t, e, true)
 	status, _, headers := e.post(t, "/v1/chat/completions", `{"model":"m","model":"other","metadata":{"session_id":"body-only-session-456"},"messages":[{"role":"user","content":"downstream-th bad-request-session-123 body-only-session-456"}]}`, map[string]string{"X-Session-Id": "bad-request-session-123"})
 	if status != 400 || e.count() != 0 {
 		t.Fatal("ambiguous model was forwarded")
@@ -226,8 +228,9 @@ func TestTHLargeBodyPreviewKeepsContextWithoutRetainingPrivateMetadata(t *testin
 	}
 }
 
-func TestTokenHarborFailureDetailsAreBoundedPrivateAndSuccessIsNotCaptured(t *testing.T) {
+func TestTokenHarborFailureDetailsAreBoundedPrivateAndDisableStopsCapture(t *testing.T) {
 	e := newTHEnv(t)
+	setTokenHarborDetail(t, e, true)
 	const identity = "private-session-123456789"
 	e.setHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -240,7 +243,7 @@ func TestTokenHarborFailureDetailsAreBoundedPrivateAndSuccessIsNotCaptured(t *te
 	}
 	logs, _ := e.s.logs.Query("details", map[string]string{"requestId": headers.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
 	if len(logs.Items) != 1 {
-		t.Fatal("failed request missing details despite logs.detail=false")
+		t.Fatal("failed request missing details with tokenHarbor.detailLog=true")
 	}
 	for _, secret := range []string{identity, "secret-cookie", "thk_live_mock-secret", "downstream-th"} {
 		if bytes.Contains(logs.Items[0], []byte(secret)) {
@@ -253,11 +256,12 @@ func TestTokenHarborFailureDetailsAreBoundedPrivateAndSuccessIsNotCaptured(t *te
 			t.Fatal("ordinary error reason leaked reflected session")
 		}
 	}
+	setTokenHarborDetail(t, e, false)
 	e.setHandler(nil)
 	_, _, headers = e.post(t, "/v1/chat/completions", `{"model":"m","messages":[]}`, nil)
 	logs, _ = e.s.logs.Query("details", map[string]string{"requestId": headers.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
 	if len(logs.Items) != 0 {
-		t.Fatal("successful request stored body by default")
+		t.Fatal("successful request stored body after disabling details")
 	}
 	cw := &captureWriter{ResponseWriter: httptest.NewRecorder(), max: 1024}
 	cw.Write(bytes.Repeat([]byte("x"), 2<<20))

@@ -104,7 +104,24 @@ func TestMistralNativeBytesHeadersAndAccounting(t *testing.T) {
 				t.Fatalf("%d %s", status, reply)
 			}
 			c := e.call(0)
-			if c.path != path || c.body != body || c.key != "Bearer mstrl_mock_secret_1" || c.header.Get("X-Api-Key") != "" || c.header.Get("User-Agent") != "pi/test" || headerValue(c.header, "Session_id") != "private-codex-session" || c.header.Get("X-Prompt-Cache-Key") != "private-cache" {
+			if path == "/v1/chat/completions" || path == "/v1/responses" {
+				var got, original map[string]json.RawMessage
+				_ = json.Unmarshal([]byte(c.body), &got)
+				_ = json.Unmarshal([]byte(body), &original)
+				var cache string
+				_ = json.Unmarshal(got["prompt_cache_key"], &cache)
+				if !strings.HasPrefix(cache, "apb-mistral-") || len(got) != len(original)+1 {
+					t.Fatal("missing private session cache key")
+				}
+				for key, value := range original {
+					if string(got[key]) != string(value) {
+						t.Fatalf("unrelated native field changed: %s", key)
+					}
+				}
+			} else if c.body != body {
+				t.Fatal("non-generation body changed")
+			}
+			if c.path != path || c.key != "Bearer mstrl_mock_secret_1" || c.header.Get("X-Api-Key") != "" || c.header.Get("User-Agent") != "pi/test" || headerValue(c.header, "Session_id") != "private-codex-session" || c.header.Get("X-Prompt-Cache-Key") != "private-cache" {
 				t.Fatal("native bytes or headers changed")
 			}
 			logs, _ := e.s.logs.Query("requests", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
@@ -434,8 +451,8 @@ func TestMistralAdminImportSettingsAndPrivacy(t *testing.T) {
 	r = httptest.NewRequest(http.MethodGet, "/api/accounts/m1/keys", nil)
 	r.SetPathValue("id", "m1")
 	e.s.apiAccountKeys(w, r)
-	if w.Code != 403 {
-		t.Fatal("key retrieval allowed")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "mstrl_mock_secret_1") {
+		t.Fatal("administrator cannot copy saved key")
 	}
 	old := e.s.cfg.Get()
 	doc := settingsDoc{Revision: old.Revision, Upstream: old.Upstream, Routing: old.Routing, Quota: old.Quota, Logs: old.Logs, Pricing: old.Pricing, Mistral: &config.Mistral{BaseURL: e.up.URL + "/v1"}, ErrorRules: old.MistralErrorRules, RetryRules: old.MistralRetryRules}

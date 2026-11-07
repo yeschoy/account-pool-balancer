@@ -604,6 +604,8 @@ type TokenHarbor struct {
 	Routing *Routing `json:"routing,omitempty"`
 	// BaseURL is the OpenRouter-style API root ("https://tokenharbor.ai/v1").
 	BaseURL string `json:"baseUrl"`
+	// DetailLog controls TokenHarbor body/header capture independently; default off.
+	DetailLog bool `json:"detailLog"`
 	// ProxyURL is the egress registrations use when a task row names none.
 	// Empty means direct, which only works from a region the API serves.
 	ProxyURL string `json:"proxyUrl"`

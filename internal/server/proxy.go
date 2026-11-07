@@ -389,7 +389,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var reqHeader http.Header
 	var reqBody []byte
 	var detailIdentities []string
-	if cfg.Logs.Detail {
+	detailEnabled := cfg.Logs.Detail
+	if detailEnabled {
 		cw = &captureWriter{ResponseWriter: w, max: cfg.Logs.DetailBodyKB << 10}
 		w, reqHeader = cw, r.Header.Clone()
 	}
@@ -443,7 +444,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: rec.Provider + " gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
 		}
 		s.logs.Append("requests", rec.TS, rec)
-		if cw != nil && (cfg.Logs.Detail || (rec.Provider == config.ProviderTokenHarbor && result == "failed" && len(rec.failureDetails) == 0)) {
+		if cw != nil && detailEnabled && (rec.Provider != config.ProviderTokenHarbor || result != "failed" || len(rec.failureDetails) == 0) {
 			max := cw.max
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
 				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
@@ -516,11 +517,18 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
 	if rec.Provider == config.ProviderTokenHarbor {
-		if cw == nil {
-			cw = &captureWriter{ResponseWriter: w, max: min(cfg.Logs.DetailBodyKB, 64) << 10}
-			w, reqHeader = cw, r.Header.Clone()
+		detailEnabled = cfg.TokenHarbor.DetailLog
+		if !detailEnabled {
+			if cw != nil {
+				w, cw, reqHeader = cw.ResponseWriter, nil, nil
+			}
+		} else {
+			if cw == nil {
+				cw = &captureWriter{ResponseWriter: w, max: min(cfg.Logs.DetailBodyKB, 64) << 10}
+				w, reqHeader = cw, r.Header.Clone()
+			}
+			cw.max = min(cw.max, 64<<10)
 		}
-		cw.max = min(cw.max, 64<<10)
 	}
 	if rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor {
 		rec.ClientFamily = goClientFamily(r.Header, nil)
@@ -646,6 +654,20 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.SessionSource, rec.AffinityKeyType, rec.AffinityConfidence = ident.Source, ident.KeyType, ident.Confidence
+	if rec.Provider == config.ProviderMistral {
+		var generatedCacheKey string
+		body, generatedCacheKey, err = prepareMistralRequest(body, r.URL.Path, ident.Fingerprint)
+		if err != nil {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_reasoning", err.Error(), 0)
+			finish(400, "failed")
+			return
+		}
+		if generatedCacheKey != "" {
+			detailIdentities = append(detailIdentities, generatedCacheKey)
+			rec.CacheHintSource = "session_hmac"
+		}
+	}
 
 	excluded := map[string]bool{}
 	if config.IsOpenCode(rec.Provider) {
