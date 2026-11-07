@@ -445,7 +445,52 @@ function tokenHarborQuotaHTML(a) {
   return `<span class="badge ${observed ? 'ok' : 'warn'}">${esc(t?.plan?.name || '套餐未知')}${observed ? '（已检测）' : '（未知/过期）'}</span><div class="acc-sub">周限余额：${esc(weekly)}${reset}</div><div class="acc-sub">月限余额：${esc(monthly)}</div><div class="acc-sub">${esc(t?.error || u.error || (u.overageBilling ? '请在官网关闭套餐用尽后从钱包继续付费，再刷新；本服务不会代改账单设置' : '仅套餐覆盖可用，不借钱包；免费功能不自动开启'))}</div><div class="acc-sub">检测 ${esc(fmtTime(t?.checkedAt, true))} · 官网额度，非钱包余额；周金额按百分比估算</div>`;
 }
 
+function openDesignStatusHTML(a) {
+  const d = a.diagnosis;
+  const bad = d && ['banned', 'auth-failed', 'control-auth-failed'].includes(d.status);
+  return `<div class="acc-sub"><span class="badge ${bad ? 'bad' : 'warn'}">${esc(d?.label || '尚未检测，当前状态未知')}</span></div>`
+    + (d?.detail ? `<div class="acc-sub">${esc(d.detail)}</div>` : '')
+    + (d?.checkedAt ? `<div class="acc-sub">检测 ${esc(fmtTime(d.checkedAt))}</div>` : '')
+    + '<div class="acc-sub muted">目录/工作区读取成功不代表推理授权，未报封禁不等于确认安全</div>';
+}
+
+function openDesignQuotaHTML(a) {
+  const q = a.quota, d = a.diagnosis;
+  const labels = { available: '套餐窗口有剩余', exhausted: '套餐窗口额度耗尽', 'no-plan': '当前无生效套餐', unknown: '套餐额度当前未知' };
+  const parts = [`<span class="badge ${d?.planStatus === 'exhausted' ? 'bad' : d?.planFresh ? '' : 'warn'}">${esc(labels[d?.planStatus] || labels.unknown)}</span>`];
+  if (!a.hasControlKey) parts.push('<div class="acc-sub">无控制密钥，无法读取额度；运行密钥仍可独立检测</div>');
+  if (q?.planAt) {
+    for (const w of q.windows || []) {
+      const passed = w.resetsAt && new Date(w.resetsAt).getTime() <= Date.now();
+      const used = w.limit > 0 ? Math.max(0, Math.min(100, (w.limit - w.remaining) / w.limit * 100)) : 0;
+      parts.push(`<div class="win"><div class="acc-sub">${d?.planFresh ? '' : '上次'}${esc(fmtDur(w.durationSeconds))} · 剩余 <b>${num(w.remaining)}</b> / ${num(w.limit)}</div><div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div><div class="acc-sub">${passed ? '窗口已到期，等待新数据；不推算满额' : '重置 ' + esc(fmtTime(w.resetsAt, true))}</div></div>`);
+    }
+    parts.push(`<div class="acc-sub">套餐上次成功 ${esc(fmtTime(q.planAt))}</div>`);
+    if (!d?.planFresh) parts.push('<div class="acc-sub">以上为历史数据，不代表当前额度</div>');
+  }
+  if (q?.nextAt && d?.autoRefresh) parts.push(`<div class="acc-sub">下次自动尝试 ${esc(fmtTime(q.nextAt))}（${esc(fmtIn(q.nextAt))}）</div>`);
+  else if (d && !d.autoRefresh) parts.push('<div class="acc-sub">后台额度轮询已关闭，可手动检测</div>');
+  return parts.join('');
+}
+
+function openDesignFundingHTML(a) {
+  const q = a.quota, d = a.diagnosis;
+  const hasWallet = q?.walletUsd !== undefined && q.walletUsd !== '';
+  let html = d?.walletFresh && hasWallet ? '钱包 ' + esc(usd(q.walletUsd)) : '钱包当前未知' + (hasWallet ? `（上次 ${esc(usd(q.walletUsd))}）` : '');
+  if (d?.walletStatus === 'empty') html += '<div class="acc-sub">钱包为零不等于套餐额度耗尽</div>';
+  if (q?.walletSource === 'preflight' && hasWallet) html += '<div class="acc-sub">钱包数据来源 preflight</div>';
+  if (q?.walletAt) html += `<div class="acc-sub">钱包上次成功 ${esc(fmtTime(q.walletAt))}</div>`;
+  const credits = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? num(n) : '未知'; };
+  if (q?.summary) {
+    const prefix = d?.billingFresh ? '' : '上次';
+    html += `<div class="acc-sub">${prefix}套餐模型余额 ${esc(credits(q.summary.subscriptionCredits))}</div><div class="acc-sub">${prefix}充值余额 ${esc(credits(q.summary.rechargeCredits))}</div>`;
+    html += `<div class="acc-sub">账单上次成功 ${esc(fmtTime(q.summaryAt))}${d?.billingFresh ? '' : ' · 当前未知'}</div>`;
+  } else html += '<div class="acc-sub">套餐模型/充值余额未知</div>';
+  return html;
+}
+
 function windowsHTML(a) {
+  if (a.provider === 'opendesign') return openDesignQuotaHTML(a);
   if (a.provider === 'mistral') return '<span class="badge">仅 API Key</span><div class="acc-sub">余额未知 · 仅同步模型目录</div><div class="acc-sub">限流按 Retry-After 冷却，同工作区 Key 可能共享限额</div>';
   if (a.provider === 'tokenharbor') return tokenHarborQuotaHTML(a);
   if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
@@ -480,7 +525,8 @@ function accountRow(a) {
   const r = a.runtime;
   const st = r.state || {};
   const models = Object.entries(st.models || {});
-  let status = `<span class="badge ${statusClass(r.status)}">${esc(statusLabel(r.status))}</span>`;
+  let status = `<span class="badge ${statusClass(r.status)}">${a.provider === 'opendesign' ? '调度：' : ''}${esc(statusLabel(r.status))}</span>`;
+  if (a.provider === 'opendesign') status += openDesignStatusHTML(a);
   if (a.tokenIncomplete) status = '<span class="badge bad">Token 不完整</span><div class="acc-sub" title="只填了 wk-<id> 那段。Modal 要的是 wk-<id>.ws-<secret>：到 modal.com/settings/proxy-auth-tokens 复制完整的 Proxy Token；旧 token 的 secret 只在创建时显示一次，看不到就新建一个，然后在这里改运行密钥">只有 wk-&lt;id&gt;，缺少 .ws-&lt;secret&gt;</div>';
   if (a.proxyHealth) status += `<div class="acc-sub">出口 ${esc(a.proxyHealth.status)}${a.proxyHealth.reason ? ' · ' + esc(a.proxyHealth.reason) : ''}</div>`;
   if (a.egress) status += `<div class="acc-sub" title="${esc('上次校验 ' + fmtTime(a.egress.checkedAt) + '；校验只能发现漂移，固定 IP 需由静态网络保障')}">${esc(GO_EGRESS_LABEL[a.egress.status] || a.egress.status)}${a.egress.observedIp ? ' · ' + esc(a.egress.observedIp) : ''}</div>`;
@@ -511,8 +557,8 @@ function accountRow(a) {
   const cov = !ollama && !modal && !openCode && q && q.coverage ? Object.entries(q.coverage) : [];
   const cat = q && q.catalog ? Object.entries(q.catalog) : [];
   const catOn = cat.filter(([, en]) => en).map(([m]) => m).sort();
-  const catTitle = a.provider === 'tokenharbor' ? '本账号已确认套餐覆盖且原生目录支持的模型（不代表周剩余额度）：\n' : openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
-  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : a.provider === 'tokenharbor' ? '上次确认覆盖 ' : '可用模型 '}${catOn.length}${a.provider === 'tokenharbor' ? ' / 目录 ' + Object.keys(q?.tokenHarbor?.directory || {}).length : cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
+  const catTitle = a.provider === 'opendesign' ? '上次成功读取的模型目录（不证明推理授权）：\n' : a.provider === 'tokenharbor' ? '本账号已确认套餐覆盖且原生目录支持的模型（不代表周剩余额度）：\n' : openCode ? '本账号上游目录（不证明推理授权）；未知/不支持协议不计可路由数：\n' : ollama ? '该 key 的 /v1/models（Ollama 云端目录对所有 key 相同）：\n' : modal ? '该 token 的 /v1/models（即它能访问的 Endpoint，模型名就是 Endpoint 的 hostname）：\n' : '该 API Key 的模型列表（/v1/models），决定套餐能调用哪些模型：\n';
+  const catHTML = modal ? '' : cat.length ? `<div class="acc-sub" title="${esc(catTitle + catOn.join('\n'))}">${openCode ? '可路由 ' + num(a.routableModels) + ' / 目录 ' : a.provider === 'tokenharbor' ? '上次确认覆盖 ' : a.provider === 'opendesign' ? (a.diagnosis?.catalogFresh ? '模型目录 ' : '上次模型目录（当前未知）') : '可用模型 '}${catOn.length}${a.provider === 'tokenharbor' ? ' / 目录 ' + Object.keys(q?.tokenHarbor?.directory || {}).length : cat.length > catOn.length ? ' / ' + cat.length : ''} 个</div>` : (q && q.catalogError ? `<div class="acc-sub">模型列表读取失败：${esc(q.catalogError)}</div>` : '');
   status += catHTML;
   const covHTML = cov.length ? `<div class="acc-sub" title="${esc(cov.map(([m, c]) => m + '：' + (c.covered === true ? 'Design Plan 模型' : c.covered === false ? '套餐模型' : '未知')).join('\n'))}">已识别 ${cov.length} 个模型的类别</div>` : '';
   const sum = !ollama && !modal && !openCode && q && q.summary ? `<div class="acc-sub" title="累计消费 ${esc(q.summary.totalConsumedUsd)} · 累计充值 ${esc(q.summary.totalRechargedUsd)} · 调用 ${esc(q.summary.usageCount)} 次">今日 ${esc(usd(q.summary.todayConsumedUsd))}</div>` : '';
@@ -523,7 +569,7 @@ function accountRow(a) {
       <div class="chips"><span class="badge">${esc(a.group)}</span>${tier}${a.hasProxy ? '<span class="badge" title="' + esc(a.proxyUrl) + '">代理</span>' : ''}${a.priority !== 50 ? '<span class="badge">优先级 ' + a.priority + '</span>' : ''}${shared}</div></td>
     <td>${status}</td>
     <td>${windowsHTML(a)}</td>
-    <td class="num">${wallet}${pkg}${sum}${covHTML}</td>
+    <td class="num">${a.provider === 'opendesign' ? openDesignFundingHTML(a) : wallet + pkg + sum + covHTML}</td>
     <td class="num">${r.active} / ${effLimit(a.maxConcurrent, st.learnedConcurrency)}</td>
     <td class="num">${r.rpm} / ${effLimit(a.maxRpm, st.learnedRpm)}</td>
     <td class="num">${r.health === null || r.health === undefined ? '<span class="muted">—</span>' : pct(r.health)}<div class="acc-sub">${r.samples} 样本</div></td>
@@ -630,7 +676,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'opendesign' ? '检测状态并刷新额度（只读）' : a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -651,7 +697,12 @@ async function accountAction(a, act) {
       case 'edit': return editAccount(a);
       case 'test': return testAccount(a);
       case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
-      case 'refresh': await api('POST', `/api/accounts/${a.id}/refresh-quota`); toast(a.provider === 'tokenharbor' ? '套餐、覆盖模型与周用量已刷新' : '额度已刷新'); break;
+      case 'refresh': {
+        const result = await api('POST', `/api/accounts/${a.id}/refresh-quota`);
+        if (a.provider === 'opendesign') toast(result.message || '检测完成，请查看分项结果', result.ok ? undefined : 'error');
+        else toast(a.provider === 'tokenharbor' ? '套餐、覆盖模型与周用量已刷新' : '额度已刷新');
+        break;
+      }
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
       case 'reauth': return deviceAuth({ accountId: a.id });
@@ -663,7 +714,7 @@ async function accountAction(a, act) {
         await api('DELETE', `/api/accounts/${a.id}`); toast('已删除'); break;
     }
     await loadAccounts();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function accountForm(a) {

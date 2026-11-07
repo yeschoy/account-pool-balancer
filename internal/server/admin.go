@@ -244,32 +244,33 @@ func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {
 // ---- accounts ----
 
 type accountView struct {
-	ID             string           `json:"id"`
-	Provider       string           `json:"provider"`
-	Name           string           `json:"name"`
-	Email          string           `json:"email"`
-	UserID         string           `json:"userId"`
-	Note           string           `json:"note"`
-	Group          string           `json:"group"`
-	Enabled        bool             `json:"enabled"`
-	RuntimeKey     string           `json:"runtimeKey"`
-	ControlKey     string           `json:"controlKey"`
-	HasControlKey  bool             `json:"hasControlKey"`
-	MaxConcurrent  int              `json:"maxConcurrent"`
-	MaxRPM         int              `json:"maxRpm"`
-	Weight         int              `json:"weight"`
-	Priority       int              `json:"priority"`
-	HasProxy       bool             `json:"hasProxy"`
-	ProxyURL       string           `json:"proxyUrl"`
-	ProxyHealth    *proxyHealthView `json:"proxyHealth,omitempty"`
-	EgressIP       string           `json:"egressIp,omitempty"`
-	Egress         *goEgressView    `json:"egress,omitempty"`
-	CreatedAt      time.Time        `json:"createdAt"`
-	Runtime        pool.View        `json:"runtime"`
-	Quota          *quota.Snapshot  `json:"quota"`
-	QuotaFresh     bool             `json:"quotaFresh"`
-	RoutableModels *int             `json:"routableModels,omitempty"`
-	SharedWith     []string         `json:"sharedWorkspaceWith,omitempty"`
+	ID             string                     `json:"id"`
+	Provider       string                     `json:"provider"`
+	Name           string                     `json:"name"`
+	Email          string                     `json:"email"`
+	UserID         string                     `json:"userId"`
+	Note           string                     `json:"note"`
+	Group          string                     `json:"group"`
+	Enabled        bool                       `json:"enabled"`
+	RuntimeKey     string                     `json:"runtimeKey"`
+	ControlKey     string                     `json:"controlKey"`
+	HasControlKey  bool                       `json:"hasControlKey"`
+	MaxConcurrent  int                        `json:"maxConcurrent"`
+	MaxRPM         int                        `json:"maxRpm"`
+	Weight         int                        `json:"weight"`
+	Priority       int                        `json:"priority"`
+	HasProxy       bool                       `json:"hasProxy"`
+	ProxyURL       string                     `json:"proxyUrl"`
+	ProxyHealth    *proxyHealthView           `json:"proxyHealth,omitempty"`
+	EgressIP       string                     `json:"egressIp,omitempty"`
+	Egress         *goEgressView              `json:"egress,omitempty"`
+	CreatedAt      time.Time                  `json:"createdAt"`
+	Runtime        pool.View                  `json:"runtime"`
+	Quota          *quota.Snapshot            `json:"quota"`
+	QuotaFresh     bool                       `json:"quotaFresh"`
+	Diagnosis      *quota.OpenDesignDiagnosis `json:"diagnosis,omitempty"`
+	RoutableModels *int                       `json:"routableModels,omitempty"`
+	SharedWith     []string                   `json:"sharedWorkspaceWith,omitempty"`
 	// TokenIncomplete flags a Modal proxy token that is only its Token ID:
 	// nothing reads with it, and every host says so with the same 401.
 	TokenIncomplete bool `json:"tokenIncomplete,omitempty"`
@@ -293,6 +294,11 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 	snaps := s.quota.All()
 	usage := s.stats.Summary().Accounts
 	now := time.Now()
+	for _, a := range cfg.Accounts {
+		if q := snaps[a.ID]; a.Provider == config.ProviderOpenDesign && q != nil && q.OpenDesign != nil && q.OpenDesign.Source != quota.OpenDesignSource(cfg, a) {
+			delete(snaps, a.ID)
+		}
+	}
 	byWS := map[string][]string{}
 	for _, a := range cfg.Accounts {
 		if q := snaps[a.ID]; q != nil && q.WorkspaceID != "" {
@@ -306,6 +312,10 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
 			HasProxy: a.ProxyURL != "", ProxyURL: maskProxy(a.ProxyURL), CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
+		if a.Provider == config.ProviderOpenDesign {
+			v.Diagnosis = snaps[a.ID].OpenDesignDiagnosis(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
+			v.Diagnosis.AutoRefresh = cfg.Quota.Enabled
+		}
 		if config.IsOpenCode(a.Provider) {
 			ph := s.openCodeProxyView(a.ProxyURL)
 			v.ProxyHealth = &ph
@@ -335,6 +345,8 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil) {
 			v.Quota = q
 			switch a.Provider {
+			case config.ProviderOpenDesign:
+				v.QuotaFresh = v.Diagnosis.PlanFresh
 			case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 				v.QuotaFresh = q.OpenCode.Fresh(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
 				if q.OpenCode != nil && q.OpenCode.Source == quota.OpenCodeSource(cfg, a) && !q.CatalogAt.IsZero() && now.Sub(q.CatalogAt) < 24*time.Hour {
@@ -652,7 +664,36 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/refresh-quota"):
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		if err := s.quota.RefreshNow(ctx, a); err != nil {
+		started := time.Now()
+		err := s.quota.RefreshNow(ctx, a)
+		if a.Provider == config.ProviderOpenDesign {
+			current := s.cfg.Get()
+			next, exists := current.Account(id)
+			q := s.quota.Get(id)
+			if !exists || quota.OpenDesignSource(cfg, a) != quota.OpenDesignSource(current, next) || q == nil || q.OpenDesign == nil || q.OpenDesign.Source != quota.OpenDesignSource(current, next) {
+				apiError(w, http.StatusConflict, errors.New("账号来源已变化或检测未完成，请重新检测"))
+				return
+			}
+			if q.OpenDesign.Catalog.CheckedAt.Before(started) || (a.ControlKey != "" && q.OpenDesign.Workspace.CheckedAt.Before(started)) {
+				apiError(w, http.StatusConflict, errors.New("本次检测未完成或等待超时，请稍后重试；旧数据不代表当前额度"))
+				return
+			}
+			d := q.OpenDesignDiagnosis(time.Now(), time.Duration(current.Quota.StaleSec)*time.Second)
+			d.AutoRefresh = current.Quota.Enabled
+			message := d.Label
+			if d.Detail != "" {
+				message += "：" + d.Detail
+			}
+			if err == nil && a.ControlKey != "" && d.PlanFresh {
+				message = "套餐、钱包与账单已刷新；目录检测不证明推理授权"
+			}
+			s.metaDirty.Store(true)
+			// 200 means the read-only diagnostic completed, NOT that every
+			// upstream succeeded. Keep failures explicit instead of a proxy 502.
+			writeJSON(w, http.StatusOK, map[string]any{"ok": err == nil && a.ControlKey != "" && d.PlanFresh, "quotaRefreshed": q.OpenDesign.Plan.State == "ok" && d.PlanFresh, "message": message, "diagnosis": d, "checks": q.OpenDesign, "nextAt": q.NextAt})
+			return
+		}
+		if err != nil {
 			apiError(w, http.StatusBadGateway, errors.New("额度读取失败："+err.Error()))
 			return
 		}

@@ -268,6 +268,9 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}
+		if a.Provider == config.ProviderOpenDesign && ok && (n.Provider != a.Provider || quota.OpenDesignSource(old, a) != quota.OpenDesignSource(next, n)) {
+			s.quota.Forget(a.ID)
+		}
 		capabilitiesChanged := old.OpenCode.CapabilitiesURL != next.OpenCode.CapabilitiesURL || old.OpenCode.ZenDocsURL != next.OpenCode.ZenDocsURL || old.OpenCode.GoDocsURL != next.OpenCode.GoDocsURL || !reflect.DeepEqual(old.OpenCode.ProtocolBases(a.Provider), next.OpenCode.ProtocolBases(n.Provider))
 		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.EgressIP != n.EgressIP || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {
 			s.quota.Forget(a.ID)

@@ -72,6 +72,7 @@ type Snapshot struct {
 	PerchAt    time.Time   `json:"perchAt,omitzero"`
 	PerchError string      `json:"perchError,omitempty"`
 
+	OpenDesign  *OpenDesignState  `json:"openDesign,omitempty"`
 	OpenCode    *opencode.State   `json:"opencode,omitempty"`
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 
@@ -313,6 +314,14 @@ func (s *Snapshot) clone() *Snapshot {
 		return nil
 	}
 	c := *s
+	if s.OpenDesign != nil {
+		o := *s.OpenDesign
+		c.OpenDesign = &o
+		if o.RuntimeRestriction != nil {
+			r := *o.RuntimeRestriction
+			o.RuntimeRestriction = &r
+		}
+	}
 	c.OpenCode = s.OpenCode.Clone()
 	c.TokenHarbor = s.TokenHarbor.clone()
 	c.Windows = append([]Window(nil), s.Windows...)
@@ -839,6 +848,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 		break
 	}
 	defer p.finish(a.ID)
+	if a.Provider == config.ProviderOpenDesign {
+		return p.fetchOpenDesign(ctx, p.Cfg(), a, true)
+	}
 	if config.IsOpenCode(a.Provider) {
 		return p.fetchOpenCodeForce(ctx, p.Cfg(), a, true)
 	}
@@ -933,6 +945,8 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
 	switch a.Provider {
+	case config.ProviderOpenDesign:
+		return p.fetchOpenDesign(ctx, cfg, a, false)
 	case config.ProviderTokenHarbor:
 		return p.fetchTokenHarbor(ctx, cfg, a, false)
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
@@ -1224,6 +1238,14 @@ func (p *Poller) store(id string, s *Snapshot) { // an account deleted while it 
 		cfg := p.Cfg()
 		a, ok := cfg.Account(id)
 		if !ok || ResponseBindingSource(cfg, a) != s.CatalogSource {
+			p.mu.Unlock()
+			return
+		}
+	}
+	if s.OpenDesign != nil {
+		cfg := p.Cfg()
+		a, ok := cfg.Account(id)
+		if !ok || a.Provider != config.ProviderOpenDesign || OpenDesignSource(cfg, a) != s.OpenDesign.Source {
 			p.mu.Unlock()
 			return
 		}

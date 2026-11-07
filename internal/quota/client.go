@@ -26,6 +26,48 @@ import (
 type HTTPError struct {
 	Status int
 	Code   string
+	// OwnerBanned is a recognized explicit refusal, never an arbitrary body.
+	OwnerBanned bool
+}
+
+// Unrecognized error strings may contain secrets. Retain only known codes;
+// unknown errors still have an HTTP status and an honest generic diagnosis.
+func knownErrorCode(code string) string {
+	switch code {
+	case "unauthenticated", "invalid_api_key", "invalid_key", "forbidden_api_key",
+		"workspace_billing_scope_forbidden", "workspace_access_denied",
+		"billing_preflight_unavailable", "database_unavailable", "internal_error",
+		"rate_limited", "insufficient_balance", "insufficient_credits", "payment_required":
+		return code
+	}
+	return ""
+}
+
+func readHTTPError(status int, body []byte) *HTTPError {
+	e := &HTTPError{Status: status}
+	var raw struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if len(body) > 1<<20 || json.Unmarshal(body, &raw) != nil {
+		return e
+	}
+	var code string
+	if json.Unmarshal(raw.Error, &code) == nil {
+		e.Code = knownErrorCode(code)
+		return e
+	}
+	var detail struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw.Error, &detail) == nil {
+		e.Code = knownErrorCode(detail.Code)
+		// Workspace active and a generic forbidden_api_key do NOT prove this.
+		message := strings.ToLower(strings.TrimSpace(detail.Message))
+		e.OwnerBanned = status == http.StatusForbidden && e.Code == "forbidden_api_key" &&
+			(message == "api key owner banned" || message == "[code=forbidden_api_key] query api key by digest: api key owner banned")
+	}
+	return e
 }
 
 func (e *HTTPError) Error() string {
@@ -83,20 +125,7 @@ func (c *Client) get(ctx context.Context, key, path, workspace, seed string, out
 		return fmt.Errorf("read error")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Error any `json:"error"`
-		}
-		code := ""
-		if json.Unmarshal(body, &e) == nil {
-			if s, ok := e.Error.(string); ok {
-				code = codeRe(s)
-			} else if m, ok := e.Error.(map[string]any); ok {
-				if s, ok := m["code"].(string); ok {
-					code = codeRe(s)
-				}
-			}
-		}
-		return &HTTPError{Status: resp.StatusCode, Code: code}
+		return readHTTPError(resp.StatusCode, body)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("invalid JSON from %s", strings.SplitN(path, "?", 2)[0])
@@ -143,6 +172,7 @@ type Window struct {
 }
 
 type Preflight struct {
+	PlanKnown    bool     // a missing codingPlan is unknown, not an inactive plan
 	Eligible     bool     `json:"eligible"`
 	Tier         string   `json:"tier"`
 	Windows      []Window `json:"windows"`
@@ -154,7 +184,7 @@ type Preflight struct {
 type rawPreflight struct {
 	BalanceUSD string `json:"balanceUsd"`
 	CodingPlan *struct {
-		Eligible bool   `json:"eligible"`
+		Eligible *bool  `json:"eligible"`
 		Tier     string `json:"tier"`
 		Windows  []struct {
 			DurationSeconds  int64  `json:"durationSeconds"`
@@ -197,7 +227,11 @@ func (c *Client) Preflight(ctx context.Context, key, workspace, model, seed stri
 	}
 	p := Preflight{Funding: raw.Funding, ModelCovered: raw.ModelCovered, BalanceUSD: raw.BalanceUSD, Windows: []Window{}}
 	if raw.CodingPlan != nil {
-		p.Eligible, p.Tier = raw.CodingPlan.Eligible, raw.CodingPlan.Tier
+		p.PlanKnown = raw.CodingPlan.Eligible != nil
+		if p.PlanKnown {
+			p.Eligible = *raw.CodingPlan.Eligible
+		}
+		p.Tier = raw.CodingPlan.Tier
 		for _, w := range raw.CodingPlan.Windows {
 			used, e1 := parseCredits(w.UsedCredits)
 			limit, e2 := parseCredits(w.LimitCredits)
@@ -490,7 +524,8 @@ func FetchCatalogFull(ctx context.Context, hc *http.Client, runtimeBase, runtime
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &HTTPError{Status: resp.StatusCode}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+		return nil, readHTTPError(resp.StatusCode, body)
 	}
 	var body struct {
 		Data []struct {

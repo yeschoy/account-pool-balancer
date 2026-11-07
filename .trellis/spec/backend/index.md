@@ -1,5 +1,7 @@
 # Account Pool Backend Contracts
 
+Read [OpenDesign diagnostics contracts](opendesign.md) before changing its
+quota reads, error evidence, refresh API or account status projections.
 Read [OpenCode integration contracts](opencode.md) before modifying config,
 quota, pool, proxy, identity or admin code in this repository.
 Read [Token Harbor contracts](tokenharbor.md) for its native-key integration,
