@@ -93,6 +93,28 @@
 `preflight-data/` 和 `preflight.log` 已登记 `_tmp_artifacts.md`，待用户同意再定向清理；
 正式备份/源码/新旧镜像及 Trellis 记录保留。公网独立浏览器已关闭。
 
+### 上线后 NewAPI 只读排查（2026-11-07 10:24 UTC）
+
+- 用户要求检查 NewAPI 报错、若由新版引起则修复。合并核对近2小时 NewAPI Docker日志、
+  只读 PostgreSQL 使用/错误记录、渠道路由及号池 JSONL 业务日志，未发起真实推理或写入配置。
+  NewAPI 自11月3日起运行原镜像，本次只升级号池；两服务均healthy、restartCount=0、未OOM。
+  按正常域名 `Host: yeschoy.com` 访问本机 NewAPI `/api/status` HTTP200/success=true；
+  无该Host的404是现有域名路由行为，不作为服务故障。
+- Modal渠道156和OpenCode渠道167均有上游429，升级前就存在；升级后15分钟分别有37/44条
+  NewAPI成功消费记录，也分别有19/8条限流错误。客户端取消对应client_gone/499，
+  固定客户端的Invalid token同样早于升级，不据此修改凭据、限流或调度保护。
+- 10:16:29 UTC渠道134的单条503，在号池错误记录中确认为OpenDesign上游
+  `workspace_billing_scope_unavailable`（账单服务内部请求超时）；未发现本地panic或持久化失败。
+  渠道158的两条零token计费告警来自独立外部上游，不经过号池；旧TokenHarbor认证错误
+  集中在升级前08:41–09:12 UTC，渠道170核查时已是停用状态，本轮未更改。
+- 排查期间10:23起渠道174–179出现422；这些是直连Mistral官方的渠道，不经过号池，
+  不能归因本次e9a3669。另有一条OpenCode400明确拒绝file内容块，此类请求须使用其支持的内容格式，
+  不在后台丢弃附件来掩盖错误；本轮未修改这些渠道或用户请求。
+- 切换窗口10:07:26–10:07:28 UTC存在访问旧兼容别名的Docker DNS错误，启动后截至10:24:21 UTC
+  未见继续发生。这是切换期间请求失败证据，不代表持续故障，也不是精确停机采样。
+- 当前没有证据表明e9a3669引入上述持续错误，未盲目修代码、回滚、重启、覆盖配置或调整计费。
+  本轮探针/查询均在内存执行，无新增临时脚本、日志下载、凭据副本或浏览器产物。
+
 ## 历史部署：Stripe 链接路径兼容（2026-11-06 21:37 UTC，a8902bc）
 
 - 用户同意上线安全诊断并用一个未尝试账号验证。先上线`9f6ab11`取得真实响应结构，再修复前后端均写死`/c/pay/`的问题，最终运行`a8902bc6069b4795c2c08d7864e3638ee9e0aef9`。Stripe官方[Session.url合同](https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url)不保证路径前缀；现在只接受HTTPS、精确checkout.stripe.com、无userinfo/显式端口/空白且非空根地址，路径/query/fragment按不透明值处理。不扩展自定义域名或invoice_url，不更改报价、单次月付、禁止扣款/升级、pending保护及保存链接优先复用规则。
