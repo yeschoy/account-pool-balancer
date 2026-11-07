@@ -32,6 +32,8 @@ var sessionHeaders = []struct{ name, keyType string }{
 	{"X-Claude-Code-Session-Id", "session_id"},
 	{"X-Codex-Session-Id", "session_id"},
 	{"X-Codex-Thread-Id", "thread_id"},
+	{"X-Pi-Session-Id", "session_id"},
+	{"X-Pi-Session", "session_id"},
 	{"Session-Id", "session_id"},
 	{"Session_id", "session_id"},
 	{"X-Session-Id", "session_id"},
@@ -271,7 +273,7 @@ func stableConversation(body map[string]any) string {
 
 // bodyKeysKept are the top-level fields identity and routing read; the rest
 // of a request body (tools, the long message history) is never decoded.
-var bodyKeysKept = map[string]bool{"model": true, "stream": true, "previous_response_id": true, "prompt_cache_key": true,
+var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true, "previous_response_id": true, "prompt_cache_key": true,
 	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true}
 
 // parseRequestBody decodes just what routing needs from a request body: the

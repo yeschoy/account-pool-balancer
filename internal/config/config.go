@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral:
 		return provider
 	}
 	return DefaultGroup
@@ -136,13 +136,15 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
 // key of a self-hosted Ollama): such an account must name its provider.
 func ProviderForKey(key string) string {
 	switch {
+	case strings.HasPrefix(key, MistralKeyPrefix):
+		return ProviderMistral
 	case strings.HasPrefix(key, RiverKeyPrefix):
 		return ProviderRiver
 	case strings.HasPrefix(key, OllamaKeyPrefix):
@@ -181,6 +183,9 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 	switch provider {
 	case ProviderRiver:
 		return strings.HasPrefix(key, RiverKeyPrefix)
+	case ProviderMistral:
+		// Mistral also issues opaque keys; mstrl_ is only an inference hint.
+		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
 	case ProviderOllama:
 		return !strings.ContainsAny(key, " \t\r\n")
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
@@ -218,11 +223,11 @@ func KnownProvider(p string) bool {
 func ResolveProvider(declared, key string) string {
 	// OpenCode credentials are opaque and can overlap sk-/other prefixes.
 	// Only an explicit declaration selects a tier; never infer it from a key.
-	if IsOpenCode(declared) {
+	if IsOpenCode(declared) || declared == ProviderMistral {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
-	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor:
+	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral:
 		return inferred
 	}
 	if declared == "" {
@@ -236,6 +241,8 @@ func runtimeKeyError(provider string) string {
 	switch provider {
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
 		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
+	case ProviderMistral:
+		return "Mistral runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderRiver:
 		return "runtime key must start with rv_"
 	case ProviderOllama:
@@ -258,6 +265,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.OpenCode.ZenErrorRules, c.OpenCode.ZenRetryRules
 	case ProviderOpenCodeGo:
 		return c.OpenCode.GoErrorRules, c.OpenCode.GoRetryRules
+	case ProviderMistral:
+		return c.MistralErrorRules, c.MistralRetryRules
 	case ProviderRiver:
 		return c.RiverErrorRules, c.RiverRetryRules
 	case ProviderOllama:
@@ -283,6 +292,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return out
 	}
 	switch provider {
+	case ProviderMistral:
+		return rules.DefaultMistralErrorRules()
 	case ProviderRiver:
 		return rules.DefaultRiverErrorRules()
 	case ProviderOllama:
@@ -307,6 +318,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return out
 	}
 	switch provider {
+	case ProviderMistral:
+		return rules.DefaultMistralRetryRules()
 	case ProviderRiver:
 		return rules.DefaultRiverRetryRules()
 	case ProviderOllama:
@@ -396,6 +409,11 @@ func (c *Config) RuntimeBase(a Account) string {
 		return c.OpenCode.ZenBase
 	case ProviderOpenCodeGo:
 		return c.OpenCode.GoBase
+	case ProviderMistral:
+		if c.Mistral.BaseURL != "" {
+			return c.Mistral.BaseURL
+		}
+		return DefaultMistral().BaseURL
 	case ProviderRiver:
 		return c.Upstream.RiverBase
 	case ProviderOllama:
@@ -931,6 +949,9 @@ type Config struct {
 	Perch                 Perch             `json:"perch"`
 	TokenHarbor           TokenHarbor       `json:"tokenHarbor"`
 	OpenCode              OpenCode          `json:"opencode"`
+	Mistral               Mistral           `json:"mistral"`
+	MistralErrorRules     []rules.ErrorRule `json:"mistralErrorRules"`
+	MistralRetryRules     []rules.RetryRule `json:"mistralRetryRules"`
 	Logs                  Logs              `json:"logs"`
 	Pricing               pricing.Config    `json:"pricing"`
 }
@@ -977,6 +998,9 @@ func Default() *Config {
 		TokenHarborRetryRules: rules.DefaultTokenHarborRetryRules(),
 		TokenHarbor:           TokenHarborDefaults(),
 		OpenCode:              DefaultOpenCode(),
+		Mistral:               DefaultMistral(),
+		MistralErrorRules:     rules.DefaultMistralErrorRules(),
+		MistralRetryRules:     rules.DefaultMistralRetryRules(),
 		Pricing:               pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
 		Logs:                  Logs{RetentionDays: 7, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
@@ -1357,6 +1381,9 @@ func (c *Config) Normalize() error {
 	if err := c.Perch.normalize(); err != nil {
 		return err
 	}
+	if err := c.normalizeMistral(); err != nil {
+		return err
+	}
 	if err := c.normalizeTokenHarbor(); err != nil {
 		return err
 	}
@@ -1492,10 +1519,10 @@ func (c *Config) Normalize() error {
 		if !groupRe.MatchString(a.Group) {
 			return fmt.Errorf("accounts[%s]: invalid group", a.ID)
 		}
-		if IsOpenCode(a.Provider) {
+		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup {
 			for _, p := range Providers {
 				if p != a.Provider && GroupForProvider(p) == a.Group {
-					return fmt.Errorf("accounts[%s]: OpenCode requires its own provider group", a.ID)
+					return fmt.Errorf("accounts[%s]: provider requires its own group", a.ID)
 				}
 			}
 		}
@@ -1700,13 +1727,13 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
-		nested.TokenHarbor.Routing = nil
+		nested.TokenHarbor.Routing, nested.Mistral.Routing = nil, nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)
@@ -1847,7 +1874,7 @@ func Mask(key string) string {
 		return ""
 	}
 	prefix := ""
-	for _, p := range []string{"vela_ctrl_", "sk-amr-", "sk-", RiverKeyPrefix, OllamaKeyPrefix, ModalKeyPrefix} {
+	for _, p := range []string{"vela_ctrl_", "sk-amr-", "sk-", RiverKeyPrefix, OllamaKeyPrefix, ModalKeyPrefix, MistralKeyPrefix} {
 		if strings.HasPrefix(key, p) {
 			prefix = p
 			break

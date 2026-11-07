@@ -295,7 +295,7 @@ func (p *Pool) classLocked(cfg *config.Config, model string, now time.Time) stri
 	class := "unknown"
 	inCatalog := false
 	for _, a := range cfg.Accounts {
-		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor {
+		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 			continue
 		} // Independent catalogs must not teach OpenDesign funding classes
 		snap := p.quota(a.ID)
@@ -354,7 +354,7 @@ func (p *Pool) Succeeded(cfg *config.Config, id, model string) {
 	if st == nil || len(st.Strikes) == 0 {
 		return
 	}
-	if a, ok := cfg.Account(id); ok && config.IsOpenCode(a.Provider) {
+	if a, ok := cfg.Account(id); ok && (config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral) {
 		delete(st.Strikes, "account")
 	}
 	delete(st.Strikes, "plan")
@@ -439,8 +439,14 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
+	if a.Provider == config.ProviderMistral && snap != nil && snap.CatalogSource != quota.ResponseBindingSource(cfg, a) {
+		snap = nil // a changed key/base/proxy cannot reuse old permissions
+	}
 	if !cfg.Routing.IgnoreCatalog && snap.NotEntitled(model, now) {
 		return "not-entitled" // not on this account's plan
+	}
+	if a.Provider == config.ProviderMistral {
+		return "" // no documented standard-key balance; never apply OpenDesign funding
 	}
 	if a.Provider == config.ProviderOllama {
 		// Ollama credits: the included allowance, then purchased credits
@@ -674,6 +680,9 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
+	if a.Provider == config.ProviderMistral {
+		return s // unknown quota is not zero or an invented wallet balance
+	}
 	if config.IsOpenCode(a.Provider) {
 		if snap != nil && snap.OpenCode.Fresh(now, stale) {
 			s.Known = true

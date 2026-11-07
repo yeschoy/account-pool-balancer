@@ -184,6 +184,8 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 func (c *Config) ForProvider(provider string) *Config {
 	var r *Routing
 	switch provider {
+	case ProviderMistral:
+		r = c.Mistral.Routing
 	case ProviderOpenCodeZen:
 		r = c.OpenCode.ZenRouting
 	case ProviderOpenCodeGo:

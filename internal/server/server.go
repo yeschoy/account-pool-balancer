@@ -251,7 +251,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
 	s.rebindPerch(next)
-	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -264,9 +264,12 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
-		if a.Provider == config.ProviderTokenHarbor && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
+		}
+		if a.Provider == config.ProviderOpenDesign && ok && (n.Provider != a.Provider || quota.OpenDesignSource(old, a) != quota.OpenDesignSource(next, n)) {
+			s.quota.Forget(a.ID)
 		}
 		capabilitiesChanged := old.OpenCode.CapabilitiesURL != next.OpenCode.CapabilitiesURL || old.OpenCode.ZenDocsURL != next.OpenCode.ZenDocsURL || old.OpenCode.GoDocsURL != next.OpenCode.GoDocsURL || !reflect.DeepEqual(old.OpenCode.ProtocolBases(a.Provider), next.OpenCode.ProtocolBases(n.Provider))
 		if config.IsOpenCode(a.Provider) && ok && (a.RuntimeKey != n.RuntimeKey || a.ProxyURL != n.ProxyURL || a.EgressIP != n.EgressIP || a.Provider != n.Provider || old.RuntimeBase(a) != next.RuntimeBase(n) || capabilitiesChanged) {

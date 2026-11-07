@@ -12,6 +12,11 @@ introduce a new frontend build system. Keep node/pnpm artifacts ignored.
 - Preserve separate pool filters and explicit provider declarations on import.
 - Batch controls call the existing account APIs, keep provider/selection scope,
   report partial failures and require explicit confirmation for deletion.
+- OpenDesign uses the backend diagnosis projection, not status-code guessing.
+  Show explicit bans separately from generic403, outage and missing quota;
+  wallet0 is not plan exhaustion. Keep historical values/times clearly labeled,
+  never display an expired window as measured replenishment, and honor refresh
+  ok/quotaRefreshed instead of treating HTTP200 as upstream success.
 - Clearly label unknown/stale quota, subscription-wide percentages and buffered
   compatibility. Do not display missing measurements as zero balances.
 - Validate with node --check and a real local browser when changing flows.

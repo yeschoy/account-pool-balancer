@@ -72,6 +72,7 @@ type Snapshot struct {
 	PerchAt    time.Time   `json:"perchAt,omitzero"`
 	PerchError string      `json:"perchError,omitempty"`
 
+	OpenDesign  *OpenDesignState  `json:"openDesign,omitempty"`
 	OpenCode    *opencode.State   `json:"opencode,omitempty"`
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 
@@ -313,6 +314,14 @@ func (s *Snapshot) clone() *Snapshot {
 		return nil
 	}
 	c := *s
+	if s.OpenDesign != nil {
+		o := *s.OpenDesign
+		c.OpenDesign = &o
+		if o.RuntimeRestriction != nil {
+			r := *o.RuntimeRestriction
+			o.RuntimeRestriction = &r
+		}
+	}
 	c.OpenCode = s.OpenCode.Clone()
 	c.TokenHarbor = s.TokenHarbor.clone()
 	c.Windows = append([]Window(nil), s.Windows...)
@@ -839,11 +848,17 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 		break
 	}
 	defer p.finish(a.ID)
+	if a.Provider == config.ProviderOpenDesign {
+		return p.fetchOpenDesign(ctx, p.Cfg(), a, true)
+	}
 	if config.IsOpenCode(a.Provider) {
 		return p.fetchOpenCodeForce(ctx, p.Cfg(), a, true)
 	}
 	if a.Provider == config.ProviderTokenHarbor {
 		return p.fetchTokenHarbor(ctx, p.Cfg(), a, true)
+	}
+	if a.Provider == config.ProviderMistral {
+		return p.fetchCatalogOnlyForce(ctx, p.Cfg(), a, true)
 	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
@@ -930,13 +945,15 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
 	switch a.Provider {
+	case config.ProviderOpenDesign:
+		return p.fetchOpenDesign(ctx, cfg, a, false)
 	case config.ProviderTokenHarbor:
 		return p.fetchTokenHarbor(ctx, cfg, a, false)
 	case config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
 		return p.fetchOpenCode(ctx, cfg, a)
 	case config.ProviderOllama:
 		return p.fetchOllama(ctx, cfg, a)
-	case config.ProviderModal:
+	case config.ProviderModal, config.ProviderMistral:
 		return p.fetchCatalogOnly(ctx, cfg, a)
 	case config.ProviderPerch:
 		return p.fetchPerch(ctx, cfg, a)
@@ -1151,6 +1168,10 @@ func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.A
 // model field is an Endpoint's hostname, so /v1/models is the set of models
 // the key may call, and it costs nothing.
 func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a config.Account) error {
+	return p.fetchCatalogOnlyForce(ctx, cfg, a, false)
+}
+
+func (p *Poller) fetchCatalogOnlyForce(ctx context.Context, cfg *config.Config, a config.Account, force bool) error {
 	p.mu.Lock()
 	prev := p.snaps[a.ID].clone()
 	p.mu.Unlock()
@@ -1159,14 +1180,21 @@ func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a con
 		s = &Snapshot{}
 	}
 	now := time.Now()
+	if a.Provider == config.ProviderMistral && s.CatalogSource != ResponseBindingSource(cfg, a) {
+		s = &Snapshot{CatalogSource: ResponseBindingSource(cfg, a)}
+	}
 	// The catalogue read is the only thing that can be asked of a Modal
 	// account, and on Modal it is also the only free check of the token: the
 	// inference host authenticates /v1/models (401 "invalid proxy auth
 	// credentials") while its request paths answer "unknown inference model"
 	// to a bad token as well, so a request can't tell a dead token from a
 	// wrong model name.
-	if catalogDue(s, now, a.RuntimeKey != "", true) {
-		cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
+	if force || catalogDue(s, now, a.RuntimeKey != "", a.Provider != config.ProviderMistral) {
+		fetch := FetchCatalogFull
+		if a.Provider == config.ProviderMistral {
+			fetch = FetchMistralCatalog
+		}
+		cat, err := fetch(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
 		switch {
 		case err == nil:
 			applyCatalog(s, cat, now)
@@ -1180,7 +1208,17 @@ func (p *Poller) fetchCatalogOnly(ctx context.Context, cfg *config.Config, a con
 			return err
 		default:
 			s.CatalogError = err.Error() // the last good catalogue stays
+			if a.Provider == config.ProviderMistral {
+				s.LastError, s.LastErrorAt = err.Error(), now
+				s.Failures++
+				s.NextAt = now.Add(backoff(s.Failures))
+				p.store(a.ID, s)
+				return err
+			}
 		}
+	}
+	if a.Provider == config.ProviderMistral {
+		s.Failures = 0
 	}
 	s.LastOKAt = now
 	if !s.AuthFailed {
@@ -1200,6 +1238,14 @@ func (p *Poller) store(id string, s *Snapshot) { // an account deleted while it 
 		cfg := p.Cfg()
 		a, ok := cfg.Account(id)
 		if !ok || ResponseBindingSource(cfg, a) != s.CatalogSource {
+			p.mu.Unlock()
+			return
+		}
+	}
+	if s.OpenDesign != nil {
+		cfg := p.Cfg()
+		a, ok := cfg.Account(id)
+		if !ok || a.Provider != config.ProviderOpenDesign || OpenDesignSource(cfg, a) != s.OpenDesign.Source {
 			p.mu.Unlock()
 			return
 		}

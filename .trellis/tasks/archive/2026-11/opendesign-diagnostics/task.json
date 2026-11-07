@@ -1,0 +1,10 @@
+{
+  "name": "OpenDesign 只读状态检测与额度故障分层展示",
+  "status": "completed",
+  "completed_scope": "本地实现、全量 normal/race/vet/build、5套JS行为及最终二进制真实隔离浏览器/磁盘验收；未部署/推送",
+  "validation": "validation.md",
+  "execution": "direct",
+  "base_commit": "f99fa52",
+  "authorization": "用户确认按照已讨论建议实施；不部署、不修改生产配置/账号开关、不发起收费推理。按复杂跨层任务约定保留 Trellis；本树缺少 scripts/workflow，沿用现有手工任务格式，不新增管理工具。",
+  "artifacts": ["prd.md", "design.md", "implement.md", "validation.md"]
+}
