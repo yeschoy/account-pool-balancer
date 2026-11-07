@@ -32,7 +32,25 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral Chat 流式内容块兼容（2026-11-07 20:43 UTC，a2ffae2）
+## 当前部署：Mistral DeepSeek medium 档位兼容（2026-11-07 21:16 UTC，02c61a8）
+
+- 用户授权解决后部署、再观察10分钟；`02c61a80f6a699e432f0a541581a98d81bed3532`已正常推送master。确定性错误为DeepSeek Chat上游400/3051拒绝medium：仅精确模型`deepseek-v4-1-flash-1017`将medium映射到high，已披露可能增加思考token；不降级/关闭思考，不改其他模型/档位/协议，不声称能保证缓存命中。保留a2ffae2流式内容块兼容。
+- 只复用/运行Mistral定向Mock测试及必要build，不重复全仓/race/vet、不主动生产推理。一次预检原a2ffae2健康，旧e6f063b工作树干净，磁盘余量286.7GiB。从干净git archive构建源码`/home/ubuntu/project/account-pool-balancer-releases/20261107T211431Z-02c61a8`；镜像`account-pool-balancer:release-02c61a8-20261107T211431Z`，ID`sha256:28004aa53424a316e8339d29db3218b4f6fb850bbc963f5605538c872676cdd4`。
+- 复用既有脚本，仅内存适配；无存储格式变化，不额外复制敏感数据预检。新镜像就绪且无queued/running注册任务后停止旧服务，退出0后完整一致备份、gzip/SHA256核验，只追加image覆盖更新Balancer。**161账号、186注册记录核心资产及凭据/Key/代理/支付/备注、routingSecret保留，完整config逐字节不变，原用户/环境/挂载/端口/网络/资源及健康策略不变。** 未改NewAPI配置/在线功能开关。
+- 本机健康/版本/四资源通过，healthy/零重启/无OOM；真实未登录公网浏览器登录页正常，healthz/四资源均200，`?v=e02f22dc28`资源SHA256逐项匹配；21:16:07.061 UTC验收通过，已立即反馈并开始新10分钟自然业务观察。专用浏览器关闭，观察结果另记下方及Trellis会话；不将Mock/静态验收当推理验证。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 21:14:54.949–21:15:01.847（6.90秒） |
+| 请求停止 / 旧进程退出 | 21:15:01.948 / 21:15:02.120 |
+| 完整一致备份及核验 | 21:15:02.403–21:15:05.753 |
+| 切换请求 / 新容器启动 | 21:15:05.753 / 21:15:05.972 |
+| 首次HTTP可达 / Docker healthy | 21:15:07.088 / 21:15:36.329 |
+| 本机验收 / 公网验收 | 21:15:36.436 / 21:16:07.061 |
+
+未采样精确停机；旧进程退出至首次HTTP可达观测间隔约5.0秒。受限正式备份`/home/ubuntu/backups/account-pool-balancer/20261107T211431Z-effort-02c61a8/`（0700/0600）保留data、原Compose/.env、构建/切换日志及回执，data SHA256`8acff9f88965271c1bec8ae21d0a5ba3598a0c99087d47e7500cdfe55d1d2414`。回退镜像`account-pool-balancer:rollback-20261107T211431Z`保留原a2ffae2，回退前先核查新写入，不用旧data覆盖在线变化。无新增临时部署脚本/预检副本/容器或凭据下载；只补记录不再次部署。
+
+## 历史部署：Mistral Chat 流式内容块兼容（2026-11-07 20:43 UTC，a2ffae2）
 
 - 用户授权部署且要求不做过多测试；`a2ffae2fd8555122af89d356787844d1d4a809c6`已正常推送`origin/master`。复用本提交已通过的Go normal/race/vet/build及逐帧Flush回归，不重复全量测试、不发起生产推理。只更新Balancer，不改NewAPI渠道或在线配置/功能开关。
 - 一次预检确认原918352d健康、restartCount=0、无OOM，旧工作树仍e6f063b/干净，磁盘充足。从干净`git archive`构建到`/home/ubuntu/project/account-pool-balancer-releases/20261107T204139Z-a2ffae2`，未在旧树构建/reset。镜像`account-pool-balancer:release-a2ffae2-20261107T204139Z`，ID`sha256:fdeecdc05694a4b14f9e2871dba3de6ee6353b0a425758b06a66256b8ce37a69`。

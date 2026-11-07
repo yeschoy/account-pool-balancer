@@ -20,7 +20,9 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 	}
 	var changes []change
 	var model string
-	var effort *change
+	var effort, store *change
+	var storeValue []byte
+	storeCount := 0
 	cacheSeen := false
 	i := skipSpace(body, 0) + 1 // caller already validated the root JSON object
 	i = skipSpace(body, i)
@@ -37,6 +39,23 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 			if bytes.Equal(bytes.TrimSpace(body[vs:ve]), []byte(`"medium"`)) {
 				effort = &change{vs, ve, []byte(`"high"`)}
 			}
+		case "store":
+			storeCount++
+			storeValue = body[vs:ve]
+			start, end := i, ve
+			if next := skipSpace(body, ve); body[next] == ',' {
+				end = skipSpace(body, next+1)
+			} else {
+				// A final field owns its preceding separator; an initial field
+				// instead owns the following separator. Never touch its neighbor.
+				for start > 0 && (body[start-1] == ' ' || body[start-1] == '\n' || body[start-1] == '\r' || body[start-1] == '\t') {
+					start--
+				}
+				if start > 0 && body[start-1] == ',' {
+					start--
+				}
+			}
+			store = &change{start, end, nil}
 		case "prompt_cache_key":
 			cacheSeen = true // preserve even explicit null/empty/invalid client values
 		case "messages":
@@ -58,8 +77,18 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 	// This Mistral-hosted model explicitly rejects the generic OpenAI medium
 	// tier (3051). Prefer its supported high tier rather than disabling or
 	// lowering reasoning. Do not rewrite other models/protocols or native tiers.
-	if path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017" && effort != nil {
-		changes = append(changes, *effort)
+	if path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017" {
+		if effort != nil {
+			changes = append(changes, *effort)
+		}
+		if store != nil {
+			if storeCount != 1 || !bytes.Equal(storeValue, []byte("false")) && !bytes.Equal(storeValue, []byte("null")) {
+				return nil, "", errors.New("Mistral Chat is stateless: omit store or use false/null; store=true is not supported")
+			}
+			// This API rejects even false/null. Omission preserves stateless
+			// Chat semantics; it does not promise provider-level data retention.
+			changes = append(changes, *store)
+		}
 		sort.Slice(changes, func(i, j int) bool { return changes[i].start < changes[j].start })
 	}
 	generated := ""

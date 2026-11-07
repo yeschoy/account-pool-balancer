@@ -28,6 +28,15 @@
 - `prepareMistralRequest`仍按原始wire字段位置拼接，并对变更位置排序，保留模型/工具参数/大整数/既有cache key和reasoning历史。
 - 定向`go test ./internal/server -run '^TestMistral' -count=1`、gofmt、build及diff检查通过；新增用例覆盖medium字段顺序、cache/工具/大整数/思考保存、一次真实Mock上游请求以及其他模型/档位/协议不变。未重复全仓/race/vet或主动生产推理。
 
+## 第二轮上线与观察中发现
+
+- 02c61a8按既有流程部署，21:16:07.061 UTC公网验收通过；161账号/186注册记录、完整配置及运行参数保留。只做定向Mistral测试/build，正式备份/回退及分阶段时间见部署文档。
+- 新观察窗口21:16:07–21:26:07；21:18:06告警触发提前返回给主会话处理：一条真实流式请求正常DONE/completed、input44816/cached44416，命中约99.11%，与NewAPI统计一致。这是实际缓存可工作的生产证据，不是Mock或统计补零。
+- 同时21:17:59出现另一个请求的上游422，固定安全诊断指向`extra_forbidden / body.store`，不是medium错误复发、不是网络断流。
+- 继续窄兼容：同一精确DeepSeek Chat模型仅省略根store=false/null（原生无状态接口不支持该可选字段）；true/非法/重复store在本地400拒绝，不能默默接受存储要求。其他模型/Responses/FIM不变，嵌套metadata.store不动；这不承诺上游平台的数据留存政策。
+- 新增store回归覆盖字段位置/逗号/空白、与effort/reasoning/cache同时修改、工具/大数/嵌套字段保留、拒绝时零上游请求及其他模型/协议原字节。再次只跑Mistral定向测试及build，不重复全仓测试。
+- 因新错误需要更新，旧观察窗口不冒充完整10分钟；重新上线后重启10分钟计时。
+
 ## 后续执行
 
 - 从干净提交构建、保留一致备份/旧镜像、仅切换Balancer，按既有部署约定验收。上线后重新计时观察10分钟；记录真实业务成功/错误、cached_tokens及bindings，流量不足时明确样本限制。
