@@ -1495,6 +1495,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			}
 		}
 	}
+	if acct.Provider == config.ProviderMistral && r.URL.Path == "/v1/chat/completions" {
+		b, err = mistralChatResponse(b, false)
+		if err != nil {
+			return mistralResponseFailure(res)
+		}
+	}
 	h := w.Header()
 	h.Set("Content-Type", ct)
 	h.Set("X-Attempts", strconv.Itoa(attemptNo))
@@ -1783,6 +1789,14 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		res.contentType = "application/json"
 		return res
 	}
+	mistralChat := lease.Account.Provider == config.ProviderMistral && r.URL.Path == "/v1/chat/completions"
+	if mistralChat {
+		var err error
+		first, err = mistralChatEvent(first)
+		if err != nil {
+			return mistralResponseFailure(res)
+		}
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -1846,6 +1860,19 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				event, data, _ := sseFields(m.ev)
 				done := isTerminalEvent(event, data)
 				outEvent := m.ev
+				if mistralChat {
+					var err error
+					outEvent, err = mistralChatEvent(outEvent)
+					if err != nil {
+						failure := mistralResponseFailure(&attemptResult{})
+						if !write(append(append([]byte("data: "), failure.body...), '\n', '\n')) {
+							return clientGone()
+						}
+						res.result, res.terminal, res.category = "failed", "compatibility", "compatibility"
+						res.evaluated = true // incompatible output is not a bad account
+						return res           // already committed: never replay or fabricate [DONE]
+					}
+				}
 				if isErr, _, _ := sseError(event, data); isErr {
 					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
 				}
