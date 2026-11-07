@@ -32,6 +32,25 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：master 合并版（2026-11-07 20:19 UTC，918352d）
+
+- 用户授权推送并部署；`918352d5d91b661699ffdb09ad7f5401910b998b` 已正常推送 `origin/master`，从干净 `git archive` 构建。包含 Mistral reasoning_content 原生兼容、Chat/Responses 会话缓存key、管理员完整Key/代理展示复制、TokenHarbor独立默认关闭的详情日志开关，以及master已合入的OpenDesign/TLS/注册功能。
+- 复用既有部署脚本，仅内存适配；本提交定向验证已通过，不重复全量测试。相对线上8d852b6没有注册库存储格式变化，不额外复制敏感数据做离线预检；未修改远端e6f063b旧分叉工作树，未新建Trellis任务。
+- 源码 `/home/ubuntu/project/account-pool-balancer-releases/20261107T201720Z-918352d`；镜像 `account-pool-balancer:release-918352d-20261107T201720Z`，ID `sha256:4b7c902e5eb2098428d9d4ed550da3c7f6c05d73288f409ae0094c97bb5dccc3`。
+- 新镜像就绪且确认无queued/running注册任务后才停止旧服务；退出0后完整一致备份data并通过gzip/SHA256核验，仅追加image覆盖更新目标服务。157个账号、186条注册记录及凭据/Key/代理/支付记录/备注、routingSecret完整保留；config逐字节一致，原用户/环境/卷/端口/网络/健康/资源参数一致，不改在线配置或功能开关，不触发注册、付款或真实推理。
+- healthy、restartCount=0、未OOM，运行revision正确；本机healthz/四资源通过。真实未登录公网浏览器 `https://ods.yeschoy.io/` 登录页正常，healthz及四资源均200，保留`?v=e02f22dc28`查询串，SHA256逐项匹配目标源码；20:19:03.419 UTC验收通过并立即反馈。只补记录，不重建/重启。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 20:17:45.682–20:17:54.122（8.44秒） |
+| 请求停止 / 旧进程退出 | 20:17:54.224 / 20:17:54.331 |
+| 完整一致备份及核验 | 20:17:54.585–20:17:57.922 |
+| 切换请求 / 新容器启动 | 20:17:57.922 / 20:17:58.125 |
+| 首次HTTP可达 / Docker healthy | 20:17:59.231 / 20:18:28.469 |
+| 本机验收 / 公网验收 | 20:18:28.565 / 20:19:03.419 |
+
+未采样精确不可用窗口；旧进程退出至首次HTTP可达观测间隔约4.9秒，不把Docker健康等待或整体操作时长当作停机。受限备份 `/home/ubuntu/backups/account-pool-balancer/20261107T201720Z-master-918352d/` 保留data、校验、原Compose/.env、构建/切换日志及deploy.json，目录0700、文件0600；data SHA256 `6fa59b8a01a2ef2faf08fc47bdc2acdef42a1f0d08af67865369e35593244ac1`。回退镜像 `account-pool-balancer:rollback-20261107T201720Z`（原8d852b6）保留，回退前核查新写入，不自动覆盖在线数据。本轮无新增临时脚本/预检副本/容器或凭据下载，既有产物未经同意不清理。
+
 ## Mistral 号池部署（2026-11-07 12:38 UTC，8d852b6）
 
 - 用户授权提交、推送并部署。业务提交 `8d852b65ecaaf91bce17f197065931edbf77073e` 已正常快进推送 `origin/master`，从该提交的干净 `git archive` 构建；未新建 Trellis 任务，不改远端旧分叉工作树。
