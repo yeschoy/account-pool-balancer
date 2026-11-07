@@ -1,6 +1,6 @@
 # Mistral 缓存、协议、Key复制与 OVH 错误核对（2026-11-07）
 
-Mistral状态：只读研究完成，缓存/Key复制与协议兼容仍待实施范围确认；未修改相关业务代码、线上配置、渠道或凭据，未重启、部署或发起真实推理。用户明确要求只做必要定向验证，避免全量与重复测试。后续单独要求的TokenHarbor日志开关按小改动直接完成，见下节。
+状态更新：用户先要求列清单并停止、禁止创建Trellis任务，随后明确“开始吧”。已在干净Mistral工作树 `/Users/lyh_god/orca/workspaces/account-pool-balancer/mistral-account` 实现管理员完整Key/代理展示复制、Mistral Chat reasoning_content→原生thinking兼容、Chat/Responses缺失缓存key的会话HMAC补齐，并整合本地TokenHarbor独立详情日志开关。主目录既有TLS/注册等并行改动未迁入。未创建Trellis任务、未提交/推送/部署，未改线上配置或NewAPI开关、未发真实推理。用户明确要求只做必要定向验证，避免全量与重复测试。
 
 ## 基线与隔离
 
@@ -61,6 +61,16 @@ Mistral状态：只读研究完成，缓存/Key复制与协议兼容仍待实施
 - 推荐后续在客户端Mistral原生适配或Mistral专属明确兼容边界中，将外来reasoning_content保留为原生thinking块，再移除非法顶层字段，保留回答/工具调用。尚未实现/开启该转换，也未修改NewAPI渠道。
 - 此前本次TokenHarbor代码/文档及Trellis规范尚待用户确认提交，未混入其他窗口TLS/注册改动。随后用户明确授权先提交master当前业务改动再合入本地OpenDesign分支；本次作为现有改动检查点一并保存，未推送/部署，不将保存现有TLS源码等同于其真实上游效果已验证。
 
-## 最小验证计划（Mistral待确认）
+## 本轮实现与验证结果
+
+- Mistral原生生成请求在账号/RPM获取前预处理；全历史assistant的reasoning_content字符串映射为thinking块，保留回答/已有内容块/工具调用，大数与根字段model/tools保持原始字节；null/空思考仅移除空字段，不可表示类型本地400。
+- 仅当Chat/Responses生成请求根缓存字段缺失且已有身份时补`apb-mistral-<现有HMAC>`。已有字段（含null/空串）保留，无身份不随机补；生成值加入日志身份脱敏。Responses输入/续传规则与其他池/端点不改。
+- 各号池的已登录管理员账号页/编辑框显示完整runtimeKey/controlKey/proxyUrl并精确复制，取消代理密码框；沿用已有明文config，不新增加密、不迁移注册密码/Cookie/会话。导入隔离与日志脱敏保留，匿名/runtime Key不可读管理员凭据，响应no-store，退出清空账号和弹窗DOM。
+- 定向Go配置/服务用例通过（Mistral全组、管理员凭据鉴权/禁缓存、TH详情/设置、既有OpenDesign/Go详情；服务用时2.284秒）。Mistral及TH Node行为、JS语法、diff检查通过；没有全仓/race/vet。一份本地build供假账号浏览器验证。
+- 本地127.0.0.1:18794、2个禁用假账号、上游均127.0.0.1:1且OpenCode/轮询关闭。实际验证完整展示/编辑值/复制按钮、TH开关off→on→off的API/磁盘保存、共享开关和账号凭据不变，退出后账号/弹窗清空、管理员读取401；复制载荷由Node断言，未宣称系统剪贴板回读。专用浏览器已关闭，服务发送SIGTERM，文件按清单待用户同意清理。
+- 实现目录的`.trellis/spec/backend/mistral.md`、相关规范及docs同步。用户未授权Git提交/部署，故本次修改含规范仍未提交；后续仅提交该树本次改动，不混主目录其他窗口改动。
+- 此修复针对已证实的reasoning_content形状，不等于已实测生产422全部消失或缓存命中；旧排查还记录过根字段thinking/Chat store被拒绝，未擅自删除其他字段。保留旧研究下的原建议作为历史。
+
+## 原最小验证计划（现已按定向范围完成）
 
 只增加/运行新增行为对应的Mistral Mock定向用例（Chat/Responses同会话稳定、已有key保留、跨下游隔离、其他池不变）、管理员复制访问边界及前端复制载荷测试、JS语法检查；不全仓race/vet、不批量真实上游试错。上线需另获用户授权，复用既有OVH流程。
