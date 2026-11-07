@@ -308,9 +308,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 	out := make([]accountView, 0, len(cfg.Accounts))
 	for _, a := range cfg.Accounts {
 		v := accountView{ID: a.ID, Provider: a.Provider, Name: a.Name, Email: a.Email, UserID: a.UserID, Note: a.Note, Group: a.Group, Enabled: a.Enabled,
-			RuntimeKey: config.Mask(a.RuntimeKey), ControlKey: config.Mask(a.ControlKey), HasControlKey: a.ControlKey != "",
+			RuntimeKey: a.RuntimeKey, ControlKey: a.ControlKey, HasControlKey: a.ControlKey != "",
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
-			HasProxy: a.ProxyURL != "", ProxyURL: maskProxy(a.ProxyURL), CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
+			HasProxy: a.ProxyURL != "", ProxyURL: a.ProxyURL, CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
 		if a.Provider == config.ProviderOpenDesign {
 			v.Diagnosis = snaps[a.ID].OpenDesignDiagnosis(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
@@ -391,6 +391,7 @@ func providerParam(r *http.Request) string {
 }
 
 func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	cfg := s.cfg.Get()
 	views := s.accountViews(cfg)
 	if p := providerParam(r); p != "" {
@@ -713,15 +714,7 @@ func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
 		return
 	}
-	if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral {
-		apiError(w, http.StatusForbidden, errors.New("upstream credentials are write-only"))
-		return
-	}
-	if a.Provider == config.ProviderTokenHarbor {
-		writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey})
+	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey, "proxyUrl": a.ProxyURL})
 }
 
 func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {

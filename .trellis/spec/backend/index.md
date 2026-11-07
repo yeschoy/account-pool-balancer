@@ -10,6 +10,8 @@ Read [Explicit saved API-key reads](tokenharbor-keys.md) before changing
 TokenHarbor Key reveal/copy or its admin credential boundary.
 Read [Registration profiles and workers](tokenharbor-registration-identity.md)
 for saved browser identities, completion order, task chronology and1–5 workers.
+Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
+assistant reasoning normalization or user-authorized admin Key/proxy display.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,
 query cutoffs or live-tail retention.
 

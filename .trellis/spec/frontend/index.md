@@ -5,10 +5,8 @@ Extend app.js/index.html and existing components; do not replace the console or
 introduce a new frontend build system. Keep node/pnpm artifacts ignored.
 
 - Escape dynamic HTML with esc(); use textContent for diagnostic strings.
-- OpenCode upstream credentials are write-only. Only masked suffixes may be
-  rendered. Never fetch /keys for these providers or include raw config secrets.
-- TokenHarbor explicit saved-Key reveal/copy follows `../backend/tokenharbor-keys.md`;
-  ordinary lists remain masked, modal close clears secrets, OpenCode remains write-only.
+- User explicitly authorizes full saved API Key/control Key/proxy display and copy in authenticated administrator account lists/editors for all pools. These are already plaintext config values; do not add encryption or migrate password/Cookie/session stores. Escape values, preserve no-store/admin boundaries, copy exact full values without extra key-read requests, and clear displayed account/modal credentials on logout. Logs/import responses remain redacted; no credentials in localStorage.
+- TokenHarbor registration saved-Key reads and existing bounded batch-copy flows still follow `../backend/tokenharbor-keys.md`; registration summaries/logs stay masked and modal close clears secrets. Administrator account lists use the newer explicit full-display policy.
 - Preserve separate pool filters and explicit provider declarations on import.
 - Batch controls call the existing account APIs, keep provider/selection scope,
   report partial failures and require explicit confirmation for deletion.

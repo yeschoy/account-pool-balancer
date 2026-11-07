@@ -656,6 +656,20 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.SessionSource, rec.AffinityKeyType, rec.AffinityConfidence = ident.Source, ident.KeyType, ident.Confidence
+	if rec.Provider == config.ProviderMistral {
+		var generatedCacheKey string
+		body, generatedCacheKey, err = prepareMistralRequest(body, r.URL.Path, ident.Fingerprint)
+		if err != nil {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_reasoning", err.Error(), 0)
+			finish(400, "failed")
+			return
+		}
+		if generatedCacheKey != "" {
+			detailIdentities = append(detailIdentities, generatedCacheKey)
+			rec.CacheHintSource = "session_hmac"
+		}
+	}
 
 	excluded := map[string]bool{}
 	if config.IsOpenCode(rec.Provider) {

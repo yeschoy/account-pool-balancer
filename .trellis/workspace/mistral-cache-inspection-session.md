@@ -1,5 +1,13 @@
 # Mistral 缓存、协议、Key复制与 OVH 错误核对（2026-11-07）
 
+## 本地 master 合入记录
+
+- 用户随后明确授权“合入master”；仅本地提交/正常合并，不推送、不部署、不新建Trellis任务。
+- 功能分支提交`13971f8`（缓存key、原生reasoning兼容、管理员完整Key/代理展示复制、TH详情开关及规范/测试）；master原有验证记录更新提交`c256df2`，此前master为`e2fc393`，已含OpenDesign诊断与现有TokenHarbor/TLS/注册功能。
+- 使用正常no-ff合并保留双方历史，逐处解决8个文件的内容冲突；保留OpenDesign诊断、TokenHarbor注册机单Key接口、既有分组隔离批量复制和Agent等效额度展示。管理员账号API/界面按最新用户授权可读取完整Key/控制Key/代理，注册机API仍只返回已保存API Key，不泄露密码/Cookie/邮箱/支付链接；同步旧测试/规范，未删除有效的鉴权或隐私断言。
+- 合并工作树定向Go配置/服务测试通过（0.406/2.603秒），覆盖Mistral、管理员凭据鉴权/禁缓存、TH详情与原保存Key功能、OpenDesign刷新及原Go/OpenDesign详情。Mistral、TH保存Key复制、TH额度展示、TH注册行为、OpenDesign诊断五组Node测试、JS语法和diff检查全部通过。没有全仓/race/vet、真实推理或重复浏览器验收。
+- 合并提交见Git日志；保留既有TLS/注册与OpenDesign提交，不reset、不覆盖分叉，不清理任何已登记临时产物。下文“尚未提交”等是合入前阶段的历史记录，以本节为准。
+
 状态更新：用户先要求列清单并停止、禁止创建Trellis任务，随后明确“开始吧”。已在干净Mistral工作树 `/Users/lyh_god/orca/workspaces/account-pool-balancer/mistral-account` 实现管理员完整Key/代理展示复制、Mistral Chat reasoning_content→原生thinking兼容、Chat/Responses缺失缓存key的会话HMAC补齐，并整合本地TokenHarbor独立详情日志开关。主目录既有TLS/注册等并行改动未迁入。未创建Trellis任务、未提交/推送/部署，未改线上配置或NewAPI开关、未发真实推理。用户明确要求只做必要定向验证，避免全量与重复测试。
 
 ## 基线与隔离

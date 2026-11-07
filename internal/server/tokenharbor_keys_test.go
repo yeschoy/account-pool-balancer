@@ -46,8 +46,9 @@ func TestTHKeysExplicitReadOnlyAndPrivate(t *testing.T) {
 		}
 		w := get(path, true)
 		var out map[string]string
-		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out) != 1 || out["runtimeKey"] != row.APIKey {
-			t.Fatal("explicit read must return only the saved API key, without caching", w.Code)
+		registrationRead := strings.HasPrefix(path, "/api/tokenharbor/")
+		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || json.Unmarshal(w.Body.Bytes(), &out) != nil || out["runtimeKey"] != row.APIKey || registrationRead && len(out) != 1 || !registrationRead && len(out) != 3 {
+			t.Fatal("administrator read must keep its account/registration credential scope and no-store", w.Code)
 		}
 		for _, secret := range []string{row.Password, row.Cookies[0].Value, row.Checkout.URL, row.MailboxURL} {
 			if strings.Contains(w.Body.String(), secret) {
@@ -57,8 +58,9 @@ func TestTHKeysExplicitReadOnlyAndPrivate(t *testing.T) {
 	}
 	for _, path := range []string{"/api/accounts?provider=tokenharbor", "/api/tokenharbor/registrations", "/api/tokenharbor/registrations/" + row.Attempt, "/api/tokenharbor/log"} {
 		w := get(path, true)
-		if w.Code != 200 || strings.Contains(w.Body.String(), row.APIKey) || strings.Contains(w.Body.String(), row.Password) || strings.Contains(w.Body.String(), row.Cookies[0].Value) {
-			t.Fatal("ordinary listing/log exposed a credential", path, w.Code)
+		accountList := strings.HasPrefix(path, "/api/accounts?")
+		if w.Code != 200 || strings.Contains(w.Body.String(), row.APIKey) != accountList || strings.Contains(w.Body.String(), row.Password) || strings.Contains(w.Body.String(), row.Cookies[0].Value) {
+			t.Fatal("administrator account listing/registration secrecy scope is wrong", path, w.Code)
 		}
 	}
 	for _, status := range []thsignupstore.Status{thsignupstore.Unverified, thsignupstore.Failed, thsignupstore.Uncertain} {
@@ -90,7 +92,7 @@ func TestTHKeysExplicitReadOnlyAndPrivate(t *testing.T) {
 	}
 }
 
-func TestTHKeyReadKeepsOpenCodeWriteOnly(t *testing.T) {
+func TestAdminSavedKeyReadIncludesOpenCode(t *testing.T) {
 	s := newTHTestServer(t)
 	if _, err := s.cfg.Update(-1, func(c *config.Config) error {
 		for _, p := range []string{config.ProviderOpenCodeZen, config.ProviderOpenCodeGo} {
@@ -105,8 +107,8 @@ func TestTHKeyReadKeepsOpenCodeWriteOnly(t *testing.T) {
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: savedSession(t, s)})
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)
-		if w.Code != 403 || strings.Contains(w.Body.String(), "mock-private-") || w.Header().Get("Cache-Control") != "no-store" {
-			t.Fatal("TokenHarbor key copy relaxed OpenCode write-only boundary")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "mock-private-"+p) || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("administrator cannot read the user-authorized OpenCode saved key")
 		}
 	}
 }

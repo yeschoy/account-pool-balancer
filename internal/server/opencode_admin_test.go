@@ -18,7 +18,7 @@ import (
 	"account-pool-balancer/internal/quota"
 )
 
-func TestOpenCodeExistingAdminImportAndWriteOnlyKeys(t *testing.T) {
+func TestOpenCodeExistingAdminImportAndDirectKeys(t *testing.T) {
 	e := newOCEnv(t, false)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/accounts/import", strings.NewReader(`{"provider":"opencode-zen","text":"sk-overlapping-token,ZenNew\nsk-overlapping-token,ZenNew"}`))
@@ -43,12 +43,12 @@ func TestOpenCodeExistingAdminImportAndWriteOnlyKeys(t *testing.T) {
 	r = httptest.NewRequest(http.MethodGet, "/api/accounts/go1/keys", nil)
 	r.SetPathValue("id", "go1")
 	e.s.apiAccountKeys(w, r)
-	if w.Code != 403 || strings.Contains(w.Body.String(), "opaque-go-secret-key") {
-		t.Fatal("upstream key readable in frontend API")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "opaque-go-secret-key") {
+		t.Fatal("administrator cannot read saved upstream key")
 	}
 	data, _ := json.Marshal(e.s.accountViews(e.s.cfg.Get()))
-	if strings.Contains(string(data), "opaque-go-secret-key") || strings.Contains(string(data), "sk-zen-secret-key") {
-		t.Fatal("account view leaks credentials")
+	if !strings.Contains(string(data), "opaque-go-secret-key") || !strings.Contains(string(data), "sk-zen-secret-key") {
+		t.Fatal("administrator account view omitted saved credentials")
 	}
 }
 

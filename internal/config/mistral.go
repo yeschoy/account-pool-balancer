@@ -48,8 +48,9 @@ func (c *Config) normalizeMistral() error {
 	return nil
 }
 
-// WriteOnlyCredentials protects native-key pools without implying that
-// Mistral's stateless Responses API supports server-side response bindings.
+// WriteOnlyCredentials retains the native-key import isolation/deduplication
+// marker. It no longer governs administrator display, which the user explicitly
+// enabled; Mistral Responses remains stateless and has no server-side bindings.
 func WriteOnlyCredentials(provider string) bool {
 	return StrictResponses(provider) || provider == ProviderMistral
 }
