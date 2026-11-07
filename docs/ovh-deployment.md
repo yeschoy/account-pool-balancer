@@ -32,7 +32,25 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：master 合并版（2026-11-07 20:19 UTC，918352d）
+## 当前部署：Mistral Chat 流式内容块兼容（2026-11-07 20:43 UTC，a2ffae2）
+
+- 用户授权部署且要求不做过多测试；`a2ffae2fd8555122af89d356787844d1d4a809c6`已正常推送`origin/master`。复用本提交已通过的Go normal/race/vet/build及逐帧Flush回归，不重复全量测试、不发起生产推理。只更新Balancer，不改NewAPI渠道或在线配置/功能开关。
+- 一次预检确认原918352d健康、restartCount=0、无OOM，旧工作树仍e6f063b/干净，磁盘充足。从干净`git archive`构建到`/home/ubuntu/project/account-pool-balancer-releases/20261107T204139Z-a2ffae2`，未在旧树构建/reset。镜像`account-pool-balancer:release-a2ffae2-20261107T204139Z`，ID`sha256:fdeecdc05694a4b14f9e2871dba3de6ee6353b0a425758b06a66256b8ce37a69`。
+- 复用既有部署脚本，仅内存适配固定版本及备份名称。无存储格式变化，不额外复制敏感数据做断网预检；新镜像就绪并确认无queued/running注册任务后才停止旧服务，退出0后完整一致备份data，通过gzip/SHA256核验，仅追加image覆盖更新目标服务。**157个账号、186条注册记录及凭据/Key/代理/支付记录/备注、routingSecret保留，config逐字节不变，原UID1000:1000/环境/卷/端口/网络/资源及健康策略不变。**
+- healthy、restartCount=0、无OOM、运行revision正确；本机healthz和四资源通过。真实未登录公网浏览器`https://ods.yeschoy.io/`登录页正常，healthz及四资源HTTP200，保留`?v=e02f22dc28`查询串且SHA256逐项匹配目标源码；20:43:22.287 UTC验收通过并立即反馈。验收时切换后尚无新的渠道180自然业务记录，不将服务验收宣称为真实Mistral推理修复验收；未主动测试推理或回改旧错误日志。专用浏览器已关闭。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 20:41:58.198–20:42:06.169（7.97秒） |
+| 请求停止 / 旧进程退出 | 20:42:06.268 / 20:42:06.370 |
+| 完整一致备份及核验 | 20:42:06.621–20:42:09.996 |
+| 切换请求 / 新容器启动 | 20:42:09.997 / 20:42:10.215 |
+| 首次HTTP可达 / Docker healthy | 20:42:11.315 / 20:42:40.548 |
+| 本机验收 / 公网验收 | 20:42:40.646 / 20:43:22.287 |
+
+未采样精确不可用窗口；旧进程退出至首次HTTP可达观测间隔约4.9秒，不将健康等待或整体操作时长当停机。受限正式备份`/home/ubuntu/backups/account-pool-balancer/20261107T204139Z-mistral-stream-a2ffae2/`（目录0700/文件0600）保留data、原Compose/.env、构建/切换日志及验收回执；data SHA256`d2e42292236abf70cc11b74cd206c8578dddd5a9d9e6efc1e49ab78985d4ab0c`。回退镜像`account-pool-balancer:rollback-20261107T204139Z`保留原918352d；回退前先核查新写入，不自动覆盖在线数据。本轮无新增临时脚本/数据副本/容器或凭据下载；只补部署记录，不重新构建或重启。
+
+## 历史部署：master 合并版（2026-11-07 20:19 UTC，918352d）
 
 - 用户授权推送并部署；`918352d5d91b661699ffdb09ad7f5401910b998b` 已正常推送 `origin/master`，从干净 `git archive` 构建。包含 Mistral reasoning_content 原生兼容、Chat/Responses 会话缓存key、管理员完整Key/代理展示复制、TokenHarbor独立默认关闭的详情日志开关，以及master已合入的OpenDesign/TLS/注册功能。
 - 复用既有部署脚本，仅内存适配；本提交定向验证已通过，不重复全量测试。相对线上8d852b6没有注册库存储格式变化，不额外复制敏感数据做离线预检；未修改远端e6f063b旧分叉工作树，未新建Trellis任务。
