@@ -108,3 +108,40 @@ func nodeALPN() []byte {
 		0x02, 'h', '2',
 	}
 }
+
+// http11ClientHelloSpec returns the measured Node handshake with ALPN narrowed
+// to http/1.1 alone.
+//
+// Why this exists: the measured hello advertises "http/1.1, h2", so a server
+// may select h2. That is incompatible with *http.Transport, which always writes
+// an HTTP/1.1 request line — the server rejects it ("bogus greeting") and Go
+// surfaces the h2 SETTINGS frame as "malformed HTTP response". Declaring only
+// http/1.1 in the ClientHello is the one change that keeps the negotiated
+// protocol equal to the one Go speaks, and it is the narrowest possible
+// deviation from the measured handshake: every other byte, including extension
+// order, cipher suite order and the PQ-hybrid key share, is untouched.
+//
+// The alternative — keeping both protocols and carrying the connection on
+// http2.Transport — preserves this byte, but restructures the whole call path
+// (a separate transport, its own connection pool, and a different way to report
+// errors). The single ALPN entry is the smaller, more auditable change, and
+// undici clients do also offer http/1.1 first, so a receiver still sees a
+// plausible HTTP/1.1 client.
+//
+// Every call returns a fresh spec: uTLS mutates the spec it is given, so a
+// shared pointer poisons the next connection ("tls: internal error").
+func http11ClientHelloSpec() *utls.ClientHelloSpec {
+	spec := NodeClientHelloSpec()
+	out := *spec
+	out.Extensions = make([]utls.TLSExtension, 0, len(spec.Extensions))
+	for _, ext := range spec.Extensions {
+		if g, ok := ext.(*utls.GenericExtension); ok && g.Id == 16 {
+			out.Extensions = append(out.Extensions, &utls.ALPNExtension{
+				AlpnProtocols: []string{"http/1.1"},
+			})
+			continue
+		}
+		out.Extensions = append(out.Extensions, ext)
+	}
+	return &out
+}

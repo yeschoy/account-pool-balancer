@@ -19,7 +19,7 @@ function environment(api) {
     }
     return nodes.get(selector);
   };
-  const context = { $: node, api, currentPage: 'other', URL, console,
+  const context = { $: node, api, currentPage: 'other', URL, console, crypto: require('node:crypto').webcrypto,
     esc: (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]),
     fmtTime: () => 'time',
     setTimeout(fn) { const id = nextTimer++; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
@@ -554,6 +554,25 @@ async function testTaskNotesAreEscapedScopedAndExplicitlySaved() {
   assert.ok(calls.every((c) => c.method === 'PUT' && c.url.endsWith('/note')), 'notes never start registration or other account work');
 }
 
+async function testEmailMailboxFormats() {
+  const e = environment(async () => ({}));
+  const mailbox = 'https://icloud.mida.vip/messages/alias%40icloud.com?token=mock-token';
+  const accounts = e.context.thParseAccounts(`  alias@icloud.com ---- ${mailbox}  \r\n\nother@icloud.com----mock-password----${mailbox}`);
+  assert.equal(accounts.length, 2);
+  assert.equal(accounts[0].email, 'alias@icloud.com');
+  assert.equal(accounts[0].mailboxUrl, mailbox);
+  assert.match(accounts[0].password, /^Tq7-[A-Za-z0-9_-]{16}$/);
+  assert.notEqual(accounts[0].password, mailbox, 'receive URL must never become the password');
+  assert.equal(accounts[1].email, 'other@icloud.com');
+  assert.equal(accounts[1].password, 'mock-password');
+  assert.equal(accounts[1].mailboxUrl, mailbox);
+  const html = fs.readFileSync(path.join(__dirname, 'web', 'index.html'), 'utf8');
+  const tag = html.match(/<textarea id="th-register-accounts"[^>]*>/)?.[0];
+  assert.ok(tag);
+  assert.match(tag, /邮箱----接码页面（自动生成密码）/);
+  assert.match(tag, /邮箱----密码----接码页面/);
+}
+
 async function testGitHubFormatAndSessionProjection() {
   const e = environment(async () => ({}));
   const accounts = e.context.thParseAccounts('mock-user----mock-password----GEZDGNBVGY3TQOJQ----https://191006.xyz/mailbox/mock-token');
@@ -604,6 +623,7 @@ async function testSavedKeySelectionAndExplicitRead() {
   await testSavedKeySelectionAndExplicitRead();
   await testResendVerificationAndVisibleInputs();
   await testTaskNotesAreEscapedScopedAndExplicitlySaved();
+  await testEmailMailboxFormats();
   await testGitHubFormatAndSessionProjection();
   await testRegistrationPacingControls();
   await testJobOrderUsesOnlyCreationTime();

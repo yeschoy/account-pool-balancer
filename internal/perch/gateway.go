@@ -731,24 +731,22 @@ func (c *Client) clientFor(accountID, proxyURL string) (*http.Client, error) {
 	// an unfinished connection and break the route. Proxied calls therefore
 	// keep Go's own handshake; see the note on dialFingerprinted.
 	//
-	// DISABLED: the measured Node ClientHello advertises ALPN as
-	// "http/1.1, h2", but the server picks h2 anyway. DialTLSContext hands
-	// back a connection that already negotiated h2, while *http.Transport
-	// still writes an HTTP/1.1 request line into it, so every direct call
-	// fails with "bogus greeting GET / HTTP/1.1" on the server and
-	// "malformed HTTP response" (an h2 SETTINGS frame) on the client. That
-	// failure surfaces as a TLS-looking transport error, then exhausts the
-	// accounts and ends as a local pool_cooling_down 429.
-	//
-	// Restoring it needs the h2 side to agree, not a different ALPN string:
-	// either carry the connection on http2.Transport, or let uTLS own ALPN
-	// so ConnectionState reports the protocol Go then actually speaks.
-	// isFingerprintingEnabled is the single switch for that work.
-	if isFingerprintingEnabled() {
-		if spec := c.fingerprintOr(NodeClientHelloSpec()); spec != nil && proxy == nil {
-			t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialFingerprinted(ctx, network, addr, spec)
-			}
+	// ForceAttemptHTTP2 must be off for the fingerprinted path: that flag makes
+	// *http.Transport offer "h2" itself, which is what previously produced an
+	// h2 connection carrying an HTTP/1.1 request line. dialFingerprinted pins
+	// the negotiated protocol to http/1.1, so the transport has to stay on
+	// HTTP/1.1 for that client. Proxied clients keep the flag, since they never
+	// take the fingerprinted dialer.
+	if isFingerprintingEnabled() && proxy == nil {
+		// http/1.1-only ALPN keeps the negotiated protocol equal to the one
+		// *http.Transport writes, and ForceAttemptHTTP2 must stay off so the
+		// transport does not offer h2 on its own.
+		t.ForceAttemptHTTP2 = false
+		t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// uTLS mutates the spec it is handed, so every connection gets a
+			// fresh one; a shared pointer fails the next handshake with
+			// "tls: internal error".
+			return dialFingerprinted(ctx, network, addr, c.fingerprintOr(http11ClientHelloSpec()))
 		}
 	}
 	hc := &http.Client{Transport: t}
@@ -770,16 +768,15 @@ func EgressKey(accountID, proxyURL string) string {
 }
 
 // isFingerprintingEnabled reports whether the uTLS ClientHello replaces Go's
-// own handshake on direct egress.
+// own handshake on direct egress. Off unless an operator turns it on.
 //
-// It is off while the ALPN/HTTP2 mismatch described in clientFor is open. The
-// code below is kept intact rather than deleted: the ClientHello itself was
-// measured correctly (1640 bytes, matching perchai-cli on Node v26), and only
-// the protocol Go speaks afterwards is wrong, so restoring this is a
-// transport change and not a re-measurement.
+// The mechanism works: dialFingerprinted presents the measured Node hello and
+// pins ALPN to http/1.1 so the negotiated protocol matches what
+// *http.Transport writes, which removes the h2 mismatch that used to fail with
+// "malformed HTTP response". Verified against a live TLS 1.3 host.
 //
-// Tests that pin the spec shape and the negotiated length call the helpers
-// directly and are unaffected by this switch.
+// It stays off by default because presenting a browser-shaped handshake is only
+// worth its risk once proven to change outcomes, and nothing yet shows it does.
 func isFingerprintingEnabled() bool { return false }
 
 // fingerprintOr returns the ClientHello to present, defaulting to the measured
@@ -801,6 +798,12 @@ func (c *Client) fingerprintOr(fallback *utls.ClientHelloSpec) *utls.ClientHello
 // inside a CONNECT would mean owning the tunnel here, which is a larger change
 // than the fingerprint and is not attempted.
 //
+// ALPN: spec must advertise exactly what NextProtos offers. uTLS rejects a
+// server selection that is not in NextProtos ("server selected unadvertised
+// ALPN protocol"), so the two cannot disagree. Callers pass a spec whose ALPN
+// is http/1.1 only (see http11ClientHelloSpec), which keeps the negotiated
+// protocol identical to the one *http.Transport actually speaks.
+//
 // Verification stays on: the certificate is the one the real host presents, and
 // accepting it unchecked would trade a fingerprint for a silent MITM hole.
 func dialFingerprinted(ctx context.Context, network, addr string, spec *utls.ClientHelloSpec) (net.Conn, error) {
@@ -815,7 +818,8 @@ func dialFingerprinted(ctx context.Context, network, addr string, spec *utls.Cli
 	}
 	u := utls.UClient(raw, &utls.Config{
 		ServerName: host,
-		NextProtos: []string{"http/1.1", "h2"},
+		// Must match the spec's ALPN exactly; see the ALPN note above.
+		NextProtos: []string{"http/1.1"},
 		MinVersion: utls.VersionTLS12,
 	}, utls.HelloCustom)
 	if err := u.ApplyPreset(spec); err != nil {

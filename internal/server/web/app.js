@@ -1045,6 +1045,7 @@ const LOG_FIELDS = [
   ['retentionDays', '日志保留天数（默认7天）', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
   ['detail', '详细日志', 'bool', '记录请求头/体、响应头/体（凭据已脱敏），排查完请关闭'], ['maxDetails', '详细日志条数', 'int'], ['detailBodyKB', '单个体上限（KB）', 'int', '超出时保留头尾各一半、省略中间；内存中的详细日志总量上限 256MB，超出自动淘汰最旧的'],
 ];
+const logFields = () => isTokenHarbor() ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
 function renderForm(el, fields, obj, prefix) {
   el.innerHTML = fields.map(([k, label, type, extra, hint]) => {
     const id = `${prefix}-${k}`;
@@ -1228,6 +1229,7 @@ async function loadSettings() {
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
   $('#th-sync').value = s.tokenHarbor?.modelSyncSec ?? 1800;
   $('#th-account-sync').value = s.tokenHarbor?.accountSyncSec ?? 300;
+  $('#th-detail-log').checked = s.tokenHarbor?.detailLog === true;
   $('#opencode-settings').classList.toggle('hidden', !isOpenCode());
   renderForm($('#form-opencode'), openCodeFields(), s.opencode || {}, 'oc');
   $('#oc-protocols').value = JSON.stringify((pool === 'opencode-go' ? s.opencode?.goProtocols : s.opencode?.zenProtocols) || {}, null, 2);
@@ -1235,7 +1237,7 @@ async function loadSettings() {
   renderForm($('#form-routing'), routingFields(), s.routing, 'rt');
   if (pool === 'opencode-go') $('#form-routing').insertAdjacentHTML('beforeend', '<span></span><span class="hint">Go 已绑定会话满载时有界等待后返回 429，不临时借号；最大并发/RPM 在账号编辑中配置。缓存亲和为尽量复用，不保证上游缓存命中。</span>');
   renderForm($('#form-quota'), QUOTA_FIELDS, s.quota, 'qt');
-  renderForm($('#form-logs'), LOG_FIELDS, s.logs, 'lg');
+  renderForm($('#form-logs'), logFields(), s.logs, 'lg');
   $('#rt-strategy').addEventListener('change', (e) => { $('#rt-strategy-hint').textContent = STRATEGY_HINTS[e.target.value] || ''; });
   errRules = clone(s.errorRules || []);
   retRules = clone(s.retryRules || []);
@@ -1251,8 +1253,8 @@ async function loadSettings() {
 $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
-  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(LOG_FIELDS, 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
-  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value) };
+  const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});
     try {

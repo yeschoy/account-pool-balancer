@@ -11,6 +11,7 @@ type tokenHarborSettings struct {
 	BaseURL        string `json:"baseUrl"`
 	ModelSyncSec   int    `json:"modelSyncSec"`
 	AccountSyncSec *int   `json:"accountSyncSec,omitempty"`
+	DetailLog      *bool  `json:"detailLog,omitempty"`
 }
 
 // Session identity wins over a reusable cache prefix (which may be shared by

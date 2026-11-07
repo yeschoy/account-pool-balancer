@@ -1156,7 +1156,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1181,6 +1181,9 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TokenHarbor != nil && prov == config.ProviderTokenHarbor {
 			c.TokenHarbor.BaseURL, c.TokenHarbor.ModelSyncSec = in.TokenHarbor.BaseURL, in.TokenHarbor.ModelSyncSec
+			if in.TokenHarbor.DetailLog != nil {
+				c.TokenHarbor.DetailLog = *in.TokenHarbor.DetailLog
+			}
 			if in.TokenHarbor.AccountSyncSec != nil {
 				v := *in.TokenHarbor.AccountSyncSec
 				c.TokenHarbor.AccountSyncSec = &v

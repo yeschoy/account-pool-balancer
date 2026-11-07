@@ -452,6 +452,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		BrowserProfile:    row.BrowserProfile,
 		CompletionOrder:   row.CompletionOrder,
 		EgressRegion:      thEgressRegion(cfg, proxy),
+		TLSFingerprint:    thTLSFingerprint(cfg),
 		Label:             thLabel(cfg),
 		VerificationSince: row.CreatedAt,
 		MailTimeout:       time.Duration(cfg.MailTimeoutSec) * time.Second,
@@ -890,6 +891,7 @@ func (s *Server) apiTHReverify(w http.ResponseWriter, r *http.Request) {
 		Seed:           row.ID,
 		BrowserProfile: row.BrowserProfile,
 		EgressRegion:   thEgressRegion(cfg, proxy),
+		TLSFingerprint: thTLSFingerprint(cfg),
 		MailTimeout:    time.Duration(cfg.MailTimeoutSec) * time.Second,
 		RequestTimeout: 40 * time.Second,
 		UserAgent:      thRowUserAgent(row),
@@ -1036,6 +1038,7 @@ func (s *Server) apiTHSaveSettings(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Update(rev, func(c *config.Config) error {
 		// Registration settings do not own the pool scheduler or model polling.
 		next.Routing, next.ModelSyncSec, next.AccountSyncSec = c.TokenHarbor.Routing, c.TokenHarbor.ModelSyncSec, c.TokenHarbor.AccountSyncSec
+		next.DetailLog = c.TokenHarbor.DetailLog
 		if strings.TrimSpace(next.CaptchaKey) == "" && !in.ClearCaptchaKey {
 			next.CaptchaKey = c.TokenHarbor.CaptchaKey
 		}
@@ -1128,6 +1131,17 @@ func thEgressRegion(cfg config.TokenHarbor, proxy string) string {
 		}
 	}
 	return ""
+}
+
+// thTLSFingerprint resolves the operator's TLS handshake switch into the
+// tri-state the registration config takes.
+//
+// The registration layer uses a pointer so "unset" and "explicitly off" stay
+// distinguishable; the configuration layer already resolves unset to the
+// documented default, so this always returns a definite choice.
+func thTLSFingerprint(cfg config.TokenHarbor) *bool {
+	v := cfg.TLSFingerprintEnabled()
+	return &v
 }
 
 // thRedact keeps credentials out of a stored detail line.

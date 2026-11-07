@@ -38,3 +38,33 @@ Request, error, detailed-body, Perch event and TokenHarbor event logs under DATA
 ## 7. Wrong vs Correct
 Wrong: file.mtime older than retention ⇒ delete it, and trust the in-memory ring forever.
 Correct: prune by record timestamps in one writer, atomically preserve retained bytes, and enforce the same cutoff at query boundaries.
+
+## TokenHarbor independent detail capture
+
+### 1. Scope / Trigger
+Only TokenHarbor inference detail collection changes; shared log retention and other pools are unchanged.
+
+### 2. Signatures
+- Config boolean `tokenHarbor.detailLog`, default false including legacy configs.
+- Existing admin `GET/PUT /api/settings?provider=tokenharbor` projects/accepts `tokenHarbor.detailLog`; the PUT projection uses `*bool` to distinguish omission.
+
+### 3. Contracts
+Off overrides shared `logs.detail`, skips response-body capture and failed-attempt detail append, but keeps request/error summaries and prior details. On captures successes and bounded failed attempts (including failed attempts before successful failover), with existing privacy/64KiB limits and terminal-failure deduplication. Registration/other-provider saves and legacy requests omitting the field preserve the value. The dedicated checkbox appears only in TokenHarbor routing settings; its generic shared-detail checkbox is hidden without changing the shared value on save.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| Legacy config / off, even shared detail on | No TokenHarbor details; summaries remain |
+| On, shared detail off | TokenHarbor successes/failures collected |
+| Failed attempt then successful retry | Failure detail plus completion, original request/attempt correlation |
+| Registration / other pool / omitted field save | Preserve independent value |
+| Disable after collection | Stop new capture; do not delete existing records |
+
+### 5. Good / Base / Bad Cases
+Good: temporarily enable only TokenHarbor and explicitly turn it off after inspection. Base: upgrades default off. Bad: shared detail unexpectedly enables TokenHarbor body capture or a registration save clears its switch.
+
+### 6. Tests Required
+`TestTokenHarborDetailDefaultsAndPersistence`, `TestTokenHarborDetailSwitch`, `TestTokenHarborDetailSettingsIsolation`, existing privacy/failover detail tests with explicit opt-in; preserve OpenDesign/Go detail tests. Local zero-account browser verifies unchecked default and on/off persistence without changing global detail. No real upstream calls needed.
+
+### 7. Wrong vs Correct
+Wrong: capture all TokenHarbor failures regardless of the switch, or replace its setting from a registration form. Correct: gate both completion and per-attempt capture on the independent persisted value; preserve unrelated settings.

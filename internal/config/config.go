@@ -586,6 +586,9 @@ type TokenHarbor struct {
 	Routing *Routing `json:"routing,omitempty"`
 	// BaseURL is the OpenRouter-style API root ("https://tokenharbor.ai/v1").
 	BaseURL string `json:"baseUrl"`
+	// DetailLog independently controls all TokenHarbor body/header details;
+	// false (including legacy configs) overrides the shared logs.detail switch.
+	DetailLog bool `json:"detailLog"`
 	// ProxyURL is the egress registrations use when a task row names none.
 	// Empty means direct, which only works from a region the API serves.
 	ProxyURL string `json:"proxyUrl"`
@@ -619,6 +622,22 @@ type TokenHarbor struct {
 	// those do not contradict the exit IP. Empty leaves the historical UTC
 	// value in place; an unrecognised value is ignored rather than guessed.
 	EgressRegion string `json:"egressRegion"`
+	// TLSFingerprint makes SOCKS5 registration egress present Chrome's
+	// ClientHello instead of Go's own.
+	//
+	// Why it is a switch: Go's handshake is a published JA3 signature, so
+	// without this every registration is flagged as a non-browser client
+	// before a header is read. Against that, the most recent failures were
+	// account_cap — a quota refusal from the site, not a TLS rejection — so
+	// whether the fingerprint changes outcomes is not yet established. An
+	// operator can turn it off and compare on the same egress.
+	//
+	// Scope: SOCKS5 only. An HTTP proxy performs TLS after its own CONNECT
+	// and never consults DialTLSContext, so that path always keeps Go's
+	// handshake whatever this says.
+	//
+	// Nil means the documented default (on).
+	TLSFingerprint *bool `json:"tlsFingerprint,omitempty"`
 }
 
 // TokenHarborDefaults returns the non-zero defaults the admin form shows.
@@ -633,7 +652,21 @@ func TokenHarborDefaults() TokenHarbor {
 		MailTimeoutSec:      600,
 		ModelSyncSec:        1800,
 		Group:               TokenHarborGroup,
+		TLSFingerprint:      boolPtr(false),
 	}
+}
+
+// TLSFingerprintEnabled resolves the tri-state switch to a decision.
+//
+// Off unless explicitly turned on. The fingerprint is unproven: the failures
+// seen so far were account_cap refusals from the site rather than TLS
+// rejections, so Go's own handshake stays the default and an operator opts in
+// when they want to test the alternative.
+func (t TokenHarbor) TLSFingerprintEnabled() bool {
+	if t.TLSFingerprint == nil {
+		return false
+	}
+	return *t.TLSFingerprint
 }
 
 type Perch struct {

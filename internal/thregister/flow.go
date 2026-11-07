@@ -256,6 +256,18 @@ type Config struct {
 	// Direct reports that ProxyURL is the loopback relay rather than the real
 	// egress; it only affects how the run is described in logs.
 	Direct bool
+	// TLSFingerprint makes a SOCKS5 egress present Chrome's ClientHello
+	// instead of Go's. Go's handshake is a published JA3 signature, so without
+	// this every registration arrives flagged as a non-browser client.
+	//
+	// It is a pointer so "unset" stays distinguishable from "explicitly off":
+	// nil follows DefaultTLSFingerprint (on), while false forces Go's
+	// handshake for a comparison run.
+	//
+	// It reaches only SOCKS5 egress. An HTTP proxy performs TLS after its own
+	// CONNECT and never consults DialTLSContext, so that path keeps Go's
+	// handshake whatever this says.
+	TLSFingerprint *bool
 	// RequestTimeout bounds a single HTTP request; zero means 30s.
 	RequestTimeout time.Duration
 	// MailTimeout bounds the wait for the verification mail; zero means 3m.
@@ -334,7 +346,11 @@ func New(cfg Config) (*Flow, error) {
 	if err != nil {
 		return nil, err
 	}
-	tr, err := Transport(cfg.ProxyURL)
+	fingerprint := DefaultTLSFingerprint
+	if cfg.TLSFingerprint != nil {
+		fingerprint = *cfg.TLSFingerprint
+	}
+	tr, err := TransportWithFingerprint(cfg.ProxyURL, fingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +394,36 @@ func (f *Flow) Close() {
 // http(s):// and socks5(://h) exactly like the rest of the program. A proxy is
 // required in practice: the inference API answers 403 region_blocked to the
 // regions these pools run in, while the site itself stays reachable.
+//
+// The TLS handshake fingerprint follows DefaultTLSFingerprint, which the
+// configuration layer sets from its own switch. Callers that must decide per
+// run use TransportWithFingerprint instead.
 func Transport(proxyURL string) (*http.Transport, error) {
+	return TransportWithFingerprint(proxyURL, DefaultTLSFingerprint)
+}
+
+// DefaultTLSFingerprint is the fingerprint policy for callers that do not pass
+// one, such as the analysis probes.
+//
+// Off unless an operator opts in. It is a variable rather than a constant so
+// the configuration layer can carry a choice into every Transport call without
+// changing the function signature the probes already depend on. It is read at
+// call time.
+var DefaultTLSFingerprint = false
+
+// TransportWithFingerprint builds one registration transport, choosing the
+// handshake explicitly.
+//
+// fingerprint selects whether a SOCKS5 egress presents Chrome's ClientHello.
+// It is only reachable on SOCKS5: with an HTTP proxy http.Transport opens a
+// CONNECT tunnel and performs TLS internally without consulting
+// DialTLSContext, so that path always keeps Go's own handshake.
+//
+// The switch exists because the fingerprint is not yet proven to change
+// registration outcomes: the last failures were account_cap (a quota refusal),
+// not a TLS rejection. An operator can therefore turn it off and compare
+// without editing code.
+func TransportWithFingerprint(proxyURL string, fingerprint bool) (*http.Transport, error) {
 	tr := &http.Transport{
 		MaxIdleConns:          8,
 		IdleConnTimeout:       60 * time.Second,
@@ -386,14 +431,33 @@ func Transport(proxyURL string) (*http.Transport, error) {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	if strings.TrimSpace(proxyURL) == "" {
+	s := strings.TrimSpace(proxyURL)
+	if s == "" {
 		return tr, nil
 	}
-	u, err := url.Parse(strings.TrimSpace(proxyURL))
+	u, err := url.Parse(s)
 	if err != nil || u.Host == "" {
 		return nil, errors.New("代理地址无效")
 	}
 	tr.Proxy = http.ProxyURL(u)
+
+	// A SOCKS5 egress is the one case where the handshake can be reshaped.
+	// http.Transport installs the socks dialer as DialContext and then asks
+	// DialTLSContext to finish TLS itself, so the Chrome ClientHello reaches
+	// the site instead of Go's own. An HTTP proxy is different: the transport
+	// opens CONNECT and performs TLS internally, never consulting
+	// DialTLSContext, so that path keeps Go's handshake.
+	if fingerprint && isSocksProxy(s) {
+		dialTLS, derr := socksDialTLS(s, "")
+		if derr != nil {
+			return nil, derr
+		}
+		tr.DialTLSContext = dialTLS
+		// DialTLSContext owns protocol selection; letting the transport offer
+		// h2 on a connection that speaks http/1.1 is the mismatch that fails
+		// with "malformed HTTP response".
+		tr.ForceAttemptHTTP2 = false
+	}
 	return tr, nil
 }
 

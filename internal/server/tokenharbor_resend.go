@@ -41,7 +41,8 @@ func (s *Server) apiTHResendVerification(w http.ResponseWriter, r *http.Request)
 	var alreadyVerified bool
 	flow, callErr := thregister.New(thregister.Config{
 		BaseURL: thBaseURL(cfg.BaseURL), ProxyURL: proxy, Seed: row.ID, BrowserProfile: row.BrowserProfile,
-		EgressRegion: thEgressRegion(cfg, proxy), UserAgent: thRowUserAgent(row), RequestTimeout: 40 * time.Second,
+		EgressRegion: thEgressRegion(cfg, proxy), TLSFingerprint: thTLSFingerprint(cfg),
+		UserAgent: thRowUserAgent(row), RequestTimeout: 40 * time.Second,
 	})
 	if callErr == nil {
 		defer flow.Close()
