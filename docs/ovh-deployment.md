@@ -48,7 +48,52 @@
   mailTimeoutSec，不能用旧整份config覆盖后续在线变更。13:36:51 UTC复核通过。
   本节仅补记录，不再次部署。
 
-## 当前部署：Stripe 链接路径兼容（2026-11-06 21:37 UTC，a8902bc）
+## 当前部署：远端最新 master（2026-11-07 10:08 UTC，e9a3669）
+
+- 用户授权部署 OVH 最新远端 `master`；fetch 及构建前核对锁定
+  `e9a3669ddbfa3a87d0221edba396e6ac608d7273`。从干净 `git archive` 构建，
+  不夹带本地其他窗口的未提交改动，不修改/reset 远端 e6f063b 旧分叉工作树，
+  不新建 Trellis 任务。复用该提交已通过的完整 Go/Node/假数据浏览器验收，未重复跑全量测试。
+- 上线稳定浏览器身份配置、可配置 1–5 注册并发（全局上限5）、注册完成顺序及任务排序。
+  完整线上配置逐字节不变，原注册默认并发1、邮箱等待120秒均保留，未主动创建任务、
+  注册、发信、解验证码、创建 Key/支付链接、付款、入池或推理。
+- 干净源码 `/home/ubuntu/project/account-pool-balancer-releases/20261107T100552Z-e9a3669/`；
+  固定镜像 `account-pool-balancer:release-e9a3669-20261107T100552Z`，镜像 ID
+  `sha256:723b9b011c293623193a367be8dcacd07dcf27b17e4a5885fe91291579ef197a`。
+  仅在原 Compose 叠加 image override 切换目标服务；用户、环境、挂载、端口、网络别名、
+  健康/重启策略和实际资源限制一致，未应用源码 Compose 的其他默认值。
+- 新注册可选字段首次升级，按线上 UID1000:1000、`--network none` 使用数据副本预检；
+  healthz、正常管理员登录后的186行注册列表核验通过，正常退出0，不访问任何外部上游。
+  新镜像就绪后才停止旧服务；旧进程退出0后完成完整一致 data 备份及 gzip/SHA-256 核验。
+  **151个账号、186条注册记录的凭据/Key/固定代理/支付记录/备注、保存代理池、
+  routingSecret 及完整配置均保留**；敏感比对仅在远端内存执行，允许正常 Cookie/套餐观察更新时间刷新。
+- 新容器 healthy、restartCount=0、revision 正确，本机 healthz 及 HTML 中四项资源验收通过。
+  真实未登录公网浏览器 `https://ods.yeschoy.io/` 登录页正常，healthz/四资源均HTTP200，
+  保留 `?v=8411c592f3` 的资源哈希与目标源码逐一相符；10:08:14.709 UTC 完成公网验收并立即反馈。
+  未登录生产管理员做业务写入，不把健康/资源验收当作上游真实注册或付款验收。只补记录，不再次重启。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 10:07:15.378–10:07:22.138（6.760秒） |
+| 断网副本预检 | 10:07:22.138–10:07:25.100（2.962秒） |
+| 请求停止 / 旧进程退出 | 10:07:25.224 / 10:07:25.343 |
+| 完整一致备份及校验 | 10:07:25.634–10:07:28.924（3.290秒） |
+| 切换请求 / 新容器启动 | 10:07:28.924 / 10:07:29.135 |
+| 首次HTTP健康可达 / Docker healthy | 10:07:30.235 / 10:07:59.475 |
+| 本机验收 / 公网验收 | 10:07:59.602 / 10:08:14.709 |
+
+未采样精确不可用窗口，不将约30秒Docker健康等待或整个操作时长误报为停机。
+受限备份 `/home/ubuntu/backups/account-pool-balancer/20261107T100552Z-master-e9a3669/`
+含完整 data.tar.gz/校验、原 Compose/.env、构建/切换日志和 deploy.json；目录0700、
+敏感文件0600，不下载、不入Git。data SHA-256：
+`05c9a462c11d89532a34b32901b6b4c89e4b69f876330dd5228f27fde3688ce4`。
+回退镜像 `account-pool-balancer:rollback-20261107T100552Z`（原a8902bc）保留；
+新版可选注册字段可能被旧版丢弃，降级前先核查新写入和兼容方案，不用旧整份data覆盖在线变化。
+已停止的预检容器 `account-pool-balancer-preflight-20261107t100552z`、备份内
+`preflight-data/` 和 `preflight.log` 已登记 `_tmp_artifacts.md`，待用户同意再定向清理；
+正式备份/源码/新旧镜像及 Trellis 记录保留。公网独立浏览器已关闭。
+
+## 历史部署：Stripe 链接路径兼容（2026-11-06 21:37 UTC，a8902bc）
 
 - 用户同意上线安全诊断并用一个未尝试账号验证。先上线`9f6ab11`取得真实响应结构，再修复前后端均写死`/c/pay/`的问题，最终运行`a8902bc6069b4795c2c08d7864e3638ee9e0aef9`。Stripe官方[Session.url合同](https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url)不保证路径前缀；现在只接受HTTPS、精确checkout.stripe.com、无userinfo/显式端口/空白且非空根地址，路径/query/fragment按不透明值处理。不扩展自定义域名或invoice_url，不更改报价、单次月付、禁止扣款/升级、pending保护及保存链接优先复用规则。
 - 干净git archive源码：`/home/ubuntu/project/account-pool-balancer-releases/20261106T213621Z-a8902bc`；未夹带两份原有HTML/JS测试草稿或未跟踪目录。旧工作树仍e6f063b/干净/分叉，未在旧树构建、reset或覆盖配置。
