@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
 // prepareMistralRequest only adapts Mistral generation requests. Unchanged
@@ -18,6 +19,8 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 		value      []byte
 	}
 	var changes []change
+	var model string
+	var effort *change
 	cacheSeen := false
 	i := skipSpace(body, 0) + 1 // caller already validated the root JSON object
 	i = skipSpace(body, i)
@@ -28,6 +31,12 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 		vs := skipSpace(body, skipSpace(body, ke)+1)
 		ve := skipValue(body, vs)
 		switch key {
+		case "model":
+			_ = json.Unmarshal(body[vs:ve], &model)
+		case "reasoning_effort":
+			if bytes.Equal(bytes.TrimSpace(body[vs:ve]), []byte(`"medium"`)) {
+				effort = &change{vs, ve, []byte(`"high"`)}
+			}
 		case "prompt_cache_key":
 			cacheSeen = true // preserve even explicit null/empty/invalid client values
 		case "messages":
@@ -45,6 +54,13 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 		if body[i] == ',' {
 			i = skipSpace(body, i+1)
 		}
+	}
+	// This Mistral-hosted model explicitly rejects the generic OpenAI medium
+	// tier (3051). Prefer its supported high tier rather than disabling or
+	// lowering reasoning. Do not rewrite other models/protocols or native tiers.
+	if path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017" && effort != nil {
+		changes = append(changes, *effort)
+		sort.Slice(changes, func(i, j int) bool { return changes[i].start < changes[j].start })
 	}
 	generated := ""
 	if !cacheSeen && fingerprint != "" {
