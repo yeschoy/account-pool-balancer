@@ -1435,16 +1435,24 @@ function upstreamTPSCell(r) {
   return average + `<br><span class="acc-sub" title="${basis}；仅最后实际上游尝试，使用真实输出用量，非服务端内部解码速度">${streaming ? '首事件后' : '上游均速'} ${num(r.upstreamTps)} tok/s</span>`;
 }
 function keyCell(r) { return esc(r.clientKeyName || r.clientKeyId || '—'); }
+function showClientRequestHeaders(r) {
+  const states = { valid:'有效候选（不代表最终选中）', empty:'空值', invalid:'无效值（控制字符或超过512字节）' };
+  const candidates = Object.entries(r.clientSessionHeaderStatus || {}).map(([name, state]) => `${name}: ${states[state] || state}`).join('\n');
+  const captured = r.clientRequestHeaders != null;
+  const explanation = captured ? '这是 NewAPI 等客户端实际到达 Balancer 的请求头，不是最终发给 Mistral 的头。密钥、Cookie、会话/缓存标识均已脱敏。' : '此历史日志未采集客户端请求头，不能据此判断客户端没有发送。';
+  const diagnosis = captured ? (candidates || (r.clientRequestHeadersTruncated ? '未在保留部分中看到支持的会话候选头；请求头已截断，不能判断其余部分。' : '未收到支持的会话候选头；透传开启不代表客户端发送了这些头。')) : '未采集';
+  modal({ title:'客户端请求头 · ' + r.requestId, wide:true, body:`<p class="acc-sub">${esc(explanation)}</p><p>最终身份来源：${esc(r.sessionSource || '—')} / ${esc(r.affinityKeyType || '—')}（正文身份或更高优先级头可能先被选中）</p><h4>会话候选头检查</h4><pre>${esc(diagnosis)}</pre><h4>客户端请求头${r.clientRequestHeadersTruncated ? '（已截断）' : ''}</h4><pre>${esc(captured ? JSON.stringify(r.clientRequestHeaders, null, 2) : '未采集')}</pre><p class="acc-sub">仅反映本层收到的内容；无法还原被 NewAPI、Nginx 或其他中间层删除的头。正文 metadata.user_id/user 内 JSON 别名不属于 HTTP 请求头。</p>` });
+}
 function requestRow(r) {
   const tok = [r.inputTokens, r.outputTokens, r.cachedTokens].map((v) => v === null || v === undefined ? '—' : num(v)).join(' / ');
   return `<tr data-rid="${esc(r.requestId)}"><td class="num">${esc(fmtTime(r.ts))}</td><td><span class="acc-sub">${esc(r.protocol || r.inboundProtocol || '—')}</span>${r.clientFamily ? `<div class="acc-sub">${esc(r.clientFamily)}</div>` : ''}</td><td>${esc(r.model)}${r.stream ? ' <span class="badge">流</span>' : ''}</td>
     <td>${keyCell(r)}</td>
     <td>${esc(r.accountName || '—')}${r.switched ? ' <span class="badge warn">换号</span>' : ''}${r.overflow ? ' <span class="badge warn">溢出</span>' : ''}</td>
     <td>${statusBadge(r.status, r.result)}${r.upstreamStatus && r.upstreamStatus !== r.status ? `<div class="acc-sub">上游 ${esc(r.upstreamStatus)}</div>` : ''}${r.errorCategory ? `<div class="acc-sub">${esc(r.errorCategory)}${r.blockedBy ? '/' + esc(r.blockedBy) : ''}</div>` : ''}</td>
-    <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
+    <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.provider === 'mistral' ? `<div class="acc-sub">来源 ${esc(r.sessionSource || '—')}</div>` : ''}${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
     <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div>${upstreamTPSCell(r)}</div><div class="acc-sub">${costCell(r)}</div></td>
     <td class="num">${tok}<div>${cacheRateCell(r)}</div>${r.cacheCreationTokens != null ? `<div class="acc-sub">缓存写入 ${num(r.cacheCreationTokens)}</div>` : ''}${r.egressStatus ? `<div class="acc-sub">${esc(r.proxy)}${r.egressIp ? ' / ' + esc(r.egressIp) : ''} · ${esc(GO_EGRESS_LABEL[r.egressStatus] || r.egressStatus)}</div>` : ''}</td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
-    <td class="act"><button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
+    <td class="act">${r.provider === 'mistral' ? `<button type="button" class="btn small ghost rq-headers" data-rid="${esc(r.requestId)}">客户端头</button>` : ''}<button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }
 function detailRow(d) {
   const sz = (n, cut) => num(n) + ' B' + (cut ? ' <span class="badge warn">截断</span>' : '');
@@ -1523,6 +1531,8 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
     try { await api('DELETE', `/api/logs/${kind}`); loadLogs(kind, true); } catch (e) { toast(e.message); }
   });
   $(`#${p}-table tbody`).addEventListener('click', (ev) => {
+    const headers = ev.target.closest('.rq-headers');
+    if (headers) { const item = logState.requests.items.find(r => r.requestId === headers.dataset.rid); if (item) showClientRequestHeaders(item); return; }
     const detail = ev.target.closest('.er-detail');
     if (detail) { openErrorDetails(detail.dataset.rid, detail.dataset.attempt).catch((e) => toast(e.message)); return; }
     const del = ev.target.closest('.rq-del');
