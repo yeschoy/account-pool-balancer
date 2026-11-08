@@ -69,6 +69,16 @@ def _http_connect(sock: socket.socket, host: str, port: int, auth: Optional[tupl
         raise OSError(f"CONNECT rejected: {status} | {buf[:200]}")
 
 
+def _connect_via(sock: socket.socket, host: str, port: int,
+                 scheme: str, auth: Optional[tuple[str, str]]) -> None:
+    """在已建立的 socket 上用上游协议连到 host:port"""
+    if scheme == "socks5":
+        _socks5_client_handshake(sock, auth)
+        _socks5_request(sock, host, port)
+    else:
+        _http_connect(sock, host, port, auth)
+
+
 class ChainGateway:
     """把「两层代理」包装成本地单层 SOCKS5 代理"""
 
@@ -76,8 +86,8 @@ class ChainGateway:
                  pre_auth: Optional[tuple[str, str]] = None,
                  target_auth: Optional[tuple[str, str]] = None,
                  host: str = "127.0.0.1", port: int = 0):
-        self.pre_host, self.pre_port, self.pre_auth = self._parse(pre_proxy, pre_auth, 1080)
-        self.tgt_host, self.tgt_port, self.tgt_auth = self._parse(target_proxy, target_auth, 5000)
+        self.pre_host, self.pre_port, self.pre_auth, self.pre_scheme = self._parse(pre_proxy, pre_auth, 1080)
+        self.tgt_host, self.tgt_port, self.tgt_auth, self.tgt_scheme = self._parse(target_proxy, target_auth, 5000)
         self.host, self.port = host, port
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -85,14 +95,22 @@ class ChainGateway:
 
     @staticmethod
     def _parse(url: str, auth, default_port: int):
+        """返回 (host, port, auth, scheme)。scheme 决定用 SOCKS5 还是 HTTP CONNECT。"""
         import urllib.parse as up
         if not url:
-            return "", 0, None
+            return "", 0, None, ""
         p = up.urlparse(url if "://" in url else "http://" + url)
         a = auth
         if not a and p.username:
             a = (up.unquote(p.username), up.unquote(p.password or ""))
-        return p.hostname or "127.0.0.1", p.port or default_port, a
+        scheme = (p.scheme or "http").lower()
+        # socks5 / socks5h 都按 SOCKS5 处理（h 表示远端解析域名）
+        if scheme.startswith("socks"):
+            scheme = "socks5"
+        default = default_port
+        if scheme == "socks5" and default_port == 5000:
+            default = 1080
+        return p.hostname or "127.0.0.1", p.port or default, a, scheme
 
     # ---------- 生命周期 ----------
     def start(self) -> int:
@@ -162,15 +180,18 @@ class ChainGateway:
 
             # --- 建立链 ---
             if self.pre_host:
-                # 两层：本机 -> pre_proxy(socks5) -> target_proxy(http) -> host:port
+                # 两层：本机 -> pre_proxy -> target_proxy -> host:port
                 upstream = socket.create_connection((self.pre_host, self.pre_port), timeout=40)
-                _socks5_client_handshake(upstream, self.pre_auth)
-                _socks5_request(upstream, self.tgt_host, self.tgt_port)
-                _http_connect(upstream, host, port, self.tgt_auth)
+                if self.pre_scheme == "socks5":
+                    _socks5_client_handshake(upstream, self.pre_auth)
+                    _socks5_request(upstream, self.tgt_host, self.tgt_port)
+                else:
+                    _http_connect(upstream, self.tgt_host, self.tgt_port, self.pre_auth)
+                _connect_via(upstream, host, port, self.tgt_scheme, self.tgt_auth)
             else:
-                # 单层（OVH 直连场景）：直接连 target_proxy
+                # 单层（OVH 直连场景）：直接连目标代理
                 upstream = socket.create_connection((self.tgt_host, self.tgt_port), timeout=40)
-                _http_connect(upstream, host, port, self.tgt_auth)
+                _connect_via(upstream, host, port, self.tgt_scheme, self.tgt_auth)
 
             client.sendall(b"\x05\x00\x00\x01" + b"\x00" * 6)
             self._pump(client, upstream)

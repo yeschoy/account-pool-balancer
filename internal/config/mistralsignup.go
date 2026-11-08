@@ -7,6 +7,9 @@ import "strings"
 // 代理凭据放在这里而不是容器环境变量，这样可以在管理页面里改。
 // 注意与 mistral.go 里的 Mistral（API 池路由配置）区分开。
 type MistralSignup struct {
+	// ProxyURLs 是完整代理 URL 列表，格式 socks5://user:pass@ip:port
+	// （也支持 http/https）。填了就优先使用，忽略下面的模板字段。
+	ProxyURLs []string `json:"proxyUrls"`
 	// ProxyUserTemplate 是 zooproxy 用户名模板，{region} 与 {sid} 会在每次
 	// 注册时替换。
 	ProxyUserTemplate string `json:"proxyUserTemplate"`
@@ -54,7 +57,50 @@ func (c *Config) normalizeMistralSignup() error {
 
 // HasProxy reports whether enough proxy settings exist to attempt a signup.
 func (m MistralSignup) HasProxy() bool {
+	if len(m.ProxyURLs) > 0 {
+		return true
+	}
 	return m.ProxyUserTemplate != "" && m.ProxyPassword != "" && len(m.ProxySIDs) > 0
+}
+
+// ProxyMode 返回当前使用的是哪一种配置方式，便于界面提示。
+func (m MistralSignup) ProxyMode() string {
+	if len(m.ProxyURLs) > 0 {
+		return "urls"
+	}
+	if m.HasProxy() {
+		return "template"
+	}
+	return "none"
+}
+
+// PickProxy 返回这次注册要用的代理 URL。
+// 优先用完整 URL 列表，其次按模板 + sid 生成。
+func (m MistralSignup) PickProxy(sid string) string {
+	if len(m.ProxyURLs) > 0 {
+		return m.ProxyURLs[0]
+	}
+	return m.ProxyURLFor(sid)
+}
+
+// AllProxies 扁平化返回所有可用代理（URL 模式直接返回列表）。
+func (m MistralSignup) AllProxies() []string {
+	if len(m.ProxyURLs) > 0 {
+		out := make([]string, 0, len(m.ProxyURLs))
+		for _, u := range m.ProxyURLs {
+			if u = strings.TrimSpace(u); u != "" {
+				out = append(out, u)
+			}
+		}
+		return out
+	}
+	out := make([]string, 0, len(m.ProxySIDs))
+	for _, sid := range m.ProxySIDs {
+		if u := m.ProxyURLFor(sid); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // ProxyURLFor builds one zooproxy URL for the given sid.

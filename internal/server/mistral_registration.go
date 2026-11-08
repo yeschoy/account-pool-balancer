@@ -362,6 +362,10 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 	cmd.Stdin = bytes.NewReader(input)
 	// 把界面里配置的代理注入 worker 环境
 	env := os.Environ()
+	// 完整 URL 列表优先（socks5://user:pass@ip:port）
+	if urls := cfg.AllProxies(); len(urls) > 0 {
+		env = append(env, "MISTRAL_PROXY_URLS="+strings.Join(urls, "\n"))
+	}
 	if cfg.ProxyUserTemplate != "" {
 		env = append(env, "ZOOPROXY_USER_TPL="+cfg.ProxyUserTemplate)
 	}
@@ -474,6 +478,14 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	next.ProxySIDs = sids
+	// 代理 URL 列表：去空行
+	urls := make([]string, 0, len(next.ProxyURLs))
+	for _, u := range next.ProxyURLs {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	next.ProxyURLs = urls
 	next.ProxyUserTemplate = strings.TrimSpace(next.ProxyUserTemplate)
 	next.ProxyHostPort = strings.TrimSpace(next.ProxyHostPort)
 	next.Region = strings.TrimSpace(next.Region)
@@ -507,11 +519,22 @@ func (s *Server) apiMistralTestProxy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	sid := cfg.ProxySIDs[0]
-	if len(cfg.ProxySIDs) > 1 {
-		sid = cfg.ProxySIDs[randIndex(len(cfg.ProxySIDs))]
+	urls := cfg.AllProxies()
+	if len(urls) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": "没有可用的代理",
+		})
+		return
 	}
-	proxyURL := cfg.ProxyURLFor(sid)
+	proxyURL := urls[0]
+	sid := ""
+	if len(cfg.ProxySIDs) > 0 {
+		sid = cfg.ProxySIDs[0]
+		if len(cfg.ProxySIDs) > 1 {
+			sid = cfg.ProxySIDs[randIndex(len(cfg.ProxySIDs))]
+		}
+		proxyURL = cfg.PickProxy(sid)
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()

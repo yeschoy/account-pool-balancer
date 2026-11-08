@@ -312,3 +312,14 @@ tr[data-id]:hover { background: var(--line2); }
 .mr-grid label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-muted, #666); }
 .mr-grid input, .mr-grid textarea { width: 100%; }
 @media (max-width: 720px) { .mr-grid { grid-template-columns: 1fr; } }
+
+/* 代理列表优先于模板配置 */
+.mr-advanced { margin: 14px 0 0; }
+.mr-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  padding: 6px 0;
+  user-select: none;
+}
+.mr-advanced > summary:hover { color: var(--text-default, #222); }

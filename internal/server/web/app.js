@@ -1667,6 +1667,7 @@ async function loadMistralSettings() {
   try {
     const d = await api('GET', '/api/mistral/settings');
     const st = d.settings || {};
+    document.getElementById('ms-proxy-urls').value = (st.proxyUrls || []).join('\n');
     document.getElementById('ms-user-tpl').value = st.proxyUserTemplate || '';
     document.getElementById('ms-password').value = st.proxyPassword || '';
     document.getElementById('ms-hostport').value = st.proxyHostPort || '';
@@ -1675,7 +1676,11 @@ async function loadMistralSettings() {
     document.getElementById('ms-mailbox-proxy').value = st.mailboxProxy || '';
     const msg = document.getElementById('mr-settings-msg');
     if (msg) {
-      msg.textContent = d.hasProxy ? '代理已配置' : '代理未配置，注册会失败';
+      msg.textContent = d.hasProxy
+        ? (st.proxyUrls && st.proxyUrls.length
+            ? `已配置 ${st.proxyUrls.length} 个代理 URL`
+            : `已配置模板方式（${(st.proxySids || []).length} 个 sid）`)
+        : '代理未配置，注册会失败';
       msg.className = d.hasProxy ? 'muted' : 'error';
     }
   } catch (e) {
@@ -1699,6 +1704,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const d = await api('PUT', '/api/mistral/settings', {
           settings: {
+            proxyUrls: parseSids(document.getElementById('ms-proxy-urls').value),
             proxyUserTemplate: document.getElementById('ms-user-tpl').value.trim(),
             proxyPassword: document.getElementById('ms-password').value,
             proxyHostPort: document.getElementById('ms-hostport').value.trim(),

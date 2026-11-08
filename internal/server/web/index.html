@@ -295,6 +295,16 @@
         </div>
         <form id="mr-settings-form" autocomplete="off">
           <div class="mr-grid">
+            <div class="mr-grid-full">
+              <label for="ms-proxy-urls">代理列表（优先使用，每行一个完整 URL）</label>
+              <textarea id="ms-proxy-urls" rows="4" spellcheck="false"
+                placeholder="socks5://用户:密码@1.2.3.4:1080&#10;http://用户:密码@5.6.7.8:8080"></textarea>
+              <span class="hint">支持 socks5:// / socks5h:// / http:// / https://，格式：协议://用户:密码@IP:端口。填写后忽略下面的模板配置。</span>
+            </div>
+          </div>
+          <details class="mr-advanced">
+            <summary>或使用模板方式（zooproxy 等按 sid 生成）</summary>
+            <div class="mr-grid" style="margin-top:12px">
             <div>
               <label for="ms-user-tpl">用户名模板</label>
               <input id="ms-user-tpl" placeholder="user-region-{region}-sid-{sid}-t-10">
@@ -321,7 +331,8 @@
               <label for="ms-mailbox-proxy">接码代理（可选，留空直连）</label>
               <input id="ms-mailbox-proxy" placeholder="socks5h://127.0.0.1:10808">
             </div>
-          </div>
+            </div>
+          </details>
           <div class="actions" style="margin-top:12px">
             <button type="submit" class="btn primary" id="mr-settings-save">保存设置</button>
             <button type="button" class="btn" id="mr-proxy-test">测试代理</button>

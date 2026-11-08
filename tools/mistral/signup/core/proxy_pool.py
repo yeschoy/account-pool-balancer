@@ -18,6 +18,18 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _hostport_of(url: str) -> str:
+    """socks5://u:p@1.2.3.4:1080 -> 1.2.3.4:1080"""
+    import urllib.parse as up
+    try:
+        p = up.urlparse(url if "://" in url else "http://" + url)
+        if p.hostname:
+            return f"{p.hostname}:{p.port or ''}".rstrip(":")
+    except Exception:
+        pass
+    return url[:40]
+
+
 @dataclass
 class Proxy:
     sid: str
@@ -27,6 +39,9 @@ class Proxy:
         "ZOOPROXY_USER_TPL", "<user>-region-{region}-sid-{sid}-t-10")
     password: str = __import__("os").environ.get("ZOOPROXY_PASSWORD", "")
     region: str = "CA"
+    # raw_url 非空时直接使用，忽略上面的模板字段。
+    # 支持 socks5://user:pass@ip:port、http://、https://
+    raw_url: str = ""
 
     # 运行时状态
     alive: bool = True
@@ -34,6 +49,13 @@ class Proxy:
     last_ok: float = 0.0
     exit_ip: Optional[str] = None
     cooldown_until: float = 0.0
+
+    @classmethod
+    def from_url(cls, url: str, label: str = "") -> "Proxy":
+        """从完整代理 URL 构造。label 用于展示（默认取 host:port）。"""
+        u = url.strip()
+        label = label or _hostport_of(u)
+        return cls(sid=label, raw_url=u)
 
     @classmethod
     def from_env(cls, sid: str) -> "Proxy":
@@ -48,8 +70,20 @@ class Proxy:
 
     @property
     def url(self) -> str:
+        if self.raw_url:
+            return self.raw_url
         u = self.user_tpl.format(region=self.region, sid=self.sid)
         return f"http://{u}:{self.password}@{self.host}:{self.port}"
+
+    @property
+    def scheme(self) -> str:
+        """socks5 / socks5h / http / https"""
+        u = self.url
+        return u.split("://", 1)[0].lower() if "://" in u else "http"
+
+    @property
+    def is_socks(self) -> bool:
+        return self.scheme.startswith("socks")
 
     def __repr__(self) -> str:
         return f"<Proxy {self.sid} {self.exit_ip or '?'}>"
@@ -68,7 +102,13 @@ class ProxyPool:
         sids = sids if sids is not None else DEFAULT_SIDS
         self.pre_proxy = pre_proxy
         self._lock = threading.Lock()
-        self._proxies = [Proxy.from_env(s) for s in sids]
+        # 优先读完整 URL 列表（MISTRAL_PROXY_URLS，换行分隔）
+        raw = __import__("os").environ.get("MISTRAL_PROXY_URLS", "").strip()
+        if raw:
+            urls = [u.strip() for u in raw.split("\n") if u.strip()]
+            self._proxies = [Proxy.from_url(u) for u in urls]
+        else:
+            self._proxies = [Proxy.from_env(s) for s in sids]
         self._rr = itertools.cycle(range(len(self._proxies))) if self._proxies else None
 
     def all(self) -> list[Proxy]:
