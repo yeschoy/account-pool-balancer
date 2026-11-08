@@ -1,1 +1,0 @@
-{"id":"mistral-wire-logs-average-tps","name":"mistral-wire-logs-average-tps","title":"新增全程平均TPS与Mistral三段原生详情日志","status":"in_progress","priority":"P1","creator":"lyh_god","assignee":"lyh_god","createdAt":"2026-11-09","branch":"master","meta":{"phase":"implementation","liveBaseline":"a817edfd26c0d577935c968d0a128c17415e06b1","validation":"pending"}}

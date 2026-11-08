@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 会话、订阅、TPS 与热路径优化（2026-11-08 15:36 UTC，77e9709）
+## 当前部署：全程平均TPS与Mistral三段详情（2026-11-08 17:41 UTC，0ed42ff）
+
+- `0ed42ff3834d64d152094b07c1d5b8483d551d43`已提交推送并上线。新增useTimeSec/averageTps，按NewAPI的两个Unix整秒差计算，前端一次整数四舍五入；保留首事件后/上游均速，不回填旧日志，不承诺不同层级计时数值相等。
+- Mistral详情新增wireVersion=1/upstreamAttempts：原客户端头/体、每次实际上游头/体、适配前原生响应及适配后客户端响应明确分段，关联账号/尝试。HTTP trace补自动头、有界tee不延迟首帧，每段64KiB且标截断/未完整读取。凭据/Cookie/自定义Token/会话/X-Affinity掩码，新获响应Cookie也用于下游及错误摘要脱敏，SSE日志大整数保真。其他池详情策略不变。
+- 预检发现实际上一运行版本是a817edf，不是文档中的77e9709。对正式release363个既有运行文件做SHA比对，并审阅两处源码差异及新增测试，保留客户端优先/最终cache key的X-Affinity修复；没有回退线上路由逻辑。496文件干净快照核验后复用既有部署脚本，仅内存适配，Compose仅image覆盖。**191账号、186TH核心记录、routingSecret、Mistral注册库、原config字节及用户/环境/healthcheck/卷/网络/资源参数保留**；healthy/零重启、两个内网别名及NewAPI到两healthz通过。
+- 定向normal4.547s/race6.682s，Cookie错误摘要补强后的wire定向race2.193s，Mistral/TH Node、JS语法、vet/build/格式检查通过；没有全仓重跑、生产推理/重放/压测。服务健康后立即反馈，不因补记录再次重启。
+- **用户明确要求记录后，17:40:37.705通过正常管理员API仅将Mistral独立detailLog从false启用并持久化**，revision5509。其他有效参数、账号/密钥/管理员、其他池和全局配置核验不变，原独立routing/quota均非继承，无额外钉住继承值。必要的既有出厂规则规范化按当前有效值保存；详情开关修改不冒充部署时config未变。仅布尔/枚举回执存正式备份detail-switch.json，密码/Cookie/CSRF始终只在远端内存，已正常logout。
+- 17:41:36.241真实未登录公网登录页、healthz及四资源200，`?v=93a90552bf`且SHA256与发布源码一致，浏览器已关闭。17:41:38.964自然样本51条中47条有averageTps且逐条核对公式正确，原upstreamTps也47条；已生成15条新wire详情，客户端/实际上游请求和原生响应头/体、sent/状态/截断均存在，凭据头掩码通过。样本请求183201→183325字节、1751315→1763820字节体现适配前后区别，响应95210字节明确限长。只输出字节/形态，不下载或回显真实正文。真实管理员弹窗未浏览，展示由Node与生产API投影验证，不冒充全UI验收。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 17:38:00.122–17:38:07.183（7.06秒） |
+| 停止请求 / 旧进程退出 | 17:38:07.294 / 17:38:07.433 |
+| 完整一致备份及核验 | 17:38:07.691–17:38:13.732 |
+| 切换请求 / 新容器启动 | 17:38:13.732 / 17:38:13.999 |
+| 首HTTP可达 / Docker healthy | 17:38:15.129 / 17:38:44.362 |
+| 双入口 / 本机验收 | 17:38:44.424 / 17:38:44.537 |
+| 启用本池详情 / 公网验收 / 自然日志核验 | 17:40:37.705 / 17:41:36.241 / 17:41:38.964 |
+
+源码 `/home/ubuntu/project/account-pool-balancer-releases/20261108T173746Z-0ed42ff`；镜像 `account-pool-balancer:release-0ed42ff-20261108T173746Z`（ID `sha256:bab8dff537612eef63243e431e2617459301715d0ddbfeedc1911493a50c88ea`）。完整备份 `/home/ubuntu/backups/account-pool-balancer/20261108T173746Z-mistral-wire-tps-0ed42ff/`，data SHA256 `b7db9829c6e3b0b0e44fc877f88840a7bedacff75b4c1cf7c9d0578218e10f1c`，回退镜像 `account-pool-balancer:rollback-20261108T173746Z`保留。回退先确认后续数据/开关写入，不自动恢复旧data。未采样精确停机；旧退出至首HTTP观测约7.70秒，不把构建/健康等待算停机。无新增临时脚本/归档/pcap，正式回退资料与Trellis保留，既有临时文件待同意清理。
+
+## 历史部署：Mistral 会话、订阅、TPS 与热路径优化（2026-11-08 15:36 UTC，77e9709）
 
 - 业务提交 `77e9709f2a95f0ef3dec4237a234d338bb70bdfd` 已推送并上线。补Codex当前session-id/thread-id与兼容头、Claude会话结构/root-user兼容及Mistral缓存头fallback，记录客户端族，所有新增身份沿用HMAC/隐私与下游Key隔离；无身份仍合理fallback，不将UA/请求ID/普通user伪造为会话。
 - 套餐新增独立组织subscription及可空只读PAYG、失败历史/状态；不混淆API Key访问等级Free与组织Student/Pro，不抹掉成功预算。原有全局4096 LRU在概览显示容量及全局用量，修复持久化严格绑定淘汰未标dirty；缺失所有者仍fail-closed。默认503+精确顶层3800不再无收益换号/扣Key健康，保留Retry-After、429恢复及其他5xx策略；仅旧完整出厂规则运行时升级，自定义列表不覆盖。
