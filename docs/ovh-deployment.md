@@ -56,6 +56,31 @@
 
 ## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
+## 当前部署：Mistral 代理列表统一为完整 URL（2026-11-08 17:33 UTC，9227c0b）
+
+- 用户要求去掉 zooproxy 模板模式：代理只有一种格式，一行一个
+  `socks5://用户:密码@IP:端口`（zooproxy 同格式，不再区分）。
+  `config.MistralSignup` 只剩 `proxyUrls`/`cardLines`/`mailboxProxy`/
+  `workerPath`/`workerPython`/`concurrency`；`Proxy` 只持 `raw_url`，
+  移除 `from_env` 与模板拼接；UI 删除「高级」折叠里的模板表单。
+- **发布事故与回退**：首次部署（9ab3c64）容器进入 restarting，日志
+  `startup: /data/config.json is corrupt: json: unknown field "proxyUserTemplate"`。
+  原因是删除了字段但线上 `config.json` 仍带旧键，而 `fsutil.ReadJSON` 使用
+  `DisallowUnknownFields`。已立即回退到 `release-fix-20261108T082340Z`
+  恢复 healthy（healthz 200），再修复后重新发布。
+- 修复（9227c0b）：旧字段改为 `Deprecated*` 保留在结构体中，读入后由
+  `normalizeMistralSignup` 清空，下次写盘消失；新增回归测试
+  `TestReadLegacyMistralSignupFields` 覆盖旧配置读取。同时备份并清理了
+  线上 `config.json` 的旧键（备份
+  `/home/ubuntu/backups/account-pool-balancer/20261108T093131Z-pre-mistral-9ab3c64/`）。
+- 验收：容器 running/healthy、restarts=0、日志 `listening on :8790`；
+  页面不再含 `ms-user-tpl`/`ms-sids`/`mr-advanced`（计数 0），
+  保留 `ms-proxy-urls` 与「zooproxy 也用这个格式」提示，资源
+  `app.js?v=18b5011ecd`；`PUT settings` 后 `revision=5459`、settings 只剩
+  `proxyUrls`；`POST settings/test` 返回 `{"ip":"15.235.122.152"}`。
+- 镜像 `account-pool-balancer:release-9227c0b-20261108T093154Z`。
+  回退镜像 `release-fix-20261108T082340Z` 保留。
+
 ## 当前部署：Mistral 批量账号 + 代理轮转 + 自动入池（2026-11-08 16:22 UTC，a225c5c）
 
 - 用户三项要求已实现：
