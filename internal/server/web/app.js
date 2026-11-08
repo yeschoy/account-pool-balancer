@@ -361,6 +361,22 @@ function goQuotaWindows(g) {
     return `<div class="acc-sub">${({ rolling:'5 小时', weekly:'周', monthly:'月' })[k]}已用 ${num(w.usedPercent)}% · 剩余 ${num(w.remainingPercent)}% · 重置 ${esc(fmtTime(w.resetsAt,true))}</div>`;
   }).join('')}<div class="acc-sub">更新 ${esc(fmtTime(a.usageAt,true))}；多个 Key 可能共享同一订阅，不可相加。</div></div>`).join('');
 }
+async function resetCacheRate() {
+  const provider = pool;
+  const button = $('#btn-reset-cache-rate');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const confirmed = await modal({ title: '清空24h缓存命中率', body: `<p>清空 ${esc(POOL_LABEL[provider])} 号池的缓存命中率统计（含各账号、模型），从现在重新累计，最长保留24小时。</p><p>保留请求数、原始 Token 用量、费用、日志及会话绑定；不会清除上游缓存，不影响其他号池。无法撤销。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '确认清空', value: 'reset', danger: true }] });
+    if (confirmed !== 'reset') return;
+    await api('POST', '/api/stats/reset-cache-rate?provider=' + encodeURIComponent(provider));
+    toast(POOL_LABEL[provider] + ' 缓存命中率已清空');
+    if (pool === provider) await Promise.all([loadOverview(), loadAccounts()]);
+  } catch (e) { toast(e.message); }
+  finally { button.disabled = false; }
+}
+$('#btn-reset-cache-rate').addEventListener('click', resetCacheRate);
+
 async function loadOverview() {
   const o = await api('GET', withPool('/api/overview'));
   const st = o.stats.total;
@@ -376,9 +392,9 @@ async function loadOverview() {
     ...(pool === 'modal' && o.modalAccounts ? [['可用 Endpoint', num(o.modalEndpoints), `${o.modalAccounts} 个账号的 token 能访问的 Endpoint 数（同一 Endpoint 会被多个账号各计一次）`]] : []),
     ['24h 请求', num(st.r), `成功率 ${okRate === null ? '—' : pct(okRate)} · 近 1h ${num(o.stats.lastHour.r)}`],
     ['24h ' + (pool === 'opencode-go' ? '价格表估算' : '费用'), costSum(st), pool === 'opencode-go' ? '不是 Go 订阅账单或额外扣费金额' : isTokenHarbor() ? '按手动价格估算；未配价/含缓存写入的不计，不是上游账单' : '按模型价格估算，未配价格的不计'],
-    ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), pool === 'opencode-go' ? `有测量缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 覆盖 ${num(st.ckr || 0)} / ${num(st.r)} 次；写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 写入 ${num(st.kw || 0)}` : `缓存 ${num(st.k)} / 提示 ${num(st.p)} token`],
+    ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
-    [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 缓存读取 ${st.ckr ? num(st.ck) : '未知'}（测量覆盖见缓存卡片）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
+    [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 累计缓存读取 ${num(st.k || 0)}（缺失的上游用量不计）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
     ['会话绑定', num(o.bindings), `${o.bindingLimit ? '全局 ' + num(o.globalBindings) + ' / ' + num(o.bindingLimit) + ' · LRU淘汰 · ' : ''}策略 ${o.strategy}`],
   ];
   $('#ov-cards').innerHTML = cards.map(([l, v, s]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
@@ -666,6 +682,7 @@ function accountRow(a) {
     <td>${status}</td>
     <td>${windowsHTML(a)}</td>
     <td class="num">${a.provider === 'opendesign' ? openDesignFundingHTML(a) : wallet + pkg + sum + covHTML}</td>
+    <td class="num">${accountCacheRateHTML(ou)}</td>
     <td class="num">${r.active} / ${effLimit(a.maxConcurrent, st.learnedConcurrency)}</td>
     <td class="num">${r.rpm} / ${effLimit(a.maxRpm, st.learnedRpm)}</td>
     <td class="num">${r.health === null || r.health === undefined ? '<span class="muted">—</span>' : pct(r.health)}<div class="acc-sub">${r.samples} 样本</div></td>
@@ -1419,10 +1436,14 @@ function cacheRateCell(r) {
 const CUR = { CNY: '¥', USD: '$' };
 function money(v, cur) { return (CUR[cur] || '') + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(4) : v.toFixed(6)); }
 function costSum(b) { return [b.cc ? money(b.cc, 'CNY') : '', b.cu ? money(b.cu, 'USD') : ''].filter(Boolean).join(' + ') || '—'; }
-// cached share of the prompt (b.p, backfilled from input for old buckets on load)
+// Only paired, measured cache/prompt samples contribute. These counters can
+// be reset independently of the original 24h token usage (b.p/b.k).
 function hitRate(b) {
-  if (pool === 'opencode-go' || isTokenHarbor()) return b.ckr && b.cp > 0 ? Math.min(b.ck / b.cp, 1) : null;
-  return b.p ? Math.min(b.k / b.p, 1) : null;
+  return b.ckr && b.cp > 0 ? Math.min((b.ck || 0) / b.cp, 1) : null;
+}
+function accountCacheRateHTML(b) {
+  const rate = hitRate(b);
+  return `<span title="缓存读取 Token / 同批已测提示 Token；不是命中请求占比。清空后重新累计，最长24小时。">${rate === null ? '—' : pct(rate)}</span><div class="acc-sub">已测缓存 ${num(b.ck || 0)} / 提示 ${num(b.cp || 0)}</div><div class="acc-sub">样本 ${num(b.ckr || 0)} 次</div>`;
 }
 function costCell(r) { return r.cost === undefined || r.cost === null ? '—' : esc(money(r.cost, r.currency)); }
 function upstreamTPSCell(r) {
@@ -1439,7 +1460,7 @@ function showClientRequestHeaders(r) {
   const states = { valid:'有效候选（不代表最终选中）', empty:'空值', invalid:'无效值（控制字符或超过512字节）' };
   const candidates = Object.entries(r.clientSessionHeaderStatus || {}).map(([name, state]) => `${name}: ${states[state] || state}`).join('\n');
   const captured = r.clientRequestHeaders != null;
-  const explanation = captured ? '这是 NewAPI 等客户端实际到达 Balancer 的请求头，不是最终发给 Mistral 的头。密钥、Cookie、会话/缓存标识均已脱敏。' : '此历史日志未采集客户端请求头，不能据此判断客户端没有发送。';
+  const explanation = captured ? '这是 NewAPI 等客户端实际到达 Balancer 的请求头，不是最终发给 Mistral 的头。[REDACTED] 是 Balancer 写日志时对密钥、Cookie、会话/缓存标识的脱敏，不会改写用于识别和转发的原始头；不能据此判断 NewAPI 是否修改过原值。' : '此历史日志未采集客户端请求头，不能据此判断客户端没有发送。';
   const diagnosis = captured ? (candidates || (r.clientRequestHeadersTruncated ? '未在保留部分中看到支持的会话候选头；请求头已截断，不能判断其余部分。' : '未收到支持的会话候选头；透传开启不代表客户端发送了这些头。')) : '未采集';
   modal({ title:'客户端请求头 · ' + r.requestId, wide:true, body:`<p class="acc-sub">${esc(explanation)}</p><p>最终身份来源：${esc(r.sessionSource || '—')} / ${esc(r.affinityKeyType || '—')}（正文身份或更高优先级头可能先被选中）</p><h4>会话候选头检查</h4><pre>${esc(diagnosis)}</pre><h4>客户端请求头${r.clientRequestHeadersTruncated ? '（已截断）' : ''}</h4><pre>${esc(captured ? JSON.stringify(r.clientRequestHeaders, null, 2) : '未采集')}</pre><p class="acc-sub">仅反映本层收到的内容；无法还原被 NewAPI、Nginx 或其他中间层删除的头。正文 metadata.user_id/user 内 JSON 别名不属于 HTTP 请求头。</p>` });
 }

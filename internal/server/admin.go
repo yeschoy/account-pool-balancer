@@ -76,6 +76,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, s.adminOnly(h)) }
 	a("POST /api/password", s.apiPassword)
 	a("GET /api/overview", s.apiOverview)
+	a("POST /api/stats/reset-cache-rate", s.apiResetCacheRate)
 	a("GET /api/accounts", s.apiAccounts)
 	a("POST /api/accounts", s.apiCreateAccount)
 	a("POST /api/accounts/import", s.apiImportAccounts)
@@ -1622,6 +1623,27 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		"uptimeSec":      int64(time.Since(s.started).Seconds()),
 		"strategy":       strategy,
 	})
+}
+
+// apiResetCacheRate deliberately requires an explicit pool: a missing or
+// misspelled provider must never turn into a cross-pool statistics reset.
+func (s *Server) apiResetCacheRate(w http.ResponseWriter, r *http.Request) {
+	provider := r.URL.Query().Get("provider")
+	switch provider {
+	case config.ProviderOpenDesign, config.ProviderRiver, config.ProviderOllama,
+		config.ProviderModal, config.ProviderMistral, config.ProviderTokenHarbor,
+		config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+	default:
+		apiError(w, http.StatusBadRequest, errors.New("请指定有效的号池"))
+		return
+	}
+	s.stats.ResetCacheRates(provider)
+	s.statsDirty.Store(true)
+	if err := s.saveMetadata(true); err != nil {
+		apiError(w, http.StatusInternalServerError, errors.New("缓存命中率已在内存清空，但保存失败，请重试"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": provider})
 }
 
 // keyPool is the pool a downstream key belongs to: its stored provider when

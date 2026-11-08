@@ -37,6 +37,72 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 - 除上述明确的缓存补齐、思考格式及精确模型参数兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。精确 DeepSeek Chat 仅省略不支持的根 `store:false/null`，`store:true` 本地拒绝；其他模型/协议不套用该规则。未知字段不静默丢弃，不支持时明确报错。
 - 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；其他临时 5xx 短冷却。明确的503+顶层code3800视为模型服务不可用，不扣账号健康、不重复换号，并保留上游Retry-After；旧的完整出厂规则自动升级，任何自定义规则/顺序/备注/空列表保留。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
 
+## 缓存率展示、清空与会话头优先级
+
+账号列表新增「24h 缓存命中率」，概览右上角新增「清空24h缓存命中率」。命中率为**已测缓存读取Token / 同批已测提示Token**，不是命中请求占比；无测量显示 `—`，实际测得零命中才显示0%。清空需确认，只重置当前号池概览、账号及模型的命中率样本，从点击后重新累计、最长24小时；原始24h请求数/Token/费用、单条日志、账号健康及会话绑定均保留，不清除上游缓存。重置立即保存，重启后保留；其他号池不受影响。新增功能需部署本次版本才在线生效。
+
+**补入 `prompt_cache_key` 的优先级（Mistral Chat / Responses，取第一个有效值）：**
+
+1. 正文已有 `prompt_cache_key`：原值保留，含显式 `null` / 空串；Chat的 `promptCacheKey` 先按既有规则归一。
+2. `X-Prompt-Cache-Key` → `Prompt-Cache-Key`。
+3. 管理员配置的「额外会话头」，按配置顺序。
+4. 父会话头，按下列固定顺序。
+5. 内置会话头，按下列固定顺序。
+6. 无有效头时：`apb-mistral-<现有会话身份HMAC>` 兜底；没有身份则不填入。
+
+头值按原值（去首尾空白）直填，不哈希；空白、超过512字节或含控制字符则跳过。头名大小写不敏感，但 `Session-Id` 和 `Session_id` 是两个独立别名。
+
+父会话头固定顺序：
+
+```text
+X-Opencode-Parent-Session-Id
+X-Parent-Session-Id
+X-Parent-Session-Affinity
+X-Codex-Parent-Thread-Id
+X-Codex-Parent-Session-Id
+X-Claude-Code-Parent-Agent-Id
+X-Claude-Code-Parent-Session-Id
+```
+
+内置会话头固定顺序（从上到下，全部参与上述第5级）：
+
+```text
+X-Claude-Code-Session-Id
+X-Claude-Session-Id
+X-Anthropic-Session-Id
+Anthropic-Session-Id
+X-Codex-Session-Id
+X-Codex-Thread-Id
+X-Codex-Conversation-Id
+X-Pi-Session-Id
+X-Pi-Session
+Session-Id
+Session_id
+X-Session-Id
+X-Session-Affinity
+Thread-Id
+Thread_id
+X-Thread-Id
+Conversation-Id
+Conversation_id
+X-Conversation-Id
+X-Deepseek-Harness-Session-Id
+X-Opencode-Session
+X-Opencode-Session-Id
+Agent-Session-Id
+X-Litellm-Session-Id
+X-Http-Session-Id
+X-Grok-Conv-Id
+X-Task-Id
+X-Kilocode-Taskid
+```
+
+**账号粘性的身份优先级不同**：额外会话头 → 父会话头 → 正文 `metadata.parent_session_id` → 正文 `session_id` / `conversation_id` / `thread_id` / `metadata.session_id` / `metadata.conversation_id` / `metadata.thread_id` / `metadata.sessionId` → Claude结构（先 `metadata.user_id`，后根 `user`）→ 上述内置头。没有真正会话时，才回退正文 `prompt_cache_key` → 两种缓存头 → 首条系统/用户消息HMAC。Mistral无状态Responses不支持 `previous_response_id` 续传。
+
+Claude结构支持 `_session_UUID`，以及包含会话字段的JSON**字符串**，字段顺序为 `session_id` → `claude_session_id` → `agent_id` → `thread_id` → `conversation_id` → `parent_session_id` → `parent_agent_id` → `parent_thread_id` → `parent_conversation_id`；普通user标签不是会话。正文会话只用于身份解析，无可用HTTP头时通过HMAC兜底补缓存键，不是直接复制正文会话原值。
+
+**`[REDACTED]` 不是缺头证据**：Balancer基于原始请求头识别身份/生成缓存键，只在日志副本中将会话值替换为 `[REDACTED]`，不会改写原始头。请看「客户端头」弹窗的候选有效性和最终身份来源；头名存在说明到达了Balancer，但仅凭脱敏日志不能验证NewAPI是否改过原值。实现见 `internal/server/identity.go`、`mistral_request.go`、`mistral_client_headers.go`。
+
 ## 原生接口与额度
 
 支持 `GET /v1/models` 以及原生 `POST /v1/chat/completions`、`/v1/responses`、`/v1/responses/input_tokens`、`/v1/fim/completions`、`/v1/embeddings`。不增加 Anthropic 协议转换，也不因识别 Claude 会话头而宣称 `/v1/messages` 可用。

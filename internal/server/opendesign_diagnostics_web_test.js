@@ -7,6 +7,7 @@ const context = { console, Date, localStorage: { getItem() { return 'opendesign'
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('const POOLS ='), source.indexOf('// navigator.clipboard')), context);
 vm.runInContext(source.slice(source.indexOf('const STATUS ='), source.indexOf('// ollamaQuotaHTML')), context);
+vm.runInContext(source.slice(source.indexOf('function hitRate('), source.indexOf('function costCell(')), context);
 vm.runInContext(source.slice(source.indexOf('function openDesignStatusHTML('), source.indexOf("$('#acc-table').addEventListener(", source.indexOf('function openDesignStatusHTML('))), context);
 vm.runInContext(source.slice(source.indexOf('async function accountAction('), source.indexOf('function accountForm(')), context);
 const account = {

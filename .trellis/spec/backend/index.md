@@ -17,6 +17,8 @@ Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
 assistant reasoning normalization or user-authorized admin Key/proxy display.
 Read [Mistral Responses completion](mistral-responses.md) before changing native
 Responses SSE terminal handling, EOF classification or no-replay guarantees.
+Read [Rolling cache statistics](cache-stats.md) before changing cache-hit rates,
+measured-token counters or administrator resets.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,
 query cutoffs or live-tail retention.
 

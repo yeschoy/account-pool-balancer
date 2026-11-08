@@ -65,7 +65,7 @@
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
     </div>
     <section id="page-overview" class="page">
-      <header class="page-head"><h1>概览</h1><span class="muted" id="ov-updated"></span></header>
+      <header class="page-head"><h1>概览</h1><div class="actions"><span class="muted" id="ov-updated"></span><button type="button" class="btn small" id="btn-reset-cache-rate">清空24h缓存命中率</button></div></header>
       <div id="ov-cards" class="cards"></div>
       <div class="panel"><h2>各模型 24 小时概况</h2>
         <div class="table-wrap"><table class="table" id="ov-models"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>费用</th></tr></thead><tbody></tbody></table></div></div>
@@ -592,7 +592,7 @@
         <p class="muted small" id="oc-batch-result">在账号名前勾选；复用已有账号 API，顺序执行，逐项报告结果。</p>
       </div>
       <div class="panel flush"><div class="table-wrap"><table class="table" id="acc-table">
-        <thead><tr><th>账号</th><th>状态</th><th data-head="windows">Design Plan 窗口</th><th data-head="wallet">钱包 / 套餐模型额度</th><th>并发</th><th>RPM</th><th>健康</th><th>选中/绑定</th><th></th></tr></thead>
+        <thead><tr><th>账号</th><th>状态</th><th data-head="windows">Design Plan 窗口</th><th data-head="wallet">钱包 / 套餐模型额度</th><th title="缓存读取 Token / 同批已测提示 Token；清空后重新累计，最长24小时">24h 缓存命中率</th><th>并发</th><th>RPM</th><th>健康</th><th>选中/绑定</th><th></th></tr></thead>
         <tbody></tbody></table></div>
         <p id="acc-empty" class="empty hidden">还没有账号。点「设备授权添加」，在已登录该账号的浏览器里批准即可。</p>
       </div>

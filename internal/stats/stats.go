@@ -397,6 +397,38 @@ func (s *Stats) Import(e Export) {
 	}
 }
 
+// ResetCacheRates clears only measured cache-rate counters for one provider.
+// Raw usage, costs, request counts and other providers remain untouched. The
+// existing export persists the reset, including new traffic in the same minute.
+func (s *Stats) ResetCacheRates(provider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sc := s.prov[provider]
+	if provider == "" || sc == nil {
+		return
+	}
+	reset := func(r, all *ring) {
+		for i := range r {
+			b := &r[i]
+			if all != nil && all[i].Minute == b.Minute {
+				a := &all[i]
+				a.CachePrompt = max(0, a.CachePrompt-b.CachePrompt)
+				a.CacheCached = max(0, a.CacheCached-b.CacheCached)
+				a.CacheKnownRequests = max(0, a.CacheKnownRequests-b.CacheKnownRequests)
+			}
+			b.CachePrompt, b.CacheCached, b.CacheKnownRequests = 0, 0, 0
+		}
+	}
+	reset(&sc.global, &s.all.global)
+	for _, pair := range []struct{ scoped, all map[string]*ring }{
+		{sc.account, s.all.account}, {sc.model, s.all.model}, {sc.proxy, s.all.proxy},
+	} {
+		for key, r := range pair.scoped {
+			reset(r, pair.all[key])
+		}
+	}
+}
+
 func (s *Stats) Forget(id string) {
 	s.mu.Lock()
 	delete(s.all.account, id)
