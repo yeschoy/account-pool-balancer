@@ -38,7 +38,25 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 额度与思考参数兼容（2026-11-08 12:37 UTC，4f8a680）
+## 当前部署：Mistral 思考档位优先级及图片格式兼容（2026-11-08 12:57 UTC，a2fdba1）
+
+- 用户报告本地400思考开关/档位冲突及422，明确要求少做测试、直接自动上线。`a2fdba1b20a5bcf0b710538848f189c3ee1f17b7` 已提交推送并部署：有效显式effort优先于兼容开关，缺失/null才按开关；精确DeepSeek Chat的user图片URL-only对象转原生字符串，保留图片和额外选项，不改模型/Responses/其他池。仅跑一次相关定向回归（1.450秒）及必要build，不跑全仓/race/长观察，不发生产推理。
+- 一次预检确认原4f8a680 healthy/零重启及双入口正常；干净472文件快照逐项SHA256核对后复用原脚本，仅内存适配。构建镜像 `account-pool-balancer:release-a2fdba1-20261108T125534Z`，ID `sha256:a42b17de515ef2e78e2fa88ed1ab2da45513f785d8c4690ac4cade6cb142784d`。完整一致备份 `/home/ubuntu/backups/account-pool-balancer/20261108T125534Z-mistral-compat-a2fdba1/` 保留data、Compose/.env、日志及回执，gzip校验通过，SHA256 `69c4cbf168c95bba980ec2ef90576533bfbb04dcdc3febe2b195e7055532dbd0`；回退镜像 `account-pool-balancer:rollback-20261108T125534Z` 保留。
+- 以线上Compose仅覆盖image，191账号/186条TH注册记录核心资产、routingSecret、完整config、Mistral明文注册库和运行参数均保留。healthy/零重启/healthcheck存在，ai-internal双别名保留，从new-api访问两个healthz均成功；公网未登录登录页、healthz及四资源200，?v=a5bb5ebec0与源码SHA256一致。上线即反馈，浏览器关闭；不因补记录再次重启。
+- **422尚未完全解决**：旧错误和新版12:57:19事件均指向body.messages.28.user.content.str/string_type，恢复的截断input前缀含image_url对象和data URL。官方模型页明确支持文本/图片，不能当作文本模型拒图；但只看到首个union分支，不能据此断言全部数组非法。上线后一次只读自然流量核对（至12:58:39）有13次200、1次422、1次499，无400；这不是同一失败请求重放或完整功能验收。新增URL-only兼容未消除全部422，其他图片对象选项不静默删除。一次25秒有界内存形态采样未捕获到图片请求，已正常结束，无pcap/正文落盘；后续需要剩余失败请求的完整结构证据，不猜测删图或改模型。503仍属独立上游问题，本次未声称根治。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 12:56:43.905–12:56:51.036（7.13秒） |
+| 停止请求 / 旧进程退出 | 12:56:51.125 / 12:56:53.507 |
+| 一致备份及校验 | 12:56:53.806–12:56:58.891 |
+| 切换请求 / 新容器启动 | 12:56:58.891 / 12:56:59.134 |
+| 首HTTP可达 / Docker healthy | 12:57:00.247 / 12:57:29.482 |
+| 双入口及本机验收 / 公网验收 | 12:57:29.631 / 12:57:58.357 |
+
+未采样精确停机；旧进程退出至首HTTP可达观测约6.74秒，不把构建、停止等待或健康等待当成停机。正式源码/镜像/备份保留，旧临时产物待同意清理，Trellis记录提交保留。
+
+## 历史部署：Mistral 额度与思考参数兼容（2026-11-08 12:37 UTC，4f8a680）
 
 - 用户要求提交、推送并部署到OVH，避免过多测试。master已推送至 `4f8a680750582e9dc0fb59e5bf514407238f07f2`，包含此前额度刷新/独立路由 `4f8d74e`、缺省思考high `efe35ce`、精确DeepSeek Chat的reasoning.effort别名 `4f8a680`；Responses保持原生。复用此前全仓normal/race/vet/build及本地Mock结果，本次不重复运行、不发生产推理，不修改线上配置或功能开关。
 - 一次预检确认原aaa09a6 healthy/重启0、旧e6f063b工作树干净且分叉3/141、252.7GiB余量、data挂载及NewAPI双内网入口正常。未在旧树构建或抹平分叉；干净git archive传到 `/home/ubuntu/project/account-pool-balancer-releases/20261108T123421Z-4f8a680`。传输命令曾超时，先确认远端结果，再逐项核对全部471个源码文件SHA256，未盲目重复发布。仅内存适配既有部署脚本，守卫精确旧container/image/revision及TH/Mistral注册任务空闲。
