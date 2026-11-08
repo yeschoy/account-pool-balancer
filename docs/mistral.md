@@ -39,7 +39,7 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 ## 缓存率展示、清空与会话头优先级
 
-账号列表新增「24h 缓存命中率」，概览右上角新增「清空24h缓存命中率」。命中率为**已测缓存读取Token / 同批已测提示Token**，不是命中请求占比；无测量显示 `—`，实际测得零命中才显示0%。清空需确认，只重置当前号池概览、账号及模型的命中率样本，从点击后重新累计、最长24小时；原始24h请求数/Token/费用、单条日志、账号健康及会话绑定均保留，不清除上游缓存。重置立即保存，重启后保留；其他号池不受影响。新增功能需部署本次版本才在线生效。
+账号列表新增「24h 缓存命中率」，概览右上角新增「清空24h缓存命中率」。命中率为**已测缓存读取Token / 同批已测提示Token**，不是命中请求占比；无测量显示 `—`，实际测得零命中才显示0%。清空需确认，只重置当前号池概览、账号及模型的命中率样本，从点击后重新累计、最长24小时；原始24h请求数/Token/费用、单条日志、账号健康及会话绑定均保留，不清除上游缓存。重置立即保存，重启后保留；其他号池不受影响。已于2026-11-08 21:13 UTC随a6d7d38部署OVH；本轮未清空线上统计。
 
 **补入 `prompt_cache_key` 的优先级（Mistral Chat / Responses，取第一个有效值）：**
 
@@ -101,7 +101,7 @@ X-Kilocode-Taskid
 
 Claude结构支持 `_session_UUID`，以及包含会话字段的JSON**字符串**，字段顺序为 `session_id` → `claude_session_id` → `agent_id` → `thread_id` → `conversation_id` → `parent_session_id` → `parent_agent_id` → `parent_thread_id` → `parent_conversation_id`；普通user标签不是会话。正文会话只用于身份解析，无可用HTTP头时通过HMAC兜底补缓存键，不是直接复制正文会话原值。
 
-**管理员「客户端头」原值展示（本次新增，需部署后生效）**：按用户明确授权，新采集的Mistral请求摘要保留会话头、父会话头、额外会话头、缓存键及 `X-Affinity` 原值，保留原始空白和多值；仍限制前64个头、每头4个值、每值512字节、总量8KiB，超限会标记截断。`Authorization`、API Key、Cookie等认证凭证及已知密钥继续隐藏，即使被配置为额外会话头也不能绕过。日志API只允许管理员会话访问并设置 `Cache-Control: no-store`，不会通过下游运行Key开放；正文、上游详情、错误日志及其他号池的脱敏规则不变。旧日志中的 `[REDACTED]` 无法还原，并不代表NewAPI屏蔽了头值。识别与转发始终使用原始请求，不因展示规则改变；实现见 `internal/server/identity.go`、`mistral_request.go`、`mistral_client_headers.go`。
+**管理员「客户端头」原值展示（已随a6d7d38部署OVH）**：按用户明确授权，新采集的Mistral请求摘要保留会话头、父会话头、额外会话头、缓存键及 `X-Affinity` 原值，保留原始空白和多值；仍限制前64个头、每头4个值、每值512字节、总量8KiB，超限会标记截断。`Authorization`、API Key、Cookie等认证凭证及已知密钥继续隐藏，即使被配置为额外会话头也不能绕过。日志API只允许管理员会话访问并设置 `Cache-Control: no-store`，不会通过下游运行Key开放；正文、上游详情、错误日志及其他号池的脱敏规则不变。旧日志中的 `[REDACTED]` 无法还原，并不代表NewAPI屏蔽了头值。识别与转发始终使用原始请求，不因展示规则改变；实现见 `internal/server/identity.go`、`mistral_request.go`、`mistral_client_headers.go`。
 
 ## 原生接口与额度
 
