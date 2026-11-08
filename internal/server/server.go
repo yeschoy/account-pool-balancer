@@ -22,6 +22,7 @@ import (
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/fsutil"
 	"account-pool-balancer/internal/logstore"
+	"account-pool-balancer/internal/mistralsignupstore"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/stats"
@@ -83,6 +84,10 @@ type Server struct {
 	perch              *perchRuntime
 	perchRegistrations registrationManager
 	perchAuto          *perchAutoManager
+	// Mistral 注册机：加密存储 + 单并发管理器，均懒初始化
+	mistralMu       sync.Mutex
+	mistralStoreRef *mistralsignupstore.Store
+	mistralMgrRef   *mistralManager
 	// Token Harbor: the registration machine's store and its concurrency
 	// budget (both created on first use).
 	thStoreMu sync.Mutex

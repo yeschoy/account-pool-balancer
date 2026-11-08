@@ -40,6 +40,8 @@
       <a data-page="pautosignup" data-pool-nav="perch" hidden>自动补号</a>
       <a data-page="pkeys" data-pool-nav="perch" hidden>Perch 密钥</a>
       <a data-page="psettings" data-pool-nav="perch" hidden>Perch 设置</a>
+      <div class="nav-sep" data-pool-nav="mistral">Mistral</div>
+      <a data-page="mregister">Mistral 注册机</a>
       <div class="nav-sep" data-pool-nav="tokenharbor" hidden>TokenHarbor</div>
       <a data-page="thoverview" data-pool-nav="tokenharbor" hidden>TokenHarbor 概览</a>
       <a data-page="thregister" data-pool-nav="tokenharbor" hidden>TokenHarbor 注册机</a>
@@ -227,6 +229,62 @@
             <div class="actions pc-register-import"><label for="pc-register-import-group">入池分组</label><input id="pc-register-import-group" value="perch"><button type="button" class="btn primary" id="pc-register-import">选中账号入池</button></div>
             <p id="pc-register-import-error" class="error" role="alert"></p>
           </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-mregister" class="page hidden">
+      <header class="page-head">
+        <h1>Mistral 注册机</h1>
+        <div class="actions">
+          <button type="button" class="btn" id="mr-refresh">刷新</button>
+        </div>
+      </header>
+
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>新建注册任务</h2>
+          <form id="mr-form" autocomplete="off">
+            <label for="mr-email">邮箱</label>
+            <input id="mr-email" placeholder="user@icloud.com" autocomplete="off" spellcheck="false">
+            <label for="mr-mailbox">接码链接</label>
+            <input id="mr-mailbox" placeholder="https://icloud.mida.vip/messages/...?token=..." autocomplete="off" spellcheck="false">
+            <label for="mr-password">密码（可选，留空自动生成）</label>
+            <input id="mr-password" autocomplete="off" spellcheck="false">
+            <label for="mr-region">地区</label>
+            <input id="mr-region" value="CA" autocomplete="off">
+            <label for="mr-proxy">代理（可选，留空走代理池）</label>
+            <input id="mr-proxy" placeholder="http://user:pass@host:port" autocomplete="off" spellcheck="false">
+            <label class="check"><input type="checkbox" id="mr-skip-register"> 账号已存在，只登录</label>
+            <button type="submit" class="btn primary" id="mr-submit">添加任务</button>
+            <p id="mr-form-error" class="error" role="alert"></p>
+          </form>
+          <div class="mr-status" id="mr-worker-status">
+            <span class="muted" id="mr-worker-text">检查运行环境…</span>
+          </div>
+        </section>
+
+        <section class="panel pc-registration-tasks">
+          <div class="head-row">
+            <h2>候选列表</h2>
+            <span id="mr-poll-error" class="error" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>邮箱</th>
+                  <th>状态</th>
+                  <th>Key</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="mr-rows">
+                <tr><td colspan="4" class="muted">暂无任务。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="hint">注册为串行执行，一次一个。完成后状态变为「就绪」。</p>
         </section>
       </div>
     </section>

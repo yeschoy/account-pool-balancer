@@ -259,14 +259,18 @@ const PERCH_PAGES = ['perch', 'paccounts', 'prequests', 'pregister', 'pautosignu
 // Token Harbor is a plain key pool with a registration machine of its own;
 // its pages live in tokenharbor.js.
 const TH_PAGES = ['thoverview', 'thregister', 'thsettings'];
+// Mistral 注册机（独立池，仅注册机页面）
+const MR_PAGES = ['mregister'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
   perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
-  thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings() };
+  thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings(),
+  mregister: () => loadMistralRegistrations() };
 function go(page) {
   if (!pages[page]) page = 'overview';
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
+  if (currentPage === 'mregister' && page !== currentPage) stopMistralPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
@@ -1486,3 +1490,161 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
 }
 
 boot();
+
+
+// ===================================================================
+// Mistral 注册机
+// ===================================================================
+let mistralPollTimer = null;
+
+const MR_STATUS_LABEL = {
+  queued: '排队中',
+  running: '注册中',
+  registered: '已注册',
+  ready: '就绪',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+function stopMistralPolling() {
+  if (mistralPollTimer) { clearInterval(mistralPollTimer); mistralPollTimer = null; }
+}
+
+function mistralKeySummary(keys) {
+  if (!keys) return '<span class="muted">—</span>';
+  const parts = [];
+  for (const [k, v] of [['API', keys.api], ['Vibe', keys.vibe], ['Studio', keys.studio]]) {
+    if (v) parts.push(k + ' ' + v);
+  }
+  if (keys.vibe_cli) parts.push('CLI ' + keys.vibe_cli);
+  return parts.length ? parts.join('<br>') : '<span class="muted">—</span>';
+}
+
+async function loadMistralRegistrations() {
+  await loadMistralStatus();
+  await loadMistralCandidates();
+  stopMistralPolling();
+  mistralPollTimer = setInterval(() => {
+    loadMistralCandidates().catch(() => {});
+  }, 5000);
+}
+
+async function loadMistralStatus() {
+  const el = document.getElementById('mr-worker-text');
+  if (!el) return;
+  try {
+    const d = await api('GET', '/api/mistral/status');
+    el.textContent = d.worker_found
+      ? `运行环境就绪 · Python ${d.python} · 共 ${d.total} 个候选`
+      : `未找到 worker（${d.worker_path}），注册会失败`;
+    el.className = d.worker_found ? 'muted' : 'error';
+  } catch (e) {
+    el.textContent = '状态查询失败：' + e.message;
+    el.className = 'error';
+  }
+}
+
+async function loadMistralCandidates() {
+  const tbody = document.getElementById('mr-rows');
+  const errEl = document.getElementById('mr-poll-error');
+  if (!tbody) return;
+  try {
+    const d = await api('GET', '/api/mistral/candidates');
+    const rows = d.candidates || [];
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">暂无任务。</td></tr>';
+      if (errEl) errEl.textContent = '';
+      return;
+    }
+    tbody.innerHTML = rows.map((c) => {
+      const label = MR_STATUS_LABEL[c.status] || c.status;
+      const busy = c.status === 'running' || c.status === 'queued';
+      const act = busy
+        ? `<button type="button" class="btn small" data-mr-cancel="${c.id}">取消</button>`
+        : `<button type="button" class="btn small primary" data-mr-run="${c.id}">开始</button>`;
+      const err = c.error ? `<div class="error">${escapeHtml(c.error)}</div>` : '';
+      return `<tr>
+        <td>${escapeHtml(c.email)}${err}</td>
+        <td><span class="mr-status mr-${c.status}">${label}</span></td>
+        <td class="mr-keys">${mistralKeySummary(c.keys)}</td>
+        <td class="actions">
+          ${act}
+          <button type="button" class="btn small ghost" data-mr-del="${c.id}">删除</button>
+        </td>
+      </tr>`;
+    }).join('');
+    if (errEl) errEl.textContent = '';
+  } catch (e) {
+    if (errEl) errEl.textContent = '刷新失败：' + e.message;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('mr-form');
+  if (form) {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const errEl = document.getElementById('mr-form-error');
+      errEl.textContent = '';
+      const body = {
+        email: document.getElementById('mr-email').value.trim(),
+        mailbox_url: document.getElementById('mr-mailbox').value.trim(),
+        password: document.getElementById('mr-password').value,
+        region: document.getElementById('mr-region').value.trim() || 'CA',
+        proxy_url: document.getElementById('mr-proxy').value.trim(),
+        skip_register: document.getElementById('mr-skip-register').checked,
+      };
+      if (!body.email || !body.mailbox_url) {
+        errEl.textContent = '邮箱和接码链接必填';
+        return;
+      }
+      try {
+        await api('POST', '/api/mistral/candidates', body);
+        form.reset();
+        document.getElementById('mr-region').value = 'CA';
+        toast('已添加任务');
+        loadMistralCandidates();
+      } catch (e) {
+        errEl.textContent = e.message;
+      }
+    });
+  }
+
+  const refresh = document.getElementById('mr-refresh');
+  if (refresh) refresh.addEventListener('click', () => loadMistralRegistrations());
+
+  document.addEventListener('click', async (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLElement)) return;
+
+    if (t.dataset.mrRun) {
+      ev.preventDefault();
+      try {
+        await api('POST', '/api/mistral/candidates/' + t.dataset.mrRun + '/register', {});
+        toast('已开始注册');
+        loadMistralCandidates();
+      } catch (e) { toast(e.message); }
+    } else if (t.dataset.mrCancel) {
+      ev.preventDefault();
+      try {
+        await api('POST', '/api/mistral/candidates/' + t.dataset.mrCancel + '/cancel', {});
+        toast('已请求取消');
+        loadMistralCandidates();
+      } catch (e) { toast(e.message); }
+    } else if (t.dataset.mrDel) {
+      ev.preventDefault();
+      if (!confirm('删除这个候选？')) return;
+      try {
+        await api('DELETE', '/api/mistral/candidates/' + t.dataset.mrDel);
+        toast('已删除');
+        loadMistralCandidates();
+      } catch (e) { toast(e.message); }
+    }
+  });
+});
