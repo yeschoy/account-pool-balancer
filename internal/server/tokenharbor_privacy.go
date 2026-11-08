@@ -50,7 +50,7 @@ func thIdentityValues(h http.Header, body map[string]any, extra []string) []stri
 	for _, x := range bodyKeys {
 		add(lookup(body, x.path))
 	}
-	for _, x := range []string{"previous_response_id", "metadata.user_id", "metadata.parent_session_id", "user"} {
+	for _, x := range []string{"previous_response_id", "metadata.user_id", "metadata.parent_session_id", "user", "promptCacheKey"} {
 		add(lookup(body, x))
 	}
 	add(claudeUserSession(lookup(body, "metadata.user_id")))
@@ -150,7 +150,7 @@ func (discardLogBody) Write(b []byte) (int, error) { return len(b), nil }
 
 func thPrivateKey(k string) bool {
 	l := strings.ToLower(k)
-	return isSecretHeader(k) || strings.Contains(l, "session") || strings.Contains(l, "conversation") || strings.Contains(l, "thread") || strings.Contains(l, "prompt_cache") || strings.Contains(l, "affinity") || l == "user_id" || l == "previous_response_id" || l == "response_id"
+	return isSecretHeader(k) || strings.Contains(l, "session") || strings.Contains(l, "conversation") || strings.Contains(l, "thread") || strings.Contains(l, "prompt_cache") || l == "promptcachekey" || strings.Contains(l, "affinity") || l == "user_id" || l == "previous_response_id" || l == "response_id"
 }
 
 // Scan full JSON without decoding/retaining message trees. Identity fields are

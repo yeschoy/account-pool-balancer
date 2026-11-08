@@ -644,6 +644,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(obj)...)
 		}
 	}
+	if rec.Provider == config.ProviderMistral {
+		prepared, aliasErr := normalizeMistralCacheAlias(body, r.URL.Path)
+		if aliasErr == nil && !bytes.Equal(prepared, body) {
+			// The wire renderer preserves validated JSON. Re-read routing fields
+			// only for an actual alias rewrite, before any identity/account lease.
+			obj, aliasErr = parseRequestBody(prepared)
+		}
+		if aliasErr != nil {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", aliasErr.Error(), 0)
+			finish(400, "failed")
+			return
+		}
+		body = prepared
+	}
 	rec.Model, _ = obj["model"].(string)
 	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
 		rec.ErrorCategory = "request"
@@ -742,7 +757,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
 			Group: routeGroup, Model: rec.Model, RequestID: rid,
-			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit",
+			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit", ClientKeyID: ck.ID,
 			Excluded: excluded, Wait: wait,
 			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider),
 		})

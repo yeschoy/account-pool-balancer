@@ -194,6 +194,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 		return nil, errors.New("metadata.json: invalid routingSecret")
 	}
 	s.pool.ImportState(md.Pool, valid)
+	s.pool.ImportMistralBindings(md.Pool.MistralBindings, store.Get())
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
@@ -322,6 +323,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 			s.quota.Refresh(a.ID)
 		}
 	}
+	s.pool.ReconcileMistralBindings(next)
 	s.metaDirty.Store(true)
 }
 
