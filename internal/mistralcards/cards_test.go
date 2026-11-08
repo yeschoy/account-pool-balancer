@@ -25,9 +25,9 @@ func TestParseLine_Valid(t *testing.T) {
 
 func TestParseLine_ExpiryVariants(t *testing.T) {
 	cases := []struct {
-		raw      string
-		wantM    int
-		wantY    int
+		raw   string
+		wantM int
+		wantY int
 	}{
 		{"4242424242424242----5/28----123", 5, 2028},
 		{"4242424242424242----05-28----123", 5, 2028},
@@ -138,9 +138,9 @@ func TestExpired(t *testing.T) {
 		month, year int
 		want        bool
 	}{
-		{5, 2026, false},  // 当月仍有效
+		{5, 2026, false}, // 当月仍有效
 		{6, 2026, false},
-		{4, 2026, true},   // 上月已过期
+		{4, 2026, true}, // 上月已过期
 		{12, 2025, true},
 		{1, 2027, false},
 	}

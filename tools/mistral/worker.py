@@ -30,6 +30,8 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
     "keys": {"API": "mstrl_...", "Vibe": "...", "Studio": "..."},
     "vibe_cli_key": "",
     "status": "ok",
+    "card_masked": "463343******7213",   # 分配到的卡（脱敏）
+    "card_expiry": "05/28",
     "error": ""
   }
 
@@ -77,6 +79,7 @@ def main() -> int:
 
     try:
         from core.hybrid import HybridRunner
+        from core.cards import cards_from_env, pick_card
         from runner import gen_name
 
         password = req.get("password") or ""
@@ -88,6 +91,16 @@ def main() -> int:
         last = req.get("last") or ""
         if not first or not last:
             first, last = gen_name(email)
+
+        # 银行卡：按 proxy_index 轮转选一张，与 Go 侧 PickCardByIndex 对齐。
+        # 当前仅解析并回显，注册流程本身不用；订阅步骤后续从这里取。
+        card = None
+        cards = cards_from_env()
+        if cards:
+            idx = int(req.get("proxy_index") or 0)
+            card = pick_card(cards, idx)
+            if card:
+                emit_progress(f"[card] 已分配 {card.masked()} exp={card.expiry}")
 
         # proxy: 显式 URL 优先，其次按 proxy_index 从代理池轮转
         proxy = (req.get("proxy") or "").strip()
@@ -139,6 +152,9 @@ def main() -> int:
             "sid": res.sid,
             "status": res.status,
             "error": res.error,
+            # 分配到的卡（脱敏，仅用于展示与后续订阅关联）
+            "card_masked": card.masked() if card else "",
+            "card_expiry": card.expiry if card else "",
         }
         print(json.dumps(out, ensure_ascii=False))
         return 0 if out["ok"] else 1

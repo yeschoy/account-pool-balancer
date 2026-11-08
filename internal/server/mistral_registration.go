@@ -327,6 +327,9 @@ type mistralWorkerResult struct {
 	VibeCLIKey    string            `json:"vibe_cli_key"`
 	Status        string            `json:"status"`
 	Error         string            `json:"error"`
+	// 分配到的银行卡（脱敏）。当前不参与注册，供订阅步骤关联使用。
+	CardMasked string `json:"card_masked,omitempty"`
+	CardExpiry string `json:"card_expiry,omitempty"`
 }
 
 func mistralWorkerPath() string {
@@ -532,12 +535,12 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg := s.cfg.Get().MistralSignup
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":  cfg,
-		"hasProxy":  cfg.HasProxy(),
-		"hasCards":  cfg.HasCards(),
-		"cardCount": len(parsed),
+		"settings":   cfg,
+		"hasProxy":   cfg.HasProxy(),
+		"hasCards":   cfg.HasCards(),
+		"cardCount":  len(parsed),
 		"cardErrors": cardErrorsJSON(cardErrs),
-		"revision":  s.cfg.Get().Revision,
+		"revision":   s.cfg.Get().Revision,
 	})
 }
 
