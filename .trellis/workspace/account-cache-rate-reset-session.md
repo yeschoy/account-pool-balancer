@@ -26,3 +26,12 @@
 ## 交付状态
 
 代码、回归、文档与本地浏览器验收完成；未推送、未部署，未操作生产账号、推理或统计。线上不因本地实现立即生效。
+
+## 用户追加：客户端会话/缓存头不脱敏
+
+- 用户明确要求原值展示，覆盖上一阶段“全部身份头脱敏”的策略，仅调整Mistral管理员请求摘要的clientRequestHeaders。使用既有maskHeaders(cfg,h)保留会话/父会话/自定义/缓存/X-Affinity原值、空白和多值，继续512字节/4值/64头/8KiB边界及截断标记。Authorization/API Key/Cookie和已知密钥继续隐藏；即便认证头配置为会话候选也不绕过。
+- 不改请求身份/缓存键生成/转发、其他池、正文/上游详情/错误日志或绑定持久化。旧日志已写入的REDACTED无法恢复，UI和docs明确说明新请求才采集原值。
+- 日志API补Cache-Control:no-store；新增管理员可见、运行Key401、凭证不泄露、全部会话头多值/空白保留等回归。既有Mistral隐私用例仅为授权clientRequestHeaders单独断言原值，其余字段仍检查不泄露。
+- 全仓normal/race、vet、build及所有Node行为/语法测试通过。定向Mistral+ResetCacheRate race通过。
+- 真实本地浏览器使用合成日志验证请求日志→客户端头弹窗：session/thread/cache原值、HTML转义、无脚本节点、凭证隐藏及API no-store；后端真实mock请求的原值采集由Go HTTP回归验证，不把合成UI记录声称为生产证据。回执header-browser-receipt.json已核验；PID40554与52757端口及专用浏览器均停止，临时产物登记在_tmp_artifacts.md待同意清理。
+- 此追加仍未推送/部署；原注册/指纹、Dockerfile及其他窗口记录不触碰。

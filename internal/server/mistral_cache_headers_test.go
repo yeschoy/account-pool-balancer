@@ -112,8 +112,18 @@ func TestMistralHeaderCacheKeysOnWire(t *testing.T) {
 				}
 				logs, _ := e.s.logs.Query("requests", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
 				var rec requestLog
-				if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.CacheHintSource != tc.source || strings.Contains(string(logs.Items[0]), key) {
-					t.Fatal("cache source missing or private key leaked into request log")
+				if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.CacheHintSource != tc.source {
+					t.Fatal("cache source missing from request log")
+				}
+				for name, value := range tc.headers {
+					if headerValue(rec.ClientRequestHeaders, name) != value {
+						t.Fatal("operator-authorized original header missing from summary")
+					}
+				}
+				rec.ClientRequestHeaders = nil
+				rest, _ := json.Marshal(rec)
+				if strings.Contains(string(rest), key) {
+					t.Fatal("cache key leaked outside administrator header projection")
 				}
 			})
 		}

@@ -10,10 +10,15 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('function showClientRequestHeaders('), source.indexOf('function requestRow(')), context);
-context.showClientRequestHeaders({requestId:'synthetic', sessionSource:'body', affinityKeyType:'claude_user_session', clientRequestHeaders:{'User-Agent':['<img onerror=bad>'], 'Session_id':['[REDACTED]']}, clientSessionHeaderStatus:{Session_id:'valid'}});
+context.showClientRequestHeaders({requestId:'synthetic', sessionSource:'body', affinityKeyType:'claude_user_session', clientRequestHeaders:{'User-Agent':['<img onerror=bad>'], 'Session_id':['session-original-123'], 'Thread-Id':['<session&thread>']}, clientSessionHeaderStatus:{Session_id:'valid'}});
 assert.match(dialog.body, /实际到达 Balancer/);
 assert.match(dialog.body, /有效候选（不代表最终选中）/);
 assert.match(dialog.body, /body \/ claude_user_session/);
+assert.match(dialog.body, /session-original-123/);
+assert.match(dialog.body, /&lt;session&amp;thread&gt;/);
+assert.match(dialog.body, /会话头、缓存键按收到的原值展示/);
+assert.match(dialog.body, /旧日志中已保存的 \[REDACTED\] 无法恢复/);
+assert.match(dialog.body, /认证凭证继续隐藏/);
 assert.match(dialog.body, /&lt;img/);
 assert.doesNotMatch(dialog.body, /<img/);
 context.showClientRequestHeaders({requestId:'legacy'});

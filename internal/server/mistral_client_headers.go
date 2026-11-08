@@ -10,6 +10,8 @@ import (
 
 // This is the client -> Balancer boundary, before outbound header rewriting.
 // Summary diagnostics remain available when body/detail logging is disabled.
+// The operator explicitly permits original session/cache headers in this
+// administrator-only projection. Credentials still use the shared masking.
 func mistralClientRequestHeaders(cfg *config.Config, h http.Header) (map[string][]string, map[string]string, bool) {
 	candidates := map[string]bool{}
 	for _, name := range cfg.Routing.SessionHeaders {
@@ -24,7 +26,7 @@ func mistralClientRequestHeaders(cfg *config.Config, h http.Header) (map[string]
 	for _, name := range []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"} {
 		candidates[strings.ToLower(name)] = true
 	}
-	private := maskHeaders(cfg, thPrivateHeaders(h))
+	private := maskHeaders(cfg, h)
 	names := make([]string, 0, len(h))
 	for name := range h {
 		names = append(names, name)
@@ -48,7 +50,6 @@ func mistralClientRequestHeaders(cfg *config.Config, h http.Header) (map[string]
 				state = "valid"
 			}
 			states[name] = state
-			values = []string{"[REDACTED]"} // Includes configured and parent-agent headers.
 		}
 		out[name] = []string{}
 		for i, value := range values {

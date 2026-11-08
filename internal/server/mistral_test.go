@@ -192,8 +192,13 @@ func TestMistralNativeBytesHeadersAndAccounting(t *testing.T) {
 			if rec.InputTokens == nil || *rec.InputTokens != 10 || rec.CachedTokens == nil || *rec.CachedTokens != 3 || rec.AffinityConfidence != "explicit" {
 				t.Fatal("lost accounting or identity")
 			}
+			if headerValue(rec.ClientRequestHeaders, "Session_id") != "private-codex-session" || headerValue(rec.ClientRequestHeaders, "X-Prompt-Cache-Key") != "private-cache" || headerValue(rec.ClientRequestHeaders, "X-Api-Key") != "[REDACTED]" {
+				t.Fatal("original session/cache headers lost or credential exposed")
+			}
+			rec.ClientRequestHeaders = nil
+			rest, _ := json.Marshal(rec)
 			for _, secret := range []string{"private-codex-session", "private-cache", "mstrl_mock_secret", "mistral-client"} {
-				if strings.Contains(string(logs.Items[0]), secret) {
+				if strings.Contains(string(rest), secret) {
 					t.Fatal("ordinary log leaked identity or key")
 				}
 			}
@@ -546,6 +551,14 @@ func TestMistralAdminImportSettingsAndPrivacy(t *testing.T) {
 			t.Fatal("missing logs")
 		}
 		for _, b := range logs.Items {
+			if kind == "requests" {
+				var rec requestLog
+				if json.Unmarshal(b, &rec) != nil || headerValue(rec.ClientRequestHeaders, "X-Pi-Session-Id") != "private-session-value" {
+					t.Fatal("authorized original session header missing")
+				}
+				rec.ClientRequestHeaders = nil
+				b, _ = json.Marshal(rec)
+			}
 			for _, secret := range []string{"mstrl_mock_secret_1", "private-session-value", "mistral-client"} {
 				if strings.Contains(string(b), secret) {
 					t.Fatalf("%s leaked private identity", kind)

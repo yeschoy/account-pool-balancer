@@ -1460,7 +1460,7 @@ function showClientRequestHeaders(r) {
   const states = { valid:'有效候选（不代表最终选中）', empty:'空值', invalid:'无效值（控制字符或超过512字节）' };
   const candidates = Object.entries(r.clientSessionHeaderStatus || {}).map(([name, state]) => `${name}: ${states[state] || state}`).join('\n');
   const captured = r.clientRequestHeaders != null;
-  const explanation = captured ? '这是 NewAPI 等客户端实际到达 Balancer 的请求头，不是最终发给 Mistral 的头。[REDACTED] 是 Balancer 写日志时对密钥、Cookie、会话/缓存标识的脱敏，不会改写用于识别和转发的原始头；不能据此判断 NewAPI 是否修改过原值。' : '此历史日志未采集客户端请求头，不能据此判断客户端没有发送。';
+  const explanation = captured ? '这是 NewAPI 等客户端实际到达 Balancer 的请求头，不是最终发给 Mistral 的头。会话头、缓存键按收到的原值展示，仍受长度与总量上限限制；密钥、Cookie 等认证凭证继续隐藏。旧日志中已保存的 [REDACTED] 无法恢复，原值展示仅对新版采集的新请求生效。' : '此历史日志未采集客户端请求头，不能据此判断客户端没有发送。';
   const diagnosis = captured ? (candidates || (r.clientRequestHeadersTruncated ? '未在保留部分中看到支持的会话候选头；请求头已截断，不能判断其余部分。' : '未收到支持的会话候选头；透传开启不代表客户端发送了这些头。')) : '未采集';
   modal({ title:'客户端请求头 · ' + r.requestId, wide:true, body:`<p class="acc-sub">${esc(explanation)}</p><p>最终身份来源：${esc(r.sessionSource || '—')} / ${esc(r.affinityKeyType || '—')}（正文身份或更高优先级头可能先被选中）</p><h4>会话候选头检查</h4><pre>${esc(diagnosis)}</pre><h4>客户端请求头${r.clientRequestHeadersTruncated ? '（已截断）' : ''}</h4><pre>${esc(captured ? JSON.stringify(r.clientRequestHeaders, null, 2) : '未采集')}</pre><p class="acc-sub">仅反映本层收到的内容；无法还原被 NewAPI、Nginx 或其他中间层删除的头。正文 metadata.user_id/user 内 JSON 别名不属于 HTTP 请求头。</p>` });
 }

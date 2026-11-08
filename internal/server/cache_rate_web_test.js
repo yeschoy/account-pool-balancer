@@ -31,7 +31,7 @@ assert.doesNotMatch(row, /<unsafe>/);
 assert.equal((row.match(/<td/g) || []).length, 10);
 assert.match(html, /id="btn-reset-cache-rate"/);
 assert.match(html, /24h 缓存命中率<\/th>/);
-assert.match(source, /\[REDACTED\] 是 Balancer 写日志时/);
+assert.match(source, /会话头、缓存键按收到的原值展示/);
 (async () => {
   const requests = [], refreshes = [], messages = [];
   vm.runInContext('pool = "mistral"', context);

@@ -1321,6 +1321,7 @@ func parseTime(v string) (time.Time, error) {
 }
 
 func (s *Server) apiLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	kind := r.PathValue("kind")
 	allowed, ok := logstore.Filters[kind]
 	if !ok {
