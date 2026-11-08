@@ -32,7 +32,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek 无状态 store 兼容（2026-11-07 21:23 UTC，8d41516）
+## 当前部署：Mistral DeepSeek Chat 参数定向兼容（2026-11-08 06:01 UTC，9f375ef）
+
+- 用户明确批准在新工作区独立实现、修复后部署且不再启动代理。功能提交`96eaad7`，集成版本`9f375efee5a89e92dcbe5f14dd0385e4519c1501`；从Orca默认基线319c751（包含8d41516）开发，fetch后正常合入master的e06a589独立工具/诊断更新，再非强制原子推送功能分支与master。没有在原master开发、reset分叉或运行注册工具。
+- 仅Mistral Chat精确`deepseek-v4-1-flash-1017`新增developer→system、thinking/enable_thinking到原生effort（enabled无档位/null默认high、disabled为none，冲突/预算/未知结构本地拒绝）、seed整数无损映射random_seed、空默认窄省略及兼容标记处理。保留medium→high、reasoning_content、逐事件流式内容数组及store无状态保护，不改其他模型/Responses/FIM/供应商的新增参数行为、identity优先级、Nginx/调度/TTL/并发/限流/账号策略。
+- root user/safety_identifier仅string/null兼容标记，不提供上游追踪/安全语义，不用于会话身份；有效但无法保真的logit_bias/verbosity/retention本地明确拒绝。prompt_cache_key/metadata原值保留。官方Chat schema支持random_seed，但本DeepSeek型号的支持及确定性仍未生产验证；不以mock冒充证据、不在失败时删seed重放。
+- 全部Mistral定向测试及相关既有回归通过（2.739s），小幅自审后新增6组参数测试通过（0.584s），gofmt/diff check/必要build通过；未重复全仓/race/vet或主动生产推理。构建源码为干净git archive：`/home/ubuntu/project/account-pool-balancer-releases/20261108T055905Z-9f375ef`，镜像`account-pool-balancer:release-9f375ef-20261108T055905Z`，ID`sha256:6716715f22121e95eb877f96d930a509f7c3afd6490275e5cee2d0404c40e39d`。
+- 一次预检8d41516健康/零重启、旧e6f063b工作树干净、磁盘287GiB余量；复用既有`.analysis/th-maintenance/deploy-checkout.py`仅内存适配版本/备份名，不新建部署脚本或复制敏感预检数据。本轮无存储格式变化。新镜像就绪且无queued/running注册任务才停旧进程，退出0后完整一致备份data，gzip/SHA256核验后只追加image覆盖切换Balancer。**161账号、186注册记录核心资产及凭据/Key/代理/支付/备注、routingSecret、完整config与原用户/环境/挂载/端口/网络/资源/健康策略均保留。**
+- 本机健康/版本/四资源通过，healthy、零重启、无OOM；真实未登录公网登录页正常，healthz与四资源均200，保留`?v=e02f22dc28`且SHA256逐项匹配。06:01:15.204 UTC公网验收通过并立即反馈；不把服务/资源验收当成真实推理验证。
+- **初步自然业务观察（非完整10分钟）**：06:00:34.988–06:04:33.034 UTC约3分58秒，真实DeepSeek完成24/24 success/HTTP200，全流式；NewAPI对应24条消费，全部stream_status=ok/end_reason=done。Mistral错误事件0、无新422/本地400、无忙溢出/请求内切号/多attempt。真实input3195540/cached2119808，token加权66.34%；绑定16hit/8miss，均message_hmac身份/session_hmac cache hint。重启清内存绑定，不能把miss当成同会话一直换号；未恢复客户端原始身份字段，不能声称缓存已改善或所有新参数均已生产实测。
+- **NewAPI渠道180规则暂未修改**：上线后读取最新配置发现它同时服务两个DeepSeek别名与`glm-5.3`/`glm-5.3-flash`（映射zai-glm-5-3/zai-glm-5-3-flash）。直接删除10项全渠道operations会影响未适配的GLM及其他路径，超出精确范围。先保留原规则/header通配/路由/Key与正式历史备份；待确认并核实运行版本可可靠按模型+Chat条件收敛后，才备份最新值、逐项停用目标范围的对应操作，不整行覆盖或清空规则。现有规则仍会删cache/metadata及绕过store=true保护，此限制尚未解除。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 05:59:51.182–06:00:00.435（9.25秒） |
+| 请求停止 / 旧进程退出 | 06:00:00.526 / 06:00:00.640 |
+| 完整一致备份及核验 | 06:00:00.921–06:00:04.312 |
+| 切换请求 / 新容器启动 | 06:00:04.312 / 06:00:04.517 |
+| 首次HTTP可达 / Docker healthy | 06:00:05.643 / 06:00:34.883 |
+| 本机验收 / 公网验收 | 06:00:34.988 / 06:01:15.204 |
+
+未采样精确停机；旧退出至首HTTP可达观测间隔约5.0秒，不将整体执行或健康等待误报为停机。受限正式备份`/home/ubuntu/backups/account-pool-balancer/20261108T055905Z-mistral-params-9f375ef/`保留完整data、原Compose/.env、构建/切换日志与deploy.json；data SHA256`1ade70b278d8a756293d09aac6cb87bba9fee93513492612d61f980dcaa60719`。回退镜像`account-pool-balancer:rollback-20261108T055905Z`保留8d41516；回退前核查新写入，不用旧data覆盖在线变化。临时产物登记当前工作区`_tmp_artifacts.md`，未经同意不清理；Trellis/正式备份保留。仅补记录不再次部署。
+
+## 历史部署：Mistral DeepSeek 无状态 store 兼容（2026-11-07 21:23 UTC，8d41516）
 
 - 用户要求观察中发现错误则修复、部署并重新观察10分钟。02c61a8窗口内已有真实流式DONE/completed且缓存44416/44816（99.11%），同时另一请求出现上游422 `extra_forbidden / body.store`。`8d41516407abe2f560b5d0f832e058019c7b9877`已正常推送master：仅精确DeepSeek Chat模型省略root store=false/null，true/非法/重复store本地拒绝，保留nested metadata.store；不假装支持持久化，不承诺上游平台的数据留存政策。保留此前medium→high及逐帧内容块兼容，不改账号调度或NewAPI配置。
 - 只跑Mistral定向Mock测试、gofmt和必要build，未重复全仓/race/vet或主动生产推理。一次预检原02c61a8健康，旧e6f063b工作树干净、余量286.5GiB；源码为干净git archive：`/home/ubuntu/project/account-pool-balancer-releases/20261107T212114Z-8d41516`，镜像`account-pool-balancer:release-8d41516-20261107T212114Z`，ID`sha256:66ddacf96e36ce5ce1b68ed340b6606eb65fac084e65811f3ca418541ca088ef`。

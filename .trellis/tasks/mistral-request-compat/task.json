@@ -3,5 +3,6 @@
   "status": "in_progress",
   "branch": "mistral-request-compat",
   "description": "用户已确认的精确Mistral DeepSeek Chat参数兼容、上线与渠道规则收敛",
-  "validation": "validation.md"
+  "validation": "validation.md",
+  "waiting_for": "渠道180还服务GLM；确认并核实仅DeepSeek Chat条件停用对应operations的安全方案，未修改线上规则"
 }
