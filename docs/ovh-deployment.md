@@ -21,7 +21,13 @@
    的数据备份；只更新目标服务，保持卷/端口/网络、配置和功能开关不变。
    不自动用旧数据覆盖上线后的新写入，失败时先确认结果再执行既定回退。
 4. **一次验收**：合并核对健康、运行镜像 revision、必要的数据/密钥/设置
-   保留与新版资源。本地检查走既有接口；静态脚本实际路径是
+   保留与新版资源。**必须核对 `ai-internal` 的网络别名，并从 `new-api`
+   容器分别请求 `http://account-pool-balancer:8790/healthz` 和
+   `http://opendesign-balancer:8790/healthz`，两者都须成功。**宿主机/公网
+   healthz=200 不能证明渠道入口可达；保留同名网络但丢掉别名也会造成全部渠道
+   DNS 失败。以线上 Compose 为基础只覆盖 image，不能用遗漏别名/healthcheck/
+   资源参数的裸 `docker run` 代替；核验 `Config.Healthcheck`，没有健康检查时
+   不得宣称 Docker healthy。本地检查走既有接口；静态脚本实际路径是
    `/assets/app.js`，优先从 HTML 读取，不猜 `/app.js`。资源URL带`?v=`时，
    HTTP请求保留查询串，映射源码文件时使用URL解析后的path。公网 Python 客户端
    的既有 403 不应误判为新版本故障；不改 WAF、不伪装身份或轮换出口，
@@ -31,6 +37,31 @@
 不是硬性 SLA；超过 5 分钟主动说明具体卡点。构建、停机切换、健康确认、
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
+
+## 线上故障恢复：补回渠道依赖的内网别名（2026-11-08 09:57 UTC）
+
+- 现象：Balancer 宿主机 `/healthz` 为200、进程 running/restart0/无OOM，但
+  09:48部署后没有新业务请求；NewAPI文件日志持续报
+  `lookup opendesign-balancer on 127.0.0.11:53: server misbehaving`。
+- 根因：5d9b62c切换创建的容器在 `ai-internal` 上 `Aliases=null`，丢了旧名
+  `opendesign-balancer`。从 `new-api` 请求新名healthz成功、旧名失败；并非全部
+  账号失效。仓库及线上原Compose都已声明旧名别名，实际创建容器未保留它。
+- 恢复：09:57:36.016开始，保留原IP `172.18.0.8` 重连该容器的网络端点，补上
+  `account-pool-balancer` / `opendesign-balancer`；重连操作0.182秒（非精确
+  请求停机时长），09:57:36.259从NewAPI验证两个名字healthz均200。
+  **同一容器、同一镜像、零进程重启、161账号及config.json SHA256不变**；
+  未改渠道、密钥、代理、额度或业务功能，未重放用户失败请求。
+- 初步自然流量验收截至09:58:29 UTC共10条全部success/200，NewAPI最新
+  日志尾部无修复后的别名解析错误。继续截至09:59:36 UTC共29条完成，
+  **OpenCode Go 15条、Mistral 8条、OpenDesign 5条全部success/200**；
+  另1条Modal失败，对应2次已到上游的HTTP429，与此次DNS故障不同，未声称
+  该上游错误也已修复。其他号池无该窗口样本，不主动推理或冒称全量实测。
+- 无凭据的端点前后状态/配置哈希/验收回执保存在
+  `/home/ubuntu/backups/account-pool-balancer/20261108T095736Z-network-alias-repair/network-repair.json`
+  （目录0700、文件0600），属于正式故障审计资料，不是临时垃圾。
+- 同时发现当前容器 `Config.Healthcheck=null`；HTTP健康和Docker healthy不是
+  一回事。为避免恢复后再次中断，本次不重建来补监控；下次正常发布必须经
+  Compose保留healthcheck并按上述NewAPI双入口检查验收。仅补记录不再次部署。
 
 ## 当前部署：Mistral 银行卡列表接入 Python worker（2026-11-08 09:48 UTC，5d9b62c）
 
@@ -59,8 +90,10 @@
   不一致，原因是服务运行中持续写 `metadata.json`/`selection-counters.json`/
   请求日志，重复计算摘要每次变化；文件列表与逐文件比对除活跃写文件外一致，
   判定为活跃服务正常现象而非备份损坏，未用旧数据覆盖上线后写入。
-- 切换只覆盖 image，用户/环境/卷/端口/网络/健康参数不变。**161 账号**、
-  `proxyUrls`、`cardLines` 字段、Mistral 注册库均保留。
+- **09:57故障复核更正**：此前“切换只覆盖image、网络/健康参数不变”的记录
+  不准确；新容器遗漏了网络别名和healthcheck，导致NewAPI旧名渠道不可达，
+  本机/公网200未覆盖该链路。网络别名已按上节修复，healthcheck缺失单独保留
+  为后续正常发布检查项。**161账号**、`proxyUrls`、`cardLines`及注册库保留。
 - 验收：容器 running、`healthz=200`（首次尝试即通过）、restarts=0、
   revision 恢复为 `5d9b62c…`、日志 `odb listening on :8790`；
   容器内 `/usr/local/share/mistral-signup/signup/core/cards.py` 存在且
