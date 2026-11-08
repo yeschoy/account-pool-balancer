@@ -20,6 +20,7 @@ Mistral 注册机 CLI
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 import time
@@ -140,7 +141,7 @@ def cmd_test_proxy(a):
 def cmd_test_mail(a):
     from core.mailbox import ICloudMailbox
     mb = Mailbox.from_line(f"{a.email}----{a.mailbox}")
-    m = ICloudMailbox(mb, proxy="socks5h://127.0.0.1:10808")
+    m = ICloudMailbox(mb, proxy=os.environ.get("MIDA_PROXY") or None)
     j = m.fetch("all")
     if not j.get("ok"):
         print("FAIL:", j)

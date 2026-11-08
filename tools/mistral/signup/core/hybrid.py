@@ -304,7 +304,7 @@ class HybridRunner:
     def _wait_code(self, mailbox_url: str, email: str,
                    timeout_s: int = 240) -> Optional[str]:
         mbx = ICloudMailbox(Mailbox.from_line(f"{email}----{mailbox_url}"),
-                            proxy="socks5h://127.0.0.1:10808")
+                            proxy=__import__("os").environ.get("MIDA_PROXY") or None)
         base = set()
         j = mbx.fetch("all")
         if j.get("ok"):

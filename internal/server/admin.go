@@ -112,6 +112,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /api/config/reload", s.apiReload)
 	s.registerPerch(mux, a)
 	s.registerTokenHarbor(mux, a)
+	s.registerMistral(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {

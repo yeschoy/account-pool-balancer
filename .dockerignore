@@ -20,3 +20,7 @@ package-lock.json
 pnpm-lock.yaml
 tools/perch-register/.venv
 tools/perch-register/__pycache__
+tools/mistral/signup/data
+tools/mistral/signup/accounts.txt
+tools/mistral/**/__pycache__
+tools/mistral/capture
