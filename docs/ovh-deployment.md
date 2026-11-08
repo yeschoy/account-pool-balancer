@@ -32,6 +32,21 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
+
+- 用户明确要求去掉加密存储。`mistralsignupstore` 由 AES-GCM 改为明文 JSON：
+  文件 `/data/mistral-signup.json`，权限 0600，`cat` 可直接读出邮箱、密码与
+  API Key。`Open(path, secret)` 保留 secret 参数位置以兼容调用方，实际不再
+  使用；删除 `encrypt/decrypt/gcm` 与 `Public()` 遮罩方法。
+- 前端候选列表直接显示完整 Key 并可点击复制；新增 `.mr-*` 样式。
+- 验收：登录后 `POST /api/mistral/candidates` 返回 201 结构，落盘文件
+  `-rw------- odb odb`、`rows` 内含明文 password；`DELETE` 后 `rows: []`。
+  容器 running/healthy、restarts=0、healthz 200。
+- 镜像 `account-pool-balancer:release-1b253bf-20261108T072132Z`，构建复用
+  缓存；仅 `--force-recreate` Balancer 单服务，卷/端口/网络/配置未变。
+- 回退镜像沿用 `account-pool-balancer:rollback-20261108T065425Z`（9f375ef）。
+- 仍未验证：容器内真实注册（未配置 ZOOPROXY_* 代理池环境变量）；订阅扣款。
+
 ## 当前部署：Mistral 注册机界面骨架（2026-11-08 15:05 UTC，8ad33b5）
 
 - 用户要求先做「界面壳子」：把命令行注册机变成管理页面可操作的形态。新增
