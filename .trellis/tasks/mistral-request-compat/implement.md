@@ -16,5 +16,5 @@
 - 503已在现有日志确认上游JSON/internal_server_error/Service unavailable，原有两账号尝试，不通过修改账号策略或无关重启掩盖。
 - 422响应前缀恰64KiB，日志通用reason无法继续归因；当前截断未显式标记。先修复此Balancer诊断缺口：有界解析已有前缀的allowlisted loc/type与真实截断标志，不扩大请求兼容、不启用详情日志、不保留原始正文。
 - [x] 定向mock验证截断/嵌套JSON/隐私/零不确定重放、gofmt/diff check/build；修复7b652c9，集成并发master为65f2680后Mistral回归2.969s通过。
-- [ ] **部署协调阻塞**：固定流程在运行revision已变时安全中止，未构建/停服/切换。另一个操作换入无revision的latest镜像（缺wget导致health unhealthy、healthz200），后又恢复原9f375ef健康镜像；不能盲目覆盖并发发布。暂停其他发布并统一可追溯基线后再部署诊断补丁。
-- [ ] 稳定目标版本完整10分钟验收仍待补丁上线。本轮已复核06:48:29–06:58:29完整10分钟日志：170完成/143成功/26失败/1取消，13上游503+13未知422，跨并发切换，不冒充单版本验收。详见diagnostic-20261108.md；原NewAPI模型范围门不变。
+- [x] 原发布因并发revision变化安全中止；随后从NewAPI Docker preview恢复14条assistant.reasoning/string的extra_forbidden证据，新增无损别名修复49e8aa0并定向验证。正常合入已在线的明文注册/UI基线，以精确image+container guard和资源一致性核验重新发布217bf64；161账号/186注册记录/明文库/完整配置与运行参数均保留。
+- [x] 稳定217bf64上07:30:15–07:40:15 UTC完整10分钟：88完成/85成功/无422、2个官方3800上游503、1个既有600秒首响应超时504。新代码/服务验收通过，503第三方服务层仍未根治、不冒称彻底解决；原NewAPI模型范围门不变。详细证据/503分布/未主动重放边界见diagnostic-20261108.md。

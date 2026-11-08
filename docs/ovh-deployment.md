@@ -32,7 +32,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
+## 当前部署：Mistral DeepSeek assistant reasoning 兼容（2026-11-08 07:29 UTC，217bf64）
+
+- 用户要求解决422并排查持续503。已从NewAPI Docker stderr的有界body preview恢复14条`extra_forbidden / body.messages.4.assistant.reasoning`，input均string；之前Balancer JSONL与NewAPI SQL只剩通用错误，不能据此声称完全无证据。解析仅远端内存，未输出/保存正文或凭据。
+- 修复提交`49e8aa0`：仅精确DeepSeek Chat把assistant reasoning字符串/null作为reasoning_content别名，无损保留为原生thinking chunks；相同别名不重复、冲突/非法/重复字段本地拒绝，保留消息顺序、原答案、工具/ID/大数，其他模型/协议/角色不变。包含此前`7b652c9`的安全loc/type与真实截断诊断；不改重试次数/账号/TTL/限流/NewAPI规则。
+- 正常合并并保留并发注册UI、Docker wget与用户要求的明文mistral-signup.json，集成版本`217bf640b0c30e4fd4a1662977c33b02e36858ae`已推送master/功能分支；没有用旧AES源码覆盖线上明文存储。定向Mistral回归3.098s、集成后2.574s，以及gofmt/diff check/必要build通过，不跑重复全仓/race/vet，不主动生产推理。
+- 预检将无revision的当前运行镜像作为**精确image+container**回退基线（image`sha256:9f476a18df96b6ab2957ad7830ae8295fb6ee0ffab9a6b9a4c807e410d41e833`，不假称它对应某Git版本）；核对线上四资源SHA256与已合并源码一致、healthy/零重启、磁盘276.8GiB余量、注册无queued/running后才发布。先前因并发切换中止的7b652c9发布没有被冒称成功。
+- 干净git archive源码`/home/ubuntu/project/account-pool-balancer-releases/20261108T072646Z-217bf64`，固定镜像`account-pool-balancer:release-217bf64-20261108T072646Z`，ID`sha256:67e3ac3a5511572e52cdbd06f6cd7b17daca093add57ee1e7f32a4a53175f499`。复用既有脚本仅内存适配基线guard/明文注册库摘要；无存储格式变化，不额外复制敏感预检数据。完整一致备份后仅image覆盖切换，**161账号、186注册记录核心资产、routingSecret、完整config、Mistral明文注册库及原用户/环境/卷/端口/网络/健康/资源参数保留**。
+- 07:29:01.871本机验收，07:29:37.106 UTC真实未登录公网登录页/healthz/四资源200、保留?v=030230089e且SHA256逐项匹配，通过即反馈。healthy/零重启/无OOM，运行revision恢复可追溯。
+- **上线后完整10分钟观察**：07:30:15.069546–07:40:15.069546 UTC（北京时间15:30:15–15:40:15），按完成时间88请求、85成功、3失败，错误率3.41%、取消0；**无422/本地400**。失败为2次官方Mistral503/code3800（4条上游尝试事件）及1次首响应等待达到原600秒上限的504（单次、未换号重放）。83条流式成功；NewAPI同窗口84消费/3错误、82ok/done，完成时间与NewAPI记账时间边界不同，不强行凑齐85成功。成功input14331638/cached11713152=81.73%，绑定73hit/15miss，无忙溢出；只有2次503沿既有流程切号/两attempt。36次健康采样无异常，结束仍217bf64。历史错误请求未重放，不把无新422等同于原14条原样实测完成。
+- **503仍未根治**：已证实是api.mistral.ai返回3800/internal_server_error/Service unavailable，遍布10账号且各账号也有成功；此前31个最终503的第二次尝试没有成功样本。两段150秒被动形态采样分别17/20条全200，未捕获503请求形态，不能臆断具体预算/档位触发原因或以重启、加重试、静默丢参数宣称解决。仍需上游服务侧排查，不声称Balancer能保证消除第三方503。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 07:27:40.942–07:28:26.644（45.70秒） |
+| 停止请求 / 旧进程退出 | 07:28:26.731 / 07:28:26.847 |
+| 完整一致备份及核验 | 07:28:27.784–07:28:31.222 |
+| 切换请求 / 新容器启动 | 07:28:31.222 / 07:28:31.434 |
+| 首HTTP可达 / Docker healthy | 07:28:32.539 / 07:29:01.772 |
+| 本机验收 / 公网验收 | 07:29:01.871 / 07:29:37.106 |
+
+未采样精确停机；旧退出至首HTTP可达观测间隔约5.7秒，不把构建/健康等待当停机。受限正式备份`/home/ubuntu/backups/account-pool-balancer/20261108T072646Z-mistral-reasoning-217bf64/`保留完整data/原Compose与.env/日志/回执，data SHA256`2da52fa9275f1a13dbaa10f377fa3068401baf84002bfd0fa116edc70f73963d`；rollback镜像`account-pool-balancer:rollback-20261108T072646Z`保留发布前明文存储版本，不用9f375ef覆盖新注册数据。正式备份/源码/镜像及Trellis保留；中止发布的临时产物仍按_tmp_artifacts.md待同意清理。仅补记录不再次部署。
+
+## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
 - 用户明确要求去掉加密存储。`mistralsignupstore` 由 AES-GCM 改为明文 JSON：
   文件 `/data/mistral-signup.json`，权限 0600，`cat` 可直接读出邮箱、密码与
