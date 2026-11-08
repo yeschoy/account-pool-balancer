@@ -305,6 +305,13 @@
               <span class="hint">一行一个，格式：协议://用户:密码@IP:端口（zooproxy 也用这个格式）。账号按添加顺序依次分配，代理可重复使用。</span>
             </div>
             <div class="mr-grid-full">
+              <label for="ms-card-lines">银行卡列表（每行一张）</label>
+              <textarea id="ms-card-lines" rows="4" spellcheck="false" autocomplete="off"
+                placeholder="4633433883347213----05/28----913"></textarea>
+              <span class="hint">一行一张，格式：卡号----有效期----CVV（有效期支持 05/28、5/2028、0528）。保存时自动校验卡号位数与 Luhn 校验位，无效行会列在下方。</span>
+              <span id="ms-card-msg" class="muted small" role="status"></span>
+            </div>
+            <div class="mr-grid-full">
               <label for="ms-mailbox-proxy">接码代理（可选，留空直连）</label>
               <input id="ms-mailbox-proxy" placeholder="socks5://127.0.0.1:10808">
             </div>

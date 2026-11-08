@@ -22,6 +22,16 @@ type MistralSignup struct {
 	WorkerPython string `json:"workerPython"`
 	// Concurrency 是同时进行的注册数上限（当前实现固定为 1）。
 	Concurrency int `json:"concurrency"`
+
+	// ---- 已废弃字段 ----
+	// 旧的 zooproxy 模板模式。保留这些字段只为让严格解析（ReadJSON 的
+	// DisallowUnknownFields）能读入旧 config.json —— 写盘时会归一化为空值，
+	// 逻辑上不再使用。删除它们会让线上配置变成 "corrupt"。
+	DeprecatedProxyUserTemplate string   `json:"proxyUserTemplate,omitempty"`
+	DeprecatedProxyPassword     string   `json:"proxyPassword,omitempty"`
+	DeprecatedProxySIDs         []string `json:"proxySids,omitempty"`
+	DeprecatedProxyHostPort     string   `json:"proxyHostPort,omitempty"`
+	DeprecatedRegion            string   `json:"region,omitempty"`
 }
 
 // DefaultMistralSignup 只给非敏感默认值。
@@ -36,6 +46,12 @@ func (c *Config) normalizeMistralSignup() error {
 	if m.Concurrency <= 0 {
 		m.Concurrency = def.Concurrency
 	}
+	// 旧模板字段已废弃：读入后立即清空，下次写盘就不再出现
+	m.DeprecatedProxyUserTemplate = ""
+	m.DeprecatedProxyPassword = ""
+	m.DeprecatedProxySIDs = nil
+	m.DeprecatedProxyHostPort = ""
+	m.DeprecatedRegion = ""
 	return nil
 }
 

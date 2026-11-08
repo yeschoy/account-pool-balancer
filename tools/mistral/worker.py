@@ -36,6 +36,10 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
 环境变量：
   MISTRAL_PROXY_URLS   代理列表，换行分隔的完整 URL
                        （socks5://user:pass@ip:port，zooproxy 同格式）
+  MISTRAL_CARDS        银行卡列表，换行分隔，格式 卡号----有效期----CVV
+                       例如 4633433883347213----05/28----913
+                       仅包含通过位数与 Luhn 校验的行；供后续订阅步骤使用，
+                       当前注册流程不读取它。
   MISTRAL_WORKER_ROOT   代码根目录（默认上级目录）
 """
 from __future__ import annotations

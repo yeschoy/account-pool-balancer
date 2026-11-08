@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/mistralcards"
 	"account-pool-balancer/internal/mistralsignupstore"
 )
 
@@ -384,15 +385,31 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 	cmd.Stdin = bytes.NewReader(input)
 	// 把界面里配置的代理注入 worker 环境
 	env := os.Environ()
+	var stdout, stderr bytes.Buffer
 	// 代理列表：一行一个完整 URL
 	if urls := cfg.AllProxies(); len(urls) > 0 {
 		env = append(env, "MISTRAL_PROXY_URLS="+strings.Join(urls, "\n"))
+	}
+	// 银行卡列表：一行一张，格式 卡号----有效期----CVV
+	// 只注入解析通过的行，避免把明显的脏数据带进 worker。
+	if cards := cfg.AllCards(); len(cards) > 0 {
+		if parsed, errs := mistralcards.ParseLines(cards); len(parsed) > 0 {
+			lines := make([]string, 0, len(parsed))
+			for _, c := range parsed {
+				lines = append(lines, fmt.Sprintf("%s----%s----%s",
+					c.Number, c.Expiry(), c.CVV))
+			}
+			env = append(env, "MISTRAL_CARDS="+strings.Join(lines, "\n"))
+			if len(errs) > 0 {
+				// 只记条数，不记明文
+				fmt.Fprintf(&stderr, "mistral: %d card line(s) skipped (invalid)\n", len(errs))
+			}
+		}
 	}
 	if cfg.MailboxProxy != "" {
 		env = append(env, "MIDA_PROXY="+cfg.MailboxProxy)
 	}
 	cmd.Env = env
-	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -447,9 +464,13 @@ func tailLines(s string, n int) string {
 // admin-only and same-origin.
 func (s *Server) apiMistralSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Get().MistralSignup
+	parsed, cardErrs := mistralcards.ParseLines(cfg.AllCards())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings":     cfg,
 		"hasProxy":     cfg.HasProxy(),
+		"hasCards":     cfg.HasCards(),
+		"cardCount":    len(parsed),
+		"cardErrors":   cardErrorsJSON(cardErrs),
 		"accountCount": len(mustMistralList(s)),
 	})
 }
@@ -485,6 +506,19 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	next.ProxyURLs = urls
 
+	// 银行卡列表：去空行后原样保存。
+	// 解析失败的行仍然保留，这样用户能在页面上看到并修正，而不是被静默丢弃。
+	cards := make([]string, 0, len(next.CardLines))
+	for _, c := range next.CardLines {
+		if c = strings.TrimSpace(c); c != "" {
+			cards = append(cards, c)
+		}
+	}
+	next.CardLines = cards
+
+	// 解析结果只用于回显诊断，不影响保存
+	parsed, cardErrs := mistralcards.ParseLines(cards)
+
 	rev := int64(-1)
 	if in.ExpectedRevision != nil {
 		rev = *in.ExpectedRevision
@@ -498,10 +532,26 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg := s.cfg.Get().MistralSignup
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings": cfg,
-		"hasProxy": cfg.HasProxy(),
-		"revision": s.cfg.Get().Revision,
+		"settings":  cfg,
+		"hasProxy":  cfg.HasProxy(),
+		"hasCards":  cfg.HasCards(),
+		"cardCount": len(parsed),
+		"cardErrors": cardErrorsJSON(cardErrs),
+		"revision":  s.cfg.Get().Revision,
 	})
+}
+
+// cardErrorsJSON 把解析错误转成前端易用的结构。
+func cardErrorsJSON(errs []mistralcards.ParseError) []map[string]any {
+	out := make([]map[string]any, 0, len(errs))
+	for _, e := range errs {
+		out = append(out, map[string]any{
+			"line":   e.Line,
+			"raw":    e.Raw,
+			"reason": e.Reason,
+		})
+	}
+	return out
 }
 
 // apiMistralTestProxy checks one candidate proxy by asking a public IP service

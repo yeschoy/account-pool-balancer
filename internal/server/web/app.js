@@ -1674,6 +1674,9 @@ async function loadMistralSettings() {
     const st = d.settings || {};
     document.getElementById('ms-proxy-urls').value = (st.proxyUrls || []).join('\n');
     document.getElementById('ms-mailbox-proxy').value = st.mailboxProxy || '';
+    const cardBox = document.getElementById('ms-card-lines');
+    if (cardBox) cardBox.value = (st.cardLines || []).join('\n');
+    renderCardStatus(d);
     const msg = document.getElementById('mr-settings-msg');
     if (msg) {
       msg.textContent = d.hasProxy
@@ -1685,6 +1688,34 @@ async function loadMistralSettings() {
     const msg = document.getElementById('mr-settings-msg');
     if (msg) { msg.textContent = '读取设置失败：' + e.message; msg.className = 'error'; }
   }
+}
+
+// renderCardStatus 把银行卡解析结果显示在列表下方。
+// d 为 /api/mistral/settings 的响应（含 cardCount / cardErrors）。
+function renderCardStatus(d) {
+  const out = document.getElementById('ms-card-msg');
+  if (!out) return;
+  const count = d && typeof d.cardCount === 'number' ? d.cardCount : 0;
+  const errs = (d && d.cardErrors) || [];
+
+  if (!count && !errs.length) {
+    out.textContent = '银行卡未配置，订阅步骤会跳过';
+    out.className = 'muted small';
+    return;
+  }
+  if (!errs.length) {
+    out.textContent = `已识别 ${count} 张卡，全部通过校验`;
+    out.className = 'muted small';
+    return;
+  }
+  // 有错误：只显示行号与原因，不回显卡号明文
+  const detail = errs
+    .map((e) => `第 ${e.line} 行：${e.reason}`)
+    .slice(0, 5)
+    .join('；');
+  const more = errs.length > 5 ? ` 等 ${errs.length} 项` : '';
+  out.textContent = `已识别 ${count} 张卡，${errs.length} 行无效 —— ${detail}${more}`;
+  out.className = 'error small';
 }
 
 function parseSids(raw) {
@@ -1703,14 +1734,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const d = await api('PUT', '/api/mistral/settings', {
           settings: {
             proxyUrls: parseSids(document.getElementById('ms-proxy-urls').value),
+            cardLines: document.getElementById('ms-card-lines').value
+              .split('\n').map((x) => x.trim()).filter(Boolean),
             mailboxProxy: document.getElementById('ms-mailbox-proxy').value.trim(),
             workerPath: '',
             workerPython: '',
             concurrency: 1,
           },
         });
-        msg.textContent = d.hasProxy ? '已保存，代理已配置' : '已保存，但代理还不完整';
-        msg.className = d.hasProxy ? 'muted' : 'error';
+        renderCardStatus(d);
+        const cardErrs = (d.cardErrors || []).length;
+        if (cardErrs) {
+          msg.textContent = `已保存，但有 ${cardErrs} 行银行卡无效`;
+          msg.className = 'error';
+        } else {
+          msg.textContent = d.hasProxy ? '已保存，代理已配置' : '已保存，但代理还不完整';
+          msg.className = d.hasProxy ? 'muted' : 'error';
+        }
         toast('设置已保存');
       } catch (e) {
         msg.textContent = '保存失败：' + e.message;
