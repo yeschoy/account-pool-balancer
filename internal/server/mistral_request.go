@@ -182,8 +182,6 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 	if err := o.unique("messages", "thinking", "enable_thinking", "reasoning_effort", "reasoning", "seed", "random_seed", "logit_bias", "verbosity", "user", "safety_identifier", "prompt_cache_retention", "prompt_cache_key", "metadata"); err != nil {
 		return err
 	}
-	var enabled *bool
-	conflictingSwitches := false
 	if raw := o.get("thinking"); raw != nil {
 		thinking := scanMistralObject(raw)
 		if thinking == nil || len(thinking.fields) != 1 || thinking.fields[0].key != "type" {
@@ -193,24 +191,16 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		if kind != "enabled" && kind != "disabled" {
 			return errors.New("Mistral Chat thinking.type must be enabled or disabled")
 		}
-		value := kind == "enabled"
-		enabled = &value
 		o.set("thinking", nil)
 	}
 	if raw := o.get("enable_thinking"); raw != nil {
 		if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
 			return errors.New("Mistral Chat enable_thinking must be boolean")
 		}
-		value := bytes.Equal(raw, []byte("true"))
-		conflictingSwitches = enabled != nil && *enabled != value
-		enabled = &value
 		o.set("enable_thinking", nil)
 	}
 	nativeEffort := o.get("reasoning_effort")
-	effortRaw, err := mistralDeepSeekEffort(nativeEffort)
-	if err != nil {
-		return err
-	}
+	effortRaw := mistralDeepSeekEffort(nativeEffort)
 	if raw := o.get("reasoning"); raw != nil {
 		reasoning := scanMistralObject(raw)
 		if reasoning != nil {
@@ -221,10 +211,7 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		if reasoning == nil || len(reasoning.fields) != 1 || reasoning.fields[0].key != "effort" {
 			return errors.New("Mistral DeepSeek Chat reasoning requires only effort; unknown structures and additional fields cannot be preserved")
 		}
-		alias, err := mistralDeepSeekEffort(reasoning.get("effort"))
-		if err != nil {
-			return err
-		}
+		alias := mistralDeepSeekEffort(reasoning.get("effort"))
 		if nativeEffort != nil && mistralString(effortRaw) != mistralString(alias) {
 			return errors.New("Mistral DeepSeek Chat reasoning.effort conflicts with explicit reasoning_effort")
 		}
@@ -233,22 +220,8 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		}
 		o.set("reasoning", nil)
 	}
-	// A valid explicit tier is authoritative; client-default switches must not
-	// reject or lower it. Missing/null effort still defers to explicit switches.
-	if mistralString(effortRaw) == "" {
-		if conflictingSwitches {
-			return errors.New("Mistral Chat thinking and enable_thinking conflict without an explicit reasoning effort")
-		}
-		if enabled != nil {
-			effortRaw = []byte(`"none"`)
-			if *enabled {
-				effortRaw = []byte(`"high"`) // explicit compatibility default, not a token budget
-			}
-		} else if effortRaw == nil {
-			// Default only omitted controls; preserve explicit tiers and native null.
-			effortRaw = []byte(`"high"`)
-		}
-	}
+	// The operator's supported tiers are low/high/max. Missing or unsupported
+	// effort always becomes high; compatibility switches cannot emit none.
 	// Write once: a missing native field is appended, not updated in-place.
 	if !bytes.Equal(effortRaw, nativeEffort) {
 		o.set("reasoning_effort", effortRaw)
@@ -303,17 +276,12 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 	return nil
 }
 
-func mistralDeepSeekEffort(raw []byte) ([]byte, error) {
-	if raw == nil || bytes.Equal(raw, []byte("null")) {
-		return raw, nil
-	}
+func mistralDeepSeekEffort(raw []byte) []byte {
 	switch mistralString(raw) {
-	case "none", "low", "high", "xhigh", "max":
-		return raw, nil
-	case "medium":
-		return []byte(`"high"`), nil
+	case "low", "high", "max":
+		return raw
 	default:
-		return nil, errors.New("Mistral DeepSeek Chat reasoning_effort must be none/low/high/xhigh/max (medium maps to high)")
+		return []byte(`"high"`)
 	}
 }
 

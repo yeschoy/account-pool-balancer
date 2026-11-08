@@ -14,13 +14,13 @@ import (
 func TestMistralThinkingParameters(t *testing.T) {
 	for _, tc := range []struct{ fields, want string }{
 		{`"thinking":{"type":"enabled"}`, "high"},
-		{`"thinking":{"type":"disabled"}`, "none"},
+		{`"thinking":{"type":"disabled"}`, "high"},
 		{`"enable_thinking":true`, "high"},
-		{`"enable_thinking":false`, "none"},
+		{`"enable_thinking":false`, "high"},
 		{`"thinking":{"type":"enabled"},"enable_thinking":true,"reasoning_effort":null`, "high"},
-		{`"thinking":{"type":"disabled"},"enable_thinking":false,"reasoning_effort":"none"`, "none"},
+		{`"thinking":{"type":"disabled"},"enable_thinking":false,"reasoning_effort":"none"`, "high"},
 		{`"enable_thinking":true,"reasoning_effort":"medium"`, "high"},
-		{`"enable_thinking":false,"reasoning_effort":null`, "none"},
+		{`"enable_thinking":false,"reasoning_effort":null`, "high"},
 	} {
 		body := []byte(`{` + tc.fields + `,"model":"deepseek-v4-1-flash-1017","messages":[]}`)
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
@@ -29,7 +29,7 @@ func TestMistralThinkingParameters(t *testing.T) {
 			t.Fatalf("%s: %s %v", tc.fields, out, err)
 		}
 	}
-	for _, effort := range []string{"low", "high", "xhigh", "max"} {
+	for _, effort := range []string{"low", "high", "max"} {
 		body := []byte(fmt.Sprintf(`{"model":"deepseek-v4-1-flash-1017","reasoning_effort":%q,"thinking":{"type":"enabled"}}`, effort))
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
 		if err != nil || !bytes.Contains(out, []byte(`"reasoning_effort":"`+effort+`"`)) {
@@ -41,9 +41,7 @@ func TestMistralThinkingParameters(t *testing.T) {
 func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 	e := newMistralEnv(t)
 	for _, tc := range []struct{ fields, message string }{
-		{`"thinking":{"type":"enabled"},"enable_thinking":false`, "conflict"},
-		{`"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning_effort":null`, "conflict"},
-		{`"thinking":{"type":"disabled"},"enable_thinking":true,"reasoning":{"effort":null}`, "conflict"},
+
 		{`"thinking":{"type":"enabled","budget_tokens":1024}`, "budgets"},
 		{`"thinking":{"type":"disabled","budget_tokens":null}`, "budgets"},
 		{`"thinking":{"type":"enabled","type":"disabled"}`, "requires only"},
@@ -52,16 +50,9 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"thinking":true`, "requires only"},
 		{`"enable_thinking":null`, "boolean"},
 		{`"enable_thinking":"false"`, "boolean"},
-		{`"reasoning_effort":"minimal"`, "reasoning_effort"},
-		{`"reasoning_effort":5`, "reasoning_effort"},
-		{`"reasoning":{"effort":"low"},"reasoning_effort":"high"`, "conflict"},
-		{`"reasoning_effort":null,"reasoning":{"effort":"high"}`, "conflict"},
-		{`"reasoning_effort":"high","reasoning":{"effort":null}`, "conflict"},
 
-		{`"reasoning":{"effort":"minimal"}`, "reasoning_effort"},
-		{`"reasoning":{"effort":42}`, "reasoning_effort"},
-		{`"reasoning":{"effort":{}}`, "reasoning_effort"},
-		{`"reasoning":{"effort":true}`, "reasoning_effort"},
+		{`"reasoning":{"effort":"low"},"reasoning_effort":"high"`, "conflict"},
+
 		{`"reasoning":{"effort":"high","summary":"private-body"}`, "only effort"},
 		{`"reasoning":{"summary":"private-body"}`, "only effort"},
 		{`"reasoning":{}`, "only effort"},
