@@ -33,6 +33,14 @@ func newMistralEnv(t *testing.T) *mistralEnv {
 	t.Helper()
 	e := &mistralEnv{}
 	e.up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/vibe/whoami" {
+			fmt.Fprint(w, `{"plan_type":"API","plan_name":"FREE"}`)
+			return
+		}
+		if r.URL.Path == "/v1/billing/budget" {
+			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":25,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+			return
+		}
 		if r.URL.Path == "/v1/models" {
 			fmt.Fprint(w, `{"object":"list","data":[{"id":"m","base_model_id":"ancestor-not-an-alias"}]}`)
 			return

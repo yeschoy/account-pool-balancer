@@ -21,6 +21,8 @@ tokenharbor-signup.json
 /tools/mistral/**/*.pyc
 # 临时产物记录
 /_tmp_artifacts.md
+# Trellis 本机会话指针；任务/规格/日志仍提交
+/.trellis/.runtime/
 # node / pnpm
 node_modules/
 package-lock.json

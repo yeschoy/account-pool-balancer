@@ -446,7 +446,7 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 		return "not-entitled" // not on this account's plan
 	}
 	if a.Provider == config.ProviderMistral {
-		return "" // no documented standard-key balance; never apply OpenDesign funding
+		return "" // Mistral budget ranks candidates; never apply OpenDesign funding or change PAYG
 	}
 	if a.Provider == config.ProviderOllama {
 		// Ollama credits: the included allowance, then purchased credits
@@ -681,7 +681,13 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
 	if a.Provider == config.ProviderMistral {
-		return s // unknown quota is not zero or an invented wallet balance
+		if snap != nil && snap.CatalogSource == quota.ResponseBindingSource(cfg, a) && snap.FreshMistral(now, stale) && snap.Mistral.Budget.Total > 0 {
+			b := snap.Mistral.Budget
+			s.Known, s.Used = true, min(100, b.UsedPercent)
+			s.Soon = []time.Time{b.ResetsAt}
+			s.Pace = max(0, 100-s.Used) / max(b.ResetsAt.Sub(now).Hours(), 1)
+		}
+		return s // unknown/stale budgets are never invented zero balances
 	}
 	if config.IsOpenCode(a.Provider) {
 		if snap != nil && snap.OpenCode.Fresh(now, stale) {

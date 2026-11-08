@@ -519,8 +519,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rootCfg := cfg
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
-	if rec.Provider == config.ProviderTokenHarbor {
-		detailEnabled = cfg.TokenHarbor.DetailLog
+	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral && cfg.Mistral.DetailLog != nil {
+		if rec.Provider == config.ProviderTokenHarbor {
+			detailEnabled = cfg.TokenHarbor.DetailLog
+		} else {
+			detailEnabled = *cfg.Mistral.DetailLog
+		}
 		if !detailEnabled {
 			// No bytes have been written yet. Do not capture this pool even
 			// when the shared detail switch is on for other providers.

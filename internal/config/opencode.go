@@ -185,7 +185,14 @@ func (c *Config) ForProvider(provider string) *Config {
 	var r *Routing
 	switch provider {
 	case ProviderMistral:
-		r = c.Mistral.Routing
+		out := *c
+		if c.Mistral.Routing != nil {
+			out.Routing = *c.Mistral.Routing
+		}
+		if c.Mistral.Quota != nil {
+			out.Quota = *c.Mistral.Quota
+		}
+		return &out
 	case ProviderOpenCodeZen:
 		r = c.OpenCode.ZenRouting
 	case ProviderOpenCodeGo:

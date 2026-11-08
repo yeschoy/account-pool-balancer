@@ -47,6 +47,38 @@ func TestMistralProviderMigrationAndRouting(t *testing.T) {
 	}
 }
 
+func TestMistralPollingOverrides(t *testing.T) {
+	c := Default()
+	if c.Mistral.ModelInterval() != 600 || c.Mistral.DetailLog != nil || c.ForProvider(ProviderMistral).Quota != c.Quota {
+		t.Fatal("legacy polling/logging defaults changed")
+	}
+	q := Quota{Enabled: false, IntervalSec: 120, Concurrency: 2, StaleSec: 600}
+	c.Mistral.Quota = &q
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.ForProvider(ProviderMistral).Quota != q || c.ForProvider(ProviderTokenHarbor).Quota != c.Quota {
+		t.Fatal("polling override lost or crossed pools without routing override")
+	}
+	cloned := c.Clone()
+	cloned.Mistral.Quota.IntervalSec = 300
+	if c.Mistral.Quota.IntervalSec != 120 {
+		t.Fatal("polling override aliases clone")
+	}
+	for _, n := range []int{-1, 10, 86401} {
+		bad := c.Clone()
+		bad.Mistral.ModelSyncSec = &n
+		if bad.Normalize() == nil {
+			t.Fatal("invalid catalog interval accepted")
+		}
+	}
+	bad := c.Clone()
+	bad.Mistral.Quota.StaleSec = 1
+	if bad.Normalize() == nil {
+		t.Fatal("invalid independent quota settings accepted")
+	}
+}
+
 func TestMistralValidation(t *testing.T) {
 	for _, key := range []string{"mstrl_mock-key", "opaque-key-without-prefix", "sk-overlapping-prefix"} {
 		if !ValidRuntimeKeyFor(ProviderMistral, key) {

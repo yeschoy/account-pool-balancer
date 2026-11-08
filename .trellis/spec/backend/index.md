@@ -1,5 +1,7 @@
 # Account Pool Backend Contracts
 
+**Before adding or completing any provider, read [Provider onboarding gates](provider-onboarding.md).** Account/quota/routing/rules/logs/test/UI persistence and isolation are mandatory, not optional follow-up work.
+
 Read [OpenDesign diagnostics contracts](opendesign.md) before changing its
 quota reads, error evidence, refresh API or account status projections.
 Read [OpenCode integration contracts](opencode.md) before modifying config,
@@ -10,6 +12,7 @@ Read [Explicit saved API-key reads](tokenharbor-keys.md) before changing
 TokenHarbor Key reveal/copy or its admin credential boundary.
 Read [Registration profiles and workers](tokenharbor-registration-identity.md)
 for saved browser identities, completion order, task chronology and1–5 workers.
+Read [Mistral quota and settings](mistral-quota.md) before changing Mistral budget reads, refresh/status projections, polling, routing or settings isolation.
 Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
 assistant reasoning normalization or user-authorized admin Key/proxy display.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,

@@ -310,7 +310,7 @@ function renderPoolTabs() {
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
   $('#oc-batch [data-oc-batch="keys"]').classList.toggle('hidden', !isTokenHarbor());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '额度（未知）', tokenharbor: '周限 / 月限余额', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
     wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
@@ -551,9 +551,25 @@ function openDesignFundingHTML(a) {
   return html;
 }
 
+function mistralQuotaHTML(a) {
+  const m = a.quota?.mistral, b = m?.budget;
+  const type = m?.keyType === 'API' ? 'Studio API' : m?.keyType === 'CHAT' ? 'Vibe' : 'Key 类型未知';
+  const fresh = !!a.quotaFresh && !m?.error && !!b && Date.parse(b.resetsAt) > Date.now();
+  let text = `<span class="badge ${fresh ? 'ok' : 'warn'}">${esc(type)}${m?.plan ? ' · ' + esc(m.plan) : ''}</span>`;
+  if (b) {
+    const money = (v) => esc(b.currency) + ' ' + Number(v).toFixed(2);
+    text += `<div class="acc-sub">${fresh ? '' : '上次'}约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
+    if (!fresh) text += '<div class="acc-sub">当前额度未知/过期，以上历史值不可视为当前余额</div>';
+    text += `<div class="acc-sub">PAYG ${b.payg === true ? '官网已开启' : b.payg === false ? '官网未开启' : '状态未知'}（本服务不代改）</div>`;
+  } else text += '<div class="acc-sub">套餐额度未知，点击刷新额度读取</div>';
+  if (m?.error) text += `<div class="acc-sub">${esc(m.error)}</div>`;
+  if (m?.checkedAt) text += `<div class="acc-sub">检测 ${esc(fmtTime(m.checkedAt))}${m.at ? ' · 上次成功 ' + esc(fmtTime(m.at)) : ''}</div>`;
+  return text + '<div class="acc-sub">按百分比估算，非钱包余额；同组织同类预算共享，不按 Key 重复累加</div>';
+}
+
 function windowsHTML(a) {
   if (a.provider === 'opendesign') return openDesignQuotaHTML(a);
-  if (a.provider === 'mistral') return '<span class="badge">仅 API Key</span><div class="acc-sub">余额未知 · 仅同步模型目录</div><div class="acc-sub">限流按 Retry-After 冷却，同工作区 Key 可能共享限额</div>';
+  if (a.provider === 'mistral') return mistralQuotaHTML(a);
   if (a.provider === 'tokenharbor') return tokenHarborQuotaHTML(a);
   if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
   if (a.provider === 'ollama') return ollamaQuotaHTML(a);
@@ -690,7 +706,7 @@ $('#oc-batch').addEventListener('click', async (ev) => {
         const path = `/api/accounts/${encodeURIComponent(a.id)}`;
         if (action === 'enable' || action === 'disable') await api('PUT', path, { enabled: action === 'enable' });
         else if (action === 'delete') await api('DELETE', path);
-        else { const result = await api('POST', path + '/' + ({ refresh: 'refresh-quota', proxy: 'test-proxy', recover: 'recover' }[action])); if (action === 'proxy' && !result.ok) throw new Error(result.error); }
+        else { const result = await api('POST', path + '/' + ({ refresh: 'refresh-quota', proxy: 'test-proxy', recover: 'recover' }[action])); if (action === 'proxy' && !result.ok) throw new Error(result.error); if (action === 'refresh' && result.ok === false) throw new Error(result.message || '额度读取失败'); }
         completed++;
       } catch (e) { errors.push(a.name + ': ' + e.message); }
     }
@@ -795,7 +811,7 @@ async function accountAction(a, act) {
       case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
       case 'refresh': {
         const result = await api('POST', `/api/accounts/${a.id}/refresh-quota`);
-        if (a.provider === 'opendesign') toast(result.message || '检测完成，请查看分项结果', result.ok ? undefined : 'error');
+        if (a.provider === 'opendesign' || a.provider === 'mistral') toast(result.message || '检测完成，请查看分项结果', result.ok ? undefined : 'error');
         else toast(a.provider === 'tokenharbor' ? '套餐、覆盖模型与周用量已刷新' : '额度已刷新');
         break;
       }
@@ -913,7 +929,7 @@ async function testAccount(a) {
     $('#test-out').textContent = JSON.stringify(r, null, 2);
   };
   await modal({ title: '测试 ' + a.name, wide: true,
-    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : (a.provider === 'tokenharbor' || a.provider === 'mistral') ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
+    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : a.provider === 'mistral' ? '模型列表（套餐额度请点刷新额度）' : a.provider === 'tokenharbor' ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
       <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : a.provider === 'mistral' ? 'deepseek-v4-1-flash-1017' : (a.provider === 'modal' || a.provider === 'tokenharbor' || a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '该账号模型列表中的首个模型（按原生协议）' : 'deepseek-v4.1-flash')}" size="34"></div>
       <pre id="test-out" class="mt">点击下方按钮开始</pre>`,
     buttons: [{ label: '关闭', value: 'c' }, { label: '真实请求', value: 'inf', action: async () => { await run(true); return false; } },
@@ -1113,7 +1129,7 @@ const OPENCODE_FIELDS = [
   ['goPolicyCooldownSec', 'Go 政策拒绝暂停（秒）', 'int', '1–86400；不换号/出口，不清空订阅额度，可人工恢复'],
 ];
 const openCodeFields = () => OPENCODE_FIELDS.filter(([k]) => pool === 'opencode-go' ? !k.startsWith('zen') && k !== 'goFallbackGroup' : !['goEgressCheckUrl','goEgressCheckSec','goPolicyCooldownSec'].includes(k));
-const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare'].includes(k)) : ROUTING_FIELDS;
+const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback') : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1124,7 +1140,7 @@ const LOG_FIELDS = [
   ['retentionDays', '日志保留天数（默认7天）', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
   ['detail', '详细日志', 'bool', '记录请求头/体、响应头/体（凭据已脱敏），排查完请关闭'], ['maxDetails', '详细日志条数', 'int'], ['detailBodyKB', '单个体上限（KB）', 'int', '超出时保留头尾各一半、省略中间；内存中的详细日志总量上限 256MB，超出自动淘汰最旧的'],
 ];
-const logFields = () => isTokenHarbor() ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
+const logFields = () => (isTokenHarbor() || isMistral()) ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
 function renderForm(el, fields, obj, prefix) {
   el.innerHTML = fields.map(([k, label, type, extra, hint]) => {
     const id = `${prefix}-${k}`;
@@ -1164,6 +1180,7 @@ const matchSummary = (w) => {
   const parts = [];
   if ((w.statuses || []).length) parts.push(`状态码 ${w.statuses.join(' / ')}`);
   if ((w.bodyContains || []).length) parts.push(`正文含 ${w.bodyContains.map((x) => '“' + x + '”').join(' 或 ')}`);
+  if ((w.bodyCodes || []).length) parts.push(`错误码 ${w.bodyCodes.join(' / ')}（精确匹配）`);
   Object.entries(w.headers || {}).forEach(([k, v]) => parts.push(v ? `响应头 ${k} 含 “${v}”` : `带响应头 ${k}`));
   return parts.length ? parts.map((x) => `<div>${esc(x)}</div>`).join('') : '<span class="muted">（无条件，不会命中）</span>';
 };
@@ -1227,6 +1244,7 @@ async function editRule(kind, arr, idx) {
     <div class="sect">命中条件（多项同时满足；每项内部任一即可）</div>
     <label>状态码</label><input id="r-st" value="${esc((w.statuses || []).join(', '))}" placeholder="如 429, 503，逗号分隔"><span class="hint">留空表示不限状态码</span>
     <label>正文包含</label><textarea id="r-body" rows="3" placeholder="每行一个关键字，不区分大小写">${esc((w.bodyContains || []).join('\n'))}</textarea><span class="hint">响应正文含其中任意一个即命中</span>
+    <label>错误码（精确匹配）</label><textarea id="r-code" rows="2" placeholder="每行一个，如 3800">${esc((w.bodyCodes || []).join('\n'))}</textarea><span class="hint">匹配正文顶层 code / errorCode，和其他条件同时满足；不读取任意正文路径</span>
     <label>响应头</label><textarea id="r-hdr" rows="2" placeholder="每行一个：Header: 子串（子串可省略）">${esc(hdrs)}</textarea>
     ${isErr ? `<div class="sect">处理方式</div>
     <label>作用范围</label><select id="r-scope">${opts(SCOPES, r.scope)}</select>
@@ -1253,8 +1271,8 @@ async function editRule(kind, arr, idx) {
       if (statuses.some((n) => !Number.isInteger(n) || n < 100 || n > 599)) throw new Error('状态码必须是 100–599 的整数');
       const headers = {};
       lines($('#r-hdr').value).forEach((l) => { const k = l.indexOf(':'); if (k < 0) headers[l] = ''; else headers[l.slice(0, k).trim()] = l.slice(k + 1).trim(); });
-      out.when = { statuses: statuses.length ? statuses : undefined, bodyContains: lines($('#r-body').value).length ? lines($('#r-body').value) : undefined, headers: Object.keys(headers).length ? headers : undefined };
-      if (!statuses.length && !out.when.bodyContains && !out.when.headers) throw new Error('至少设置一个命中条件');
+      out.when = { statuses: statuses.length ? statuses : undefined, bodyContains: lines($('#r-body').value).length ? lines($('#r-body').value) : undefined, bodyCodes: lines($('#r-code').value).length ? lines($('#r-code').value) : undefined, headers: Object.keys(headers).length ? headers : undefined };
+      if (!statuses.length && !out.when.bodyContains && !out.when.bodyCodes && !out.when.headers) throw new Error('至少设置一个命中条件');
       if (isErr) {
         out.scope = $('#r-scope').value; out.action = $('#r-action').value;
         out.refreshQuota = $('#r-rq').checked || undefined;
@@ -1306,6 +1324,8 @@ async function loadSettings() {
   const s = settingsCache.settings;
   $('#mistral-settings').classList.toggle('hidden', !isMistral());
   $('#mistral-base').value = s.mistral?.baseUrl || 'https://api.mistral.ai/v1';
+  $('#mistral-sync').value = s.mistral?.modelSyncSec ?? 600;
+  $('#mistral-detail-log').checked = s.mistral?.detailLog ?? s.logs.detail;
   $('#tokenharbor-settings').classList.toggle('hidden', !isTokenHarbor());
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
   $('#th-sync').value = s.tokenHarbor?.modelSyncSec ?? 1800;
@@ -1335,7 +1355,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
-  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim() };
+  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), detailLog: $('#mistral-detail-log').checked };
   if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});

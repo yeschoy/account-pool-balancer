@@ -75,6 +75,7 @@ type Snapshot struct {
 	OpenDesign  *OpenDesignState  `json:"openDesign,omitempty"`
 	OpenCode    *opencode.State   `json:"opencode,omitempty"`
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
+	Mistral     *MistralState     `json:"mistral,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
@@ -324,6 +325,7 @@ func (s *Snapshot) clone() *Snapshot {
 	}
 	c.OpenCode = s.OpenCode.Clone()
 	c.TokenHarbor = s.TokenHarbor.clone()
+	c.Mistral = s.Mistral.clone()
 	c.Windows = append([]Window(nil), s.Windows...)
 	if s.Catalog != nil {
 		c.Catalog = make(map[string]bool, len(s.Catalog))
@@ -793,6 +795,13 @@ func (p *Poller) dispatch(ctx context.Context) {
 	now := time.Now()
 	p.mu.Lock()
 	inFlight := len(p.running)
+	mistralInFlight := 0
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderMistral && p.running[a.ID] != nil {
+			mistralInFlight++
+		}
+	}
+	mistralLimit := cfg.ForProvider(config.ProviderMistral).Quota.Concurrency
 	var urgent, due []config.Account
 	for _, a := range cfg.Accounts {
 		if config.IsOpenCode(a.Provider) && !cfg.OpenCode.Enabled {
@@ -801,7 +810,7 @@ func (p *Poller) dispatch(ctx context.Context) {
 		if a.Provider == config.ProviderTokenHarbor && cfg.TokenHarbor.AccountInterval() == 0 && !p.urgent[a.ID] {
 			continue
 		}
-		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.Quota.Enabled && a.Provider != config.ProviderTokenHarbor && !p.urgent[a.ID]) {
+		if a.RuntimeKey == "" || p.running[a.ID] != nil || (!cfg.ForProvider(a.Provider).Quota.Enabled && a.Provider != config.ProviderTokenHarbor && !p.urgent[a.ID]) {
 			continue
 		}
 		s := p.snaps[a.ID]
@@ -812,8 +821,16 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 	}
 	for _, a := range append(urgent, due...) {
-		if inFlight >= cfg.Quota.Concurrency {
+		if inFlight >= max(cfg.Quota.Concurrency, mistralLimit) {
 			break
+		}
+		if a.Provider == config.ProviderMistral {
+			if mistralInFlight >= mistralLimit {
+				continue
+			}
+			mistralInFlight++
+		} else if inFlight >= cfg.Quota.Concurrency {
+			continue
 		}
 		inFlight++
 		p.running[a.ID] = make(chan struct{})
@@ -858,7 +875,7 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 		return p.fetchTokenHarbor(ctx, p.Cfg(), a, true)
 	}
 	if a.Provider == config.ProviderMistral {
-		return p.fetchCatalogOnlyForce(ctx, p.Cfg(), a, true)
+		return p.fetchMistral(ctx, p.Cfg(), a, true)
 	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
@@ -953,8 +970,10 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchOpenCode(ctx, cfg, a)
 	case config.ProviderOllama:
 		return p.fetchOllama(ctx, cfg, a)
-	case config.ProviderModal, config.ProviderMistral:
+	case config.ProviderModal:
 		return p.fetchCatalogOnly(ctx, cfg, a)
+	case config.ProviderMistral:
+		return p.fetchMistral(ctx, cfg, a, false)
 	case config.ProviderPerch:
 		return p.fetchPerch(ctx, cfg, a)
 	}
@@ -1189,7 +1208,12 @@ func (p *Poller) fetchCatalogOnlyForce(ctx context.Context, cfg *config.Config, 
 	// credentials") while its request paths answer "unknown inference model"
 	// to a bad token as well, so a request can't tell a dead token from a
 	// wrong model name.
-	if force || catalogDue(s, now, a.RuntimeKey != "", a.Provider != config.ProviderMistral) {
+	due := catalogDue(s, now, a.RuntimeKey != "", true)
+	if a.Provider == config.ProviderMistral {
+		every := time.Duration(cfg.Mistral.ModelInterval()) * time.Second
+		due = s.CatalogAt.IsZero() || every > 0 && now.Sub(s.CatalogAt) >= every
+	}
+	if force || due {
 		fetch := FetchCatalogFull
 		if a.Provider == config.ProviderMistral {
 			fetch = FetchMistralCatalog

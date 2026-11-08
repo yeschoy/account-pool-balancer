@@ -37,7 +37,7 @@ const (
 type Match struct {
 	Statuses     []int    `json:"statuses,omitempty"`
 	BodyContains []string `json:"bodyContains,omitempty"`
-	// BodyCodes matches an exact top-level JSON errorCode or code value.
+	// BodyCodes matches an exact top-level JSON errorCode or code string/number.
 	BodyCodes []string `json:"bodyCodes,omitempty"`
 	// Headers maps a response header name to a case-insensitive substring
 	// its value must contain; "" only requires the header to be present.
@@ -487,15 +487,27 @@ func (m Match) matches(status int, lowerBody string, h http.Header) bool {
 	}
 	if len(m.BodyCodes) > 0 {
 		var body struct {
-			ErrorCode string `json:"errorCode"`
-			Code      string `json:"code"`
+			ErrorCode json.RawMessage `json:"errorCode"`
+			Code      json.RawMessage `json:"code"`
 		}
 		if json.Unmarshal([]byte(lowerBody), &body) != nil {
 			return false
 		}
+		value := func(raw json.RawMessage) string {
+			var text string
+			if json.Unmarshal(raw, &text) == nil {
+				return text
+			}
+			var number json.Number
+			if json.Unmarshal(raw, &number) == nil {
+				return number.String()
+			}
+			return ""
+		}
+		errorCode, bodyCode := value(body.ErrorCode), value(body.Code)
 		found := false
 		for _, code := range m.BodyCodes {
-			if strings.EqualFold(code, body.ErrorCode) || strings.EqualFold(code, body.Code) {
+			if strings.EqualFold(code, errorCode) || strings.EqualFold(code, bodyCode) {
 				found = true
 				break
 			}

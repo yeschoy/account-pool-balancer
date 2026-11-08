@@ -6,7 +6,7 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 1. 管理台选择 **Mistral 号池 → 账号**，手动添加或批量导入 API Key。每行 `API Key[,名称[,代理URL]]`。不需要控制密钥；按用户要求，已登录管理员可在账号列表/编辑窗口直接查看、复制完整 Key 和代理地址。它们沿用 config.json 明文存储，不新增加密或迁移密码/Cookie；接口仍需管理员会话并禁止缓存，普通日志继续脱敏。
 2. 在本池创建下游密钥，默认分组 `mistral`。下游使用网关地址和这把密钥，不使用上游 Key。分组与导入密钥均隔离，不能借其他池账号。
-3. **路由设置**可修改本池 API Base（必须含 `/v1`）、选号、粘性、并发等待与错误/重试规则。未单独保存路由前，继承 OpenDesign 现有路由配置；保存后独立生效，不改变 OpenDesign。
+3. **路由设置**可修改本池 API Base（必须含 `/v1`）、选号、粘性/TTL/额外会话头、满载等待、单请求账号上限、健康阈值、流式/非流式超时、请求体上限、模型缓存及独立错误/重试规则（含精确错误码匹配）。额度轮询的开关/间隔/并发/快照过期、目录刷新间隔、详情日志也可配置。首次保存前继承原共享路由/轮询/详情日志；Mistral 保存后路由与轮询独立，不改变 OpenDesign。目录周期默认600秒，0关闭周期更新但首次/手动读取仍可用；轮询关闭不影响手动刷新。日志保留/容量仍为全局共享，UI明确提示。
 
 `mstrl_` 开头的 Key 自动识别为 Mistral；无前缀或其他形态的官方 Key 请显式填写 `provider: "mistral"`。本池导入界面会自动携带该字段。重复导入同一 Key 不重复建号。
 
@@ -33,7 +33,7 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整历史，`previous_response_id` 必须省略或 null，`store` 必须省略、false 或 null。不建立服务器端 Responses 续传绑定。
 
-当前号池仍仅同步 `/v1/models`，额度展示为未知，尚未接入下面已核实的套餐读取接口。模型目录失败保留上次成功值与时间；更换 Key / Base / 代理后失效旧快照。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
+“刷新额度”与自动轮询现已同时接入模型目录和本 Key 对应的套餐预算；预算沿现有 Snapshot/metadata 保存，页面显示币种、约剩余/总额、已用百分比、重置/检测时间和 PAYG 状态。失败保留上次值但标为历史/未知，403不把仍可推理的Key判失效；目录失败与预算失败分别记录。更换 Key / Base / 代理后失效旧快照，晚返回不能复活旧数据。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。真实且未过期的预算参与 smart/least-used/pace 的余量排序；未知不伪造零，不把 Mistral 预算放进 OpenDesign 付费分类，不代改官网 PAYG 或凭预算假造钱包余额。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
 
 ### API Key 读取套餐额度（2026-11-08 实测）
 
@@ -43,7 +43,7 @@ Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整�
 - `GET https://api.mistral.ai/v1/billing/subscription`：读取 `plan_name`、`payg_enabled`、`vibe_payg_enabled` 等套餐信息，不是剩余额度本身。
 - `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。Studio 使用 `api_budget`，Vibe 使用 `vibe_budget`；剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
 
-本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。尚未验证所有账号或接入自动刷新。
+本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。真实接口采样未覆盖全部账号；随后已接入现有自动/手动刷新。接入代码、失败/持久化及本地假数据浏览器已验证，生产生效仍须部署后另行验收。
 
 官方 CLI 注明 budget 可能需要 `see_org_inference_usage` 权限；403/缺字段/失败应显示未知，不能当作零。企业 `GET /v1/admin/usage` 是另一套 Admin Key 权限（本次普通 Key 为401）；第三方声称的 `/v1/billing/usage` 本次为404，不能据此否定已成功的 budget 接口。探针必须匹配 Go SOCKS 远端解析语义：curl 对 `socks5://` 默认本地解析，本轮曾出现 TLS EOF，改为同一代理的远端 DNS 探测后200；未改线上代理配置、直连回退或绕过权限。
 
@@ -52,6 +52,8 @@ Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整�
 参考：[官方文档](https://docs.mistral.ai/)、[Responses](https://docs.mistral.ai/inference/conversations/responses)、[用量和限制](https://docs.mistral.ai/admin/billing-usage/usage-limits)。
 
 ## 验证
+
+2026-11-08补齐额度与路由：全仓Go normal/race/vet与Node行为/语法、必要build通过；新增Mistral定向测试覆盖API/CHAT预算选择、缺字段/过期/403、失败保留、metadata往返、来源变化晚返回、独立轮询开关/并发/目录周期、完整设置/规则保存重载/跨池隔离、详情开关和余量排序。真实本地浏览器使用两把假Key完成批量刷新（Studio USD22.50/30、Vibe EUR270/300）、403显示历史未知、路由/错误码/重试规则保存及进程重启后读回；这是Mock验证，不是生产推理或上线验收。
 
 本轮缓存/思考兼容/凭据展示与TH日志开关只运行受影响Go定向用例、Mistral/TH Node行为与JS语法检查，并用一次本地构建、禁用假账号完成页面核对；未做真实推理或实际缓存命中验证，不重复全仓/race/vet。以下为原始号池接入时的历史验证记录：
 

@@ -311,6 +311,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 				s.quota.RefreshSession(a.ID)
 			}
 		}
+		if a.Provider == config.ProviderMistral && next.ForProvider(a.Provider).Quota.Enabled {
+			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) || old.ForProvider(a.Provider).Quota != next.ForProvider(a.Provider).Quota || old.Mistral.ModelInterval() != next.Mistral.ModelInterval() {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
 		if _, ok := old.Account(a.ID); !ok && a.ControlKey != "" {
 			s.quota.Refresh(a.ID)
 		} else if o, _ := old.Account(a.ID); o.ControlKey != a.ControlKey && a.ControlKey != "" {

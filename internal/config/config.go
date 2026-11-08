@@ -1689,17 +1689,7 @@ func (c *Config) Normalize() error {
 		return errors.New("routing.lowShare/spentShare must satisfy 0 < low <= spent <= 100")
 	}
 
-	q := &c.Quota
-	defInt(&q.IntervalSec, d.Quota.IntervalSec)
-	defInt(&q.Concurrency, d.Quota.Concurrency)
-	defInt(&q.StaleSec, d.Quota.StaleSec)
-	if err := clampInt(&q.IntervalSec, 30, 3600, "quota.intervalSec"); err != nil {
-		return err
-	}
-	if err := clampInt(&q.Concurrency, 1, 16, "quota.concurrency"); err != nil {
-		return err
-	}
-	if err := clampInt(&q.StaleSec, 60, 86400, "quota.staleSec"); err != nil {
+	if err := normalizeQuota(&c.Quota); err != nil {
 		return err
 	}
 
@@ -1743,6 +1733,27 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("provider routing: %w", err)
 		}
 		*r = nested.Routing
+	}
+	return nil
+}
+
+func normalizeQuota(q *Quota) error {
+	d := Default().Quota
+	for _, f := range []struct {
+		value         *int
+		def, min, max int
+		name          string
+	}{
+		{&q.IntervalSec, d.IntervalSec, 30, 3600, "quota.intervalSec"},
+		{&q.Concurrency, d.Concurrency, 1, 16, "quota.concurrency"},
+		{&q.StaleSec, d.StaleSec, 60, 86400, "quota.staleSec"},
+	} {
+		if *f.value == 0 {
+			*f.value = f.def
+		}
+		if err := clampInt(f.value, f.min, f.max, f.name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

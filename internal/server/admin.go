@@ -343,7 +343,7 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				}
 			}
 		}
-		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil) {
+		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil || q.Mistral != nil) {
 			v.Quota = q
 			switch a.Provider {
 			case config.ProviderOpenDesign:
@@ -363,6 +363,11 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				v.QuotaFresh = q.FreshOllama(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
 			case config.ProviderTokenHarbor:
 				v.QuotaFresh = q.TokenHarbor.PlanFresh(now)
+			case config.ProviderMistral:
+				if q.Mistral != nil && q.Mistral.Source != quota.ResponseBindingSource(cfg, a) {
+					q.Mistral = nil
+				}
+				v.QuotaFresh = q.FreshMistral(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 			case config.ProviderModal:
 				// no quota endpoint: the Endpoint catalogue is all that is read
 				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
@@ -668,6 +673,28 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		started := time.Now()
 		err := s.quota.RefreshNow(ctx, a)
+		if a.Provider == config.ProviderMistral {
+			current := s.cfg.Get()
+			next, exists := current.Account(id)
+			q := s.quota.Get(id)
+			if !exists || quota.ResponseBindingSource(cfg, a) != quota.ResponseBindingSource(current, next) || q == nil || q.Mistral == nil || q.Mistral.Source != quota.ResponseBindingSource(current, next) || q.Mistral.CheckedAt.Before(started) {
+				apiError(w, http.StatusConflict, errors.New("账号来源已变化或本次检测未完成，请重新刷新"))
+				return
+			}
+			fresh := q.FreshMistral(time.Now(), time.Duration(current.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
+			message := "套餐额度未知或过期，请查看检测结果"
+			if fresh {
+				message = "套餐额度已刷新"
+				if q.CatalogError != "" {
+					message += "；模型目录读取失败：" + q.CatalogError
+				}
+			} else if q.Mistral.Error != "" {
+				message = q.Mistral.Error
+			}
+			s.metaDirty.Store(true)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": fresh, "quotaRefreshed": fresh, "message": message})
+			return
+		}
 		if a.Provider == config.ProviderOpenDesign {
 			current := s.cfg.Get()
 			next, exists := current.Account(id)
@@ -1194,7 +1221,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
@@ -1209,7 +1236,10 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
-		c.Upstream, c.Quota, c.Logs = in.Upstream, in.Quota, in.Logs
+		c.Upstream, c.Logs = in.Upstream, in.Logs
+		if prov != config.ProviderMistral {
+			c.Quota = in.Quota
+		}
 		if !config.StrictResponses(prov) && prov != config.ProviderMistral {
 			c.Routing = in.Routing
 		}
@@ -1231,7 +1261,14 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		case config.ProviderMistral:
 			if in.Mistral != nil {
 				c.Mistral.BaseURL = in.Mistral.BaseURL
+				if in.Mistral.ModelSyncSec != nil {
+					c.Mistral.ModelSyncSec = in.Mistral.ModelSyncSec
+				}
+				if in.Mistral.DetailLog != nil {
+					c.Mistral.DetailLog = in.Mistral.DetailLog
+				}
 			}
+			c.Mistral.Quota = &in.Quota
 			c.Mistral.Routing = &in.Routing
 			c.MistralErrorRules, c.MistralRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderTokenHarbor:
