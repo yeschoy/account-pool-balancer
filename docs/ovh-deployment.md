@@ -38,7 +38,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral Responses终态与三模型思考档位（2026-11-08 18:44 UTC，5d15347）
+## 当前部署：Mistral 缓存绑定持久化与会话优先（2026-11-08 19:44 UTC，2629255）
+
+- 用户明确“清理，提交推送部署”，并要求不要无关测试。`2629255e66c3d74597c323ccd63756872727c330`已推送master并上线：普通Mistral绑定跨重启保存、真实会话优先于cache hint、OpenCode Chat缓存别名无损归一与隐私。复用已通过的一次定向回归/必要build，不重复全仓/race/vet/UI业务测试，不发生产推理。
+- 一次预检确认旧5d15347 healthy/restart0、191账号、双内网入口、248.1GiB余量；旧e6f063b工作树干净但历史分叉，未构建/重置旧树。干净提交516个源码文件逐项SHA256核验；复用既有部署脚本仅内存适配，没有新建部署系统或Trellis任务。
+- 本次首次新增可选`metadata.pool.mistralBindings`：新镜像以线上UID1000:1000、network none运行一次兼容启动，副本显式带新字段，health及退出0通过；临时容器/敏感副本/日志已当场定向清理，原线上data未改。镜像就绪后停止旧进程、退出0并完整一致备份data，gzip/SHA256核验，然后仅追加线上Compose的image覆盖。
+- **191账号、186条TH核心注册资产、routingSecret、完整config.json字节、Mistral注册库及用户/环境/healthcheck/卷/端口/网络/资源参数全部保留**。未开启Mistral详情、修改NewAPI渠道或其他开关。Docker healthy/restart0且有Healthcheck，ai-internal保留新旧别名，NewAPI容器请求account-pool-balancer与opendesign-balancer两个healthz均成功，四项本机静态资源SHA256匹配。
+- 上线验收后立即反馈；19:44:17.086 UTC真实未登录公网浏览器登录页与healthz200通过，专用浏览器已关闭。19:44:43.682 UTC一次只读核对发现**6条自然流量普通Mistral绑定已持久化，均为弱身份，key/source均64位hash**；未主动推理或追加等待观察。这不是受控缓存命中率对照，也不声称修复了客户端缺少显式session。
+- 按授权已清理本轮Magpie浅克隆/合成审计、hardening采样/验证目录及指定公开文档工具产物，共约219.7MiB；正式文档、Trellis记录、共享Go缓存、其他任务文件以及新旧镜像/备份均保留。部署后的记录提交不再重建或重启。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 19:42:45.308–19:42:52.722（7.41秒） |
+| 断网兼容启动 / 临时副本清理完成 | 19:42:52.722–19:42:53.658 |
+| 停止请求 / 旧进程退出 | 19:42:53.773 / 19:42:58.531 |
+| 完整一致备份及核验 | 19:42:58.852–19:43:02.980 |
+| 切换请求 / 新容器启动 | 19:43:02.980 / 19:43:03.195 |
+| 首HTTP可达 / Docker healthy | 19:43:04.293 / 19:43:33.528 |
+| 双内网入口 / 本机验收 | 19:43:33.557 / 19:43:33.677 |
+| 公网 / 自然绑定落盘核对 | 19:44:17.086 / 19:44:43.682 |
+
+正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261108T194231Z-2629255`；镜像`account-pool-balancer:release-2629255-20261108T194231Z`（ID`sha256:7754ac7bbf757c4d54600cb01fd7e85a32ef33100c2d8b9245f094cb9577b6c1`）。受限完整备份`/home/ubuntu/backups/account-pool-balancer/20261108T194231Z-mistral-cache-2629255/`含data、原Compose/.env、构建/切换日志、deploy.json及降版说明；data SHA256`e8e1e4d51be49f0915204d5a1a7339deb1353a5214555184b5c683b16d7652e8`，旧镜像`account-pool-balancer:rollback-20261108T194231Z`保留。**降版先停新进程并备份当前data，旧版严格JSON读取器需要时只移除当前metadata的派生mistralBindings，不得覆盖后续写入或改responseBindings。**未采样精确停机，旧退出至首HTTP观测间隔约5.76秒，不把构建/排空/健康检查等待算作停机。
+
+## 历史部署：Mistral Responses终态与三模型思考档位（2026-11-08 18:44 UTC，5d15347）
 
 - 用户明确授权提交推送部署。业务代码`3ec9611`及任务/规格记录`5d15347e55d5b63986f8f79e708223d43e035ef8`已推送master并上线。修复Mistral Responses首帧/后续终态与缺终态EOF误记成功；DeepSeek V4.1 Flash 1017、GLM5.3、GLM5.3 Flash在Chat/Responses支持low/high/max，缺省high，显式max不再降级。保留DeepSeek专属兼容与Large4/其他池原生隔离，更新UI预算/客户端验收边界文案。
 - 复用已完成的全仓Go normal/race/vet/build、全部Node行为/语法、本地零账号真实浏览器和最终Mistral定向race结果；本次不重复跑完整测试、不主动生产推理、重放或压测。无持久化字段/存储格式迁移，不额外复制真实凭据做断网副本预检。

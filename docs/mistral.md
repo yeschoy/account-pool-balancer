@@ -2,7 +2,7 @@
 
 Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转换。默认上游 `https://api.mistral.ai/v1`。
 
-缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）。后续已在本地落实普通绑定持久化、真实会话优先与OpenCode缓存别名兼容，定向Mock/构建通过；尚未部署或验证生产命中率提升。
+缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）。后续已落实普通绑定持久化、真实会话优先与OpenCode缓存别名兼容，定向Mock/构建通过，`2629255`于2026-11-08 19:44 UTC完成部署验收；自然流量已有6条普通绑定落盘，尚未做生产缓存命中率受控对照。
 
 ## 管理与接入
 
