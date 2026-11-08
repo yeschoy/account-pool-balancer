@@ -4,5 +4,5 @@
   "branch": "mistral-request-compat",
   "description": "用户已确认的精确Mistral DeepSeek Chat参数兼容、上线与渠道规则收敛",
   "validation": "validation.md",
-  "waiting_for": "渠道180还服务GLM；确认并核实仅DeepSeek Chat条件停用对应operations的安全方案，未修改线上规则"
+  "waiting_for": "先协调OVH并发部署：诊断补丁7b652c9未上线，原revision guard安全中止；需统一可追溯版本发布后归因422。原渠道180 GLM/条件规则范围门仍保留，未修改线上规则"
 }

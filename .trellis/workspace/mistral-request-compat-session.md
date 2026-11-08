@@ -24,3 +24,12 @@
 - Mistral精确DeepSeek60/60 HTTP200、错误率0%，57流式+3非流式，无新增400/422/流式错误；NewAPI渠道180同窗口60条消费、57条ok/done，无错误记录。Mistral真实input10055835/cached8382592=83.36%，54hit/6miss，无忙溢出/请求内切号/多attempt。Modal42条尝试级429不能混作42个失败请求。
 - 38次健康采样无异常，结束时两服务healthy/零重启/无OOM，运行revision9f375ef。5分钟时已反馈Mistral30/30及Modal4次429，10分钟完成即反馈最终结果。采样健康不冒称连续探针，缓存窗口不当受控提升证据；详见validation.md。
 - 全程SSH/远端内存只读，递归错误解码只输出状态/loc/type；不发推理、改配置/规则或重启，无新增临时文件/日志下载/凭据副本。只提交观察记录，不重新部署；原NewAPI范围确认门保留。
+
+## 再次要求观察并修复：422诊断补丁及并发部署阻塞
+
+- 06:48 UTC预查发现Mistral上游503/422，暂停空等并分析。503有上游internal_server_error/Service unavailable证据；422错误体恰64KiB、通用reason，无法断言是请求适配导致。
+- 已修复确定的Balancer诊断缺口：7b652c9新增有界、隐私安全的mistralValidation loc/type及真实responseBodyTruncated，原转发前缀/状态/重放/健康策略不变。定向Mistral回归3.744s，最终两组诊断1.022s，集成并发master后2.969s，gofmt/diff check/build通过；无额外生产推理。
+- 发布guard发现运行revision已被另一个操作改变，构建/停服/切换前安全中止。观察到06:56:27启动无revision latest镜像，后因缺wget健康检查unhealthy（healthz200），又被另一个操作恢复原9f375ef健康镜像；这些切换不是本会话执行的。补丁尚未上线，不能报422已解决。
+- 正常保留master并发注册UI、工具及wget修复8ad33b5，合并成65f2680；没有启动其他代理，仅更新当前Orca卡片阻塞说明。发布必须先协调，不能两个窗口反复覆盖。
+- 完整日志窗口06:48:29.015–06:58:29.015 UTC：Mistral170完成/143成功/26失败/1取消，错误率15.29%；失败13上游503+13未知422。NewAPI对应26错误/144消费，143ok/done+1ok/eof，不能把消费144当完整成功144。跨独立部署，不是补丁单版本验收；详细证据/归因边界在diagnostic-20261108.md。
+- 中止发布的源码release和预建备份目录登记新的_tmp_artifacts.md（ignore），未经本轮清理同意不删；无原始请求/错误正文/凭据下载。待用户协调暂停另一发布后再统一部署及自然流量定位422；原NewAPI范围门保留。
