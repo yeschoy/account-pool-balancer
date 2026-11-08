@@ -12,7 +12,7 @@ import (
 func TestMistralReasoningCompatibilityAndNativeFields(t *testing.T) {
 	body := []byte(` { "model":"m", "tools": [ {"id":"keep-id-123", "number":9007199254740993} ], "messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"answer","reasoning_content":"thought <private>","tool_calls":[{"id":"tool-original","function":{"arguments":"{\"x\":1}"}}]},{"role":"tool","tool_call_id":"tool-original","content":"result"},{"role":"assistant","reasoning_content":"second thought","content":[{"type":"text","text":"second answer"},{"type":"image_url","image_url":"https://example.invalid/image"}]}] } `)
 	out, key, err := prepareMistralRequest(body, "/v1/chat/completions", "scope-hmac")
-	if err != nil || key != "apb-mistral-scope-hmac" || !json.Valid(out) {
+	if err != nil || key != "scope-hmac" || !json.Valid(out) {
 		t.Fatalf("prepare: %q %v", key, err)
 	}
 	var original, got map[string]json.RawMessage
@@ -71,7 +71,7 @@ func TestMistralCachePreservationAndProtocolScope(t *testing.T) {
 	}
 	body := []byte(` {"model":"m", "input":[{"type":"reasoning","summary":[]}]} `)
 	out, key, err := prepareMistralRequest(body, "/v1/responses", "scope")
-	if err != nil || key != "apb-mistral-scope" || !bytes.Contains(out, []byte(`"input":[{"type":"reasoning","summary":[]}]`)) {
+	if err != nil || key != "scope" || !bytes.Contains(out, []byte(`"input":[{"type":"reasoning","summary":[]}]`)) {
 		t.Fatal("Responses history changed or cache key missing")
 	}
 	out, key, err = prepareMistralRequest(body, "/v1/responses", "")
@@ -97,9 +97,15 @@ func TestMistralReasoningEmptyAndInvalidValues(t *testing.T) {
 	}
 }
 
-func TestMistralCacheStableIsolatedAndCallerKeyPreserved(t *testing.T) {
+func TestMistralCacheHeaderPreservedAndAccountAffinityIsolated(t *testing.T) {
 	e := newMistralEnv(t)
-	var first string
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Routing.Strategy = "least-selections"
+		c.Accounts[1].Priority = c.Accounts[0].Priority
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for i, auth := range []string{"mistral-client", "mistral-client", "mistral-other-client"} {
 		st, _ := e.post(t, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"question"},{"role":"assistant","content":"answer","reasoning_content":"thought"}]}`, map[string]string{"X-Pi-Session-Id": "raw-private-session", "Authorization": "Bearer " + auth})
 		if st != 200 {
@@ -109,13 +115,11 @@ func TestMistralCacheStableIsolatedAndCallerKeyPreserved(t *testing.T) {
 		_ = json.Unmarshal([]byte(e.call(i).body), &body)
 		var key string
 		_ = json.Unmarshal(body["prompt_cache_key"], &key)
-		if !strings.HasPrefix(key, "apb-mistral-") || strings.Contains(key, "raw-private-session") || strings.Contains(key, auth) {
-			t.Fatal("cache key is absent or leaks caller/session")
+		if key != "raw-private-session" {
+			t.Fatal("downstream session header was not copied directly into cache key")
 		}
-		if i == 0 {
-			first = key
-		} else if (i == 1) != (key == first) {
-			t.Fatal("session cache is unstable or crosses downstream callers")
+		if i > 0 && (i == 1) != (e.call(i).key == e.call(0).key) {
+			t.Fatal("account affinity is unstable or crosses downstream callers")
 		}
 		if bytes.Contains(body["messages"], []byte("reasoning_content")) || !bytes.Contains(body["messages"], []byte(`"type":"thinking"`)) {
 			t.Fatal("old assistant history was not normalized")

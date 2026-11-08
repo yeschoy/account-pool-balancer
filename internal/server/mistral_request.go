@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+
+	"account-pool-balancer/internal/config"
 )
 
 // mistralWireObject is a view over already validated JSON. Replacement values
@@ -154,10 +156,36 @@ func mistralFinalPromptCacheKey(body []byte) string {
 	return strings.TrimSpace(s)
 }
 
+// mistralRequestCacheKey keeps explicit downstream cache/session headers intact
+// on the wire. Account affinity still uses the caller-scoped identity HMAC.
+func mistralRequestCacheKey(cfg *config.Config, h http.Header, ident Identity) (string, string) {
+	for _, name := range []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"} {
+		if value, ok := validValue(headerValue(h, name)); ok {
+			return value, "cache_header"
+		}
+	}
+	for _, names := range [][]string{cfg.Routing.SessionHeaders, parentHeaders} {
+		for _, name := range names {
+			if value, ok := validValue(headerValue(h, name)); ok {
+				return value, "session_header"
+			}
+		}
+	}
+	for _, sh := range sessionHeaders {
+		if value, ok := validValue(headerValue(h, sh.name)); ok {
+			return value, "session_header"
+		}
+	}
+	if ident.Fingerprint != "" {
+		return "apb-mistral-" + ident.Fingerprint, "session_hmac"
+	}
+	return "", ""
+}
+
 // prepareMistralRequest runs after strict JSON/model validation and original
 // identity selection, but before account/RPM acquisition. Three exact models
 // share reasoning controls; unrelated DeepSeek parameters stay Chat-only.
-func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, string, error) {
+func prepareMistralRequest(body []byte, path, cacheKey string) ([]byte, string, error) {
 	if path != "/v1/chat/completions" && path != "/v1/responses" {
 		return body, "", nil
 	}
@@ -190,8 +218,8 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 		}
 	}
 	generated := ""
-	if o.get("prompt_cache_key") == nil && fingerprint != "" {
-		generated = "apb-mistral-" + fingerprint
+	if o.get("prompt_cache_key") == nil && cacheKey != "" {
+		generated = cacheKey
 		key, _ := json.Marshal(generated)
 		o.set("prompt_cache_key", key)
 	}

@@ -29,7 +29,7 @@ func TestMistralOutboundXAffinityFromFinalCache(t *testing.T) {
 	st, _ := e.post(t, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"mock"}]}`, map[string]string{"X-Session-Id": "private-session"})
 	call := e.call(0)
 	var body map[string]any
-	if st != 200 || json.Unmarshal([]byte(call.body), &body) != nil || body["prompt_cache_key"] == "" || call.header.Get("X-Affinity") != body["prompt_cache_key"] {
+	if st != 200 || json.Unmarshal([]byte(call.body), &body) != nil || body["prompt_cache_key"] != "private-session" || call.header.Get("X-Affinity") != body["prompt_cache_key"] {
 		t.Fatal("deployed final cache key was not propagated as affinity")
 	}
 }

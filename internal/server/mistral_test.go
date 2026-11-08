@@ -169,8 +169,8 @@ func TestMistralNativeBytesHeadersAndAccounting(t *testing.T) {
 				_ = json.Unmarshal([]byte(body), &original)
 				var cache string
 				_ = json.Unmarshal(got["prompt_cache_key"], &cache)
-				if !strings.HasPrefix(cache, "apb-mistral-") || len(got) != len(original)+1 {
-					t.Fatal("missing private session cache key")
+				if cache != "private-cache" || len(got) != len(original)+1 {
+					t.Fatal("downstream cache header was not copied directly")
 				}
 				for key, value := range original {
 					if string(got[key]) != string(value) {

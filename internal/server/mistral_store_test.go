@@ -15,7 +15,7 @@ func TestMistralDeepSeekStatelessStoreCompatibility(t *testing.T) {
 	} {
 		out, generated, err := prepareMistralRequest([]byte(body), "/v1/chat/completions", "scope")
 		var fields map[string]json.RawMessage
-		if err != nil || json.Unmarshal(out, &fields) != nil || generated != "apb-mistral-scope" {
+		if err != nil || json.Unmarshal(out, &fields) != nil || generated != "scope" {
 			t.Fatalf("invalid root removal: %s %v", out, err)
 		}
 		if _, exists := fields["store"]; exists || !bytes.Contains(fields["tools"], []byte("9007199254740993")) {

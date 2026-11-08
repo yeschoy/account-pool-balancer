@@ -136,7 +136,7 @@ func TestMistralDeveloperRoleOnlyAndCombinedWirePreservation(t *testing.T) {
 				input = `{` + core + `,` + extra + `,` + strings.TrimSuffix(fields, ",") + `}`
 			}
 			prepared, key, err := prepareMistralRequest([]byte(input), "/v1/chat/completions", "scope")
-			if err != nil || !json.Valid(prepared) || key != "apb-mistral-scope" {
+			if err != nil || !json.Valid(prepared) || key != "scope" {
 				t.Fatalf("overlapping removals %s: %s %v", position, prepared, err)
 			}
 			var got, original map[string]json.RawMessage
