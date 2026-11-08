@@ -93,11 +93,11 @@ Mistral详情开关开启后，现有详情记录额外保存每次`upstreamAtte
 
 ## 验证
 
-### 本轮兼容修复（2026-11-09，尚未部署）
+### 本轮兼容修复（2026-11-09，已部署5d15347）
 
 新增Mock矩阵覆盖上述四模型的Chat/Responses、流式/非流式、多轮思考与工具结果、Deny/apply_patch原始多行补丁/引号/反斜杠/大数、缓存字段及真实usage保留；三种推理模型额外覆盖low/high/max/缺省high、别名冲突和跨池/路径隔离。工具被上游拒绝时保留错误，不删工具重放。Responses回归先在旧代码复现首帧终态等待及EOF误记成功，再验证修复；完整执行结果见`.trellis/tasks/archive/2026-11/11-09-mistral-stream-reasoning/validation.md`。
 
-本轮未发真实推理、未在生产保存配置、未部署。**Codex / Cherry Studio / pi等真实客户端端到端验收尚未进行**；会话头识别和Mock协议形状不等于客户端已验收。历史真实测试仅证明以下记录中明确的接口/模型；Claude原生Messages仍不支持，不能因为识别Claude会话头就宣称Claude Code直连可用。
+2026-11-08 18:44 UTC，5d15347已推送并部署OVH，版本/健康/数据与配置保留、NewAPI双内网入口及公网资源验收通过，见`docs/ovh-deployment.md`。本轮未发真实推理、未修改生产配置。**Codex / Cherry Studio / pi等真实客户端端到端验收尚未进行**；会话头识别和Mock协议形状不等于客户端已验收。历史真实测试仅证明以下记录中明确的接口/模型；Claude原生Messages仍不支持，不能因为识别Claude会话头就宣称Claude Code直连可用。
 
 ### 历史验证
 

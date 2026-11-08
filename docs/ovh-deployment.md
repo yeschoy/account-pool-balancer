@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：全程平均TPS与Mistral三段详情（2026-11-08 17:41 UTC，0ed42ff）
+## 当前部署：Mistral Responses终态与三模型思考档位（2026-11-08 18:44 UTC，5d15347）
+
+- 用户明确授权提交推送部署。业务代码`3ec9611`及任务/规格记录`5d15347e55d5b63986f8f79e708223d43e035ef8`已推送master并上线。修复Mistral Responses首帧/后续终态与缺终态EOF误记成功；DeepSeek V4.1 Flash 1017、GLM5.3、GLM5.3 Flash在Chat/Responses支持low/high/max，缺省high，显式max不再降级。保留DeepSeek专属兼容与Large4/其他池原生隔离，更新UI预算/客户端验收边界文案。
+- 复用已完成的全仓Go normal/race/vet/build、全部Node行为/语法、本地零账号真实浏览器和最终Mistral定向race结果；本次不重复跑完整测试、不主动生产推理、重放或压测。无持久化字段/存储格式迁移，不额外复制真实凭据做断网副本预检。
+- 一次预检：旧0ed42ff healthy/restart0，191账号/186条TH注册记录，TH/Mistral注册无queued/running，磁盘250.7GiB余量，NewAPI双别名入口均正常。旧e6f063b工作树干净但有历史分叉，未构建/重置旧树；以干净git archive压缩管道传输509个源码文件并逐项SHA256核验。复用既有部署脚本仅内存适配目标版本、完整资产/注册忙守卫和双入口验收，不新增临时部署系统。
+- 新镜像就绪后停止旧进程、退出0后完整一致备份data并gzip/SHA256核验，以线上Compose仅覆盖image。**191账号、186条TH核心记录、routingSecret、Mistral注册库、完整config.json字节，以及原用户/环境/healthcheck/卷/端口/网络/资源参数全部保留**。预检发现线上Mistral detailLog已是false，按本次实际值保留，不按历史启用记录擅自重新打开；其他功能开关不改。
+- Docker healthy/restart0且Config.Healthcheck存在，ai-internal保留account-pool-balancer/opendesign-balancer；从new-api容器分别请求两者healthz均成功。18:44:35.252 UTC真实未登录公网浏览器登录页正常，healthz及四静态资源200，保留`?v=cbee624b83`且SHA256逐项匹配发布源码。服务与公网验收后立即反馈，浏览器已关闭；补记录不再构建/重启。
+- **验收边界**：本次确认版本、健康、数据/配置/运行参数保留、双内网入口及公网静态资源，不代表真实上游三模型三档效果、Codex/Cherry Studio/pi端到端或生产缓存命中已验收。没有改NewAPI渠道或发付费推理。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 18:42:46.347–18:43:25.923（39.58秒） |
+| 停止请求 / 旧进程退出 | 18:43:26.035 / 18:43:26.191 |
+| 完整一致备份及核验 | 18:43:27.249–18:43:30.325 |
+| 切换请求 / 新容器启动 | 18:43:30.326 / 18:43:30.556 |
+| 首HTTP可达 / Docker healthy | 18:43:31.667 / 18:44:00.905 |
+| 双入口 / 本机验收 | 18:44:00.957 / 18:44:01.080 |
+| 公网验收 | 18:44:35.252 |
+
+正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261108T184140Z-5d15347`；镜像`account-pool-balancer:release-5d15347-20261108T184140Z`（ID`sha256:328f28d3f7edf33d79cfc4281c621f97df1adf85acad106c4abe0e16120435fc`）。完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261108T184140Z-mistral-stream-reasoning-5d15347/`含原Compose/.env、完整data、build/switch日志与deploy.json，data SHA256`14e7d20f292f74f3ccc5f6e7618ecf140e1872313285022a75c031a190f958cd`；旧镜像`account-pool-balancer:rollback-20261108T184140Z`保留。回退前先确认上线后新写入，不自动覆盖旧data。未采样精确停机；旧退出至首HTTP观测间隔约5.48秒，不把构建或健康等待算作停机。正式回退资料和Trellis保留，无新增临时脚本/压缩包/敏感副本，既有临时产物待同意清理。
+
+## 历史部署：全程平均TPS与Mistral三段详情（2026-11-08 17:41 UTC，0ed42ff）
 
 - `0ed42ff3834d64d152094b07c1d5b8483d551d43`已提交推送并上线。新增useTimeSec/averageTps，按NewAPI的两个Unix整秒差计算，前端一次整数四舍五入；保留首事件后/上游均速，不回填旧日志，不承诺不同层级计时数值相等。
 - Mistral详情新增wireVersion=1/upstreamAttempts：原客户端头/体、每次实际上游头/体、适配前原生响应及适配后客户端响应明确分段，关联账号/尝试。HTTP trace补自动头、有界tee不延迟首帧，每段64KiB且标截断/未完整读取。凭据/Cookie/自定义Token/会话/X-Affinity掩码，新获响应Cookie也用于下游及错误摘要脱敏，SSE日志大整数保真。其他池详情策略不变。

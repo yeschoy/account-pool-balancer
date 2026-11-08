@@ -10,5 +10,5 @@
   "branch": "master",
   "relatedFiles": ["internal/server/proxy.go", "internal/server/mistral_request.go", "internal/server/web/app.js", "docs/mistral.md", "README.md"],
   "notes": "用户已明确实施1～3并以low/high/max和缺省high替代旧DeepSeek max降级策略。子项目无Trellis脚本，按既有本地任务格式记录并直接实施，不覆盖上级项目任务指针。无需新增外部服务/配置，不推送/部署/真实付费推理。",
-  "meta": {"phase": "completed", "execution": "inline", "revision": "3ec9611", "validation": "full_go_normal_race_vet_build_node_and_local_browser_passed", "productionBoundary": "Not pushed/deployed; no real inference or Codex/Cherry Studio/pi end-to-end acceptance."}
+  "meta": {"phase": "completed", "execution": "inline", "revision": "3ec9611", "validation": "full_go_normal_race_vet_build_node_and_local_browser_passed", "deployedRevision": "5d15347e55d5b63986f8f79e708223d43e035ef8", "deployedAt": "2026-11-08T18:44:35.252Z", "productionBoundary": "Pushed and deployed after explicit user authorization; health/version/assets/config/runtime/dual NewAPI aliases/public assets accepted. No real inference or Codex/Cherry Studio/pi end-to-end acceptance."}
 }
