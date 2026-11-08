@@ -154,14 +154,14 @@ func (s *Server) responseFingerprint(group, responseID string) string {
 // configured and parent headers, body fields, session headers, and as a
 // fallback an HMAC of the first system and user messages.
 func (s *Server) identity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
-	return s.identityWithFallbackHeaders(cfg, group, h, body, nil)
+	return s.identityWithFallbackHeaders(cfg, group, h, body, nil, claudeUserSession)
 }
 
 func (s *Server) mistralIdentity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
-	return s.identityWithFallbackHeaders(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"})
+	return s.identityWithFallbackHeaders(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"}, mistralClaudeUserSession)
 }
 
-func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h http.Header, body map[string]any, hints []string) Identity {
+func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h http.Header, body map[string]any, hints []string, claudeSession func(string) string) Identity {
 	if v, ok := validValue(lookup(body, "previous_response_id")); ok {
 		return Identity{Source: "body", KeyType: "previous_response_id", Confidence: "explicit", Fingerprint: s.responseFingerprint(group, v)}
 	}
@@ -186,12 +186,12 @@ func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h
 			return explicit("body", k.keyType, v)
 		}
 	}
-	if v, ok := validValue(claudeUserSession(lookup(body, "metadata.user_id"))); ok {
+	if v, ok := validValue(claudeSession(lookup(body, "metadata.user_id"))); ok {
 		return explicit("body", "claude_user_session", v)
 	}
 	// Some Claude-to-Chat relays move metadata.user_id into user. Only a
 	// recognized session-bearing structure counts; a generic user label does not.
-	if v, ok := validValue(claudeUserSession(lookup(body, "user"))); ok {
+	if v, ok := validValue(claudeSession(lookup(body, "user"))); ok {
 		return explicit("body", "claude_user_session", v)
 	}
 	for _, sh := range sessionHeaders {

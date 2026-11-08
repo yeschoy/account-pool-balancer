@@ -618,6 +618,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
 			detailIdentities = thIdentityValues(r.Header, redactionObject, cfg.Routing.SessionHeaders)
+			if rec.Provider == config.ProviderMistral {
+				detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(redactionObject)...)
+			}
 		}
 		rec.ErrorCategory = "request"
 		message := "request body must be a JSON object"
@@ -630,6 +633,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		detailIdentities = thIdentityValues(r.Header, obj, cfg.Routing.SessionHeaders)
+		if rec.Provider == config.ProviderMistral {
+			detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(obj)...)
+		}
 	}
 	rec.Model, _ = obj["model"].(string)
 	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
