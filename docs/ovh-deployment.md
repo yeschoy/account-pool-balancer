@@ -32,6 +32,51 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
+
+- 用户明确要求去掉加密存储。`mistralsignupstore` 由 AES-GCM 改为明文 JSON：
+  文件 `/data/mistral-signup.json`，权限 0600，`cat` 可直接读出邮箱、密码与
+  API Key。`Open(path, secret)` 保留 secret 参数位置以兼容调用方，实际不再
+  使用；删除 `encrypt/decrypt/gcm` 与 `Public()` 遮罩方法。
+- 前端候选列表直接显示完整 Key 并可点击复制；新增 `.mr-*` 样式。
+- 验收：登录后 `POST /api/mistral/candidates` 返回 201 结构，落盘文件
+  `-rw------- odb odb`、`rows` 内含明文 password；`DELETE` 后 `rows: []`。
+  容器 running/healthy、restarts=0、healthz 200。
+- 镜像 `account-pool-balancer:release-1b253bf-20261108T072132Z`，构建复用
+  缓存；仅 `--force-recreate` Balancer 单服务，卷/端口/网络/配置未变。
+- 回退镜像沿用 `account-pool-balancer:rollback-20261108T065425Z`（9f375ef）。
+- 仍未验证：容器内真实注册（未配置 ZOOPROXY_* 代理池环境变量）；订阅扣款。
+
+## 当前部署：Mistral 注册机界面骨架（2026-11-08 15:05 UTC，8ad33b5）
+
+- 用户要求先做「界面壳子」：把命令行注册机变成管理页面可操作的形态。新增
+  `mistralsignupstore`（AES-GCM 加密存储，与 perchsignupstore 同构）、
+  `mistral_registration.go`（6 个 admin API + 串行 worker 调度）、
+  `tools/mistral/worker.py`（stdin/stdout JSON 契约）、前端「Mistral 注册机」
+  页面（候选列表 / 状态 / 开始 / 取消 / 删除）。**未接入订阅扣款**，就绪状态
+  仅代表三把 API Key 生成成功。
+- 基础镜像由 alpine 改为 debian:bookworm-slim：Playwright 官方 Chromium 为
+  glibc 编译，musl 下无法运行。镜像由约 60MB 增至 2.01GB。首次切换因
+  Debian 未预装 `wget` 导致 compose healthcheck 失败（`executable file not
+  found`），服务本身正常；已回退旧镜像恢复，补 `wget` 后重建通过。
+- 构建 1m7s（首次）/ 复用缓存后重建；一次预检原 9f375ef 健康、余量 287GiB。
+  源码为干净 git clone：`20261108T065139Z-8b701f0`，镜像
+  `account-pool-balancer:release-8ad33b5-20261108T070000Z`。
+- 切换仅 `--force-recreate` Balancer 单服务；卷/端口/网络/配置/功能开关不变。
+  数据目录挂载 `data:/data` 保留，9 个既有 JSON 配置在，未改动。
+- 验收：容器 running/healthy、restarts=0、healthz 200；登录后
+  `/api/mistral/status` 返回 `worker_found=true`，
+  `python=/opt/mistral-signup/bin/python`；`/api/mistral/candidates` 空列表；
+  `index.html` 含 `page-mregister`、`app.js` 含 Mistral 逻辑；资源版本
+  `app.js?v=f4bb4a3c6e`。
+- 未登录访问 `/api/mistral/*` 与 `/api/perch/*` 均为 401，行为一致。
+- 回退镜像 `account-pool-balancer:rollback-20261108T065425Z`（原 9f375ef）。
+  备份 `/home/ubuntu/backups/account-pool-balancer/20261108T065425Z-mistral-ui-8b701f0/`
+  （0700）保留 compose 与原 .env。
+- 管理页面仍只监听 `127.0.0.1:8790`，需 SSH 隧道访问，未新增公网入口。
+- Playwright Chromium 与系统库已装进镜像（`/opt/ms-playwright`），但容器内
+  尚未实跑注册（未配置代理池环境变量）；真实注册验证仍缺。
+
 ## 当前部署：Mistral DeepSeek Chat 参数定向兼容（2026-11-08 06:01 UTC，9f375ef）
 
 - 用户明确批准在新工作区独立实现、修复后部署且不再启动代理。功能提交`96eaad7`，集成版本`9f375efee5a89e92dcbe5f14dd0385e4519c1501`；从Orca默认基线319c751（包含8d41516）开发，fetch后正常合入master的e06a589独立工具/诊断更新，再非强制原子推送功能分支与master。没有在原master开发、reset分叉或运行注册工具。
