@@ -32,7 +32,53 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek assistant reasoning 兼容（2026-11-08 07:29 UTC，217bf64）
+## 当前部署：Mistral 银行卡列表接入 Python worker（2026-11-08 09:48 UTC，5d9b62c）
+
+- 用户要求提交推送并部署。注册机界面此前已能保存 `cardLines`，但 worker 未读取，
+  卡列表实际处于「只存不用」。本次将其接到 Python 执行层。
+- 提交 `5d9b62c`：新增 `tools/mistral/signup/core/cards.py`（解析
+  `卡号----有效期----CVV`，校验 13-19 位与 Luhn，支持 `05/28`/`5/2028`/`05-28`/`0528`）；
+  `worker.py` 读 `MISTRAL_CARDS` 并按 `proxy_index` 轮转选卡，结果回传
+  `card_masked`/`card_expiry`（脱敏，不含完整卡号与 CVV）；
+  `mistral_registration.go` 结果结构补两字段。规则与 Go 侧
+  `internal/mistralcards` 一致，由 `test_consistent_with_go` 锁定两端同输入同输出。
+  **卡当前只解析并回显，注册流程不使用；订阅步骤后续取用。**
+- 预检：容器 healthy/restarts=0、`healthz=200`、磁盘 262GiB 余量、
+  卷 `/home/ubuntu/project/account-pool-balancer/data:/data`、端口 `127.0.0.1:8790`
+  均未变。线上 `config.json` 已含 `cardLines: []`（上一版已有该字段），
+  **无存储格式变更**，兼容零风险。当前运行镜像无 revision 标签，
+  以其 image（`sha256:feb81224f486…`）作为回退基线，不假称对应某 Git 版本。
+- 本地验证：`go build`、`go test ./internal/mistralcards ./internal/config`、
+  `python3 tools/mistral/test_cards.py`（15 passed）、`gofmt -l` 全部通过。
+- 干净 `git archive` 快照 `/home/ubuntu/project/account-pool-balancer-releases/20261108T094514Z-5d9b62c`，
+  固定镜像 `account-pool-balancer:release-5d9b62c-20261108T094514Z`
+  （`sha256:13269fb6d6c814fb91b9bb627a0c6dd650315119b94165fd1293c66e4d0d447e`），
+  旧镜像打 `rollback-20261108T094514Z` 保留。
+- 备份 `/home/ubuntu/backups/account-pool-balancer/20261108T094514Z-mistral-cards/`，
+  data 263M 完整复制，文件清单与线上逐项一致。**核验说明**：首次比对汇总摘要
+  不一致，原因是服务运行中持续写 `metadata.json`/`selection-counters.json`/
+  请求日志，重复计算摘要每次变化；文件列表与逐文件比对除活跃写文件外一致，
+  判定为活跃服务正常现象而非备份损坏，未用旧数据覆盖上线后写入。
+- 切换只覆盖 image，用户/环境/卷/端口/网络/健康参数不变。**161 账号**、
+  `proxyUrls`、`cardLines` 字段、Mistral 注册库均保留。
+- 验收：容器 running、`healthz=200`（首次尝试即通过）、restarts=0、
+  revision 恢复为 `5d9b62c…`、日志 `odb listening on :8790`；
+  容器内 `/usr/local/share/mistral-signup/signup/core/cards.py` 存在且
+  `parse_line("4633433883347213----05/28----913")` 返回
+  `463343******7213 05/28 bin=463343`；公网 `https://ods.yeschoy.io/` 与
+  `/healthz` 均 200；`app.js?v=18b5011ecd` 含 `ms-card-lines`/`renderCardStatus`。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 09:45:5x–09:46:3x（43.1 秒） |
+| 停止请求 / 旧进程退出 | 09:48:01.4 / 09:48:01.452 |
+| 备份及核验 | 切换前完成（263M） |
+| 新容器启动 | 09:48:01.829 |
+| 首 HTTP 可达 | 09:48:13（100% 200） |
+
+未采样精确停机；旧退出至新启动约 0.38 秒。仅补记录不再次部署。
+
+## 历史部署：Mistral DeepSeek assistant reasoning 兼容（2026-11-08 07:29 UTC，217bf64）
 
 - 用户要求解决422并排查持续503。已从NewAPI Docker stderr的有界body preview恢复14条`extra_forbidden / body.messages.4.assistant.reasoning`，input均string；之前Balancer JSONL与NewAPI SQL只剩通用错误，不能据此声称完全无证据。解析仅远端内存，未输出/保存正文或凭据。
 - 修复提交`49e8aa0`：仅精确DeepSeek Chat把assistant reasoning字符串/null作为reasoning_content别名，无损保留为原生thinking chunks；相同别名不重复、冲突/非法/重复字段本地拒绝，保留消息顺序、原答案、工具/ID/大数，其他模型/协议/角色不变。包含此前`7b652c9`的安全loc/type与真实截断诊断；不改重试次数/账号/TTL/限流/NewAPI规则。
@@ -56,7 +102,7 @@
 
 ## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
-## 当前部署：Mistral 代理列表统一为完整 URL（2026-11-08 17:33 UTC，9227c0b）
+## 历史部署：Mistral 代理列表统一为完整 URL（2026-11-08 17:33 UTC，9227c0b）
 
 - 用户要求去掉 zooproxy 模板模式：代理只有一种格式，一行一个
   `socks5://用户:密码@IP:端口`（zooproxy 同格式，不再区分）。
@@ -81,7 +127,7 @@
 - 镜像 `account-pool-balancer:release-9227c0b-20261108T093154Z`。
   回退镜像 `release-fix-20261108T082340Z` 保留。
 
-## 当前部署：Mistral 批量账号 + 代理轮转 + 自动入池（2026-11-08 16:22 UTC，a225c5c）
+## 历史部署：Mistral 批量账号 + 代理轮转 + 自动入池（2026-11-08 16:22 UTC，a225c5c）
 
 - 用户三项要求已实现：
   1. **代理列表一行一个，账号按顺序分配，代理可重复使用**：
