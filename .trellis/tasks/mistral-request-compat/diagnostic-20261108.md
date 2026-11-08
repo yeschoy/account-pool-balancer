@@ -27,7 +27,8 @@ fetch发现master另有c63b5ac/5962c86工具更新及8b701f0注册UI/store/API�
 - 计划从9f375ef切换诊断版，传输干净archive后，脚本明确报`Running revision changed; stop before mutation`。guard在构建/停服/切换前退出，本次没有部署、停机或修改在线配置。只预建了release源码与备份目录，登记当前工作区_tmp_artifacts.md；不是完整备份，不冒称可恢复数据。
 - 06:57:54 UTC只读检查发现另一个操作已在06:56:27启动`account-pool-balancer:latest`，镜像无revision标签；随后unhealthy，healthz仍200，健康探针报告缺少wget，非应用panic。该镜像ID为`sha256:4d07477e4cbd4e3ebf48af3e9f20c252d9605bad734326d411c7cffec0821275`，Compose仅剩旧目录基础文件链。没有盲目覆盖它。
 - 后续另一个操作将服务恢复到原9f375ef镜像ID`sha256:6716715f22121e95eb877f96d930a509f7c3afd6490275e5cee2d0404c40e39d`（tag仍latest），healthy/零重启/无OOM。该恢复不是本会话执行的，不把它记为本补丁上线。
-- master并发新增8ad33b5 Docker wget修复；正常合入到本分支形成65f2680，保留注册UI/工具/Docker变更，不reset/强推或回退他人代码。集成后Mistral回归2.969s及必要build/diff check通过。当前等待发布协调，补丁未运行，不能因容器恢复健康就宣称422已修复。
+- master并发新增8ad33b5 Docker wget修复；正常合入到本分支形成65f2680，保留注册UI/工具/Docker变更，不reset/强推或回退他人代码。集成后Mistral回归2.969s及必要build/diff check通过。当前等待发布协调，补丁尚未由本会话上线，不能因容器恢复健康就宣称422已修复。
+- 07:04:59 UTC最终复核又观察到07:03:39启动的另一份无revision latest镜像（ID`sha256:6de5aa97fa0e6be0f011a07a7454bcd2d79550a3e7a0b5571c0f1936ad1efeb1`），healthy/零重启/无OOM。线上再次并发变化，当前构建版本不可确证，不能仍宣称当前运行9f375ef，也不能宣称诊断补丁已被该镜像包含。
 
 ## 完整10分钟日志窗口（跨并发切换，不是单一稳定版本验收）
 
