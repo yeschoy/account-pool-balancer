@@ -12,6 +12,13 @@ tokenharbor-signup.json
 !/tools/perch-register/
 /tools/perch-register/__pycache__/
 /tools/perch-register/.venv/
+# Mistral 注册机（已清理明文凭据后才入库）
+!/tools/mistral/
+/tools/mistral/capture/
+/tools/mistral/signup/data/
+/tools/mistral/signup/accounts.txt
+/tools/mistral/**/__pycache__/
+/tools/mistral/**/*.pyc
 # 临时产物记录
 /_tmp_artifacts.md
 # node / pnpm
