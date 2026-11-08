@@ -46,7 +46,7 @@ func (s *Server) mistralStore() (*mistralsignupstore.Store, error) {
 	if s.mistralStoreRef != nil {
 		return s.mistralStoreRef, nil
 	}
-	path := filepath.Join(s.dataDir, "mistral-signup.enc")
+	path := filepath.Join(s.dataDir, "mistral-signup.json")
 	st, err := mistralsignupstore.Open(path, s.secret)
 	if err != nil {
 		return nil, err
@@ -122,7 +122,7 @@ func (s *Server) apiMistralCandidateAdd(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidate": c.Public()})
+	writeJSON(w, http.StatusOK, map[string]any{"candidate": c})
 }
 
 func (s *Server) apiMistralCandidateGet(w http.ResponseWriter, r *http.Request) {

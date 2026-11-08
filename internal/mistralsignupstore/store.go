@@ -1,15 +1,13 @@
 // Package mistralsignupstore persists Mistral registration results.
 //
-// Mirrors perchsignupstore: AES-GCM at rest, one Store per path per process,
-// goroutine-safe. No response or log carries a plaintext API key without an
-// explicit admin reveal request.
+// 明文 JSON 存储：账号、密码、API Key 全部以可读形式落盘，便于直接查看、
+// 导出和手工编辑。权限 0600，依靠文件系统权限与 data 目录隔离，不做额外加密。
+//
+// A path must be owned by one Store in one process; methods are goroutine-safe.
 package mistralsignupstore
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,7 +23,7 @@ import (
 var (
 	ErrNotFound = errors.New("mistral candidate not found")
 	ErrInvalid  = errors.New("invalid mistral candidate or transition")
-	ErrCorrupt  = errors.New("cannot authenticate mistral signup store")
+	ErrCorrupt  = errors.New("invalid mistral signup store json")
 )
 
 // Status mirrors the lifecycle a UI shows.
@@ -40,7 +38,7 @@ const (
 	Cancelled  Status = "cancelled"
 )
 
-// Keys holds the API key material. Never serialized without encryption.
+// Keys holds the API key material.
 type Keys struct {
 	API    string `json:"api,omitempty"`
 	Vibe   string `json:"vibe,omitempty"`
@@ -53,7 +51,7 @@ type Keys struct {
 type Candidate struct {
 	ID          string    `json:"id"`
 	Email       string    `json:"email"`
-	Password    string    `json:"password,omitempty"` // 加密存储，默认不回传
+	Password    string    `json:"password,omitempty"`
 	MailboxURL  string    `json:"mailbox_url"`
 	Region      string    `json:"region"`
 	ProxyURL    string    `json:"proxy_url,omitempty"`
@@ -68,33 +66,10 @@ type Candidate struct {
 	CreatedBy   string    `json:"created_by,omitempty"`
 }
 
-// Public returns a copy safe for list responses: secrets stripped.
-func (c Candidate) Public() Candidate {
-	c.Password = ""
-	c.Keys = Keys{
-		API:     maskKey(c.Keys.API),
-		Vibe:    maskKey(c.Keys.Vibe),
-		Studio:  maskKey(c.Keys.Studio),
-		VibeCLI: maskKey(c.Keys.VibeCLI),
-	}
-	return c
-}
-
-func maskKey(k string) string {
-	if k == "" {
-		return ""
-	}
-	if len(k) <= 8 {
-		return "****"
-	}
-	return "****" + k[len(k)-4:]
-}
-
-// Store is a single-file encrypted store.
+// Store is a single plaintext JSON file.
 type Store struct {
 	mu    sync.Mutex
 	path  string
-	gcm   cipher.AEAD
 	rows  []Candidate
 	dirty bool
 }
@@ -104,21 +79,10 @@ type envelope struct {
 	Rows    []Candidate `json:"rows"`
 }
 
-// Open loads (or creates) the store at path using secret as AES-256 key material.
-func Open(path string, secret []byte) (*Store, error) {
-	if len(secret) < 16 {
-		return nil, fmt.Errorf("mistral store: secret too short")
-	}
-	key := sha256.Sum256(secret)
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	s := &Store{path: path, gcm: gcm}
+// Open loads (or creates) the store at path. secret 保留参数位置以兼容调用方，
+// 明文存储不再使用它。
+func Open(path string, _ []byte) (*Store, error) {
+	s := &Store{path: path}
 
 	raw, err := os.ReadFile(path)
 	switch {
@@ -131,53 +95,27 @@ func Open(path string, secret []byte) (*Store, error) {
 		return s, nil
 	}
 
-	plain, err := s.decrypt(raw)
-	if err != nil {
-		return nil, err
-	}
 	var env envelope
-	if err := json.Unmarshal(plain, &env); err != nil {
+	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
 	}
 	s.rows = env.Rows
 	return s, nil
 }
 
-func (s *Store) encrypt(plain []byte) ([]byte, error) {
-	nonce := make([]byte, s.gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	return s.gcm.Seal(nonce, nonce, plain, nil), nil
-}
-
-func (s *Store) decrypt(raw []byte) ([]byte, error) {
-	ns := s.gcm.NonceSize()
-	if len(raw) < ns {
-		return nil, ErrCorrupt
-	}
-	plain, err := s.gcm.Open(nil, raw[:ns], raw[ns:], nil)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
-	}
-	return plain, nil
-}
-
-// List returns all candidates, newest first, with secrets masked.
+// List returns all candidates, newest first.
 func (s *Store) List() []Candidate {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Candidate, 0, len(s.rows))
-	for _, r := range s.rows {
-		out = append(out, r.Public())
-	}
+	out := make([]Candidate, len(s.rows))
+	copy(out, s.rows)
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out
 }
 
-// Get returns one candidate including secrets (for a reveal request).
+// Get returns one candidate.
 func (s *Store) Get(id string) (Candidate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,11 +198,7 @@ func (s *Store) Flush() error {
 
 func (s *Store) flushLocked() error {
 	env := envelope{Version: 1, Rows: s.rows}
-	plain, err := json.Marshal(env)
-	if err != nil {
-		return err
-	}
-	enc, err := s.encrypt(plain)
+	enc, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
 		return err
 	}

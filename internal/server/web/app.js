@@ -1512,12 +1512,14 @@ function stopMistralPolling() {
 
 function mistralKeySummary(keys) {
   if (!keys) return '<span class="muted">—</span>';
-  const parts = [];
-  for (const [k, v] of [['API', keys.api], ['Vibe', keys.vibe], ['Studio', keys.studio]]) {
-    if (v) parts.push(k + ' ' + v);
+  const rows = [];
+  for (const [label, v] of [['API', keys.api], ['Vibe', keys.vibe],
+                            ['Studio', keys.studio], ['CLI', keys.vibe_cli]]) {
+    if (!v) continue;
+    rows.push(`<div class="mr-key"><span class="mr-key-label">${label}</span>` +
+      `<code class="mr-key-val" title="点击复制" data-mr-copy="${escapeHtml(v)}">${escapeHtml(v)}</code></div>`);
   }
-  if (keys.vibe_cli) parts.push('CLI ' + keys.vibe_cli);
-  return parts.length ? parts.join('<br>') : '<span class="muted">—</span>';
+  return rows.length ? rows.join('') : '<span class="muted">—</span>';
 }
 
 async function loadMistralRegistrations() {
@@ -1637,6 +1639,12 @@ document.addEventListener('DOMContentLoaded', () => {
         toast('已请求取消');
         loadMistralCandidates();
       } catch (e) { toast(e.message); }
+    } else if (t.dataset.mrCopy) {
+      ev.preventDefault();
+      try {
+        await navigator.clipboard.writeText(t.dataset.mrCopy);
+        toast('已复制');
+      } catch { toast('复制失败'); }
     } else if (t.dataset.mrDel) {
       ev.preventDefault();
       if (!confirm('删除这个候选？')) return;
