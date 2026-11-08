@@ -7,20 +7,14 @@ import "strings"
 // 代理凭据放在这里而不是容器环境变量，这样可以在管理页面里改。
 // 注意与 mistral.go 里的 Mistral（API 池路由配置）区分开。
 type MistralSignup struct {
-	// ProxyURLs 是完整代理 URL 列表，格式 socks5://user:pass@ip:port
-	// （也支持 http/https）。填了就优先使用，忽略下面的模板字段。
+	// ProxyURLs 是完整代理 URL 列表，一行一个。
+	// 格式：协议://用户:密码@IP:端口（socks5 / socks5h / http / https 均可）。
+	// zooproxy 也是这个格式，无需区分。
 	ProxyURLs []string `json:"proxyUrls"`
-	// ProxyUserTemplate 是 zooproxy 用户名模板，{region} 与 {sid} 会在每次
-	// 注册时替换。
-	ProxyUserTemplate string `json:"proxyUserTemplate"`
-	// ProxyPassword 是 zooproxy 密码。
-	ProxyPassword string `json:"proxyPassword"`
-	// ProxySIDs 是粘性会话列表，每次注册挑一个。
-	ProxySIDs []string `json:"proxySids"`
-	// ProxyHostPort 是代理入口，例如 us-eu.zooproxy.com:5000。
-	ProxyHostPort string `json:"proxyHostPort"`
-	// Region 传给 {region} 的地区代码。
-	Region string `json:"region"`
+	// CardLines 是银行卡列表，一行一张。
+	// 格式：卡号----有效期----CVV，例如 4633433883347213----05/28----913。
+	// 只保存原始行，解析交给 mistralcards 包，避免多处重复实现。
+	CardLines []string `json:"cardLines"`
 	// MailboxProxy 可选，用于走 iCloud HME 轮询；留空表示直连。
 	MailboxProxy string `json:"mailboxProxy"`
 	// WorkerPath / WorkerPython 覆盖镜像内默认值；留空用默认。
@@ -30,49 +24,23 @@ type MistralSignup struct {
 	Concurrency int `json:"concurrency"`
 }
 
-// DefaultMistralSignup 只给非敏感默认值：代理入口与地区。
+// DefaultMistralSignup 只给非敏感默认值。
 func DefaultMistralSignup() MistralSignup {
-	return MistralSignup{
-		ProxyHostPort: "us-eu.zooproxy.com:5000",
-		Region:        "CA",
-		Concurrency:   1,
-	}
+	return MistralSignup{Concurrency: 1}
 }
 
 // normalizeMistralSignup 补齐空字段。
 func (c *Config) normalizeMistralSignup() error {
 	m := &c.MistralSignup
 	def := DefaultMistralSignup()
-	if m.ProxyHostPort == "" {
-		m.ProxyHostPort = def.ProxyHostPort
-	}
-	if m.Region == "" {
-		m.Region = def.Region
-	}
 	if m.Concurrency <= 0 {
 		m.Concurrency = def.Concurrency
 	}
 	return nil
 }
 
-// HasProxy reports whether enough proxy settings exist to attempt a signup.
-func (m MistralSignup) HasProxy() bool {
-	if len(m.ProxyURLs) > 0 {
-		return true
-	}
-	return m.ProxyUserTemplate != "" && m.ProxyPassword != "" && len(m.ProxySIDs) > 0
-}
-
-// ProxyMode 返回当前使用的是哪一种配置方式，便于界面提示。
-func (m MistralSignup) ProxyMode() string {
-	if len(m.ProxyURLs) > 0 {
-		return "urls"
-	}
-	if m.HasProxy() {
-		return "template"
-	}
-	return "none"
-}
+// HasProxy reports whether proxies are configured.
+func (m MistralSignup) HasProxy() bool { return len(m.ProxyURLs) > 0 }
 
 // PickProxyByIndex 按序号轮转取代理：第 n 个候选固定用第 n%len 个代理，
 // 代理可以重复使用。
@@ -87,40 +55,44 @@ func (m MistralSignup) PickProxyByIndex(n int) string {
 	return all[n%len(all)]
 }
 
-// PickProxy 返回这次注册要用的代理 URL（兼容旧调用）。
-func (m MistralSignup) PickProxy(sid string) string {
-	if len(m.ProxyURLs) > 0 {
-		return m.ProxyURLs[0]
-	}
-	return m.ProxyURLFor(sid)
-}
-
-// AllProxies 扁平化返回所有可用代理（URL 模式直接返回列表）。
+// AllProxies 返回去掉空行后的代理列表。
 func (m MistralSignup) AllProxies() []string {
-	if len(m.ProxyURLs) > 0 {
-		out := make([]string, 0, len(m.ProxyURLs))
-		for _, u := range m.ProxyURLs {
-			if u = strings.TrimSpace(u); u != "" {
-				out = append(out, u)
-			}
-		}
-		return out
-	}
-	out := make([]string, 0, len(m.ProxySIDs))
-	for _, sid := range m.ProxySIDs {
-		if u := m.ProxyURLFor(sid); u != "" {
+	out := make([]string, 0, len(m.ProxyURLs))
+	for _, u := range m.ProxyURLs {
+		if u = strings.TrimSpace(u); u != "" {
 			out = append(out, u)
 		}
 	}
 	return out
 }
 
-// ProxyURLFor builds one zooproxy URL for the given sid.
-func (m MistralSignup) ProxyURLFor(sid string) string {
-	if !m.HasProxy() {
+// HasCards reports whether any card line is configured.
+func (m MistralSignup) HasCards() bool { return len(m.AllCards()) > 0 }
+
+// AllCards 返回去掉空行后的银行卡原始行列表。
+// 只做去空白，不解析格式；解析见 mistralcards.ParseLines。
+func (m MistralSignup) AllCards() []string {
+	out := make([]string, 0, len(m.CardLines))
+	for _, c := range m.CardLines {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// PickCardByIndex 按序号轮转取卡：第 n 个候选固定用第 n%len 张卡，
+// 与代理的轮转策略保持一致。
+//
+// 注意：这里只做轮转分配，不保证卡不被跨账号复用。真正的一卡一号约束
+// 由卡池的使用记录实现；如需强制唯一，请在调用方记录已用卡。
+func (m MistralSignup) PickCardByIndex(n int) string {
+	all := m.AllCards()
+	if len(all) == 0 {
 		return ""
 	}
-	user := strings.ReplaceAll(m.ProxyUserTemplate, "{region}", m.Region)
-	user = strings.ReplaceAll(user, "{sid}", sid)
-	return "http://" + user + ":" + m.ProxyPassword + "@" + m.ProxyHostPort
+	if n < 0 {
+		n = 0
+	}
+	return all[n%len(all)]
 }

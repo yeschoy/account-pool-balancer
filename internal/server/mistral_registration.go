@@ -384,24 +384,9 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 	cmd.Stdin = bytes.NewReader(input)
 	// 把界面里配置的代理注入 worker 环境
 	env := os.Environ()
-	// 完整 URL 列表优先（socks5://user:pass@ip:port）
+	// 代理列表：一行一个完整 URL
 	if urls := cfg.AllProxies(); len(urls) > 0 {
 		env = append(env, "MISTRAL_PROXY_URLS="+strings.Join(urls, "\n"))
-	}
-	if cfg.ProxyUserTemplate != "" {
-		env = append(env, "ZOOPROXY_USER_TPL="+cfg.ProxyUserTemplate)
-	}
-	if cfg.ProxyPassword != "" {
-		env = append(env, "ZOOPROXY_PASSWORD="+cfg.ProxyPassword)
-	}
-	if len(cfg.ProxySIDs) > 0 {
-		env = append(env, "ZOOPROXY_SIDS="+strings.Join(cfg.ProxySIDs, ","))
-	}
-	if cfg.ProxyHostPort != "" {
-		env = append(env, "ZOOPROXY_HOST_PORT="+cfg.ProxyHostPort)
-	}
-	if cfg.Region != "" {
-		env = append(env, "MISTRAL_REGION="+cfg.Region)
 	}
 	if cfg.MailboxProxy != "" {
 		env = append(env, "MIDA_PROXY="+cfg.MailboxProxy)
@@ -491,15 +476,6 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	next := *in.Settings
-	// 去掉空白 sid，避免出现空串代理
-	sids := make([]string, 0, len(next.ProxySIDs))
-	for _, sid := range next.ProxySIDs {
-		sid = strings.TrimSpace(sid)
-		if sid != "" {
-			sids = append(sids, sid)
-		}
-	}
-	next.ProxySIDs = sids
 	// 代理 URL 列表：去空行
 	urls := make([]string, 0, len(next.ProxyURLs))
 	for _, u := range next.ProxyURLs {
@@ -508,9 +484,6 @@ func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	next.ProxyURLs = urls
-	next.ProxyUserTemplate = strings.TrimSpace(next.ProxyUserTemplate)
-	next.ProxyHostPort = strings.TrimSpace(next.ProxyHostPort)
-	next.Region = strings.TrimSpace(next.Region)
 
 	rev := int64(-1)
 	if in.ExpectedRevision != nil {
@@ -537,26 +510,18 @@ func (s *Server) apiMistralTestProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Get().MistralSignup
 	if !cfg.HasProxy() {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok": false, "error": "代理未配置（需要用户名模板、密码和至少一个 sid）",
+			"ok": false, "error": "代理未配置，请先在代理列表里填写",
 		})
 		return
 	}
 	urls := cfg.AllProxies()
-	if len(urls) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok": false, "error": "没有可用的代理",
-		})
-		return
+	// 每次测试随机挑一个，便于轮换验证
+	idx := 0
+	if len(urls) > 1 {
+		idx = randIndex(len(urls))
 	}
-	proxyURL := urls[0]
-	sid := ""
-	if len(cfg.ProxySIDs) > 0 {
-		sid = cfg.ProxySIDs[0]
-		if len(cfg.ProxySIDs) > 1 {
-			sid = cfg.ProxySIDs[randIndex(len(cfg.ProxySIDs))]
-		}
-		proxyURL = cfg.PickProxy(sid)
-	}
+	proxyURL := urls[idx]
+	sid := fmt.Sprintf("#%d", idx)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()

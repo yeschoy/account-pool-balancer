@@ -33,14 +33,8 @@ def _hostport_of(url: str) -> str:
 @dataclass
 class Proxy:
     sid: str
-    host: str = __import__("os").environ.get("ZOOPROXY_HOST", "us-eu.zooproxy.com")
-    port: int = int(__import__("os").environ.get("ZOOPROXY_PORT", "5000"))
-    user_tpl: str = __import__("os").environ.get(
-        "ZOOPROXY_USER_TPL", "<user>-region-{region}-sid-{sid}-t-10")
-    password: str = __import__("os").environ.get("ZOOPROXY_PASSWORD", "")
-    region: str = "CA"
-    # raw_url 非空时直接使用，忽略上面的模板字段。
-    # 支持 socks5://user:pass@ip:port、http://、https://
+    # 完整代理 URL：协议://用户:密码@IP:端口
+    # 支持 socks5 / socks5h / http / https；zooproxy 也用同一格式
     raw_url: str = ""
 
     # 运行时状态
@@ -57,23 +51,9 @@ class Proxy:
         label = label or _hostport_of(u)
         return cls(sid=label, raw_url=u)
 
-    @classmethod
-    def from_env(cls, sid: str) -> "Proxy":
-        hp = __import__("os").environ.get("ZOOPROXY_HOST_PORT", "")
-        if ":" in hp:
-            h, p = hp.rsplit(":", 1)
-            try:
-                return cls(sid=sid, host=h, port=int(p))
-            except ValueError:
-                pass
-        return cls(sid=sid)
-
     @property
     def url(self) -> str:
-        if self.raw_url:
-            return self.raw_url
-        u = self.user_tpl.format(region=self.region, sid=self.sid)
-        return f"http://{u}:{self.password}@{self.host}:{self.port}"
+        return self.raw_url
 
     @property
     def scheme(self) -> str:
@@ -102,13 +82,13 @@ class ProxyPool:
         sids = sids if sids is not None else DEFAULT_SIDS
         self.pre_proxy = pre_proxy
         self._lock = threading.Lock()
-        # 优先读完整 URL 列表（MISTRAL_PROXY_URLS，换行分隔）
+        # 代理列表：MISTRAL_PROXY_URLS（换行分隔的完整 URL）
         raw = __import__("os").environ.get("MISTRAL_PROXY_URLS", "").strip()
-        if raw:
-            urls = [u.strip() for u in raw.split("\n") if u.strip()]
+        urls = [u.strip() for u in raw.split("\n") if u.strip()]
+        if urls:
             self._proxies = [Proxy.from_url(u) for u in urls]
         else:
-            self._proxies = [Proxy.from_env(s) for s in sids]
+            self._proxies = [Proxy.from_url(s) for s in (sids or [])]
         self._rr = itertools.cycle(range(len(self._proxies))) if self._proxies else None
 
     def all(self) -> list[Proxy]:
@@ -151,7 +131,5 @@ class ProxyPool:
         return sum(1 for p in self._proxies if p.alive and p.cooldown_until <= now)
 
 
-# 代理 sid 列表：从环境变量 ZOOPROXY_SIDS 读取（逗号分隔）
-# 未设置时为空，需自行配置；示例见 cli.py 注释
-import os as _os
-DEFAULT_SIDS = [s for s in _os.environ.get("ZOOPROXY_SIDS", "").split(",") if s]
+# 代理列表统一从 MISTRAL_PROXY_URLS 读取（换行分隔的完整 URL）
+DEFAULT_SIDS: list[str] = []

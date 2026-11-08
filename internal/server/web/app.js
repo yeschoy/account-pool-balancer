@@ -1673,18 +1673,11 @@ async function loadMistralSettings() {
     const d = await api('GET', '/api/mistral/settings');
     const st = d.settings || {};
     document.getElementById('ms-proxy-urls').value = (st.proxyUrls || []).join('\n');
-    document.getElementById('ms-user-tpl').value = st.proxyUserTemplate || '';
-    document.getElementById('ms-password').value = st.proxyPassword || '';
-    document.getElementById('ms-hostport').value = st.proxyHostPort || '';
-    document.getElementById('ms-region').value = st.region || 'CA';
-    document.getElementById('ms-sids').value = (st.proxySids || []).join('\n');
     document.getElementById('ms-mailbox-proxy').value = st.mailboxProxy || '';
     const msg = document.getElementById('mr-settings-msg');
     if (msg) {
       msg.textContent = d.hasProxy
-        ? (st.proxyUrls && st.proxyUrls.length
-            ? `已配置 ${st.proxyUrls.length} 个代理 URL`
-            : `已配置模板方式（${(st.proxySids || []).length} 个 sid）`)
+        ? `已配置 ${(st.proxyUrls || []).length} 个代理`
         : '代理未配置，注册会失败';
       msg.className = d.hasProxy ? 'muted' : 'error';
     }
@@ -1710,11 +1703,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const d = await api('PUT', '/api/mistral/settings', {
           settings: {
             proxyUrls: parseSids(document.getElementById('ms-proxy-urls').value),
-            proxyUserTemplate: document.getElementById('ms-user-tpl').value.trim(),
-            proxyPassword: document.getElementById('ms-password').value,
-            proxyHostPort: document.getElementById('ms-hostport').value.trim(),
-            region: document.getElementById('ms-region').value.trim() || 'CA',
-            proxySids: parseSids(document.getElementById('ms-sids').value),
             mailboxProxy: document.getElementById('ms-mailbox-proxy').value.trim(),
             workerPath: '',
             workerPython: '',
@@ -1740,10 +1728,10 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const d = await api('POST', '/api/mistral/settings/test', {});
         if (d.ok) {
-          out.textContent = '出口 ' + (d.response || '') + ' (sid ' + d.sid + ')';
+          out.textContent = '出口 ' + (d.response || '') + ' (' + d.sid + ')';
           out.className = 'muted';
         } else {
-          out.textContent = '失败：' + (d.error || '') + ' (sid ' + (d.sid || '-') + ')';
+          out.textContent = '失败：' + (d.error || '') + ' (' + (d.sid || '-') + ')';
           out.className = 'error';
         }
       } catch (e) {

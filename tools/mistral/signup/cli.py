@@ -34,16 +34,15 @@ from core.proxy_pool import DEFAULT_SIDS, ProxyPool
 from runner import Account, SignupRunner, Store, gen_password
 
 
-# 代理凭据从环境变量读取（不写死在代码里）
-#   export ZOOPROXY_USER_TPL='<user>-region-{region}-sid-{sid}-t-10'
-#   export ZOOPROXY_PASSWORD='<password>'
-#   export ZOOPROXY_SIDS='sid1,sid2,...'      # 可选
+# 代理列表从环境变量读取（不写死在代码里）
+#   export MISTRAL_PROXY_URLS='socks5://user:pass@ip:port
+#   socks5://user:pass@ip2:port2'
 
 
 def _load_sids():
     import os
-    raw = os.environ.get("ZOOPROXY_SIDS", "")
-    return [s for s in raw.split(",") if s] or DEFAULT_SIDS
+    raw = os.environ.get("MISTRAL_PROXY_URLS", "")
+    return [s.strip() for s in raw.split("\n") if s.strip()] or DEFAULT_SIDS
 
 
 def parse_args():

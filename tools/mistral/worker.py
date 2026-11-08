@@ -34,7 +34,8 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
   }
 
 环境变量：
-  ZOOPROXY_USER_TPL / ZOOPROXY_PASSWORD / ZOOPROXY_SIDS   代理池
+  MISTRAL_PROXY_URLS   代理列表，换行分隔的完整 URL
+                       （socks5://user:pass@ip:port，zooproxy 同格式）
   MISTRAL_WORKER_ROOT   代码根目录（默认上级目录）
 """
 from __future__ import annotations
