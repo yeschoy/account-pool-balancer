@@ -106,7 +106,7 @@ type requestLog struct {
 	CacheRate           *float64     `json:"cacheRate"`      // cached share of the prompt, 0..1
 	Cost                *float64     `json:"cost,omitempty"` // in Currency, from the price table
 	Currency            string       `json:"currency,omitempty"`
-	UpstreamRequestID   string       `json:"upstreamRequestId,omitempty"` // x-request-id of the upstream response that was delivered
+	UpstreamRequestID   string       `json:"upstreamRequestId,omitempty"` // provider trace of the upstream response that was delivered
 	// Conversations is how many distinct accounts this request tried while a
 	// conversation fingerprint was present. It stays 1 while every attempt
 	// remained on one account, and only exceeds 1 when a failover handed one
@@ -254,13 +254,6 @@ type attemptResult struct {
 	turnToken   string
 	turnAccount config.Account
 	turnStarted bool
-}
-
-// setUpstreamRequestID exposes the upstream's own request id so downstream gateways can quote it to the provider.
-func setUpstreamRequestID(dst, upstream http.Header) {
-	if id := upstream.Get("X-Request-Id"); id != "" {
-		dst.Set("X-Upstream-Request-Id", id)
-	}
 }
 
 func newRequestID() string {
@@ -869,7 +862,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		switch res.kind {
 		case outDelivered:
-			rec.UpstreamRequestID = res.header.Get("X-Request-Id")
+			rec.UpstreamRequestID = upstreamRequestID(res.header, acct.Provider)
 			rec.Attempts = append(rec.Attempts, att)
 			if res.result == "success" {
 				if acct.Provider == config.ProviderOpenCodeGo {
@@ -1606,7 +1599,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	h := w.Header()
 	h.Set("Content-Type", ct)
 	h.Set("X-Attempts", strconv.Itoa(attemptNo))
-	setUpstreamRequestID(h, resp.Header)
+	setUpstreamRequestID(h, resp.Header, acct.Provider)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(b)
 	res.kind, res.result, res.status, res.terminal = outDelivered, "success", resp.StatusCode, "success"
@@ -1911,7 +1904,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	h.Set("X-Attempts", strconv.Itoa(attemptNo))
-	setUpstreamRequestID(h, resp.Header)
+	setUpstreamRequestID(h, resp.Header, lease.Account.Provider)
 	w.WriteHeader(http.StatusOK)
 	rc := http.NewResponseController(w)
 	ttft := time.Since(start).Milliseconds()

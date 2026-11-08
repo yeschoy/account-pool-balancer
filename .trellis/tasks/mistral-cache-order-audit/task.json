@@ -1,0 +1,7 @@
+{
+  "name": "mistral-cache-order-audit",
+  "status": "in_progress",
+  "description": "仅检查自测-test的详情，审计Mistral账号池是否改写/重排前缀并修复有证据的缺陷",
+  "validation": "validation.md",
+  "waiting_for": "详情/源码/完整HTTP顺序审计及trace漏记修复完成；低缓存内部原因未确认，等待受控生产A/B授权或Mistral按原生关联ID排查；未部署"
+}

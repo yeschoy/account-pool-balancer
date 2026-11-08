@@ -118,7 +118,7 @@ func (s *Server) openCodeCompatibility(w http.ResponseWriter, r *http.Request, c
 	h := w.Header()
 	h.Set("X-Compatibility-Mode", "buffered")
 	h.Set("X-Attempts", strconv.Itoa(attempt))
-	setUpstreamRequestID(h, resp.Header)
+	setUpstreamRequestID(h, resp.Header, "")
 	h.Set("Content-Type", "application/json")
 	if stream {
 		h.Set("Content-Type", "text/event-stream")
