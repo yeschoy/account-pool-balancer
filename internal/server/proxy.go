@@ -1441,6 +1441,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// session is exactly that key, and it never leaves as the raw value.
 		req.Header.Set("Modal-Routing-Affinity-Key", ident.Fingerprint)
 	}
+	if acct.Provider == config.ProviderMistral {
+		ensureMistralXAffinity(req.Header, body)
+	}
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
