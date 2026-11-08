@@ -12,7 +12,7 @@
 
 新增 **Token Harbor 号池**：原生 Chat Completions / Responses（Codex）/ Messages（Claude Code），按会话与缓存标识尽量固定同一 key，独立分组/路由/错误规则，支持概览、请求/错误日志和缓存读取/写入统计。不强制跨协议兼容、不保证上游内部缓存命中；余额未知。见 [接入与边界](docs/tokenharbor.md)。
 
-新增 **Mistral 号池**：复用 OpenDesign 调度策略与 Codex / Claude / pi 等会话头粘性，支持账号管理、批量导入、独立密钥/路由/错误规则，以及原生 Chat / 无状态 Responses / FIM / Embeddings。模型目录独立同步，余额明确未知，不做协议转换。见 [Mistral 接入](docs/mistral.md)。
+新增 **Mistral 号池**：复用 OpenDesign 调度策略与 Codex / Claude / pi 等会话头粘性，支持账号管理、批量导入、独立密钥/路由/错误规则，以及原生 Chat / 无状态 Responses / FIM / Embeddings。模型目录独立同步，已接入 Studio / Vibe 套餐额度与组织订阅刷新；额度为百分比推算的约值，不是钱包余额，失败/过期保留历史并标未知。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high；不跨协议转换。客户端实测边界见 [Mistral 接入](docs/mistral.md)。
 
 单个 Go 二进制，无外部依赖，无数据库。
 

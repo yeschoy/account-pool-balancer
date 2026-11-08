@@ -1131,7 +1131,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"
 		}
-	case "compatibility", "egress", "policy_pause":
+	case "compatibility", "egress", "policy_pause", "incomplete_stream":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
 		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
@@ -1813,6 +1813,7 @@ type evMsg struct {
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
 	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string) *attemptResult {
+	mistralResponses := lease.Account.Provider == config.ProviderMistral && r.URL.Path == "/v1/responses"
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
 	done := make(chan struct{})
@@ -1831,6 +1832,9 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 	}()
 	readFailure := func(err error) *attemptResult {
+		if mistralResponses && err == io.EOF && r.Context().Err() == nil && !timedOut.Load() {
+			return mistralResponsesTruncated(res)
+		}
 		res.kind = outFailed
 		switch {
 		case r.Context().Err() != nil:
@@ -1915,12 +1919,39 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 		return rc.Flush() == nil
 	}
+	// Keep HTTP200 after commitment, but never turn a missing Responses
+	// terminal into success or synthesize completed/DONE. No account replay.
+	truncatedResponses := func() *attemptResult {
+		if r.Context().Err() != nil {
+			return clientGone()
+		}
+		failure := mistralResponsesTruncated(&attemptResult{})
+		if !write(append(append([]byte("\n\nevent: error\ndata: "), failure.body...), '\n', '\n')) {
+			return clientGone()
+		}
+		res.result, res.terminal, res.category = "failed", failure.terminal, failure.category
+		if timedOut.Load() {
+			res.terminal, res.category = "timeout", "timeout"
+		}
+		res.evaluated = true // transport incompleteness is not a bad credential
+		return res
+	}
+	firstDone := mistralResponses && mistralResponsesTerminal(firstEvent, firstData)
 	if !write(first) {
+		if firstDone {
+			return res
+		}
 		return clientGone()
 	}
 	scan(firstEvent, firstData)
+	if firstDone {
+		return res
+	}
 	if firstErr == io.EOF {
-		return res // the whole stream was one event
+		if mistralResponses {
+			return truncatedResponses()
+		}
+		return res // legacy native streams may finish with one event
 	}
 
 	idleDur := time.Duration(cfg.Routing.IdleSec) * time.Second
@@ -1935,6 +1966,9 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				res.upstreamLast = m.at
 				event, data, _ := sseFields(m.ev)
 				done := isTerminalEvent(event, data)
+				if mistralResponses {
+					done = mistralResponsesTerminal(event, data)
+				}
 				outEvent := m.ev
 				if mistralChat {
 					var err error
@@ -1961,6 +1995,10 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				scan(event, data)
 				if isErr, st, payload := sseError(event, data); isErr {
 					res.result, res.category = "failed", "upstream"
+					if mistralResponses {
+						res.terminal, res.evaluated = "upstream_envelope", true
+						return res // a failed terminal must not wait for EOF either
+					}
 					if lease.Account.Provider == config.ProviderOpenCodeGo && !res.evaluated && res.goRecord != nil {
 						failure := &attemptResult{privateIdentities: privateIdentities, status: st, upstreamStatus: resp.StatusCode, egressIP: res.egressIP, body: payload, contentType: "application/json", header: resp.Header, terminal: "upstream_envelope", category: "upstream"}
 						rc := res.goRecord
@@ -1980,11 +2018,17 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				idle.Reset(idleDur)
 			}
 			if m.err == io.EOF {
+				if mistralResponses {
+					return truncatedResponses()
+				}
 				return res
 			}
 			if m.err != nil {
 				if r.Context().Err() != nil {
 					return clientGone()
+				}
+				if mistralResponses {
+					return truncatedResponses()
 				}
 				res.result, res.terminal = "failed", "network"
 				res.category = "network"

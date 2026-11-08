@@ -155,16 +155,23 @@ func mistralFinalPromptCacheKey(body []byte) string {
 }
 
 // prepareMistralRequest runs after strict JSON/model validation and original
-// identity selection, but before account/RPM acquisition. Only the exact
-// DeepSeek Chat model consumes generic parameters; other paths remain native.
+// identity selection, but before account/RPM acquisition. Three exact models
+// share reasoning controls; unrelated DeepSeek parameters stay Chat-only.
 func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, string, error) {
 	if path != "/v1/chat/completions" && path != "/v1/responses" {
 		return body, "", nil
 	}
 	o := scanMistralObject(body)
-	deepSeek := path == "/v1/chat/completions" && mistralString(o.get("model")) == "deepseek-v4-1-flash-1017"
+	model := mistralString(o.get("model"))
+	deepSeek := path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017"
 	if deepSeek {
 		if err := adaptMistralDeepSeekParameters(o); err != nil {
+			return nil, "", err
+		}
+	}
+	reasoningModel := mistralReasoningModel(model)
+	if reasoningModel {
+		if err := adaptMistralReasoningParameters(o, path == "/v1/responses"); err != nil {
 			return nil, "", err
 		}
 	}
@@ -173,7 +180,7 @@ func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, strin
 			if o.fields[i].key != "messages" {
 				continue
 			}
-			messages, changed, err := mistralChatMessages(o.fields[i].value, deepSeek)
+			messages, changed, err := mistralChatMessages(o.fields[i].value, deepSeek, reasoningModel)
 			if err != nil {
 				return nil, "", err
 			}
@@ -208,52 +215,8 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		}
 		o.set("store", nil)
 	}
-	if err := o.unique("messages", "thinking", "enable_thinking", "reasoning_effort", "reasoning", "seed", "random_seed", "logit_bias", "verbosity", "user", "safety_identifier", "prompt_cache_retention", "prompt_cache_key", "metadata"); err != nil {
+	if err := o.unique("messages", "seed", "random_seed", "logit_bias", "verbosity", "user", "safety_identifier", "prompt_cache_retention", "prompt_cache_key", "metadata"); err != nil {
 		return err
-	}
-	if raw := o.get("thinking"); raw != nil {
-		thinking := scanMistralObject(raw)
-		if thinking == nil || len(thinking.fields) != 1 || thinking.fields[0].key != "type" {
-			return errors.New("Mistral Chat thinking requires only type=enabled/disabled; budgets and unknown structures cannot be preserved")
-		}
-		kind := mistralString(thinking.get("type"))
-		if kind != "enabled" && kind != "disabled" {
-			return errors.New("Mistral Chat thinking.type must be enabled or disabled")
-		}
-		o.set("thinking", nil)
-	}
-	if raw := o.get("enable_thinking"); raw != nil {
-		if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
-			return errors.New("Mistral Chat enable_thinking must be boolean")
-		}
-		o.set("enable_thinking", nil)
-	}
-	nativeEffort := o.get("reasoning_effort")
-	effortRaw := mistralDeepSeekEffort(nativeEffort)
-	if raw := o.get("reasoning"); raw != nil {
-		reasoning := scanMistralObject(raw)
-		if reasoning != nil {
-			if err := reasoning.unique("effort"); err != nil {
-				return err
-			}
-		}
-		if reasoning == nil || len(reasoning.fields) != 1 || reasoning.fields[0].key != "effort" {
-			return errors.New("Mistral DeepSeek Chat reasoning requires only effort; unknown structures and additional fields cannot be preserved")
-		}
-		alias := mistralDeepSeekEffort(reasoning.get("effort"))
-		if nativeEffort != nil && mistralString(effortRaw) != mistralString(alias) {
-			return errors.New("Mistral DeepSeek Chat reasoning.effort conflicts with explicit reasoning_effort")
-		}
-		if nativeEffort == nil {
-			effortRaw = alias
-		}
-		o.set("reasoning", nil)
-	}
-	// The operator's supported tiers are low/high. Missing or unsupported
-	// effort always becomes high; compatibility switches cannot emit none.
-	// Write once: a missing native field is appended, not updated in-place.
-	if !bytes.Equal(effortRaw, nativeEffort) {
-		o.set("reasoning_effort", effortRaw)
 	}
 	if seed := o.get("seed"); seed != nil {
 		if !bytes.Equal(seed, []byte("null")) {
@@ -305,9 +268,93 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 	return nil
 }
 
-func mistralDeepSeekEffort(raw []byte) []byte {
+func mistralReasoningModel(model string) bool {
+	switch model {
+	case "deepseek-v4-1-flash-1017", "zai-glm-5-3", "zai-glm-5-3-flash":
+		return true
+	default:
+		return false
+	}
+}
+
+// Only shared reasoning controls belong here. Do not extend DeepSeek's
+// store/image/developer/seed exceptions to GLM or rewrite native Responses input.
+func adaptMistralReasoningParameters(o *mistralWireObject, responses bool) error {
+	if err := o.unique("reasoning_effort", "reasoning", "prompt_cache_key", "metadata"); err != nil {
+		return err
+	}
+	if !responses {
+		if err := o.unique("messages", "thinking", "enable_thinking"); err != nil {
+			return err
+		}
+		if raw := o.get("thinking"); raw != nil {
+			thinking := scanMistralObject(raw)
+			if thinking == nil || len(thinking.fields) != 1 || thinking.fields[0].key != "type" {
+				return errors.New("Mistral Chat thinking requires only type=enabled/disabled; budgets and unknown structures cannot be preserved")
+			}
+			kind := mistralString(thinking.get("type"))
+			if kind != "enabled" && kind != "disabled" {
+				return errors.New("Mistral Chat thinking.type must be enabled or disabled")
+			}
+			o.set("thinking", nil)
+		}
+		if raw := o.get("enable_thinking"); raw != nil {
+			if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
+				return errors.New("Mistral Chat enable_thinking must be boolean")
+			}
+			o.set("enable_thinking", nil)
+		}
+	}
+
+	flat := o.get("reasoning_effort")
+	effort := mistralReasoningEffort(flat)
+	raw := o.get("reasoning")
+	var reasoning *mistralWireObject
+	if raw != nil && !(responses && bytes.Equal(raw, []byte("null"))) {
+		reasoning = scanMistralObject(raw)
+		if reasoning == nil {
+			return errors.New("Mistral reasoning requires only effort for Chat, or a native reasoning object/null for Responses")
+		}
+		if err := reasoning.unique("effort"); err != nil {
+			return err
+		}
+		if !responses && (len(reasoning.fields) != 1 || reasoning.fields[0].key != "effort") {
+			return errors.New("Mistral Chat reasoning requires only effort; unknown structures and additional fields cannot be preserved")
+		}
+		if nested := reasoning.get("effort"); nested != nil {
+			alias := mistralReasoningEffort(nested)
+			if flat != nil && mistralString(effort) != mistralString(alias) {
+				return errors.New("Mistral reasoning.effort conflicts with explicit reasoning_effort")
+			}
+			if flat == nil {
+				effort = alias
+			}
+		}
+	}
+	if responses {
+		if reasoning == nil {
+			o.set("reasoning", append(append([]byte(`{"effort":`), effort...), '}'))
+		} else if !bytes.Equal(reasoning.get("effort"), effort) {
+			reasoning.set("effort", effort)
+			o.set("reasoning", reasoning.render()) // preserve summary and all other native fields
+		}
+		if flat != nil {
+			o.set("reasoning_effort", nil)
+		}
+	} else {
+		if !bytes.Equal(flat, effort) {
+			o.set("reasoning_effort", effort)
+		}
+		if raw != nil {
+			o.set("reasoning", nil)
+		}
+	}
+	return nil
+}
+
+func mistralReasoningEffort(raw []byte) []byte {
 	switch mistralString(raw) {
-	case "low", "high":
+	case "low", "high", "max":
 		return raw
 	default:
 		return []byte(`"high"`)
@@ -323,7 +370,7 @@ func mistralSeed(raw []byte) (*big.Int, bool) {
 	return new(big.Int).SetString(string(raw), 10)
 }
 
-func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
+func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bool, error) {
 	if len(raw) == 0 || raw[0] != '[' {
 		return raw, false, nil // native validation owns unrelated malformed messages
 	}
@@ -334,7 +381,7 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 		message := scanMistralObject(raw[i:end])
 		if message != nil {
 			role := mistralString(message.get("role"))
-			if developer || message.get("reasoning_content") != nil {
+			if developer || reasoningAlias || message.get("reasoning_content") != nil {
 				if err := message.unique("role"); err != nil {
 					return nil, false, err
 				}
@@ -349,22 +396,21 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 			}
 			if role == "assistant" {
 				reasoning := message.get("reasoning_content")
-				// The exact DeepSeek Chat endpoint also rejects the string
-				// reasoning alias used by some clients. Preserve its thought
-				// through the same native chunks, never by simply deleting it.
-				if alias := message.get("reasoning"); developer && alias != nil {
+				// All three reasoning models use Mistral's native typed chunks.
+				// Preserve legacy assistant reasoning via the same representation.
+				if alias := message.get("reasoning"); reasoningAlias && alias != nil {
 					if err := message.unique("reasoning", "reasoning_content", "content"); err != nil {
 						return nil, false, err
 					}
 					var aliased, canonical *string
 					if json.Unmarshal(alias, &aliased) != nil {
-						return nil, false, errors.New("Mistral DeepSeek assistant reasoning must be a string or null")
+						return nil, false, errors.New("Mistral assistant reasoning must be a string or null")
 					}
 					if reasoning != nil && json.Unmarshal(reasoning, &canonical) != nil {
 						return nil, false, errors.New("Mistral assistant reasoning_content must be a string or null")
 					}
 					if aliased != nil && *aliased != "" && canonical != nil && *canonical != "" && *aliased != *canonical {
-						return nil, false, errors.New("Mistral DeepSeek assistant reasoning conflicts with reasoning_content; neither thought was discarded")
+						return nil, false, errors.New("Mistral assistant reasoning conflicts with reasoning_content; neither thought was discarded")
 					}
 					if reasoning == nil || canonical == nil || *canonical == "" {
 						reasoning = alias

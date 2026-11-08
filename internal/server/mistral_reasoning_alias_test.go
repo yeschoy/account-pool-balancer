@@ -94,7 +94,7 @@ func TestMistralReasoningAliasScope(t *testing.T) {
 		{"deepseek-v4-1-flash-1017", "/v1/responses"},
 		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
 	} {
-		body := []byte(` {"model":"` + tc.model + `","messages":[{"role":"assistant","reasoning":"native","content":"answer"}]} `)
+		body := []byte(` {"model":"` + tc.model + `","reasoning":{"effort":"high"},"messages":[{"role":"assistant","reasoning":"native","content":"answer"}]} `)
 		out, _, err := prepareMistralRequest(body, tc.path, "")
 		if err != nil || !bytes.Equal(out, body) {
 			t.Fatal("alias compatibility escaped exact scope")

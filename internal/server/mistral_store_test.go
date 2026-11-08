@@ -48,7 +48,7 @@ func TestMistralStoreOtherModelAndProtocolUnchanged(t *testing.T) {
 		{"deepseek-v4-1-flash-1017", "/v1/responses"},
 		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
 	} {
-		body := []byte(`{ "model":"` + tc.model + `", "store":false, "messages":[] }`)
+		body := []byte(`{ "model":"` + tc.model + `", "reasoning":{"effort":"high"}, "store":false, "messages":[] }`)
 		out, _, err := prepareMistralRequest(body, tc.path, "")
 		if err != nil || !bytes.Equal(out, body) {
 			t.Fatal("other model/protocol store behavior changed")

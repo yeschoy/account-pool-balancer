@@ -29,7 +29,7 @@ func TestMistralThinkingParameters(t *testing.T) {
 			t.Fatalf("%s: %s %v", tc.fields, out, err)
 		}
 	}
-	for _, effort := range []string{"low", "high"} {
+	for _, effort := range []string{"low", "high", "max"} {
 		body := []byte(fmt.Sprintf(`{"model":"deepseek-v4-1-flash-1017","reasoning_effort":%q,"thinking":{"type":"enabled"}}`, effort))
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
 		if err != nil || !bytes.Contains(out, []byte(`"reasoning_effort":"`+effort+`"`)) {
@@ -232,7 +232,7 @@ func TestMistralNewParametersScope(t *testing.T) {
 		{"deepseek-v4-1-flash-1017", "/v1/responses"},
 		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
 	} {
-		body := []byte(` { "model":"` + tc.model + `", "thinking":{"type":"disabled"},"enable_thinking":true,"seed":42,"store":false,"logit_bias":{},"verbosity":"high","user":"marker","safety_identifier":"label","prompt_cache_retention":"24h","metadata":{"session_id":"keep"},"messages":[{"role":"developer","content":"keep"}] } `)
+		body := []byte(` { "model":"` + tc.model + `", "reasoning":{"effort":"high"},"thinking":{"type":"disabled"},"enable_thinking":true,"seed":42,"store":false,"logit_bias":{},"verbosity":"high","user":"marker","safety_identifier":"label","prompt_cache_retention":"24h","metadata":{"session_id":"keep"},"messages":[{"role":"developer","content":"keep"}] } `)
 		out, _, err := prepareMistralRequest(body, tc.path, "")
 		if err != nil || !bytes.Equal(out, body) {
 			t.Fatalf("new adaptation escaped exact scope: %s %s", tc.model, tc.path)

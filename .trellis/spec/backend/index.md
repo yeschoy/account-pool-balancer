@@ -15,6 +15,8 @@ for saved browser identities, completion order, task chronology and1–5 workers
 Read [Mistral quota and settings](mistral-quota.md) before changing Mistral budget reads, refresh/status projections, polling, routing or settings isolation.
 Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
 assistant reasoning normalization or user-authorized admin Key/proxy display.
+Read [Mistral Responses completion](mistral-responses.md) before changing native
+Responses SSE terminal handling, EOF classification or no-replay guarantees.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,
 query cutoffs or live-tail retention.
 

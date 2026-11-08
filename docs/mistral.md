@@ -24,9 +24,9 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 - 旧下划线头必须先由 Nginx 放行；应用无法恢复已被入口删除的字段。双跳采样若已无任何身份，仍会合理回退message_hmac，不凭空造会话。概览显示当前池绑定数及**全局共享4096条LRU硬上限**，不是每池/每账号4096。淘汰持久化严格续传绑定会同步保存删除，缺失所有者仍拒绝续传，不静默换号。
 - 会话 HMAC 按分组和下游密钥隔离。TTL 与忙时 `overflow` / `wait-overflow` / `reject` 策略沿用现有配置，临时借号不改原绑定。
 - Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 且已识别会话时，自动填入 `apb-mistral-<现有会话HMAC>`；HMAC按分组与下游密钥隔离，不暴露原始会话或凭据。客户端已有字段（包括显式null/空串）原样保留；没有身份不随机生成。共享前缀与同一账号有利于缓存命中，但不保证命中；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
-- 仅 Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。不支持的类型本地400，不丢弃思考或换号重试。Responses和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
-- 仅对 Chat 模型 `deepseek-v4-1-flash-1017`：根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。两种写法按相同规则校验/归一化，归一化后同值合并、冲突拒绝；null/未传/无效档位按下条最新high策略处理。Responses、其他模型和号池不做此别名转换。
-- 仅对同一精确 Chat 模型，按用户最新要求只保留 `low` / `high` 两档；未传、null、空值、其他档位（包括 max/none/medium/xhigh/minimal）或非法档位类型统一映射为 `reasoning_effort:"high"`。根 `reasoning_effort` 与 `reasoning.effort` 共用此规则，归一化后同值合并、冲突仍拒绝。`thinking` / `enable_thinking` 仅校验结构后移除，不再产生不支持的 none 或压低有效档位；未知预算/额外字段和重复字段仍本地拒绝。high 可能增加思考用量和耗时，不自动增大 `max_tokens`；其他模型、协议及号池不套用此规则。
+- Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。下表三种推理模型的 assistant 字符串 `reasoning` 也作为同义字段处理，同值合并、冲突/重复/不可表示的类型本地400，不丢弃思考或换号重试。Responses历史和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
+- 对下表三种推理模型的 Chat，根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。`thinking:{"type":"enabled|disabled"}` / 布尔 `enable_thinking` 仅校验结构后移除，不压低有效档位或产生不支持的 none；未知预算/额外字段仍本地拒绝。
+- 按用户2026-11-09最新要求，三种模型的 Chat / Responses 均支持 `low` / `high` / `max`；**未传默认 high，显式 max 保留**，替代旧版DeepSeek max→high策略。null、空值、其他档位（none/medium/xhigh/minimal）或非法档位值类型沿用归一high策略。Chat使用 `reasoning_effort`，Responses使用原生 `reasoning.effort`；兼容两种写法，归一后同值合并、冲突拒绝。Responses的原生reasoning其他字段及完整input历史不丢弃，支持性仍由上游验证；不套用Chat专属思考开关清理。高档位可能增加思考用量和耗时，不自动增大输出预算。其他模型、FIM、input_tokens、其他池不套用该规则。
 - 同一精确 DeepSeek Chat 的 user 图片块中，先清除 NewAPI 泄漏的空内部 `MimeType:""/null`（已实测被上游以 `extra_forbidden` 拒绝），再将仅含 `url` 的 `image_url:{"url":"..."}` 对象转成原生字符串 `image_url:"..."`，支持 data URL，保留图片和原有文本/顺序；带 detail 等额外选项的对象保留这些选项，不丢弃语义，非空 MimeType 不擅自删除。其他模型/协议/号池不套用此转换。
 - 除上述明确的缓存补齐、思考格式及精确模型参数兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。精确 DeepSeek Chat 仅省略不支持的根 `store:false/null`，`store:true` 本地拒绝；其他模型/协议不套用该规则。未知字段不静默丢弃，不支持时明确报错。
 - 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；其他临时 5xx 短冷却。明确的503+顶层code3800视为模型服务不可用，不扣账号健康、不重复换号，并保留上游Retry-After；旧的完整出厂规则自动升级，任何自定义规则/顺序/备注/空列表保留。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
@@ -36,6 +36,21 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 支持 `GET /v1/models` 以及原生 `POST /v1/chat/completions`、`/v1/responses`、`/v1/responses/input_tokens`、`/v1/fim/completions`、`/v1/embeddings`。不增加 Anthropic 协议转换，也不因识别 Claude 会话头而宣称 `/v1/messages` 可用。
 
 Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整历史，`previous_response_id` 必须省略或 null，`store` 必须省略、false 或 null。不建立服务器端 Responses 续传绑定。
+
+Responses SSE识别`event:`和根`data.type`中的终态，首帧即`response.completed` / `response.incomplete`也立即结束，不等待上游关闭连接。合法空output、纯工具调用和incomplete协议终态不因没有文本误判为断流（incomplete仍不表示模型已完整生成）。已输出后遇到`response.failed` / error立即按失败结束；EOF/读错误而没有终态时记录失败，并追加一个明确error事件，不伪造completed/[DONE]/usage，也不重放请求或归咎账号Key。尚未输出任何有效事件的空流返回502 `mistral_response_incomplete`；已提交的HTTP200不会假装改成502。其他池和Mistral Chat保持原有结束策略。
+
+### 模型与思考兼容范围
+
+| 模型 | 上游原生ID | 本项目档位策略 |
+|---|---|---|
+| DeepSeek V4.1 Flash 1017 | `deepseek-v4-1-flash-1017` | low / high / max，缺省high |
+| GLM 5.3 | `zai-glm-5-3` | low / high / max，缺省high |
+| GLM 5.3 Flash | `zai-glm-5-3-flash` | low / high / max，缺省high |
+| Mistral Large 4 | `mistral-large-4-0` | 原生透传，不套用上述默认/归一策略；官方档位low / medium / high |
+
+NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道映射到实际上游ID；本轮不新增模型别名配置，不将Modal的`glm-5-3`短名冒充Mistral原生ID。DeepSeek专属的developer/store/图片/seed等适配不因公共思考控制而扩散到GLM/Large。
+
+模型目录可见、协议Mock通过和真实客户端可用是不同验收层级；不能仅凭目录宣称四模型全部获得推理授权。
 
 “刷新额度”与自动轮询同时接入模型目录、本 Key 对应的套餐预算及独立组织订阅；预算沿现有 Snapshot/metadata 保存，页面显示币种、约剩余/总额、已用百分比、重置/检测时间和 PAYG 状态。失败保留上次值但标为历史/未知，403不把仍可推理的Key判失效；目录失败与预算失败分别记录。更换 Key / Base / 代理后失效旧快照，晚返回不能复活旧数据。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。真实且未过期的预算参与 smart/least-used/pace 的余量排序；未知不伪造零，不把 Mistral 预算放进 OpenDesign 付费分类，不代改官网 PAYG 或凭预算假造钱包余额。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
 
@@ -77,6 +92,14 @@ Mistral详情开关开启后，现有详情记录额外保存每次`upstreamAtte
 同一Apple M4短基准：原生字符串SSE约2613→135ns/帧、46→0次分配；128条约1KB文本块历史准备约801→274μs、379→104KB分配。原生帧和纯文本历史仅跳过无用解码，内容数组/转义键/多行SSE保守回退，不删思考、图片、工具或校验。这是局部基准，不代表模型生成或端到端耗时相同比例提速；无生产压测。
 
 ## 验证
+
+### 本轮兼容修复（2026-11-09，尚未部署）
+
+新增Mock矩阵覆盖上述四模型的Chat/Responses、流式/非流式、多轮思考与工具结果、Deny/apply_patch原始多行补丁/引号/反斜杠/大数、缓存字段及真实usage保留；三种推理模型额外覆盖low/high/max/缺省high、别名冲突和跨池/路径隔离。工具被上游拒绝时保留错误，不删工具重放。Responses回归先在旧代码复现首帧终态等待及EOF误记成功，再验证修复；完整执行结果见`.trellis/tasks/11-09-mistral-stream-reasoning/validation.md`（任务归档后随目录移动）。
+
+本轮未发真实推理、未在生产保存配置、未部署。**Codex / Cherry Studio / pi等真实客户端端到端验收尚未进行**；会话头识别和Mock协议形状不等于客户端已验收。历史真实测试仅证明以下记录中明确的接口/模型；Claude原生Messages仍不支持，不能因为识别Claude会话头就宣称Claude Code直连可用。
+
+### 历史验证
 
 2026-11-08补齐额度与路由：全仓Go normal/race/vet与Node行为/语法、必要build通过；新增Mistral定向测试覆盖API/CHAT预算选择、缺字段/过期/403、失败保留、metadata往返、来源变化晚返回、独立轮询开关/并发/目录周期、完整设置/规则保存重载/跨池隔离、详情开关和余量排序。真实本地浏览器使用两把假Key完成批量刷新（Studio USD22.50/30、Vibe EUR270/300）、403显示历史未知、路由/错误码/重试规则保存及进程重启后读回；这是Mock验证，不是生产推理或上线验收。
 

@@ -365,7 +365,7 @@ async function loadOverview() {
   const o = await api('GET', withPool('/api/overview'));
   const st = o.stats.total;
   $('#ov-egress-title').textContent = pool === 'opencode-go' ? '各固定出口路由 24 小时成功率（不是实测 IP）' : '各出口 IP 24 小时成功率';
-  $('#ov-quota-title').textContent = pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : '套餐窗口（按工作区去重）';
+  $('#ov-quota-title').textContent = pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : isMistral() ? 'Mistral 套餐预算（请在账号页查看）' : '套餐窗口（按工作区去重）';
   const okRate = st.r ? (st.s / Math.max(1, st.r - st.c)) : null;
   const ok = o.status.ok || 0;
   const cards = [
@@ -403,7 +403,7 @@ async function loadOverview() {
   $('#ov-windows').innerHTML = pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
     const used = w.limit ? w.used / w.limit * 100 : 0;
     return `<div class="win"><div class="row"><b>${esc(fmtDur(w.durationSeconds))}</b><span class="muted">剩余 ${num(w.remaining)} / ${num(w.limit)} credits</span></div><div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div></div>`;
-  }).join('') : `<p class="muted">${isMistral() ? 'Mistral 余额未知，只同步模型目录；复用 OpenDesign 选号及会话粘性策略。多个 Key 可能共享工作区限额，缓存命中由上游决定。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
+  }).join('') : `<p class="muted">${isMistral() ? '已接入 Studio / Vibe 套餐额度与组织订阅，请在账号页刷新查看；额度按用量百分比估算，不是钱包余额。读取失败或过期时标为未知并保留历史值。多个 Key 可能共享组织预算，不可直接相加；缓存命中由上游决定。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
   applyWidths($('#ov-windows'));
   $('#ov-status').innerHTML = Object.entries(o.status).map(([k, v]) => `<span class="badge ${statusClass(k)}">${esc(statusLabel(k))} ${v}</span>`).join('') || '<span class="muted">无账号</span>';
   $('#ov-updated').textContent = '更新于 ' + fmtTime(o.stats.generated);
@@ -846,7 +846,7 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" value="${v('runtimeKey')}" placeholder="${a ? '留空不变' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isMistral() ? 'Mistral 独立号池，使用现有调度器；支持 Codex / Claude / pi 等会话头粘性。仅兼容外来 reasoning_content，保留原生思考、模型与工具；自动补会话缓存 key。无控制密钥，余额未知；管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isMistral() ? 'Mistral 独立号池，使用现有调度器；识别 Codex / Claude / pi 会话头，不代表已完成各客户端验收。支持原生 Chat / 无状态 Responses，保留思考与工具，自动补会话缓存 key。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high。可刷新 Studio / Vibe 套餐额度与组织订阅，不是钱包余额；无控制密钥，管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
