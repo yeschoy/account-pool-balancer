@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/mistralsignupstore"
 )
 
@@ -37,6 +39,9 @@ func (s *Server) registerMistral(mux *http.ServeMux, a func(string, http.Handler
 	a("POST /api/mistral/candidates/{id}/register", s.apiMistralCandidateRegister)
 	a("POST /api/mistral/candidates/{id}/cancel", s.apiMistralCandidateCancel)
 	a("GET /api/mistral/status", s.apiMistralStatus)
+	a("GET /api/mistral/settings", s.apiMistralSettings)
+	a("PUT /api/mistral/settings", s.apiMistralSaveSettings)
+	a("POST /api/mistral/settings/test", s.apiMistralTestProxy)
 }
 
 // mistralStore returns the lazily-opened encrypted store.
@@ -230,7 +235,7 @@ func (s *Server) apiMistralCandidateRegister(w http.ResponseWriter, r *http.Requ
 			return nil
 		})
 
-		res, runErr := runMistralWorker(ctx, c, body.SkipRegister)
+		res, runErr := m.srv.runMistralWorker(ctx, c, body.SkipRegister)
 		if runErr != nil {
 			_, _ = m.store.Update(id, func(x *mistralsignupstore.Candidate) error {
 				x.Status = mistralsignupstore.Failed
@@ -324,7 +329,7 @@ func mistralPythonPath() string {
 	return "python3"
 }
 
-func runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipRegister bool) (mistralWorkerResult, error) {
+func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipRegister bool) (mistralWorkerResult, error) {
 	var out mistralWorkerResult
 
 	payload := map[string]any{
@@ -342,8 +347,40 @@ func runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipR
 		return out, err
 	}
 
-	cmd := exec.CommandContext(ctx, mistralPythonPath(), mistralWorkerPath())
+	cfg := s.cfg.Get().MistralSignup
+
+	python := mistralPythonPath()
+	if cfg.WorkerPython != "" {
+		python = cfg.WorkerPython
+	}
+	worker := mistralWorkerPath()
+	if cfg.WorkerPath != "" {
+		worker = cfg.WorkerPath
+	}
+
+	cmd := exec.CommandContext(ctx, python, worker)
 	cmd.Stdin = bytes.NewReader(input)
+	// 把界面里配置的代理注入 worker 环境
+	env := os.Environ()
+	if cfg.ProxyUserTemplate != "" {
+		env = append(env, "ZOOPROXY_USER_TPL="+cfg.ProxyUserTemplate)
+	}
+	if cfg.ProxyPassword != "" {
+		env = append(env, "ZOOPROXY_PASSWORD="+cfg.ProxyPassword)
+	}
+	if len(cfg.ProxySIDs) > 0 {
+		env = append(env, "ZOOPROXY_SIDS="+strings.Join(cfg.ProxySIDs, ","))
+	}
+	if cfg.ProxyHostPort != "" {
+		env = append(env, "ZOOPROXY_HOST_PORT="+cfg.ProxyHostPort)
+	}
+	if cfg.Region != "" {
+		env = append(env, "MISTRAL_REGION="+cfg.Region)
+	}
+	if cfg.MailboxProxy != "" {
+		env = append(env, "MIDA_PROXY="+cfg.MailboxProxy)
+	}
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -390,4 +427,114 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// ---------------------------------------------------------------- settings
+
+// apiMistralSettings returns the signup runner settings. ProxyPassword is
+// returned verbatim so the dashboard can round-trip edits; the endpoint is
+// admin-only and same-origin.
+func (s *Server) apiMistralSettings(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Get().MistralSignup
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings":     cfg,
+		"hasProxy":     cfg.HasProxy(),
+		"accountCount": len(mustMistralList(s)),
+	})
+}
+
+func mustMistralList(s *Server) []mistralsignupstore.Candidate {
+	m, err := s.mistralMgr()
+	if err != nil {
+		return nil
+	}
+	return m.store.List()
+}
+
+func (s *Server) apiMistralSaveSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Settings         *config.MistralSignup `json:"settings"`
+		ExpectedRevision *int64                `json:"expectedRevision"`
+	}
+	if err := readBody(r, &in); err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Settings == nil {
+		apiError(w, http.StatusBadRequest, errors.New("settings is required"))
+		return
+	}
+	next := *in.Settings
+	// 去掉空白 sid，避免出现空串代理
+	sids := make([]string, 0, len(next.ProxySIDs))
+	for _, sid := range next.ProxySIDs {
+		sid = strings.TrimSpace(sid)
+		if sid != "" {
+			sids = append(sids, sid)
+		}
+	}
+	next.ProxySIDs = sids
+	next.ProxyUserTemplate = strings.TrimSpace(next.ProxyUserTemplate)
+	next.ProxyHostPort = strings.TrimSpace(next.ProxyHostPort)
+	next.Region = strings.TrimSpace(next.Region)
+
+	rev := int64(-1)
+	if in.ExpectedRevision != nil {
+		rev = *in.ExpectedRevision
+	}
+	if _, err := s.cfg.Update(rev, func(c *config.Config) error {
+		c.MistralSignup = next
+		return nil
+	}); err != nil {
+		apiError(w, http.StatusConflict, err)
+		return
+	}
+	cfg := s.cfg.Get().MistralSignup
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings": cfg,
+		"hasProxy": cfg.HasProxy(),
+		"revision": s.cfg.Get().Revision,
+	})
+}
+
+// apiMistralTestProxy checks one candidate proxy by asking a public IP service
+// through it. It never runs a full registration.
+func (s *Server) apiMistralTestProxy(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Get().MistralSignup
+	if !cfg.HasProxy() {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": "代理未配置（需要用户名模板、密码和至少一个 sid）",
+		})
+		return
+	}
+	sid := cfg.ProxySIDs[0]
+	if len(cfg.ProxySIDs) > 1 {
+		sid = cfg.ProxySIDs[randIndex(len(cfg.ProxySIDs))]
+	}
+	proxyURL := cfg.ProxyURLFor(sid)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "curl", "-s", "-m", "30",
+		"-x", proxyURL, "https://api.ipify.org?format=json")
+	out, err := cmd.Output()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "sid": sid, "error": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "sid": sid, "response": string(bytes.TrimSpace(out)),
+	})
+}
+
+func randIndex(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	b := make([]byte, 1)
+	_, _ = rand.Read(b)
+	return int(b[0]) % n
 }

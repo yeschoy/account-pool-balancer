@@ -1524,6 +1524,7 @@ function mistralKeySummary(keys) {
 
 async function loadMistralRegistrations() {
   await loadMistralStatus();
+  await loadMistralSettings();
   await loadMistralCandidates();
   stopMistralPolling();
   mistralPollTimer = setInterval(() => {
@@ -1655,4 +1656,89 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) { toast(e.message); }
     }
   });
+});
+
+
+// ---------------------------------------------------------------- Mistral 设置
+
+async function loadMistralSettings() {
+  const form = document.getElementById('mr-settings-form');
+  if (!form) return;
+  try {
+    const d = await api('GET', '/api/mistral/settings');
+    const st = d.settings || {};
+    document.getElementById('ms-user-tpl').value = st.proxyUserTemplate || '';
+    document.getElementById('ms-password').value = st.proxyPassword || '';
+    document.getElementById('ms-hostport').value = st.proxyHostPort || '';
+    document.getElementById('ms-region').value = st.region || 'CA';
+    document.getElementById('ms-sids').value = (st.proxySids || []).join('\n');
+    document.getElementById('ms-mailbox-proxy').value = st.mailboxProxy || '';
+    const msg = document.getElementById('mr-settings-msg');
+    if (msg) {
+      msg.textContent = d.hasProxy ? '代理已配置' : '代理未配置，注册会失败';
+      msg.className = d.hasProxy ? 'muted' : 'error';
+    }
+  } catch (e) {
+    const msg = document.getElementById('mr-settings-msg');
+    if (msg) { msg.textContent = '读取设置失败：' + e.message; msg.className = 'error'; }
+  }
+}
+
+function parseSids(raw) {
+  return raw.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('mr-settings-form');
+  if (form) {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const msg = document.getElementById('mr-settings-msg');
+      msg.textContent = '保存中…';
+      msg.className = 'muted';
+      try {
+        const d = await api('PUT', '/api/mistral/settings', {
+          settings: {
+            proxyUserTemplate: document.getElementById('ms-user-tpl').value.trim(),
+            proxyPassword: document.getElementById('ms-password').value,
+            proxyHostPort: document.getElementById('ms-hostport').value.trim(),
+            region: document.getElementById('ms-region').value.trim() || 'CA',
+            proxySids: parseSids(document.getElementById('ms-sids').value),
+            mailboxProxy: document.getElementById('ms-mailbox-proxy').value.trim(),
+            workerPath: '',
+            workerPython: '',
+            concurrency: 1,
+          },
+        });
+        msg.textContent = d.hasProxy ? '已保存，代理已配置' : '已保存，但代理还不完整';
+        msg.className = d.hasProxy ? 'muted' : 'error';
+        toast('设置已保存');
+      } catch (e) {
+        msg.textContent = '保存失败：' + e.message;
+        msg.className = 'error';
+      }
+    });
+  }
+
+  const test = document.getElementById('mr-proxy-test');
+  if (test) {
+    test.addEventListener('click', async () => {
+      const out = document.getElementById('mr-proxy-result');
+      out.textContent = '测试中…';
+      out.className = 'muted';
+      try {
+        const d = await api('POST', '/api/mistral/settings/test', {});
+        if (d.ok) {
+          out.textContent = '出口 ' + (d.response || '') + ' (sid ' + d.sid + ')';
+          out.className = 'muted';
+        } else {
+          out.textContent = '失败：' + (d.error || '') + ' (sid ' + (d.sid || '-') + ')';
+          out.className = 'error';
+        }
+      } catch (e) {
+        out.textContent = '测试失败：' + e.message;
+        out.className = 'error';
+      }
+    });
+  }
 });

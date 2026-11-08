@@ -947,6 +947,7 @@ type Config struct {
 	TokenHarborErrorRules []rules.ErrorRule `json:"tokenHarborErrorRules"`
 	TokenHarborRetryRules []rules.RetryRule `json:"tokenHarborRetryRules"`
 	Perch                 Perch             `json:"perch"`
+	MistralSignup         MistralSignup     `json:"mistralSignup"`
 	TokenHarbor           TokenHarbor       `json:"tokenHarbor"`
 	OpenCode              OpenCode          `json:"opencode"`
 	Mistral               Mistral           `json:"mistral"`
@@ -1382,6 +1383,9 @@ func (c *Config) Normalize() error {
 		return err
 	}
 	if err := c.normalizeMistral(); err != nil {
+		return err
+	}
+	if err := c.normalizeMistralSignup(); err != nil {
 		return err
 	}
 	if err := c.normalizeTokenHarbor(); err != nil {

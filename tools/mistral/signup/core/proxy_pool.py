@@ -21,8 +21,8 @@ from typing import Optional
 @dataclass
 class Proxy:
     sid: str
-    host: str = "us-eu.zooproxy.com"
-    port: int = 5000
+    host: str = __import__("os").environ.get("ZOOPROXY_HOST", "us-eu.zooproxy.com")
+    port: int = int(__import__("os").environ.get("ZOOPROXY_PORT", "5000"))
     user_tpl: str = __import__("os").environ.get(
         "ZOOPROXY_USER_TPL", "<user>-region-{region}-sid-{sid}-t-10")
     password: str = __import__("os").environ.get("ZOOPROXY_PASSWORD", "")
@@ -34,6 +34,17 @@ class Proxy:
     last_ok: float = 0.0
     exit_ip: Optional[str] = None
     cooldown_until: float = 0.0
+
+    @classmethod
+    def from_env(cls, sid: str) -> "Proxy":
+        hp = __import__("os").environ.get("ZOOPROXY_HOST_PORT", "")
+        if ":" in hp:
+            h, p = hp.rsplit(":", 1)
+            try:
+                return cls(sid=sid, host=h, port=int(p))
+            except ValueError:
+                pass
+        return cls(sid=sid)
 
     @property
     def url(self) -> str:
@@ -57,7 +68,7 @@ class ProxyPool:
         sids = sids if sids is not None else DEFAULT_SIDS
         self.pre_proxy = pre_proxy
         self._lock = threading.Lock()
-        self._proxies = [Proxy(sid=s) for s in sids]
+        self._proxies = [Proxy.from_env(s) for s in sids]
         self._rr = itertools.cycle(range(len(self._proxies))) if self._proxies else None
 
     def all(self) -> list[Proxy]:
