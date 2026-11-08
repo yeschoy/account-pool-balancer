@@ -56,6 +56,27 @@
 
 ## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
+## 当前部署：Mistral 批量账号 + 代理轮转 + 自动入池（2026-11-08 16:22 UTC，a225c5c）
+
+- 用户三项要求已实现：
+  1. **代理列表一行一个，账号按顺序分配，代理可重复使用**：
+     `PickProxyByIndex(n)` / `ProxyPool.by_index(n)` 取 `n%len`；候选记录
+     `proxy_index`，worker 用该序号经本地网关连上游。
+  2. **iCloud 账号列表批量导入**，每行 `账号----接码地址`：
+     新增 `POST /api/mistral/candidates/bulk`，逐行校验并回报被拒行
+     （缺分隔符/空值/邮箱格式/重复）。
+  3. **注册成功后自动加入 Mistral 账号池**：
+     候选带 `import_to_pool`；成功后 `importMistralCandidate` 写入
+     `config.Accounts`（Provider=mistral、Group=mistral），拒绝重复 Key；
+     列表新增「池」列显示 已入池/待入池/—。
+- 前端表单由单账号改为批量 textarea，新增入池勾选；代理提示说明轮转规则。
+- 验收：批量导入 3 条成功、坏行被拒；`proxy_index` 0/1/2 正确落盘并返回
+  （`omitempty` 导致 idx=0 被省略，已修）；容器内 3 个代理按
+  `0→a,1→b,2→c,3→a,4→b` 轮转；测试候选已清理为 `[]`；
+  池内现有 mistral 账号 10 个、总计 161。
+- 镜像 `account-pool-balancer:release-fix-20261108T081928Z`；仅
+  `--force-recreate` Balancer。仍未验证：容器内真实注册与真实入池。
+
 ## 当前部署：Mistral 支持完整代理 URL（2026-11-08 15:55 UTC，2934598）
 
 - 用户要求支持标准格式 `socks5://用户:密码@IP:端口`，不再局限于 zooproxy 模板。
