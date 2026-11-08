@@ -94,6 +94,53 @@ func (e *mistralEnv) count() int                    { e.mu.Lock(); defer e.mu.Un
 func (e *mistralEnv) call(i int) mistralCall        { e.mu.Lock(); defer e.mu.Unlock(); return e.calls[i] }
 func (e *mistralEnv) setHandler(h http.HandlerFunc) { e.mu.Lock(); e.handler = h; e.mu.Unlock() }
 
+func TestMistralAccountTestModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, model, wantModel string
+		inference              bool
+	}{
+		{name: "default without cached catalog", inference: true, wantModel: "deepseek-v4-1-flash-1017"},
+		{name: "explicit model preserved", model: "custom-mistral-model", inference: true, wantModel: "custom-mistral-model"},
+		{name: "free check does not infer", inference: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newMistralEnv(t)
+			body, _ := json.Marshal(map[string]any{"inference": tc.inference, "model": tc.model})
+			r := httptest.NewRequest(http.MethodPost, "/api/accounts/m1/test", strings.NewReader(string(body)))
+			r.SetPathValue("id", "m1")
+			w := httptest.NewRecorder()
+			e.s.apiTestAccount(w, r)
+			var out struct {
+				Runtime   struct{ OK bool } `json:"runtime"`
+				Inference *struct {
+					OK    bool   `json:"ok"`
+					Model string `json:"model"`
+				} `json:"inference"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil || !out.Runtime.OK {
+				t.Fatalf("account test failed: %d %s", w.Code, w.Body.String())
+			}
+			if !tc.inference {
+				if out.Inference != nil || e.count() != 0 {
+					t.Fatal("free check triggered inference")
+				}
+				return
+			}
+			if out.Inference == nil || !out.Inference.OK || out.Inference.Model != tc.wantModel || e.count() != 1 {
+				t.Fatalf("wrong inference model or count: %s; calls=%d", w.Body.String(), e.count())
+			}
+			var sent struct {
+				Model     string `json:"model"`
+				MaxTokens int    `json:"max_tokens"`
+			}
+			call := e.call(0)
+			if json.Unmarshal([]byte(call.body), &sent) != nil || sent.Model != tc.wantModel || sent.MaxTokens != 1 || call.path != "/v1/chat/completions" {
+				t.Fatalf("wrong upstream test request: %s %s", call.path, call.body)
+			}
+		})
+	}
+}
+
 func TestMistralNativeBytesHeadersAndAccounting(t *testing.T) {
 	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens", "/v1/fim/completions", "/v1/embeddings"} {
 		t.Run(path, func(t *testing.T) {

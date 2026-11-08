@@ -33,7 +33,21 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整历史，`previous_response_id` 必须省略或 null，`store` 必须省略、false 或 null。不建立服务器端 Responses 续传绑定。
 
-普通 API Key 没有本实现可用的余额读取契约；仅同步 `/v1/models`，余额明确显示未知。模型目录失败保留上次成功值与时间；更换 Key / Base / 代理后失效旧快照。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
+当前号池仍仅同步 `/v1/models`，额度展示为未知，尚未接入下面已核实的套餐读取接口。模型目录失败保留上次成功值与时间；更换 Key / Base / 代理后失效旧快照。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
+
+### API Key 读取套餐额度（2026-11-08 实测）
+
+官方 [Vibe billing 实现](https://github.com/mistralai/mistral-vibe/blob/main/vibe/app_server/_billing.py) 和 [whoami 实现](https://github.com/mistralai/mistral-vibe/blob/main/vibe/setup/auth/whoami.py) 提供了普通 Key 可用的读取路径，均使用 `Authorization: Bearer <API Key>`：
+
+- `GET https://console.mistral.ai/api/vibe/whoami`：按 `plan_type` 区分 Studio/API (`API`) 与 Vibe (`CHAT`)，不要仅由账号名称猜测。
+- `GET https://api.mistral.ai/v1/billing/subscription`：读取 `plan_name`、`payg_enabled`、`vibe_payg_enabled` 等套餐信息，不是剩余额度本身。
+- `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。Studio 使用 `api_budget`，Vibe 使用 `vibe_budget`；剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
+
+本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。尚未验证所有账号或接入自动刷新。
+
+官方 CLI 注明 budget 可能需要 `see_org_inference_usage` 权限；403/缺字段/失败应显示未知，不能当作零。企业 `GET /v1/admin/usage` 是另一套 Admin Key 权限（本次普通 Key 为401）；第三方声称的 `/v1/billing/usage` 本次为404，不能据此否定已成功的 budget 接口。探针必须匹配 Go SOCKS 远端解析语义：curl 对 `socks5://` 默认本地解析，本轮曾出现 TLS EOF，改为同一代理的远端 DNS 探测后200；未改线上代理配置、直连回退或绕过权限。
+
+管理台「真实请求」测试 Mistral 时，未填写模型默认使用 `deepseek-v4-1-flash-1017`，仍为 `max_tokens=1`；显式填写的模型保留。「免费检查」只读目录，不发推理请求。
 
 参考：[官方文档](https://docs.mistral.ai/)、[Responses](https://docs.mistral.ai/inference/conversations/responses)、[用量和限制](https://docs.mistral.ai/admin/billing-usage/usage-limits)。
 

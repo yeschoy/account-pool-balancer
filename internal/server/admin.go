@@ -793,14 +793,16 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 				model = "deepseek-ai/DeepSeek-V4.1-Flash"
 			case config.ProviderOllama:
 				model = "gpt-oss:20b"
-			case config.ProviderModal, config.ProviderTokenHarbor, config.ProviderMistral:
+			case config.ProviderMistral:
+				model = "deepseek-v4-1-flash-1017"
+			case config.ProviderModal, config.ProviderTokenHarbor:
 				// Use the account catalog, never guess a model for these pools.
 				// a Modal model is an Endpoint hostname that differs per
 				// workspace: the account's own catalogue is the only source
 				model = s.firstCatalogModel(a)
 				if model == "" {
 					message := "没有读到该 token 的 Endpoint 列表（/v1/models）：Modal 的模型名就是 Endpoint 的 hostname，无法猜默认值，请手动填写"
-					if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
+					if a.Provider == config.ProviderTokenHarbor {
 						message = "没有读到该账号的模型目录（/v1/models），不能猜默认模型，请刷新目录或手动填写"
 					}
 					out["inference"] = map[string]any{"ok": false, "error": message}

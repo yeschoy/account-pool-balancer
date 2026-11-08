@@ -913,8 +913,8 @@ async function testAccount(a) {
     $('#test-out').textContent = JSON.stringify(r, null, 2);
   };
   await modal({ title: '测试 ' + a.name, wide: true,
-    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : a.provider === 'tokenharbor' ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
-      <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : (a.provider === 'modal' || a.provider === 'tokenharbor' || a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '该账号模型列表中的首个模型（按原生协议）' : 'deepseek-v4.1-flash')}" size="34"></div>
+    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : (a.provider === 'tokenharbor' || a.provider === 'mistral') ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=1 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
+      <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : a.provider === 'mistral' ? 'deepseek-v4-1-flash-1017' : (a.provider === 'modal' || a.provider === 'tokenharbor' || a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '该账号模型列表中的首个模型（按原生协议）' : 'deepseek-v4.1-flash')}" size="34"></div>
       <pre id="test-out" class="mt">点击下方按钮开始</pre>`,
     buttons: [{ label: '关闭', value: 'c' }, { label: '真实请求', value: 'inf', action: async () => { await run(true); return false; } },
       { label: '免费检查', value: 'free', primary: true, action: async () => { await run(false); return false; } }] });
