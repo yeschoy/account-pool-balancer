@@ -117,35 +117,37 @@ type requestLog struct {
 }
 
 type errorLog struct {
-	TS                  time.Time `json:"ts"`
-	RequestID           string    `json:"requestId"`
-	AttemptIndex        int       `json:"attemptIndex"`
-	ClientKeyID         string    `json:"clientKeyId,omitempty"`
-	ClientKeyName       string    `json:"clientKeyName,omitempty"`
-	Provider            string    `json:"provider,omitempty"`
-	AccountID           string    `json:"accountId"`
-	AccountName         string    `json:"accountName"`
-	Model               string    `json:"model"`
-	Status              int       `json:"status"`
-	UpstreamStatus      *int      `json:"upstreamStatus"`
-	Origin              string    `json:"origin,omitempty"`
-	Egress              string    `json:"egress,omitempty"`
-	EgressIP            string    `json:"egressIp,omitempty"`
-	Category            string    `json:"category"`
-	Terminal            string    `json:"terminal"`
-	Reason              string    `json:"reason"`
-	ReasonTruncated     bool      `json:"reasonTruncated"`
-	RuleID              string    `json:"ruleId,omitempty"`
-	RuleScope           string    `json:"ruleScope,omitempty"`
-	RuleAction          string    `json:"ruleAction,omitempty"`
-	MatchedBy           string    `json:"matchedBy"`
-	RetryRuleID         string    `json:"retryRuleId,omitempty"`
-	RetryDecision       string    `json:"retryDecision,omitempty"`
-	HealthAction        string    `json:"healthAction"`
-	RetryAfterMs        *int64    `json:"retryAfterMs,omitempty"`
-	Switched            bool      `json:"switched"`
-	ResponseContentType string    `json:"responseContentType,omitempty"`
-	ResponseBytes       int       `json:"responseBytes"`
+	TS                    time.Time           `json:"ts"`
+	RequestID             string              `json:"requestId"`
+	AttemptIndex          int                 `json:"attemptIndex"`
+	ClientKeyID           string              `json:"clientKeyId,omitempty"`
+	ClientKeyName         string              `json:"clientKeyName,omitempty"`
+	Provider              string              `json:"provider,omitempty"`
+	AccountID             string              `json:"accountId"`
+	AccountName           string              `json:"accountName"`
+	Model                 string              `json:"model"`
+	Status                int                 `json:"status"`
+	UpstreamStatus        *int                `json:"upstreamStatus"`
+	Origin                string              `json:"origin,omitempty"`
+	Egress                string              `json:"egress,omitempty"`
+	EgressIP              string              `json:"egressIp,omitempty"`
+	Category              string              `json:"category"`
+	Terminal              string              `json:"terminal"`
+	Reason                string              `json:"reason"`
+	ReasonTruncated       bool                `json:"reasonTruncated"`
+	RuleID                string              `json:"ruleId,omitempty"`
+	RuleScope             string              `json:"ruleScope,omitempty"`
+	RuleAction            string              `json:"ruleAction,omitempty"`
+	MatchedBy             string              `json:"matchedBy"`
+	RetryRuleID           string              `json:"retryRuleId,omitempty"`
+	RetryDecision         string              `json:"retryDecision,omitempty"`
+	HealthAction          string              `json:"healthAction"`
+	RetryAfterMs          *int64              `json:"retryAfterMs,omitempty"`
+	Switched              bool                `json:"switched"`
+	ResponseContentType   string              `json:"responseContentType,omitempty"`
+	ResponseBytes         int                 `json:"responseBytes"`
+	ResponseBodyTruncated bool                `json:"responseBodyTruncated,omitempty"`
+	MistralValidation     []mistralValidation `json:"mistralValidation,omitempty"`
 }
 
 // cacheRate is the cached share of the prompt. Messages usage reports input
@@ -208,6 +210,7 @@ type attemptResult struct {
 	category          string // upstream | network | timeout | proxy
 	terminal          string // success | upstream_http | upstream_envelope | timeout | proxy | network
 	body              []byte
+	bodyTruncated     bool // Mistral error prefix hit its bounded read cap
 	header            http.Header
 	contentType       string
 	sent              atomic.Bool
@@ -939,6 +942,10 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	el := errorLog{TS: now.UTC(), RequestID: rid, AttemptIndex: idx, ClientKeyID: keyID, ClientKeyName: keyName, Provider: acct.Provider, AccountID: acct.ID, AccountName: acct.Name, Model: model,
 		Status: res.status, Category: res.category, Terminal: res.terminal, Reason: reason, ReasonTruncated: truncated,
 		MatchedBy: "default", HealthAction: "degrade", ResponseContentType: strings.SplitN(res.contentType, ";", 2)[0], ResponseBytes: len(res.body)}
+	if acct.Provider == config.ProviderMistral {
+		el.ResponseBodyTruncated = res.bodyTruncated
+		el.MistralValidation = mistralValidationDetails(res.body)
+	}
 	if res.upstreamStatus != 0 {
 		us := res.upstreamStatus
 		el.UpstreamStatus = &us
@@ -1452,7 +1459,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		limit := int64(64 << 10)
+		if acct.Provider == config.ProviderMistral {
+			limit++ // distinguish a complete64KiB error from a truncated prefix
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
+		if acct.Provider == config.ProviderMistral && len(b) > 64<<10 {
+			res.bodyTruncated = true
+			b = b[:64<<10]
+		}
 		if r.Context().Err() != nil {
 			res.kind = outCancelled
 			return res
