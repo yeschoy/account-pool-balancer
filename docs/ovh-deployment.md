@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 默认测试模型（2026-11-08 10:43 UTC，aaa09a6）
+## 当前部署：Mistral 额度与思考参数兼容（2026-11-08 12:37 UTC，4f8a680）
+
+- 用户要求提交、推送并部署到OVH，避免过多测试。master已推送至 `4f8a680750582e9dc0fb59e5bf514407238f07f2`，包含此前额度刷新/独立路由 `4f8d74e`、缺省思考high `efe35ce`、精确DeepSeek Chat的reasoning.effort别名 `4f8a680`；Responses保持原生。复用此前全仓normal/race/vet/build及本地Mock结果，本次不重复运行、不发生产推理，不修改线上配置或功能开关。
+- 一次预检确认原aaa09a6 healthy/重启0、旧e6f063b工作树干净且分叉3/141、252.7GiB余量、data挂载及NewAPI双内网入口正常。未在旧树构建或抹平分叉；干净git archive传到 `/home/ubuntu/project/account-pool-balancer-releases/20261108T123421Z-4f8a680`。传输命令曾超时，先确认远端结果，再逐项核对全部471个源码文件SHA256，未盲目重复发布。仅内存适配既有部署脚本，守卫精确旧container/image/revision及TH/Mistral注册任务空闲。
+- 镜像 `account-pool-balancer:release-4f8a680-20261108T123421Z`，ID `sha256:9eef7cc00b5c40b94fffda67067c330d47d3afbe2c2efcdf88db61cd57faba63`，OCI revision正确。构建约7.21秒后才停旧进程并一致备份；沿线上Compose仅覆盖image，保留旧镜像 `account-pool-balancer:rollback-20261108T123421Z`。
+- 正式备份 `/home/ubuntu/backups/account-pool-balancer/20261108T123421Z-reasoning-4f8a680/` 保留完整data、原Compose/.env、build/switch日志及deploy.json；gzip校验通过，data SHA256 `02d7ed461726226fe713b02b1708ec31e1c2d6f18b5c7e6ef1930f31200429d0`。**191账号、186条TH注册记录核心资产、routingSecret、完整config、Mistral明文注册库及原用户/环境/卷/端口/网络/健康检查/资源参数均保留**；不自动用旧data覆盖新写入。
+- 上线验收：Docker healthy、重启0，healthcheck存在；ai-internal保留account-pool-balancer/opendesign-balancer，从new-api容器访问两者healthz均成功。真实未登录公网登录页正常，healthz及四资源均200，保留 `?v=a5bb5ebec0` 且SHA256逐项与发布源码匹配。通过后立即反馈，独立浏览器已关闭。未新增临时脚本、压缩包或敏感下载；正式发布/备份资料保留，旧临时产物未经同意不清理，Trellis随记录提交。
+- **验收边界**：这是版本、配置/资产保留、健康及入口/静态资源验收，不是新的生产推理对照或生产管理台预算刷新/保存往返验收；额度功能已部署，不能把此前本地假数据验证冒充本轮生产UI验收。后续只提交记录，不再构建或重启。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 12:36:37.166–12:36:44.374（7.21秒） |
+| 停止请求 / 旧进程退出 | 12:36:44.462 / 12:36:44.626 |
+| 完整一致备份及校验 | 12:36:44.852–12:36:49.993 |
+| 切换请求 / 新容器启动 | 12:36:49.993 / 12:36:50.246 |
+| 首HTTP可达 / Docker healthy | 12:36:51.348 / 12:37:20.581 |
+| NewAPI双入口 / 本机静态验收 | 12:37:20.634 / 12:37:20.727 |
+| 公网验收 | 12:37:48.902 |
+
+未采样精确停机；旧进程退出至首HTTP可达的观测间隔约6.72秒，不将构建、源码传输或Docker健康等待当成停机。
+
+## 历史部署：Mistral 默认测试模型（2026-11-08 10:43 UTC，aaa09a6）
 
 - 用户要求提交、推送并部署此前改动，暂不做 service。`aaa09a661bc1eda246b2938a14b804bde6adca99` 已推送 master：Mistral 管理台真实请求未指定模型时默认 `deepseek-v4-1-flash-1017`，保留显式模型与 `max_tokens=1`，免费检查仍不推理；同步前端提示与回归测试。`docs/mistral.md` 记录普通 API Key 可读 whoami/billing/budget 的真实证据，**本版未接入自动额度展示**。
 - 复用既有定向 Go/Mistral/Modal、race、vet、Node 语法/行为和必要构建结果，不重复全仓测试，不主动生产推理。一次预检确认原容器 healthy/重启0、191账号、40个Mistral（30个zxg）、固定data挂载、256GiB余量及NewAPI双别名通路正常；旧工作树e6f063b干净但分叉3/141，未在旧树构建。原镜像无revision，使用精确container/image作切换守卫，不猜其Git版本。

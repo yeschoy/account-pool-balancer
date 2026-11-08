@@ -60,3 +60,11 @@
 - 先新增回归复现旧实现把嵌套 low 当成缺省、保留未知根 reasoning 的行为，再修复；最终只写一次原生字段，避免追加式 wire setter 产生重复 effort。历史 assistant.reasoning 别名仍独立处理，原始消息/工具/大数/缓存/metadata/输出预算保留。
 - Mock 覆盖所有档位/null、相同/归一化/转义别名、开关冲突、无损拼接、缓存补齐及一次上游 HTTP；Responses 含原生 effort+summary 的正文经 HTTP 保持原样，其他模型/协议/号池隔离通过。定向 Mistral 回归通过；全仓 normal（server63.862秒）、race（server79.071秒）、vet、构建到 /dev/null、gofmt 与 diff check 均通过，规范与使用文档同步。
 - 本次及此前缺省 high 均尚未推送/部署，不宣称线上已生效；未发生产推理或修改 NewAPI 配置。无新增业务无关临时产物，旧清单不擅自清理，Trellis 记录随代码提交并保留。
+
+## 2026-11-08 12:37 UTC：用户授权推送并部署到OVH（4f8a680）
+
+- 用户要求提交推送部署、不要过多测试。master已正常推送4f8a680，包含4f8d74e额度/路由、efe35ce缺省high和4f8a680嵌套effort兼容；不重复此前通过的normal/race/vet/build，不改NewAPI配置或在线功能开关、不发生产推理。
+- 远端仍aaa09a6时完成一次合并预检；git archive传输命令超时后先检查结果，逐一核对471源码文件SHA256才构建，保留旧分叉工作树。复用既有部署脚本仅内存适配精确container/image/revision守卫、TH/Mistral任务空闲和明文注册库资产核对；构建7.21秒，完整一致备份后以线上Compose仅覆盖image切换，未使用裸docker run。
+- 12:37:20.727本机验收：运行4f8a680、Docker healthy/重启0、healthcheck与全部运行参数/完整config保留，191账号/186条TH注册记录核心资产/routingSecret/Mistral明文注册库一致。ai-internal两个别名均保留，从new-api访问双healthz都成功。
+- 12:37:48.902真实未登录公网登录页、healthz及四静态资源200，?v=a5bb5ebec0与源码SHA256一致；立即告知用户，独立浏览器关闭。正式release、回退镜像及备份/阶段时间详见docs/ovh-deployment.md，未将6.72秒首HTTP观测间隔当成精确停机。
+- 两项思考兼容已部署，但未做新的生产推理对照；额度功能也已部署，本轮未做生产管理台预算刷新/保存往返。上方未推送/未部署仅为当时历史状态，以本节为准。无新临时脚本或敏感下载，旧临时产物待同意清理，Trellis保留；后续只补记录，不重新部署。

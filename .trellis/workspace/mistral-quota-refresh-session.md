@@ -12,3 +12,6 @@
 本轮业务与所有Trellis变更需一并提交；不擅自推送或部署。任务11-08-mistral-quota-refresh保持in_progress，等待用户明确生产发布授权。线上仍aaa09a6，不把Mock验证当线上生效。新增metadata/config字段需兼容预检及一致备份后发布，回退先核查新写入。
 
 本地浏览器/Go/mock进程及50267/50266监听已关闭；.analysis/mistral-quota-refresh仅假数据，登记_tmp_artifacts.md待同意清理，所有Trellis记录保留。没有新增生产Key调用、推理、注册、付款或在线配置变更。service仍按用户要求暂不做。
+
+## 发布状态更新（2026-11-08 12:37 UTC）
+用户随后授权提交推送并部署到OVH、避免重复测试。额度/路由提交4f8d74e已随集成版本4f8a680推送上线，保留191账号/186条TH注册记录核心资产、完整config与运行参数，Docker healthy/零重启、NewAPI双内网别名及公网四资源哈希验收通过；备份与时间见docs/ovh-deployment.md。本轮未登录生产管理台执行真实预算刷新/保存往返，因此不宣称生产UI完整验收，任务不擅自归档；上方等待发布/仍aaa09a6仅为历史状态。不改在线开关，不发生产推理，不重复全量测试，service仍未新增。
