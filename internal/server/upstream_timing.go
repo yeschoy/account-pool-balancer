@@ -1,6 +1,28 @@
 package server
 
-import "math"
+import (
+	"math"
+	"time"
+)
+
+// applyAverageTiming follows NewAPI's integer Unix-second difference, not a
+// millisecond duration rounded down. This gateway's clock includes its admission,
+// first-response wait and retries; it is not NewAPI's exact observation point.
+func applyAverageTiming(rec *requestLog, ended time.Time) {
+	if rec.TS.IsZero() {
+		return
+	}
+	seconds := ended.Unix() - rec.TS.Unix()
+	if seconds < 0 {
+		return
+	}
+	rec.UseTimeSec = &seconds
+	if rec.Result != "success" || seconds == 0 || rec.OutputTokens == nil || *rec.OutputTokens <= 0 {
+		return
+	}
+	rate := float64(*rec.OutputTokens) / float64(seconds)
+	rec.AverageTPS = &rate
+}
 
 // applyUpstreamTiming describes the final actual upstream attempt, not request
 // upload, account admission, prior retries, or downstream postprocessing. The

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"strings"
 )
 
 // mistralWireObject is a view over already validated JSON. Replacement values
@@ -123,6 +125,33 @@ func (o *mistralWireObject) render() []byte {
 	}
 	out.Write(o.body[tail:])
 	return out.Bytes()
+}
+
+// Preserve the deployed cache-shard affinity behavior when updating master.
+// A supplied X-Affinity wins; otherwise reuse the final private cache key.
+func ensureMistralXAffinity(h http.Header, body []byte) {
+	if h.Get("X-Affinity") != "" {
+		return
+	}
+	if key := mistralFinalPromptCacheKey(body); key != "" {
+		h.Set("X-Affinity", key)
+	}
+}
+
+func mistralFinalPromptCacheKey(body []byte) string {
+	o := scanMistralObject(body)
+	if o == nil {
+		return ""
+	}
+	raw := o.get("prompt_cache_key")
+	if raw == nil || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
 }
 
 // prepareMistralRequest runs after strict JSON/model validation and original

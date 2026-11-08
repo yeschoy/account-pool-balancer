@@ -87,6 +87,18 @@ vm.runInContext(source.slice(source.indexOf('function upstreamTPSCell('), source
 assert.match(context.upstreamTPSCell({upstreamTps:42,upstreamTpsBasis:'post-first-event'}),/42 tok\/s/);
 assert.match(context.upstreamTPSCell({upstreamTps:0,upstreamTpsBasis:'request-average'}),/0 tok\/s/);
 assert.match(context.upstreamTPSCell({}),/TPS —/);
+const bothTPS = context.upstreamTPSCell({averageTps:25,upstreamTps:50,upstreamTpsBasis:'post-first-event'});
+assert.match(bothTPS,/全程平均 25 tok\/s/);
+assert.match(bothTPS,/首事件后 50 tok\/s/);
+assert.match(context.upstreamTPSCell({averageTps:25.6}),/全程平均 26 tok\/s/);
+assert.match(context.upstreamTPSCell({outputTokens:100,durationMs:4000}),/全程平均 TPS —/); // never backfill old logs
+vm.runInContext(source.slice(source.indexOf('function showDetail('), source.indexOf('function errorRow(')), context);
+context.modal = options => { context.wireDialog = options; };
+context.showDetail({provider:'mistral',wireVersion:1,method:'POST',path:'/v1/chat/completions',status:200,requestBody:'<img src=x onerror=bad>',responseBody:'adapted',upstreamAttempts:[{attemptIndex:0,method:'POST',path:'/v1/chat/completions',status:200,sent:true,request:{body:'prepared'},response:{body:'native',bodyTruncated:true,bodyBytes:99999}}]});
+for (const label of ['客户端原始请求','实际发给上游的请求','上游原生响应（适配前）','返回客户端的响应（适配后）','已截断/未完整读取','prepared','native','adapted']) assert.ok(context.wireDialog.body.includes(label));
+assert.doesNotMatch(context.wireDialog.body,/<img src/);
+context.showDetail({provider:'mistral',method:'POST',path:'/v1/chat/completions',status:200});
+assert.match(context.wireDialog.body,/旧记录未采集/);
 vm.runInContext(source.slice(source.indexOf('async function testAccount('), source.indexOf('// ---- device authorization ----')), context);
 (async () => {
   let dialog;

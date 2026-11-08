@@ -16,8 +16,11 @@ func thIdentityValues(h http.Header, body map[string]any, extra []string) []stri
 			out = append(out, v)
 		}
 	}
-	for name := range secretHeaders {
-		for _, value := range h.Values(name) {
+	for name, values := range h {
+		if !isSecretHeader(name) {
+			continue
+		}
+		for _, value := range values {
 			add(value)
 			if parts := strings.Fields(value); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 				add(parts[1])
@@ -41,7 +44,7 @@ func thIdentityValues(h http.Header, body map[string]any, extra []string) []stri
 	for _, x := range extra {
 		add(headerValue(h, x))
 	}
-	for _, x := range []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key", "X-Cache-Key", "X-Client-Request-Id"} {
+	for _, x := range []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key", "X-Cache-Key", "X-Client-Request-Id", "X-Affinity"} {
 		add(headerValue(h, x))
 	}
 	for _, x := range bodyKeys {
@@ -58,7 +61,7 @@ func thIdentityValues(h http.Header, body map[string]any, extra []string) []stri
 func thPrivateHeaders(h http.Header) http.Header {
 	out := goPrivateHeaders(h)
 	for k := range out {
-		if strings.EqualFold(k, "X-Client-Request-Id") || strings.EqualFold(k, "X-Cache-Key") {
+		if strings.EqualFold(k, "X-Client-Request-Id") || strings.EqualFold(k, "X-Cache-Key") || strings.EqualFold(k, "X-Affinity") {
 			out[k] = []string{"[REDACTED]"}
 		}
 		for _, x := range sessionHeaders {
@@ -99,7 +102,9 @@ func thPrivateBody(b []byte, identities []string) []byte {
 	}
 	one := func(raw []byte) []byte {
 		var v any
-		if json.Unmarshal(raw, &v) != nil {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if !json.Valid(raw) || decoder.Decode(&v) != nil {
 			return []byte("[body omitted: identity redaction unavailable]")
 		}
 		redact(v)
@@ -145,7 +150,7 @@ func (discardLogBody) Write(b []byte) (int, error) { return len(b), nil }
 
 func thPrivateKey(k string) bool {
 	l := strings.ToLower(k)
-	return strings.Contains(l, "session") || strings.Contains(l, "conversation") || strings.Contains(l, "thread") || strings.Contains(l, "prompt_cache") || l == "user_id" || l == "previous_response_id" || l == "response_id"
+	return isSecretHeader(k) || strings.Contains(l, "session") || strings.Contains(l, "conversation") || strings.Contains(l, "thread") || strings.Contains(l, "prompt_cache") || strings.Contains(l, "affinity") || l == "user_id" || l == "previous_response_id" || l == "response_id"
 }
 
 // Scan full JSON without decoding/retaining message trees. Identity fields are

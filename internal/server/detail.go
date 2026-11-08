@@ -45,6 +45,8 @@ type detailLog struct {
 	AttemptIndex          int                 `json:"attemptIndex"`
 	Context               string              `json:"context,omitempty"`
 	Terminal              string              `json:"terminal,omitempty"`
+	WireVersion           int                 `json:"wireVersion,omitempty"`
+	UpstreamAttempts      []upstreamWireLog   `json:"upstreamAttempts,omitempty"`
 	RequestHeaders        map[string][]string `json:"requestHeaders"`
 	RequestBody           string              `json:"requestBody"`
 	RequestBodyBytes      int                 `json:"requestBodyBytes"`
@@ -63,12 +65,17 @@ func (d *detailLog) LogKeys() map[string]string {
 var secretHeaders = map[string]bool{"authorization": true, "x-api-key": true, "api-key": true, "x-goog-api-key": true,
 	"cookie": true, "set-cookie": true, "proxy-authorization": true}
 
+func isSecretHeader(name string) bool {
+	lower := strings.ToLower(name)
+	return secretHeaders[lower] || lower == "token" || strings.Contains(lower, "authorization") || strings.Contains(lower, "api-key") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "access-token") || strings.Contains(lower, "access_token") || strings.HasSuffix(lower, "-token") || strings.Contains(lower, "password") || strings.Contains(lower, "secret")
+}
+
 func maskHeaders(cfg *config.Config, h http.Header) map[string][]string {
 	out := make(map[string][]string, len(h))
 	for k, vs := range h {
 		cp := make([]string, len(vs))
 		for i, v := range vs {
-			if secretHeaders[strings.ToLower(k)] {
+			if isSecretHeader(k) {
 				cp[i] = "[REDACTED]"
 			} else {
 				cp[i] = redactSecrets(cfg, v)

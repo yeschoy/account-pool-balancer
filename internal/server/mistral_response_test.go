@@ -124,11 +124,12 @@ func TestMistralChatEventPreservesSSEFraming(t *testing.T) {
 
 func TestMistralContentStreamFlushesBeforeUpstreamCompletes(t *testing.T) {
 	e := newMistralEnv(t)
+	enableMistralWireDetails(t, e)
 	release := make(chan struct{})
 	defer close(release)
 	e.setHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"thought\"}]}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"opaque\":9007199254740993,\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"thought\"}]}]}}]}\n\n")
 		w.(http.Flusher).Flush()
 		select {
 		case <-release:
@@ -159,8 +160,12 @@ func TestMistralContentStreamFlushesBeforeUpstreamCompletes(t *testing.T) {
 	}
 	logs, _ := e.s.logs.Query("requests", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
 	var rec requestLog
-	if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.InputTokens == nil || *rec.InputTokens != 17 || rec.OutputTokens == nil || *rec.OutputTokens != 5 || rec.Result != "success" || rec.UpstreamTPS == nil || *rec.UpstreamTPS <= 0 || rec.UpstreamTPSBasis != "post-first-event" {
+	if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.InputTokens == nil || *rec.InputTokens != 17 || rec.OutputTokens == nil || *rec.OutputTokens != 5 || rec.Result != "success" || rec.UpstreamTPS == nil || *rec.UpstreamTPS <= 0 || rec.UpstreamTPSBasis != "post-first-event" || rec.UseTimeSec == nil {
 		t.Fatal("lost measured usage or success outcome")
+	}
+	detail := mistralWireRecord(t, e)
+	if len(detail.UpstreamAttempts) != 1 || detail.UpstreamAttempts[0].Response == nil || !strings.Contains(detail.UpstreamAttempts[0].Response.Body, `"content":[`) || !strings.Contains(detail.UpstreamAttempts[0].Response.Body, "9007199254740993") || !strings.Contains(detail.ResponseBody, `"reasoning_content":"thought"`) {
+		t.Fatal("stream capture buffered or replaced native bytes with adapted output")
 	}
 }
 

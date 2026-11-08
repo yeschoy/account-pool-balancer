@@ -90,6 +90,8 @@ type requestLog struct {
 	BlockedBy           string       `json:"blockedBy,omitempty"`
 	RetryAfter          *int         `json:"retryAfter,omitempty"`
 	DurationMs          int64        `json:"durationMs"`
+	UseTimeSec          *int64       `json:"useTimeSec,omitempty"`
+	AverageTPS          *float64     `json:"averageTps,omitempty"`
 	TTFTMs              *int64       `json:"ttftMs"`
 	UpstreamDurationMs  *int64       `json:"upstreamDurationMs,omitempty"`
 	UpstreamOutputMs    *int64       `json:"upstreamOutputMs,omitempty"`
@@ -118,6 +120,9 @@ type requestLog struct {
 	CrossAccountFrom string             `json:"crossAccountFrom,omitempty"`
 	Attempts         []attemptLog       `json:"attempts"`
 	Workflow         []workflowDecision `json:"workflow,omitempty"`
+
+	upstreamDetails    []upstreamWireLog // sanitized, attached only to detail logs
+	upstreamIdentities []string          // ephemeral response secrets; never serialized
 }
 
 type errorLog struct {
@@ -399,6 +404,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var cw *captureWriter
 	var reqHeader http.Header
 	var reqBody []byte
+	var reqBodyIncomplete bool
 	var detailIdentities []string
 	detailEnabled := cfg.Logs.Detail
 	if detailEnabled {
@@ -415,7 +421,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var turnReported bool
 	finish := func(status int, result string) {
 		rec.Status, rec.Result = status, result
-		rec.DurationMs = time.Since(start).Milliseconds()
+		ended := time.Now()
+		rec.DurationMs = ended.Sub(start).Milliseconds()
 		if res != nil {
 			rec.InputTokens, rec.OutputTokens, rec.CachedTokens = res.usage.in, res.usage.out, res.usage.cached
 			rec.CacheCreationTokens, rec.ReasoningTokens = res.usage.cacheWrite, res.usage.reasoning
@@ -432,6 +439,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				rec.UpstreamStatus = &us
 			}
 		}
+		applyAverageTiming(rec, ended)
 		// The Perch pool reports its turn to the same places the CLI does.
 		// It runs after the log line is written so the record can cite the
 		// request id, and it is synchronous by design: the reporter's budget
@@ -463,6 +471,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
 				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
 				ResponseHeaders: maskHeaders(cfg, cw.Header()), ResponseBodyBytes: cw.n}
+			if rec.Provider == config.ProviderMistral {
+				d.WireVersion, d.UpstreamAttempts = 1, rec.upstreamDetails
+				detailIdentities = append(detailIdentities, rec.upstreamIdentities...)
+			}
+			d.RequestBodyTruncated = reqBodyIncomplete
 			capturedBody := reqBody
 			if rec.Provider == config.ProviderOpenCodeGo {
 				d.RequestHeaders = maskHeaders(cfg, goPrivateHeaders(reqHeader))
@@ -488,7 +501,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				d.ResponseHeaders = maskHeaders(cfg, thPrivateHeaders(cw.Header()))
 				var cut bool
 				capturedBody, cut = thBodyPreview(reqBody, detailIdentities, max)
-				d.RequestBodyTruncated = cut
+				d.RequestBodyTruncated = d.RequestBodyTruncated || cut
 			}
 			var reqCut bool
 			d.RequestBody, reqCut = maskBody(cfg, capturedBody, max)
@@ -530,10 +543,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rootCfg := cfg
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
-	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral && cfg.Mistral.DetailLog != nil {
+	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		if rec.Provider == config.ProviderTokenHarbor {
 			detailEnabled = cfg.TokenHarbor.DetailLog
-		} else {
+		} else if cfg.Mistral.DetailLog != nil {
 			detailEnabled = *cfg.Mistral.DetailLog
 		}
 		if !detailEnabled {
@@ -570,6 +583,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, int64(cfg.Routing.MaxBodyMB)<<20))
 	}
 	defer releaseBody()
+	reqBody, reqBodyIncomplete = body, err != nil
 	if err != nil {
 		if errors.Is(err, errTHBufferLimit) {
 			rec.ErrorCategory = "gateway-buffer-limit"
@@ -599,7 +613,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		finish(499, "client_cancelled")
 		return
 	}
-	reqBody = body
 	obj, err := parseRoutingBody(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral)
 	if err != nil {
 		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
@@ -810,6 +823,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident, detailIdentities)
 		res.privateIdentities = detailIdentities
+		if rec.Provider == config.ProviderMistral && len(rec.upstreamIdentities) > 0 {
+			res.privateIdentities = rec.upstreamIdentities
+		}
 		if rec.Provider == config.ProviderTokenHarbor && (res.kind == outFailed || res.result == "failed") {
 			s.thFailureDetail(cfg, rec, r, body, res, i)
 		}
@@ -1441,10 +1457,22 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// session is exactly that key, and it never leaves as the raw value.
 		req.Header.Set("Modal-Routing-Affinity-Key", ident.Fingerprint)
 	}
+	if acct.Provider == config.ProviderMistral {
+		ensureMistralXAffinity(req.Header, body)
+	}
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.ContentLength = int64(len(body))
+	wireCapture := newMistralUpstreamDetail(cfg, req, rec, body, attemptNo, privateIdentities)
+	if wireCapture != nil {
+		trace.WroteHeaderField = wireCapture.recordHeader
+		defer func() {
+			wire, secrets := wireCapture.finish(res)
+			rec.upstreamDetails = append(rec.upstreamDetails, wire)
+			rec.upstreamIdentities = append(rec.upstreamIdentities, secrets...)
+		}()
+	}
 
 	client := s.httpClient(acct.ProxyURL)
 	if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
@@ -1477,6 +1505,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	markSent()
 	res.upstreamStatus = resp.StatusCode
 	res.header = resp.Header
+	if wireCapture != nil {
+		wireCapture.attach(resp)
+	}
 	ct := resp.Header.Get("Content-Type")
 	res.contentType = ct
 	if config.IsOpenCode(acct.Provider) && acct.ProxyURL != "" && resp.StatusCode == http.StatusProxyAuthRequired {

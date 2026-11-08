@@ -1426,9 +1426,13 @@ function hitRate(b) {
 }
 function costCell(r) { return r.cost === undefined || r.cost === null ? '—' : esc(money(r.cost, r.currency)); }
 function upstreamTPSCell(r) {
-  if (typeof r.upstreamTps !== 'number' || !Number.isFinite(r.upstreamTps)) return '<span class="acc-sub">上游 TPS —</span>';
-  const basis = r.upstreamTpsBasis === 'post-first-event' ? '流式首事件后平均输出速率' : '非流式上游调用平均速率（含首响应等待）';
-  return `<span class="acc-sub" title="${basis}；使用上游真实输出用量（含其计入的思考 token），非服务端内部解码速度">上游 ${num(r.upstreamTps)} tok/s</span>`;
+  const average = typeof r.averageTps === 'number' && Number.isFinite(r.averageTps)
+    ? `<span class="acc-sub" title="真实输出 token / useTimeSec；按NewAPI相同的Unix整秒差公式，含本网关排队、首响应等待和重试。两层计时起点不同，不保证数值完全相等。">全程平均 ${num(Math.round(r.averageTps))} tok/s</span>`
+    : '<span class="acc-sub" title="旧日志、无真实输出、失败或整秒耗时为0时未知">全程平均 TPS —</span>';
+  if (typeof r.upstreamTps !== 'number' || !Number.isFinite(r.upstreamTps)) return average + '<br><span class="acc-sub">上游 TPS —</span>';
+  const streaming = r.upstreamTpsBasis === 'post-first-event';
+  const basis = streaming ? '流式首事件后平均输出速率' : '非流式上游调用平均速率（含首响应等待）';
+  return average + `<br><span class="acc-sub" title="${basis}；仅最后实际上游尝试，使用真实输出用量，非服务端内部解码速度">${streaming ? '首事件后' : '上游均速'} ${num(r.upstreamTps)} tok/s</span>`;
 }
 function keyCell(r) { return esc(r.clientKeyName || r.clientKeyId || '—'); }
 function requestRow(r) {
@@ -1450,19 +1454,29 @@ function detailRow(d) {
 function showDetail(d) {
   const pretty = (t) => { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return t; } };
   const sec = (title, text) => `<h4>${esc(title)}</h4><pre>${esc(text)}</pre>`;
-  modal({ title: `${d.context === 'failed_attempt' ? '失败尝试 #' + d.attemptIndex + ' · ' : ''}${d.method} ${d.path} → ${d.status}${d.clientKeyName || d.clientKeyId ? '（密钥 ' + (d.clientKeyName || d.clientKeyId) + '）' : ''}`, wide: true, body:
-    sec('请求头', JSON.stringify(d.requestHeaders, null, 2)) + sec('请求体' + (d.requestBodyTruncated ? '（已截断）' : ''), pretty(d.requestBody)) +
-    sec('响应头', JSON.stringify(d.responseHeaders, null, 2)) + sec('响应体' + (d.responseBodyTruncated ? '（已截断）' : ''), pretty(d.responseBody)) });
+  const block = (name, m) => sec(name + '头', JSON.stringify(m.headers || {}, null, 2)) + sec(name + '体（' + num(m.bodyBytes || 0) + ' B' + (m.bodyTruncated ? '，已截断/未完整读取' : '') + '）', pretty(m.body || ''));
+  const legacyFailure = d.context === 'failed_attempt';
+  let body = block(legacyFailure ? '失败尝试请求（旧格式）' : '客户端原始请求', { headers:d.requestHeaders, body:d.requestBody, bodyBytes:d.requestBodyBytes, bodyTruncated:d.requestBodyTruncated });
+  if (d.wireVersion === 1) {
+    for (const a of d.upstreamAttempts || []) {
+      body += `<h3>上游尝试 #${esc(Number(a.attemptIndex) + 1)} · ${esc(a.method)} ${esc(a.path)} · HTTP ${esc(a.status || '未收到响应')}</h3><p class="acc-sub">${a.sent ? '已发出请求头' : '未确认发出请求头'} · ${esc(a.terminal || '')}</p>`;
+      body += block('实际发给上游的请求', a.request || {});
+      body += a.response ? block('上游原生响应（适配前）', a.response) : '<p class="acc-sub">没有收到上游HTTP响应，不伪造响应头/体。</p>';
+    }
+    if (!d.upstreamAttempts?.length) body += '<p class="acc-sub">本次未发起上游HTTP请求。</p>';
+  } else if (d.provider === 'mistral') body += '<p class="acc-sub">旧记录未采集上游原生交换，不从客户端内容推造。</p>';
+  body += block(legacyFailure ? '上游错误响应（旧格式）' : '返回客户端的响应（适配后）', { headers:d.responseHeaders, body:d.responseBody, bodyBytes:d.responseBodyBytes, bodyTruncated:d.responseBodyTruncated });
+  modal({ title: `${legacyFailure ? '失败尝试 #' + d.attemptIndex + ' · ' : ''}${d.method} ${d.path} → ${d.status}${d.clientKeyName || d.clientKeyId ? '（密钥 ' + (d.clientKeyName || d.clientKeyId) + '）' : ''}`, wide:true, body });
 }
 function errorRow(e) {
   return `<tr><td class="num">${esc(fmtTime(e.ts))}</td><td>${keyCell(e)}</td><td>${esc(e.accountName)}</td><td>${esc(e.model)}</td>
     <td>${statusBadge(e.status)}${e.upstreamStatus && e.upstreamStatus !== e.status ? `<div class="acc-sub">上游 ${esc(e.upstreamStatus)}</div>` : ''}</td>
     <td>${esc(e.category)}<div class="acc-sub">${esc(e.terminal)}${e.origin ? ' · ' + esc(e.origin) : ''}</div>${e.egress ? `<div class="acc-sub">${esc(e.egress)}${e.egressIp ? ' / ' + esc(e.egressIp) : ''}</div>` : ''}</td>
     <td>${e.ruleId ? `${esc(e.ruleId)}<div class="acc-sub">${esc(e.ruleAction)}${e.switched ? ' · 换号' : ''}</div>` : `<span class="muted">${esc(e.matchedBy)}</span>`}${e.retryRuleId ? `<div class="acc-sub">停止重试：${esc(e.retryRuleId)}</div>` : ''}</td>
-    <td class="small">${esc(String(e.reason).slice(0, 160))}${e.provider === 'tokenharbor' ? `<div><button type="button" class="btn small er-detail" data-rid="${esc(e.requestId)}" data-attempt="${esc(e.attemptIndex ?? 0)}">详细请求</button></div>` : ''}</td></tr>`;
+    <td class="small">${esc(String(e.reason).slice(0, 160))}${e.provider === 'tokenharbor' || e.provider === 'mistral' ? `<div><button type="button" class="btn small er-detail" data-rid="${esc(e.requestId)}" data-attempt="${esc(e.attemptIndex ?? 0)}">详细请求</button></div>` : ''}</td></tr>`;
 }
 async function openErrorDetails(requestId, attemptIndex) {
-  const d = await api('GET', withPool('/api/logs/details?requestId=' + encodeURIComponent(requestId) + '&attemptIndex=' + encodeURIComponent(attemptIndex)));
+  const d = await api('GET', withPool('/api/logs/details?requestId=' + encodeURIComponent(requestId) + (pool === 'mistral' ? '' : '&attemptIndex=' + encodeURIComponent(attemptIndex))));
   if (d.items?.length) showDetail(d.items.find(x => x.context === 'failed_attempt') || d.items[0]);
   else toast('没有该次尝试的详细记录：旧版未采集、记录已过期或尚未生成。');
 }
