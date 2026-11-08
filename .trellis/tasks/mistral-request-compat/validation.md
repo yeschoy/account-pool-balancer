@@ -25,3 +25,20 @@ fetch发现origin/master=e06a589，新增诊断文档和独立tools/mistral工�
 06:00:34.988–06:04:33.034 UTC，约3分58秒，真实DeepSeek完成24/24 success/HTTP200，全为流式；NewAPI渠道180对应24条type=2，stream_status=ok/end_reason=done。Mistral错误事件0，无新增422或本地400，无忙溢出、请求内切号或多attempt；两服务结束时healthy、零重启、无OOM。
 
 真实input3195540/cached2119808，token加权66.34%；绑定16hit/8miss，24次均message_hmac身份与session_hmac cache hint。重启会清内存绑定，miss不能当作同会话一直切号。未恢复NewAPI删掉的客户端metadata/cache，因此不声称客户端原值已端到端恢复，也不把该窗口和先前85.85%当受控对比或承诺缓存提升。无主动生产推理；自然样本没有原始请求体证据，不能声称所有新参数形态、seed或store=true均已线上实测。
+
+## 用户要求的完整10分钟错误率观察
+
+窗口：2026-11-08 **06:14:51.458414–06:24:51.458414 UTC**（北京时间14:14:51–14:24:51），600秒。只读自然业务，不发推理、不改配置/规则、不重启。按完成时间`ts + durationMs`落入窗口的请求计数；未完成请求不计入。客户端取消单列，不当作服务错误；本窗口取消0。
+
+| 范围 | 完成请求 | 成功 | 最终错误 | 错误率 |
+|---|---:|---:|---:|---:|
+| Mistral精确DeepSeek Chat | 60 | 60 | 0 | 0% |
+| OpenCode Go | 96 | 96 | 0 | 0% |
+| Modal | 89 | 72 | 17 | 19.10% |
+| Balancer总体 | 245 | 228 | 17 | 6.94% |
+
+- Mistral60条均HTTP200、无新增400/422/流式错误，57流式+3非流式；NewAPI渠道180同窗口60条type=2消费，57条stream_status=ok/end_reason=done，无type=5错误。跨层计数一致；没有将健康检查当成推理成功。
+- 17次最终失败全部为Modal上游429，错误事件日志42条也均Modal/upstream/429；42是尝试级事件数，不能混入245个完成请求的错误率分母。没有Mistral错误事件；仅归类可证实的状态，不输出原始reason/input或凭据，也不将Modal429归因Mistral适配。
+- Mistral真实input10055835、cached8382592，token加权83.36%；54绑定hit/6miss，60次均message_hmac身份、session_hmac cache hint，无忙溢出、请求内切号或multi-attempt。没有原始请求体证据证明客户端cache/metadata已透传（渠道规则仍删除），不能把不同时段缓存率当成受控性能改善。
+- 两阶段共38次容器健康采样均无异常；结束时Balancer/NewAPI均healthy、restartCount=0、无OOM，Balancer revision仍9f375ef。请求统计覆盖完整10分钟；健康结论是采样结果，不冒称连续探针证明。
+- 无新增临时脚本、日志下载、原始请求或凭据副本；本记录为需保留的Trellis业务验收日志。不因补记录而重新部署。NewAPI规则收敛范围确认门不变。
