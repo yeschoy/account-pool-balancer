@@ -314,12 +314,37 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 			if developer && role == "developer" {
 				message.set("role", []byte(`"system"`))
 			}
-			if role == "assistant" && message.get("reasoning_content") != nil {
-				if err := message.unique("content", "reasoning_content"); err != nil {
-					return nil, false, err
+			if role == "assistant" {
+				reasoning := message.get("reasoning_content")
+				// The exact DeepSeek Chat endpoint also rejects the string
+				// reasoning alias used by some clients. Preserve its thought
+				// through the same native chunks, never by simply deleting it.
+				if alias := message.get("reasoning"); developer && alias != nil {
+					if err := message.unique("reasoning", "reasoning_content", "content"); err != nil {
+						return nil, false, err
+					}
+					var aliased, canonical *string
+					if json.Unmarshal(alias, &aliased) != nil {
+						return nil, false, errors.New("Mistral DeepSeek assistant reasoning must be a string or null")
+					}
+					if reasoning != nil && json.Unmarshal(reasoning, &canonical) != nil {
+						return nil, false, errors.New("Mistral assistant reasoning_content must be a string or null")
+					}
+					if aliased != nil && *aliased != "" && canonical != nil && *canonical != "" && *aliased != *canonical {
+						return nil, false, errors.New("Mistral DeepSeek assistant reasoning conflicts with reasoning_content; neither thought was discarded")
+					}
+					if reasoning == nil || canonical == nil || *canonical == "" {
+						reasoning = alias
+					}
+					message.set("reasoning", nil)
 				}
-				if err := mistralAssistantReasoning(message); err != nil {
-					return nil, false, err
+				if reasoning != nil {
+					if err := message.unique("content", "reasoning_content"); err != nil {
+						return nil, false, err
+					}
+					if err := mistralAssistantReasoning(message, reasoning); err != nil {
+						return nil, false, err
+					}
 				}
 			}
 			prepared := message.render()
@@ -341,9 +366,9 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 	return out.Bytes(), true, nil
 }
 
-func mistralAssistantReasoning(message *mistralWireObject) error {
+func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte) error {
 	var text *string
-	if json.Unmarshal(message.get("reasoning_content"), &text) != nil {
+	if json.Unmarshal(reasoning, &text) != nil {
 		return errors.New("Mistral assistant reasoning_content must be a string or null")
 	}
 	if text != nil && *text != "" {

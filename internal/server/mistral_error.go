@@ -152,7 +152,7 @@ func mistralValidationLocation(raw []byte) []any {
 		if len(part) > 0 && part[0] == '"' {
 			name := mistralString(part)
 			switch name {
-			case "body", "messages", "role", "thinking", "enable_thinking", "type", "budget_tokens", "user", "seed", "random_seed", "store", "verbosity", "safety_identifier", "metadata", "prompt_cache_key", "prompt_cache_retention", "reasoning_effort", "logit_bias", "content", "tool_calls", "tool_call_id", "arguments", "tools", "function", "name", "tool_choice", "parallel_tool_calls", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stream", "stream_options", "include_usage", "include_obfuscation", "response_format", "stop", "n", "safe_prompt", "prediction", "presence_penalty", "frequency_penalty", "assistant", "system", "developer", "tool", "text", "signature", "image_url", "url", "input", "output", "strict":
+			case "body", "messages", "role", "thinking", "enable_thinking", "type", "budget_tokens", "user", "seed", "random_seed", "store", "verbosity", "safety_identifier", "metadata", "prompt_cache_key", "prompt_cache_retention", "reasoning_effort", "reasoning", "reasoning_content", "logit_bias", "content", "tool_calls", "tool_call_id", "arguments", "tools", "function", "name", "tool_choice", "parallel_tool_calls", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stream", "stream_options", "include_usage", "include_obfuscation", "response_format", "stop", "n", "safe_prompt", "prediction", "presence_penalty", "frequency_penalty", "assistant", "system", "developer", "tool", "text", "signature", "image_url", "url", "input", "output", "strict":
 				loc = append(loc, name)
 			default:
 				loc = append(loc, "[other]")
