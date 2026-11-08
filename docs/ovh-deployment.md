@@ -56,6 +56,23 @@
 
 ## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
+## 当前部署：Mistral 支持完整代理 URL（2026-11-08 15:55 UTC，2934598）
+
+- 用户要求支持标准格式 `socks5://用户:密码@IP:端口`，不再局限于 zooproxy 模板。
+- `config.MistralSignup` 新增 `proxyUrls`：填了即优先使用，忽略模板字段；
+  `PickProxy`/`AllProxies` 统一两种来源。支持 socks5/socks5h/http/https。
+- worker 注入 `MISTRAL_PROXY_URLS`（换行分隔）；`Proxy.from_url()` 直接持有
+  完整 URL；`chain_gateway` 按上游 scheme 选择 SOCKS5 握手或 HTTP CONNECT
+  （此前只实现了 HTTP CONNECT）。
+- 前端：「代理列表」textarea 置顶优先，模板方式折叠进 `<details>`（高级）。
+- 验收：`PUT` 保存 `proxyUrls` 后 `revision=5456`、`hasProxy=true`；
+  `POST settings/test` 返回 `{"ip":"15.235.122.152"}`，与配置的出口一致；
+  页面含 `ms-proxy-urls` 与格式说明，资源 `app.js?v=9c5ce31094`；
+  容器 running/healthy。本机网关直连该 SOCKS5 出口亦为 `15.235.122.152`。
+- 镜像 `account-pool-balancer:release-2934598-20261108T075416Z`；仅
+  `--force-recreate` Balancer，卷/端口/网络未变。
+- 仍未验证：容器内真实注册全流程；订阅扣款。
+
 ## 当前部署：Mistral 代理设置移到界面（2026-11-08 15:44 UTC，cfbc02a）
 
 - 用户要求代理凭据在界面配置，而不是写进容器环境。新增
