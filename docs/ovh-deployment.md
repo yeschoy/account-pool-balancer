@@ -56,6 +56,28 @@
 
 ## 历史部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
 
+## 当前部署：Mistral 代理设置移到界面（2026-11-08 15:44 UTC，cfbc02a）
+
+- 用户要求代理凭据在界面配置，而不是写进容器环境。新增
+  `config.MistralSignup`（用户名模板/密码/SID 列表/入口/地区/接码代理），
+  持久化在 `config.json` 的 `mistralSignup` 键；与 `mistral.go` 里 API 池的
+  `Mistral`（BaseURL/routing）命名区分，未改动后者。
+- worker 不再依赖容器环境变量：`runMistralWorker` 每次执行时把界面里的设置
+  注入 `ZOOPROXY_*` / `MIDA_PROXY` 子进程环境。
+- 新增 `GET/PUT /api/mistral/settings` 与 `POST /api/mistral/settings/test`
+  （后者用配置的首个 SID 走一次 ipify，只验代理不跑注册）。
+- 前端新增「代理与运行设置」表单 + 「测试代理」按钮。
+- 验收：`PUT` 保存后 `revision=5454`、`hasProxy=true`；`POST settings/test`
+  返回 `{"ip":"64.66.229.122"}`（sid q4h1WBwP）；`/data/config.json` 中
+  `mistralSignup.proxySids` 3 条、`proxyPassword` 已写入；页面含
+  `mr-settings-form`/`ms-user-tpl`/`代理与运行设置`，资源
+  `app.js?v=a1370297d1`；容器 running/healthy。
+- 镜像 `account-pool-balancer:release-cfbc02a-20261108T074202Z`；仅
+  `--force-recreate` Balancer，卷/端口/网络未变。
+- 仍未验证：容器内真实注册全流程；订阅扣款。
+
+## 当前部署：Mistral 注册机改用明文存储（2026-11-08 15:25 UTC，1b253bf）
+
 - 用户明确要求去掉加密存储。`mistralsignupstore` 由 AES-GCM 改为明文 JSON：
   文件 `/data/mistral-signup.json`，权限 0600，`cat` 可直接读出邮箱、密码与
   API Key。`Open(path, secret)` 保留 secret 参数位置以兼容调用方，实际不再
