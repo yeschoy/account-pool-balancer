@@ -34,6 +34,8 @@ func TestMistralSessionPrecedesCacheHint(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"session_id": "test-private-session", "prompt_cache_key": "cache"},
 		{"metadata": map[string]any{"user_id": "{\"session_id\":\"test-private-session\"}"}, "prompt_cache_key": "cache"},
+		{"metadata": map[string]any{"user_id": "{\"parent_agent_id\":\"test-private-session\"}"}, "prompt_cache_key": "cache"},
+		{"user": "{\"agent_id\":\"test-private-session\"}", "prompt_cache_key": "cache"},
 	} {
 		if id := s.mistralIdentity(cfg, "scope", nil, body); id.KeyType == "prompt_cache_key" {
 			t.Fatal("cache hint overrode structured body session")

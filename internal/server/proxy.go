@@ -121,6 +121,10 @@ type requestLog struct {
 	Attempts         []attemptLog       `json:"attempts"`
 	Workflow         []workflowDecision `json:"workflow,omitempty"`
 
+	ClientRequestHeaders          map[string][]string `json:"clientRequestHeaders,omitempty"`
+	ClientSessionHeaderStatus     map[string]string   `json:"clientSessionHeaderStatus,omitempty"`
+	ClientRequestHeadersTruncated bool                `json:"clientRequestHeadersTruncated,omitempty"`
+
 	upstreamDetails    []upstreamWireLog // sanitized, attached only to detail logs
 	upstreamIdentities []string          // ephemeral response secrets; never serialized
 }
@@ -543,6 +547,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rootCfg := cfg
 	cfg = rootCfg.ForProvider(rec.Provider)
 	rec.Selector = cfg.Routing.Strategy
+	if rec.Provider == config.ProviderMistral {
+		rec.ClientRequestHeaders, rec.ClientSessionHeaderStatus, rec.ClientRequestHeadersTruncated = mistralClientRequestHeaders(cfg, r.Header)
+	}
 	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		if rec.Provider == config.ProviderTokenHarbor {
 			detailEnabled = cfg.TokenHarbor.DetailLog
@@ -618,6 +625,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
 			detailIdentities = thIdentityValues(r.Header, redactionObject, cfg.Routing.SessionHeaders)
+			if rec.Provider == config.ProviderMistral {
+				detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(redactionObject)...)
+			}
 		}
 		rec.ErrorCategory = "request"
 		message := "request body must be a JSON object"
@@ -630,6 +640,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		detailIdentities = thIdentityValues(r.Header, obj, cfg.Routing.SessionHeaders)
+		if rec.Provider == config.ProviderMistral {
+			detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(obj)...)
+		}
 	}
 	if rec.Provider == config.ProviderMistral {
 		prepared, aliasErr := normalizeMistralCacheAlias(body, r.URL.Path)
