@@ -24,7 +24,8 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 - 会话 HMAC 按分组和下游密钥隔离。TTL 与忙时 `overflow` / `wait-overflow` / `reject` 策略沿用现有配置，临时借号不改原绑定。
 - Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 且已识别会话时，自动填入 `apb-mistral-<现有会话HMAC>`；HMAC按分组与下游密钥隔离，不暴露原始会话或凭据。客户端已有字段（包括显式null/空串）原样保留；没有身份不随机生成。共享前缀与同一账号有利于缓存命中，但不保证命中；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
 - 仅 Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。不支持的类型本地400，不丢弃思考或换号重试。Responses和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
-- 仅对 Chat 模型 `deepseek-v4-1-flash-1017`：未传 `reasoning_effort` 且未传 `thinking` / `enable_thinking` 时，默认补 `reasoning_effort:"high"`；显式开启无档位也补 high，显式关闭转 none，已有原生档位保留（medium 兼容为 high），冲突本地拒绝。无开关时显式 `reasoning_effort:null` 仍保持原值。high 可能增加思考用量和耗时，不自动增大 `max_tokens`；其他模型、协议及号池不套用此默认值。
+- 仅对 Chat 模型 `deepseek-v4-1-flash-1017`：根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。两种写法按相同规则校验/归一化，同值合并、冲突拒绝（显式 null 与非 null 也视为冲突）；嵌套 effort 为 null 且无开关时保留为原生 null。Responses、其他模型和号池不做此别名转换。
+- 仅对同一精确 Chat 模型：两种 effort 写法及 `thinking` / `enable_thinking` 均未传时，默认补 `reasoning_effort:"high"`；显式开启无档位也补 high，显式关闭转 none，已有原生档位保留（medium 兼容为 high），冲突本地拒绝。无开关时显式 `reasoning_effort:null` 仍保持原值。high 可能增加思考用量和耗时，不自动增大 `max_tokens`；其他模型、协议及号池不套用此默认值。
 - 除上述明确的缓存补齐、思考格式及精确模型参数兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。精确 DeepSeek Chat 仅省略不支持的根 `store:false/null`，`store:true` 本地拒绝；其他模型/协议不套用该规则。未知字段不静默丢弃，不支持时明确报错。
 - 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；临时 5xx 短冷却。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
 

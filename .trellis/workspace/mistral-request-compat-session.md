@@ -52,3 +52,11 @@
 - 新增回归先确认旧实现缺省未补 high，再验证修复；本地 Mock 覆盖缺省/开启/关闭/none/low/high/xhigh/max/null、原始工具/大数/历史/cache/metadata/输出预算保留及单次真实 HTTP 转发。扩充缺省参数的其他模型/协议/号池隔离，调整既有精确字节断言以纳入授权新增字段；Mistral 定向通过（3.122秒）。
 - 质量门禁：`go test ./...`、`go test -race ./...`、`go vet ./...`、`go build -o /dev/null ./cmd/odb`、gofmt 与 diff check 均通过；同步 Mistral 规范及使用文档。
 - 本次新增代码尚未推送或部署，未发起生产推理。本地构建输出到 /dev/null，没有新增需清理的业务无关临时产物；此前清单不擅自清理，Trellis 记录保留并随修改提交。
+
+## 2026-11-08：用户授权 Chat 的 reasoning.effort 别名兼容（本地修改，未部署）
+
+- 用户明确要求把嵌套 `reasoning.effort` 自动转为正确的原生字段 `reasoning_effort`；沿用精确 Mistral DeepSeek Chat 边界，不转换 Responses/FIM、其他模型或号池，不新建任务。
+- 只接受根 `reasoning` 中唯一的 effort 字段，复用原生档位校验及 medium→high；两种写法归一化后相同才合并，不同值（含显式 null 对非 null）本地400。未知结构、summary/budget等额外字段、根或嵌套重复字段均拒绝，不静默丢弃意图，不回显字段值。与 thinking 开关/缺省 high 的既有语义一致，保留 none/low/null，不让默认值盖掉显式选择。
+- 先新增回归复现旧实现把嵌套 low 当成缺省、保留未知根 reasoning 的行为，再修复；最终只写一次原生字段，避免追加式 wire setter 产生重复 effort。历史 assistant.reasoning 别名仍独立处理，原始消息/工具/大数/缓存/metadata/输出预算保留。
+- Mock 覆盖所有档位/null、相同/归一化/转义别名、开关冲突、无损拼接、缓存补齐及一次上游 HTTP；Responses 含原生 effort+summary 的正文经 HTTP 保持原样，其他模型/协议/号池隔离通过。定向 Mistral 回归通过；全仓 normal（server63.862秒）、race（server79.071秒）、vet、构建到 /dev/null、gofmt 与 diff check 均通过，规范与使用文档同步。
+- 本次及此前缺省 high 均尚未推送/部署，不宣称线上已生效；未发生产推理或修改 NewAPI 配置。无新增业务无关临时产物，旧清单不擅自清理，Trellis 记录随代码提交并保留。

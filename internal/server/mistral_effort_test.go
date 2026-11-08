@@ -20,6 +20,22 @@ func TestMistralDeepSeekDefaultEffort(t *testing.T) {
 		{"high", `"reasoning_effort":"high",`, `"high"`},
 		{"xhigh", `"reasoning_effort":"xhigh",`, `"xhigh"`},
 		{"max", `"reasoning_effort":"max",`, `"max"`},
+		{"nested high", `"reasoning":{"effort":"high"},`, `"high"`},
+		{"nested none", `"reasoning":{"effort":"none"},`, `"none"`},
+		{"nested low", `"reasoning":{"effort":"low"},`, `"low"`},
+		{"nested xhigh", `"reasoning":{"effort":"xhigh"},`, `"xhigh"`},
+		{"nested max", `"reasoning":{"effort":"max"},`, `"max"`},
+		{"nested medium", `"reasoning":{"effort":"medium"},`, `"high"`},
+		{"nested null", `"reasoning":{"effort":null},`, `null`},
+		{"nested null enabled", `"reasoning":{"effort":null},"thinking":{"type":"enabled"},`, `"high"`},
+		{"nested null disabled", `"reasoning":{"effort":null},"enable_thinking":false,`, `"none"`},
+		{"nested explicit enabled", `"reasoning":{"effort":"low"},"enable_thinking":true,`, `"low"`},
+		{"nested explicit disabled", `"reasoning":{"effort":"none"},"thinking":{"type":"disabled"},`, `"none"`},
+		{"equal effort aliases", `"reasoning_effort":"low","reasoning":{"effort":"low"},`, `"low"`},
+		{"equal null aliases", `"reasoning":{"effort":null},"reasoning_effort":null,`, `null`},
+		{"equal normalized aliases", `"reasoning_effort":"medium","reasoning":{"effort":"high"},`, `"high"`},
+		{"equal normalized reverse aliases", `"reasoning":{"effort":"medium"},"reasoning_effort":"high",`, `"high"`},
+		{"escaped alias values", `"reasoning_effort":"h\u0069gh","reasoning":{"effort":"high"},`, `"h\u0069gh"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{ "model":"deepseek-v4-1-flash-1017", ` + tc.fields + `"messages":[{"role":"user","content":"mock"}], "tools":[{"n":9007199254740993}], "metadata": {"session_id":"client-session"}, "prompt_cache_key":null, "max_tokens":16000 }`)
@@ -34,8 +50,8 @@ func TestMistralDeepSeekDefaultEffort(t *testing.T) {
 					t.Fatalf("unrelated wire field changed: %s", key)
 				}
 			}
-			if got["thinking"] != nil || got["enable_thinking"] != nil {
-				t.Fatal("compatibility switch was not converted to native effort")
+			if got["thinking"] != nil || got["enable_thinking"] != nil || got["reasoning"] != nil || bytes.Count(out, []byte(`"reasoning_effort"`)) != 1 {
+				t.Fatal("compatibility controls remained or native effort was duplicated")
 			}
 			before := e.count()
 			st, reply := e.post(t, "/v1/chat/completions", string(body), nil)
@@ -53,6 +69,8 @@ func TestMistralDeepSeekMediumEffortCompatibility(t *testing.T) {
 	for _, body := range []string{
 		`{ "model":"deepseek-v4-1-flash-1017", "reasoning_effort":"medium", "messages":[{"role":"assistant","content":"answer","reasoning_content":"thought"}], "tools":[{"number":9007199254740993}], "prompt_cache_key":"client-cache" }`,
 		`{ "reasoning_effort":"medium", "messages":[{"role":"assistant","content":"answer","reasoning_content":"thought"}], "model":"deepseek-v4-1-flash-1017", "tools":[{"number":9007199254740993}], "prompt_cache_key":"client-cache" }`,
+		`{ "reasoning":{"effort":"medium"}, "store":false, "thinking":{"type":"enabled"}, "model":"deepseek-v4-1-flash-1017", "messages":[{"role":"assistant","content":"answer","reasoning":"thought"}], "tools":[{"number":9007199254740993}], "prompt_cache_key":"client-cache" }`,
+		`{ "model":"deepseek-v4-1-flash-1017", "messages":[{"role":"assistant","content":"answer","reasoning":"thought"}], "tools":[{"number":9007199254740993}], "prompt_cache_key":"client-cache", "thinking":{"type":"enabled"}, "store":null, "reasoning":{"effort":"medium"} }`,
 	} {
 		out, generated, err := prepareMistralRequest([]byte(body), "/v1/chat/completions", "scope")
 		var fields map[string]json.RawMessage
@@ -66,6 +84,35 @@ func TestMistralDeepSeekMediumEffortCompatibility(t *testing.T) {
 	e := newMistralEnv(t)
 	if st, body := e.post(t, "/v1/chat/completions", `{"model":"deepseek-v4-1-flash-1017","reasoning_effort":"medium","messages":[{"role":"user","content":"mock"}]}`, nil); st != 200 || e.count() != 1 || !strings.Contains(e.call(0).body, `"reasoning_effort":"high"`) {
 		t.Fatalf("upstream did not receive supported effort exactly once: %d %s", st, body)
+	}
+}
+
+func TestMistralNestedEffortScopeAndCache(t *testing.T) {
+	for _, tc := range []struct{ model, path string }{
+		{"other-model", "/v1/chat/completions"},
+		{"deepseek-v4-1-flash-1017", "/v1/responses"},
+		{"deepseek-v4-1-flash-1017", "/v1/responses/input_tokens"},
+		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
+	} {
+		for _, reasoning := range []string{`{"effort":"high"}`, `{"effort":"none"}`, `{"effort":"high","summary":"auto"}`, `null`} {
+			body := []byte(` {"model":"` + tc.model + `","reasoning":` + reasoning + `,"messages":[],"prompt_cache_key":"keep"} `)
+			out, generated, err := prepareMistralRequest(body, tc.path, "scope")
+			if err != nil || generated != "" || !bytes.Equal(out, body) {
+				t.Fatalf("nested effort escaped exact model/Chat scope: %s %s %s", tc.model, tc.path, reasoning)
+			}
+		}
+	}
+	e := newMistralEnv(t)
+	native := ` {"model":"deepseek-v4-1-flash-1017","reasoning":{"effort":"low","summary":"auto"},"input":"mock","prompt_cache_key":"keep"} `
+	st, reply := e.post(t, "/v1/responses", native, nil)
+	if st != 200 || e.count() != 1 || e.call(0).body != native {
+		t.Fatalf("Responses reasoning was converted or rejected: %d %s", st, reply)
+	}
+	body := []byte(`{"model":"deepseek-v4-1-flash-1017","reasoning":{"effort":"low"},"messages":[]}`)
+	out, key, err := prepareMistralRequest(body, "/v1/chat/completions", "scope")
+	var got map[string]json.RawMessage
+	if err != nil || json.Unmarshal(out, &got) != nil || key != "apb-mistral-scope" || string(got["prompt_cache_key"]) != `"apb-mistral-scope"` || string(got["reasoning_effort"]) != `"low"` || got["reasoning"] != nil {
+		t.Fatalf("alias conversion and cache injection overlapped: %s %v", out, err)
 	}
 }
 
