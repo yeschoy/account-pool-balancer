@@ -12,6 +12,11 @@ func TestMistralDeepSeekUserImageCompatibility(t *testing.T) {
 	for _, tc := range []struct{ name, image, want string }{
 		{"url object", `{"url":"https://example.invalid/image.png"}`, `"https://example.invalid/image.png"`},
 		{"data url object", `{"url":"data:image/png;base64,AAAA"}`, `"data:image/png;base64,AAAA"`},
+		{"empty NewAPI MIME", `{"MimeType":"","url":"data:image/png;base64,AAAA"}`, `"data:image/png;base64,AAAA"`},
+		{"null NewAPI MIME", `{"url":"https://example.invalid/image.png","MimeType":null}`, `"https://example.invalid/image.png"`},
+		{"escaped NewAPI MIME", `{"url":"https://example.invalid/image.png","Mime\u0054ype":""}`, `"https://example.invalid/image.png"`},
+		{"empty MIME preserves detail", `{"MimeType":"","url":"https://example.invalid/image.png","detail":"high"}`, `{"url":"https://example.invalid/image.png","detail":"high"}`},
+		{"nonempty MIME preserved", `{"url":"https://example.invalid/image.png","MimeType":"image/png"}`, `{"url":"https://example.invalid/image.png","MimeType":"image/png"}`},
 		{"native string", `"https://example.invalid/image.png"`, `"https://example.invalid/image.png"`},
 		{"extra options preserved", `{"url":"https://example.invalid/image.png","detail":"high"}`, `{"url":"https://example.invalid/image.png","detail":"high"}`},
 	} {
@@ -60,7 +65,7 @@ func TestMistralUserImageCompatibilityScope(t *testing.T) {
 		{"deepseek-v4-1-flash-1017", "/v1/responses"},
 		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
 	} {
-		body := []byte(` {"model":"` + tc.model + `","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}]}],"prompt_cache_key":"keep"} `)
+		body := []byte(` {"model":"` + tc.model + `","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png","MimeType":""}}]}],"prompt_cache_key":"keep"} `)
 		out, key, err := prepareMistralRequest(body, tc.path, "scope")
 		if err != nil || key != "" || !bytes.Equal(out, body) {
 			t.Fatalf("image conversion escaped exact DeepSeek Chat scope: %s %s", tc.model, tc.path)

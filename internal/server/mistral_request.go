@@ -402,8 +402,8 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 	return out.Bytes(), true, nil
 }
 
-// Mistral's native vision form uses image_url as a string. Unwrap only a
-// URL-only OpenAI object; preserve extra options rather than discarding them.
+// Mistral's native vision form accepts a string URL. Remove only empty
+// NewAPI MimeType metadata, then unwrap URL-only objects; retain real options.
 func mistralUserImages(message *mistralWireObject) error {
 	content := message.get("content")
 	if len(content) == 0 || content[0] != '[' {
@@ -427,10 +427,19 @@ func mistralUserImages(message *mistralWireObject) error {
 		if image == nil {
 			continue // already native or unrelated malformed input: retain upstream validation
 		}
-		if err := image.unique("url"); err != nil {
+		if err := image.unique("url", "MimeType"); err != nil {
 			return err
 		}
-		if len(image.fields) != 1 || image.fields[0].key != "url" {
+		fields := len(image.fields)
+		mime := image.get("MimeType")
+		if bytes.Equal(mime, []byte(`""`)) || bytes.Equal(mime, []byte("null")) {
+			// NewAPI may leak this empty internal field; Mistral rejects it.
+			image.set("MimeType", nil)
+			fields--
+			chunk.set("image_url", image.render())
+			chunks[i], changed = chunk.render(), true
+		}
+		if fields != 1 || image.get("url") == nil {
 			continue // never drop detail or any other requested option
 		}
 		url := image.get("url")

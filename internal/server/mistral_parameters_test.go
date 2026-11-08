@@ -101,6 +101,8 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"messages":[{"role":"assistant","reasoning_content":null,"reasoning_content":"private-body"}]`, "duplicate"},
 		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":42}}]}]`, "image_url.url"},
 		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":null}}]}]`, "image_url.url"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":42,"MimeType":""}}]}]`, "image_url.url"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"private-body","MimeType":"","MimeType":null}}]}]`, "duplicate"},
 		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"private-body","url":"other"}}]}]`, "duplicate"},
 		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"private-body"},"image_url":"other"}]}]`, "duplicate"},
 		{`"store":true,"thinking":{"type":"enabled"}`, "stateless"},
