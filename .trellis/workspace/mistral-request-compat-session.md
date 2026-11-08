@@ -10,3 +10,10 @@
 - 06:00:34.988–06:04:33.034自然窗口24/24真实流式success，NewAPI 24条ok/done，Mistral无错误事件；cache2119808/input3195540=66.34%，16hit/8miss，无溢出/请求内切号/多attempt。该窗口非完整10分钟，不作受控缓存改善结论。
 - **未完成项/需要确认**：渠道180最新读取发现同时服务两种GLM模型，不能按原设想移除全渠道operations。本轮没有写NewAPI数据库/配置，旧规则仍删metadata/cache与绕过store=true保护。仅DeepSeek Chat条件化收敛可保留GLM/其他路径，但运行NewAPI ad556799精确源码对象不可用；须确认方案并核实运行条件支持，不能盲加条件、整行覆盖或先清空规则。任务维持in_progress等待此边界确认，不虚报整体交付完成。
 - 临时产物登记当前`_tmp_artifacts.md`（ignore）：公开文档自动snapshot与本地odb构建；未下载生产原始请求/凭据，未经同意不清理。Trellis/正式备份/业务资料保留。后续仅补记录，不重新部署文档提交。
+
+## 用户授权清理、合入master及部署复核
+
+- 用户明确要求“清理吧，合入master，之后部署到ovh中”。按本轮登记清单精确删除当前工作区`odb`（16653938字节）、公开文档自动快照`pi-agent-browser-snapshot-b488fa98c27a25e6.json`（38564字节）及`_tmp_artifacts.md`（686字节），逐项确认不存在。没有清理历史任务产物、Trellis、生产数据、正式备份、发布源码或新旧镜像。
+- fetch确认origin/master仍1d746ef，已包含96eaad7与9f375ef；主目录master为e06a589、工作树干净且未分叉，可仅用`--ff-only`同步最新记录，不在主目录开发、不reset/强推。
+- OVH只读预检：仍运行`9f375efee5a89e92dcbe5f14dd0385e4519c1501`，原镜像ID未变；Balancer/NewAPI均healthy、零重启、无OOM，healthz200、数据挂载不变，旧e6f063b树干净、磁盘285.6GiB余量。Git核对运行提交与远端master仅差docs/.trellis记录，全部应用代码一致；依据部署约定复用既有上线验收，**无需重新构建/部署或重启**。本轮未产生停机、推理或生产配置变更。
+- 清理/合并/部署授权不扩大为条件化NewAPI规则修改；渠道180规则仍未动，原范围确认门保留。仅提交此清理/复核记录，不因文档版本变化再次部署。
