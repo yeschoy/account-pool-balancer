@@ -1570,6 +1570,9 @@ async function loadMistralCandidates() {
         <td>${escapeHtml(c.email)}${err}</td>
         <td><span class="mr-status mr-${c.status}">${label}</span></td>
         <td class="mr-keys">${mistralKeySummary(c.keys)}</td>
+        <td>${c.imported_account_id
+          ? '<span class="mr-status mr-ready">已入池</span>'
+          : (c.import_to_pool ? '<span class="muted">待入池</span>' : '<span class="muted">—</span>')}</td>
         <td class="actions">
           ${act}
           <button type="button" class="btn small ghost" data-mr-del="${c.id}">删除</button>
@@ -1595,23 +1598,25 @@ document.addEventListener('DOMContentLoaded', () => {
       ev.preventDefault();
       const errEl = document.getElementById('mr-form-error');
       errEl.textContent = '';
+      const raw = document.getElementById('mr-accounts').value.trim();
+      if (!raw) { errEl.textContent = '请填写账号列表'; return; }
       const body = {
-        email: document.getElementById('mr-email').value.trim(),
-        mailbox_url: document.getElementById('mr-mailbox').value.trim(),
-        password: document.getElementById('mr-password').value,
+        accounts: raw,
         region: document.getElementById('mr-region').value.trim() || 'CA',
-        proxy_url: document.getElementById('mr-proxy').value.trim(),
         skip_register: document.getElementById('mr-skip-register').checked,
+        import_to_pool: document.getElementById('mr-import-pool').checked,
       };
-      if (!body.email || !body.mailbox_url) {
-        errEl.textContent = '邮箱和接码链接必填';
-        return;
-      }
+      const resEl = document.getElementById('mr-bulk-result');
       try {
-        await api('POST', '/api/mistral/candidates', body);
-        form.reset();
-        document.getElementById('mr-region').value = 'CA';
-        toast('已添加任务');
+        const d = await api('POST', '/api/mistral/candidates/bulk', body);
+        const rej = d.rejected || [];
+        resEl.textContent = `已添加 ${d.count} 个` +
+          (rej.length ? `，跳过 ${rej.length} 个（${rej.slice(0, 3).map((x) => '第' + x.line + '行:' + x.error).join('；')}${rej.length > 3 ? '…' : ''}）` : '');
+        resEl.className = rej.length ? 'error' : 'hint';
+        if (d.count) {
+          document.getElementById('mr-accounts').value = '';
+          toast('已添加 ' + d.count + ' 个任务');
+        }
         loadMistralCandidates();
       } catch (e) {
         errEl.textContent = e.message;

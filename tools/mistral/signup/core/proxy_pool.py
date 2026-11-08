@@ -114,6 +114,13 @@ class ProxyPool:
     def all(self) -> list[Proxy]:
         return list(self._proxies)
 
+    def by_index(self, n: int) -> Optional[Proxy]:
+        """按序号轮转取代理；代理可重复使用（第 n 个用第 n%len 个）。"""
+        with self._lock:
+            if not self._proxies:
+                return None
+            return self._proxies[max(0, n) % len(self._proxies)]
+
     def acquire(self) -> Optional[Proxy]:
         with self._lock:
             now = time.time()

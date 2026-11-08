@@ -74,8 +74,20 @@ func (m MistralSignup) ProxyMode() string {
 	return "none"
 }
 
-// PickProxy 返回这次注册要用的代理 URL。
-// 优先用完整 URL 列表，其次按模板 + sid 生成。
+// PickProxyByIndex 按序号轮转取代理：第 n 个候选固定用第 n%len 个代理，
+// 代理可以重复使用。
+func (m MistralSignup) PickProxyByIndex(n int) string {
+	all := m.AllProxies()
+	if len(all) == 0 {
+		return ""
+	}
+	if n < 0 {
+		n = 0
+	}
+	return all[n%len(all)]
+}
+
+// PickProxy 返回这次注册要用的代理 URL（兼容旧调用）。
 func (m MistralSignup) PickProxy(sid string) string {
 	if len(m.ProxyURLs) > 0 {
 		return m.ProxyURLs[0]

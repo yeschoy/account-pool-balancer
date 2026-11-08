@@ -34,6 +34,7 @@ func (s *Server) registerMistral(mux *http.ServeMux, a func(string, http.Handler
 	// 懒初始化：store 需要 routingSecret，而它在 New() 后期才就绪
 	a("GET /api/mistral/candidates", s.apiMistralCandidates)
 	a("POST /api/mistral/candidates", s.apiMistralCandidateAdd)
+	a("POST /api/mistral/candidates/bulk", s.apiMistralCandidateBulk)
 	a("GET /api/mistral/candidates/{id}", s.apiMistralCandidateGet)
 	a("DELETE /api/mistral/candidates/{id}", s.apiMistralCandidateDelete)
 	a("POST /api/mistral/candidates/{id}/register", s.apiMistralCandidateRegister)
@@ -95,6 +96,7 @@ func (s *Server) apiMistralCandidateAdd(w http.ResponseWriter, r *http.Request) 
 		Region       string `json:"region"`
 		ProxyURL     string `json:"proxy_url"`
 		SkipRegister bool   `json:"skip_register"`
+		ImportToPool bool   `json:"import_to_pool"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -116,12 +118,13 @@ func (s *Server) apiMistralCandidateAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	c, err := m.store.Add(mistralsignupstore.Candidate{
-		Email:      body.Email,
-		Password:   body.Password,
-		MailboxURL: body.MailboxURL,
-		Region:     body.Region,
-		ProxyURL:   body.ProxyURL,
-		Status:     mistralsignupstore.Queued,
+		Email:        body.Email,
+		Password:     body.Password,
+		MailboxURL:   body.MailboxURL,
+		Region:       body.Region,
+		ProxyURL:     body.ProxyURL,
+		Status:       mistralsignupstore.Queued,
+		ImportToPool: body.ImportToPool,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -235,7 +238,7 @@ func (s *Server) apiMistralCandidateRegister(w http.ResponseWriter, r *http.Requ
 			return nil
 		})
 
-		res, runErr := m.srv.runMistralWorker(ctx, c, body.SkipRegister)
+		res, runErr := m.srv.runMistralWorker(ctx, c, body.SkipRegister, c.ProxyIndex)
 		if runErr != nil {
 			_, _ = m.store.Update(id, func(x *mistralsignupstore.Candidate) error {
 				x.Status = mistralsignupstore.Failed
@@ -266,6 +269,24 @@ func (s *Server) apiMistralCandidateRegister(w http.ResponseWriter, r *http.Requ
 			}
 			return nil
 		})
+
+		// 勾选了「入池」就在注册成功后自动写入 Mistral 账号池
+		if res.OK && c.ImportToPool {
+			refreshed, err := m.store.Get(id)
+			if err == nil {
+				if acctID, impErr := m.srv.importMistralCandidate(refreshed); impErr == nil {
+					_, _ = m.store.Update(id, func(x *mistralsignupstore.Candidate) error {
+						x.ImportedAccountID = acctID
+						return nil
+					})
+				} else {
+					_, _ = m.store.Update(id, func(x *mistralsignupstore.Candidate) error {
+						x.Detail = "入池失败：" + impErr.Error()
+						return nil
+					})
+				}
+			}
+		}
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "id": id})
@@ -329,7 +350,7 @@ func mistralPythonPath() string {
 	return "python3"
 }
 
-func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipRegister bool) (mistralWorkerResult, error) {
+func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipRegister bool, proxyIndex int) (mistralWorkerResult, error) {
 	var out mistralWorkerResult
 
 	payload := map[string]any{
@@ -338,6 +359,7 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 		"password":      c.Password,
 		"region":        c.Region,
 		"skip_register": skipRegister,
+		"proxy_index":   proxyIndex,
 	}
 	if c.ProxyURL != "" {
 		payload["proxy"] = c.ProxyURL
@@ -560,4 +582,139 @@ func randIndex(n int) int {
 	b := make([]byte, 1)
 	_, _ = rand.Read(b)
 	return int(b[0]) % n
+}
+
+// apiMistralCandidateBulk 批量添加候选。每行 "邮箱----接码地址"。
+// 代理按候选顺序轮转分配（可重复使用）。
+func (s *Server) apiMistralCandidateBulk(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Accounts     string `json:"accounts"` // 多行文本
+		Region       string `json:"region"`
+		SkipRegister bool   `json:"skip_register"`
+		ImportToPool bool   `json:"import_to_pool"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if body.Region == "" {
+		body.Region = "CA"
+	}
+
+	m, err := s.mistralMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	type badLine struct {
+		Line  int    `json:"line"`
+		Text  string `json:"text"`
+		Error string `json:"error"`
+	}
+	var added []mistralsignupstore.Candidate
+	var rejected []badLine
+	existing := map[string]bool{}
+	for _, c := range m.store.List() {
+		existing[c.Email] = true
+	}
+
+	// 已有序号基数：新候选接着往后排，保证代理轮转连续
+	base := len(m.store.List())
+
+	for i, raw := range strings.Split(body.Accounts, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "----", 2)
+		if len(parts) != 2 {
+			rejected = append(rejected, badLine{i + 1, line, "缺少 ---- 分隔符"})
+			continue
+		}
+		email := strings.TrimSpace(parts[0])
+		mailbox := strings.TrimSpace(parts[1])
+		if email == "" || mailbox == "" {
+			rejected = append(rejected, badLine{i + 1, line, "邮箱或接码地址为空"})
+			continue
+		}
+		if !strings.Contains(email, "@") {
+			rejected = append(rejected, badLine{i + 1, line, "邮箱格式不正确"})
+			continue
+		}
+		if existing[email] {
+			rejected = append(rejected, badLine{i + 1, line, "该邮箱已存在"})
+			continue
+		}
+		c, err := m.store.Add(mistralsignupstore.Candidate{
+			Email:        email,
+			MailboxURL:   mailbox,
+			Region:       body.Region,
+			Status:       mistralsignupstore.Queued,
+			ImportToPool: body.ImportToPool,
+			ProxyIndex:   base + len(added),
+		})
+		if err != nil {
+			rejected = append(rejected, badLine{i + 1, line, err.Error()})
+			continue
+		}
+		existing[email] = true
+		added = append(added, c)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added":    added,
+		"rejected": rejected,
+		"count":    len(added),
+	})
+}
+
+// ---------------------------------------------------------------- 入池
+
+// importMistralCandidate 把一个已完成注册的候选写入 Mistral 账号池。
+// 返回新账号 ID。重复 Key 会被拒绝。
+func (s *Server) importMistralCandidate(c mistralsignupstore.Candidate) (string, error) {
+	key := strings.TrimSpace(c.Keys.API)
+	if key == "" {
+		return "", errors.New("该候选没有 API Key，无法入池")
+	}
+	if !strings.HasPrefix(key, config.MistralKeyPrefix) {
+		return "", fmt.Errorf("Key 前缀不是 %s", config.MistralKeyPrefix)
+	}
+
+	var newID string
+	_, err := s.cfg.Update(-1, func(cfg *config.Config) error {
+		for _, a := range cfg.Accounts {
+			if a.Provider == config.ProviderMistral && a.RuntimeKey == key {
+				return errors.New("该 Key 已在账号池中")
+			}
+		}
+		name := c.Email
+		if i := strings.Index(name, "@"); i > 0 {
+			name = name[:i]
+		}
+		if len([]rune(name)) > 50 {
+			name = string([]rune(name)[:50])
+		}
+		acct := config.Account{
+			ID:          "mistral-" + c.ID,
+			Provider:    config.ProviderMistral,
+			Name:        name,
+			Email:       c.Email,
+			Group:       config.MistralGroup,
+			Enabled:     true,
+			RuntimeKey:  key,
+			WorkspaceID: c.WorkspaceID,
+			MaxConc:     0,
+			Weight:      1,
+			Note:        "Mistral 注册机导入",
+		}
+		cfg.Accounts = append(cfg.Accounts, acct)
+		newID = acct.ID
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return newID, nil
 }

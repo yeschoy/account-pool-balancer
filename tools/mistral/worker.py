@@ -15,7 +15,8 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
     "first":       "可选",
     "last":        "可选",
     "region":      "CA",
-    "proxy":       "可选，逗号分隔多个，缺省取代理池",
+    "proxy":       "可选，指定单条代理 URL",
+    "proxy_index": 0,           # 可选，按序号从代理池轮转取
     "skip_register": false      # true 表示账号已存在，只登录
   }
 
@@ -83,8 +84,17 @@ def main() -> int:
         if not first or not last:
             first, last = gen_name(email)
 
-        # proxy: 若调用方显式给了就用它
+        # proxy: 显式 URL 优先，其次按 proxy_index 从代理池轮转
         proxy = (req.get("proxy") or "").strip()
+        if not proxy and req.get("proxy_index") is not None:
+            from core.proxy_pool import ProxyPool
+            px = ProxyPool().by_index(int(req.get("proxy_index") or 0))
+            if px:
+                from core.chain_gateway import ChainGateway
+                gw = ChainGateway(pre_proxy="", target_proxy=px.url)
+                port = gw.start()
+                proxy = f"socks5://127.0.0.1:{port}"
+                emit_progress(f"[proxy] index={req.get('proxy_index')} sid={px.sid} local={proxy}")
 
         runner = HybridRunner(headless=True)
         runner.debug(True)

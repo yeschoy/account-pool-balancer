@@ -245,20 +245,22 @@
         <section class="panel pc-registration-form">
           <h2>新建注册任务</h2>
           <form id="mr-form" autocomplete="off">
-            <label for="mr-email">邮箱</label>
-            <input id="mr-email" placeholder="user@icloud.com" autocomplete="off" spellcheck="false">
-            <label for="mr-mailbox">接码链接</label>
-            <input id="mr-mailbox" placeholder="https://icloud.mida.vip/messages/...?token=..." autocomplete="off" spellcheck="false">
-            <label for="mr-password">密码（可选，留空自动生成）</label>
-            <input id="mr-password" autocomplete="off" spellcheck="false">
+            <label for="mr-accounts">iCloud 账号（每行一个）</label>
+            <textarea id="mr-accounts" rows="8" spellcheck="false"
+              placeholder="user1@icloud.com----https://icloud.mida.vip/messages/user1%40icloud.com?token=xxx&#10;user2@icloud.com----https://icloud.mida.vip/messages/user2%40icloud.com?token=yyy"></textarea>
+            <span class="hint">格式：iCloud 账号----接码地址</span>
+
             <label for="mr-region">地区</label>
             <input id="mr-region" value="CA" autocomplete="off">
-            <label for="mr-proxy">代理（可选，留空走代理池）</label>
-            <input id="mr-proxy" placeholder="http://user:pass@host:port" autocomplete="off" spellcheck="false">
+
+            <label class="check"><input type="checkbox" id="mr-import-pool" checked> 注册成功后自动加入 Mistral 账号池</label>
             <label class="check"><input type="checkbox" id="mr-skip-register"> 账号已存在，只登录</label>
+
             <button type="submit" class="btn primary" id="mr-submit">添加任务</button>
             <p id="mr-form-error" class="error" role="alert"></p>
+            <p id="mr-bulk-result" class="hint"></p>
           </form>
+
           <div class="mr-status" id="mr-worker-status">
             <span class="muted" id="mr-worker-text">检查运行环境…</span>
           </div>
@@ -276,11 +278,12 @@
                   <th>邮箱</th>
                   <th>状态</th>
                   <th>Key</th>
+                  <th>池</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody id="mr-rows">
-                <tr><td colspan="4" class="muted">暂无任务。</td></tr>
+                <tr><td colspan="5" class="muted">暂无任务。</td></tr>
               </tbody>
             </table>
           </div>
@@ -299,7 +302,7 @@
               <label for="ms-proxy-urls">代理列表（优先使用，每行一个完整 URL）</label>
               <textarea id="ms-proxy-urls" rows="4" spellcheck="false"
                 placeholder="socks5://用户:密码@1.2.3.4:1080&#10;http://用户:密码@5.6.7.8:8080"></textarea>
-              <span class="hint">支持 socks5:// / socks5h:// / http:// / https://，格式：协议://用户:密码@IP:端口。填写后忽略下面的模板配置。</span>
+              <span class="hint">支持 socks5:// / socks5h:// / http:// / https://，格式：协议://用户:密码@IP:端口。账号按添加顺序依次分配，代理可重复使用。填写后忽略下面的模板配置。</span>
             </div>
           </div>
           <details class="mr-advanced">

@@ -49,21 +49,27 @@ type Keys struct {
 
 // Candidate is one registration attempt.
 type Candidate struct {
-	ID          string    `json:"id"`
-	Email       string    `json:"email"`
-	Password    string    `json:"password,omitempty"`
-	MailboxURL  string    `json:"mailbox_url"`
-	Region      string    `json:"region"`
-	ProxyURL    string    `json:"proxy_url,omitempty"`
-	Status      Status    `json:"status"`
-	OrgUUID     string    `json:"org_uuid,omitempty"`
-	WorkspaceID string    `json:"workspace_uuid,omitempty"`
-	Keys        Keys      `json:"keys"`
-	Error       string    `json:"error,omitempty"`
-	Detail      string    `json:"detail,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	CreatedBy   string    `json:"created_by,omitempty"`
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Password    string `json:"password,omitempty"`
+	MailboxURL  string `json:"mailbox_url"`
+	Region      string `json:"region"`
+	ProxyURL    string `json:"proxy_url,omitempty"`
+	Status      Status `json:"status"`
+	OrgUUID     string `json:"org_uuid,omitempty"`
+	WorkspaceID string `json:"workspace_uuid,omitempty"`
+	Keys        Keys   `json:"keys"`
+	Error       string `json:"error,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	// ImportToPool 表示注册成功后自动加入 Mistral 账号池。
+	ImportToPool bool `json:"import_to_pool,omitempty"`
+	// ProxyIndex 是分配到的代理序号（按 candidates 顺序轮转）。
+	ProxyIndex int `json:"proxy_index,omitempty"`
+	// ImportedAccountID 是入池后的账号 ID，空表示未入池。
+	ImportedAccountID string    `json:"imported_account_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	CreatedBy         string    `json:"created_by,omitempty"`
 }
 
 // Store is a single plaintext JSON file.
