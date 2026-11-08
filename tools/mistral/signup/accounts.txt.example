@@ -1,0 +1,4 @@
+# 格式: 邮箱----接码链接
+# 复制为 accounts.txt 使用（accounts.txt 不入库）
+user1@icloud.com----https://icloud.mida.vip/messages/user1%40icloud.com?token=<your-token>
+user2@icloud.com----https://icloud.mida.vip/messages/user2%40icloud.com?token=<your-token>
