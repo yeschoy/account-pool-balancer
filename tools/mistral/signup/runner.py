@@ -97,7 +97,7 @@ class SignupRunner:
     def __init__(self, proxy_pool: ProxyPool, gateway_pool: GatewayPool | None = None,
                  headless: bool = False, debug: bool = False):
         self.pool = proxy_pool
-        self.gw = gateway_pool or GatewayPool(pre_proxy="socks5h://127.0.0.1:10808")
+        self.gw = gateway_pool or GatewayPool(pre_proxy=__import__("os").environ.get("MIDA_PROXY") or None)
         self.headless = headless
         self.debug = debug
         self._local: Optional[str] = None
@@ -189,7 +189,7 @@ class SignupRunner:
     def _verify(self, acct: Account, sb: SignupBrowser):
         page = sb.page
         mbx = ICloudMailbox(Mailbox.from_line(f"{acct.email}----{acct.mailbox_url}"),
-                            proxy="socks5h://127.0.0.1:10808")
+                            proxy=__import__("os").environ.get("MIDA_PROXY") or None)
 
         # 注册后应已在 /verification 页；不在就导航过去
         if "/verification" not in page.url:

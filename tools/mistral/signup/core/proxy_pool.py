@@ -51,7 +51,10 @@ class ProxyPool:
     - report_ok / report_fail 反馈健康度
     """
 
-    def __init__(self, sids: list[str], pre_proxy: str = "socks5h://127.0.0.1:10808"):
+    def __init__(self, sids: list[str] | None = None,
+                 pre_proxy: str = ""):
+        # pre_proxy 为空表示直连（OVH 场景，无需本地第一跳）
+        sids = sids if sids is not None else DEFAULT_SIDS
         self.pre_proxy = pre_proxy
         self._lock = threading.Lock()
         self._proxies = [Proxy(sid=s) for s in sids]

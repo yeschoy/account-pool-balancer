@@ -114,7 +114,7 @@ def cmd_run(a):
 
     # 阶段 3: 从邮箱取码
     mbx = ICloudMailbox(Mailbox.from_line(f"{email}----{a.mailbox}"),
-                        proxy="socks5h://127.0.0.1:10808")
+                        proxy=__import__("os").environ.get("MIDA_PROXY") or None)
     baseline = set()
     j = mbx.fetch("all")
     if j.get("ok"):
@@ -244,6 +244,36 @@ def cmd_keys(a):
     return 0
 
 
+def cmd_batch(a):
+    """批量：读 accounts.txt，逐账号跑完整协议流程"""
+    from core.mailbox import load_mailboxes
+    boxes = load_mailboxes(a.accounts)
+    done = set()
+    store = Path(a.out) / "accounts.json"
+    if store.exists():
+        try:
+            done = {r["email"] for r in json.loads(store.read_text())
+                    if r.get("status") == "ok"}
+        except Exception:
+            pass
+    todo = [b for b in boxes if b.email not in done][: a.limit]
+    print(f"待处理 {len(todo)} / 总 {len(boxes)}（已完成 {len(done)}）")
+
+    ok = 0
+    for i, mb in enumerate(todo, 1):
+        print(f"\n[{i}/{len(todo)}] {mb.email}")
+        ns = argparse.Namespace(email=mb.email, mailbox=mb.url,
+                                password="", out=a.out, headless=True)
+        try:
+            cmd_run(ns)
+            ok += 1
+        except Exception as e:
+            print(f"  FAIL {type(e).__name__}: {e}")
+        time.sleep(a.interval)
+    print(f"\n完成 {ok}/{len(todo)}")
+    return 0
+
+
 def cmd_cancel(a):
     prov = json.loads(Path(a.cookie_file).read_text())
     cli = make_client(prov, a.email)
@@ -271,6 +301,12 @@ def main():
     k.add_argument("--cookie-file", required=True)
     k.add_argument("--email", required=True)
 
+    b = sub.add_parser("batch")
+    b.add_argument("--accounts", required=True)
+    b.add_argument("--limit", type=int, default=1)
+    b.add_argument("--out", default="data")
+    b.add_argument("--interval", type=int, default=30, help="账号间隔秒数")
+
     c = sub.add_parser("cancel")
     c.add_argument("--cookie-file", required=True)
     c.add_argument("--email", required=True)
@@ -278,7 +314,8 @@ def main():
 
     a = p.parse_args()
     return {"run": cmd_run, "resume": cmd_resume,
-            "keys": cmd_keys, "cancel": cmd_cancel}[a.cmd](a)
+            "keys": cmd_keys, "cancel": cmd_cancel,
+            "batch": cmd_batch}[a.cmd](a)
 
 
 if __name__ == "__main__":

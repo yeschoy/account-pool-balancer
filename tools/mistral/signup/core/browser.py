@@ -58,8 +58,11 @@ class SignupBrowser:
             args=self.launch_args,
             slow_mo=self.opts.slow_mo,
         )
+        # Playwright 要求用户名/密码分开传，不能塞在 URL 里，
+        # 否则会返回 "Proxy Authentication needed"
+        proxy_cfg = self._parse_proxy(self.proxy_server)
         self.context = self.browser.new_context(
-            proxy={"server": self.proxy_server},
+            proxy=proxy_cfg,
             user_agent=self.user_agent,
             locale=self.profile.locale,
             timezone_id=self.profile.timezone,
@@ -100,6 +103,20 @@ class SignupBrowser:
         self._apply_header_override()
 
         return self
+
+    @staticmethod
+    def _parse_proxy(url: str | None) -> dict | None:
+        """把 http://user:pass@host:port 拆成 Playwright 需要的结构。
+        None / 空串表示直连（OVH 海外机器可直接访问目标站）。"""
+        if not url:
+            return None
+        import urllib.parse as up
+        u = up.urlparse(url if "://" in url else "http://" + url)
+        cfg = {"server": f"{u.scheme or 'http'}://{u.hostname}:{u.port}"}
+        if u.username:
+            cfg["username"] = up.unquote(u.username)
+            cfg["password"] = up.unquote(u.password or "")
+        return cfg
 
     def _apply_header_override(self):
         """把 HTTP 层的 sec-ch-ua-* / Accept-Language 换成画像里的值"""

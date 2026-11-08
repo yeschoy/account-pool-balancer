@@ -57,6 +57,7 @@ class ICloudMailbox:
 
     def __init__(self, mailbox: Mailbox, proxy: Optional[str] = None,
                  timeout: int = 20):
+        # proxy=None 表示直连（OVH 海外机器可达 mida.vip，无需代理）
         self.mb = mailbox
         self.proxy = proxy
         self.timeout = timeout
