@@ -6,7 +6,7 @@
 - [x] 增加多模型多轮/工具（Deny、apply_patch换行和转义）/缓存/流与非流回归。
 - [x] 更新README、Mistral指南、UI过时文案及对应Node测试；隔离本地浏览器核对。
 - [x] 完成gofmt、Go全仓normal/race/vet、build到登记目录或/dev/null、Node行为/语法和全差异复核。
-- [ ] 更新workspace，归档任务并提交本轮代码/文档/Trellis；不推送/部署。
+- [x] 代码与规格已提交3ec9611；补workspace并归档本任务，提交收尾记录；不推送/部署。
 
 ## 验证命令
 `go test ./internal/server -run 'Mistral|Terminal' -count=1`
