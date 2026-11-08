@@ -49,7 +49,7 @@ Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整�
 - `GET https://api.mistral.ai/v1/billing/subscription`：读取 `plan_name`、`payg_enabled`、`vibe_payg_enabled` 等套餐信息，不是剩余额度本身。
 - `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。Studio 使用 `api_budget`，Vibe 使用 `vibe_budget`；剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
 
-本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。真实接口采样未覆盖全部账号；随后已接入现有自动/手动刷新。接入代码、失败/持久化及本地假数据浏览器已验证，生产生效仍须部署后另行验收。
+本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。初始接口采样未覆盖全部账号；后续接入现有自动/手动刷新。2026-11-08 `77e9709`已上线，生产40把Key预算新鲜、组织订阅全部成功持久化（Student6/Pro34，可能共享组织预算），CHAT/API两类各一次真实手动刷新通过。新增显示由Node与生产API投影核验，未做本轮真实生产管理员浏览器保存往返或主动推理；完整部署/验收边界见`docs/ovh-deployment.md`。
 
 官方 CLI 注明 budget 可能需要 `see_org_inference_usage` 权限；403/缺字段/失败应显示未知，不能当作零。企业 `GET /v1/admin/usage` 是另一套 Admin Key 权限（本次普通 Key 为401）；第三方声称的 `/v1/billing/usage` 本次为404，不能据此否定已成功的 budget 接口。探针必须匹配 Go SOCKS 远端解析语义：curl 对 `socks5://` 默认本地解析，本轮曾出现 TLS EOF，改为同一代理的远端 DNS 探测后200；未改线上代理配置、直连回退或绕过权限。
 

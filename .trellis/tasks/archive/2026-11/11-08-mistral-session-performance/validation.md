@@ -25,4 +25,7 @@
 - 双跳内存形态采样各5条在3000/8790端口均无可识别头/正文字段，不能声称全部fallback来自Balancer漏头。
 - 官方Codex当前发送session-id/thread-id；官方Vibe读取subscription plan_name及nullable vibe_payg_enabled。真实CHAT/API只读订阅均EDU，API whoami却Free，说明两种等级不可混用。
 - 60分钟14994请求中13次429后换号恢复，8次最终503在16个服务错误尝试中均未恢复；仅优化已知code3800，其他结构不扩张规则匹配。
-- Nginx newapi.conf仅有yeschoy.com/nginx.yeschoy.com的HTTP/HTTPS两个server，尚未修改。应用与入口的正式发布、健康/双别名/公网资源、生产订阅/TPS/UI验收待后续更新。
+- Nginx仅两个NewAPI vhost加入underscores_in_headers on，备份20261108T152932Z-newapi-session-headers，nginx -t/reload一次；15:31:05窄GET合成探针证实Session_id与Session-Id均到NewAPI。首次宽探针不完整后先确认配置/active/HTTP200，再收窄采样，未重复修改/reload。
+- 77e9709已推送并正式发布，487源码SHA256一致；healthy/restart0、原healthcheck/用户/环境/资源/两个别名保留，从new-api双healthz通过；191账号/186TH核心记录/config原字节/Mistral注册库不变。7.19秒构建，15:33:36本机验收；15:36:04公网登录/healthz/四资源200及SHA256匹配。正式备份20261108T153233Z-mistral-session-perf-77e9709保留。
+- 15:36:09正常管理员API各刷新CHAT/API一把，均成功，40预算新鲜；概览global225/currentMistral209/limit4096，两条3800规则生效。15:38:07 metadata只读确认40把Key的订阅全部成功持久化：Student6/Pro34、零错误；同组织Key不当作独立额度累加。管理员密码/Cookie/CSRF未回显/落盘，已logout。
+- 自然最新80条完成请求全部TPS有值（76 post-first-event、4 request-average），也全部message_hmac；不能声称fallback比例下降或凭空恢复未传身份。新显示通过Node数据/UI与生产API投影核验，未做真实生产管理员浏览器保存往返、Codex/Claude全客户端E2E或生产推理/重放/压测。公网未登录浏览器已关闭；上述边界不隐藏。

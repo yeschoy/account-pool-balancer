@@ -2,7 +2,7 @@
   "id": "mistral-session-performance",
   "name": "mistral-session-performance",
   "title": "完善 Mistral 会话、套餐、错误与上游 TPS 并优化热路径",
-  "status": "in_progress",
+  "status": "completed",
   "priority": "P1",
   "creator": "lyh_god",
   "assignee": "lyh_god",
@@ -10,5 +10,5 @@
   "branch": "master",
   "relatedFiles": ["internal/server/identity.go", "internal/quota/mistral.go", "internal/pool/pool.go", "internal/rules/mistral.go", "internal/server/proxy.go", "internal/server/mistral_response.go", "internal/server/web/app.js"],
   "notes": "用户追加六项明确实施要求；统一取证与改造，不启动代理、不生产压测、不重复全仓测试。沿用此前修完自动上线要求，但不擅改账号、安全、付费与新功能开关。",
-  "meta": {"phase": "implementation", "validation": "pending"}
+  "meta": {"phase": "completed", "validation": "targeted_checks_and_ovh_accepted", "revision": "77e9709f2a95f0ef3dec4237a234d338bb70bdfd", "productionBoundary": "No production inference/load or real Codex/Claude end-to-end replay; natural no-identity requests still use message_hmac."}
 }

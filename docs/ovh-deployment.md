@@ -38,7 +38,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 图片 MimeType 修复与最终思考规则（2026-11-08 13:18 UTC，3ed0ad8）
+## 当前部署：Mistral 会话、订阅、TPS 与热路径优化（2026-11-08 15:36 UTC，77e9709）
+
+- 业务提交 `77e9709f2a95f0ef3dec4237a234d338bb70bdfd` 已推送并上线。补Codex当前session-id/thread-id与兼容头、Claude会话结构/root-user兼容及Mistral缓存头fallback，记录客户端族，所有新增身份沿用HMAC/隐私与下游Key隔离；无身份仍合理fallback，不将UA/请求ID/普通user伪造为会话。
+- 套餐新增独立组织subscription及可空只读PAYG、失败历史/状态；不混淆API Key访问等级Free与组织Student/Pro，不抹掉成功预算。原有全局4096 LRU在概览显示容量及全局用量，修复持久化严格绑定淘汰未标dirty；缺失所有者仍fail-closed。默认503+精确顶层3800不再无收益换号/扣Key健康，保留Retry-After、429恢复及其他5xx策略；仅旧完整出厂规则运行时升级，自定义列表不覆盖。
+- 日志接入最后真实上游尝试的输出用量/TPS/时间窗口；流式post-first-event与非流式request-average明确区分，未知/失败不造值，不是上游内部decode速度。局部短基准SSE2613→134.5ns、46→0alloc；128条文本块历史801→274μs、379→104KB分配。只跳过确定无须转换的解析，不删思考/图片/工具/校验，不能冒充端到端提速。
+- 受影响normal/race/vet、Node、gofmt/diff、build通过，没有全仓重复测试或生产推理/重放/压测。一次预检确认原3ed0ad8 healthy/双入口/251.2GiB可用；487个干净源码文件SHA256一致。复用原部署脚本仅内存适配，Compose仅image覆盖，**191账号、186条TH注册核心资产、routingSecret、原config.json字节、Mistral注册库、环境/用户/healthcheck/网络/资源参数完整保留**；原规则仅在内存按精确旧默认兼容升级。新容器healthy/restart0，NewAPI到两别名healthz成功。
+- 另对 `/etc/nginx/conf.d/newapi.conf` 的yeschoy.com/nginx.yeschoy.com两个server加 `underscores_in_headers on`，其他校验不改。备份 `/home/ubuntu/backups/account-pool-balancer/20261108T152932Z-newapi-session-headers/`，nginx -t后仅reload一次。首次宽流量探针未取得完整证据，先只读确认active/配置有效/HTTP200，再缩到GET内存形态采样；15:31:05验证合成Session_id和Session-Id都到达NewAPI，receipt.json保留，无pcap。前后配置SHA256分别e116ac5b60c3b99163eeeeedcb24fca092593e2c82fd0e3b4735e2ad43946b3e、88593929d9d8643c6689a9abd394733bad2a604857787b4b20d97be5750eec65。
+- 15:36:04.860公网未登录真实浏览器：登录页正常、healthz与四静态资源200，`?v=762b31dc63`及四SHA256与源码完全一致。浏览器已关闭。15:36:09正常管理员API仅对CHAT/API各一把Key刷新额度，两者成功，40预算新鲜；概览global225/currentMistral209/limit4096，503两条规则已生效。15:38:07只读metadata确认**40把Key订阅均成功持久化（Student6、Pro34），零订阅错误**；这些Key可能共享组织预算，不代表40份独立额度。密码/Cookie/CSRF仅远端内存，正常logout，不改账号/渠道/设置或新开功能。
+- 上线后最近80条完成的自然请求均记录TPS（76流式、4非流式），不是主动压测。**这80条仍全部message_hmac**：双跳样本在进入NewAPI时已无身份，修复入口/识别不能凭空恢复更上游未传/已删字段；没有宣称全部Codex/Claude生产端到端识别或fallback比例下降。没有真实管理员浏览器保存往返，本轮新增显示由Node数据/UI测试和生产API投影验证，不冒充生产全UI验收。服务上线即反馈，补记录不再次部署。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 15:32:52.576–15:32:59.763（7.19秒） |
+| 停止请求 / 旧进程退出 | 15:32:59.864 / 15:33:00.013 |
+| 完整一致备份及核验 | 15:33:00.270–15:33:05.968 |
+| 切换请求 / 新容器启动 | 15:33:05.968 / 15:33:06.270 |
+| 首HTTP可达 / Docker healthy | 15:33:07.377 / 15:33:36.611 |
+| 双入口 / 本机验收 | 15:33:36.665 / 15:33:36.763 |
+| 公网验收 / 两类真实刷新 | 15:36:04.860 / 15:36:09.624 |
+
+正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261108T153233Z-77e9709`；镜像 `account-pool-balancer:release-77e9709-20261108T153233Z`，ID `sha256:d7bd6a623d26ad7f02b74f5f47c7c9180e14f70e3533561ebb344a4462e2313e`。完整受限备份 `/home/ubuntu/backups/account-pool-balancer/20261108T153233Z-mistral-session-perf-77e9709/`，data SHA256 `227c373326849df6adad29a2dcb53d1519e9b9594e1f958aec1ced86a02bbf59`；回退镜像 `account-pool-balancer:rollback-20261108T153233Z` 保留。回退先检查新写入/新增可选metadata字段兼容，不自动覆盖旧data。未采样精确停机；旧进程退出至首HTTP观测约7.36秒，不把构建或Docker健康等待算作停机。正式回退资料/Trellis保留，旧临时产物待同意清理。
+
+## 历史部署：Mistral 图片 MimeType 修复与最终思考规则（2026-11-08 13:18 UTC，3ed0ad8）
 
 - 截图北京时间20:58:48/49两条请求 `req_78b430e23d83d38978c2422a` / `req_ee38b187ecbf9b2b68cfe80f` 都是第29条user图片消息携带 `image_url.MimeType:""` 导致422；两条NewAPI预览均含该空字段/PNG data URL。此前合成一像素图校验已证实该字段触发 `extra_forbidden`，去掉后图片schema通过；故不是请求体上限或模型不支持图片。
 - `54b5b26` 修复仅精确DeepSeek Chat user图片块的空/null内部MimeType，保留图片、完整历史、detail等有效选项，重复字段本地拒绝，不擅自删除非空MIME。其后用户连续追加要求：`89a4cdc` 默认/非法档位统一high、保留low/high/max；最终 `3ed0ad86d05e27c6174fe31562e0bbe2a0ff299c` **max也映射high，仅low/high保留**。根reasoning_effort和reasoning.effort共用归一化；省略/null/空值/其他字符串或非法档位类型均high，兼容开关不再产生none。额外预算/未知reasoning结构、重复字段及归一化后冲突仍拒绝。其他模型/Responses/FIM/号池不变；不增输出预算、不改调度/重试/账号配置。
