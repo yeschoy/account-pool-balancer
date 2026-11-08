@@ -167,8 +167,10 @@ class ProtocolClient:
 
         cmd = [self.curl, "-s", "-S", "-L", "-m", str(self.timeout),
                "--compressed",
-               "-b", self._jar, "-c", self._jar,
-               "--socks5-hostname", self.sess.proxy.replace("socks5://", "")]
+               "-b", self._jar, "-c", self._jar]
+        # proxy 为空表示直连（OVH 等海外机器可达目标站，无需代理）
+        if self.sess.proxy:
+            cmd += ["--socks5-hostname", self.sess.proxy.replace("socks5://", "")]
         # GET 时不加 -X，让 curl 正确处理 303 See Other -> GET
         if method.upper() != "GET":
             cmd += ["-X", method]

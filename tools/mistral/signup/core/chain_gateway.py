@@ -8,7 +8,7 @@
       上层客户端只需把代理指向这个本地端口。
 
 启动:
-    gw = ChainGateway(pre_proxy="socks5h://127.0.0.1:10808")
+    gw = ChainGateway(pre_proxy="socks5h://127.0.0.1:10808")  # 示例：本机两级；OVH 用空串直连
     port = gw.start()          # 例如 15000
     # 之后用 socks5://127.0.0.1:{port} 作为代理即可
 
@@ -86,6 +86,8 @@ class ChainGateway:
     @staticmethod
     def _parse(url: str, auth, default_port: int):
         import urllib.parse as up
+        if not url:
+            return "", 0, None
         p = up.urlparse(url if "://" in url else "http://" + url)
         a = auth
         if not a and p.username:
@@ -158,11 +160,17 @@ class ChainGateway:
                 return
             port = struct.unpack(">H", client.recv(2))[0]
 
-            # --- 建立链：本机 -> pre_proxy -> target_proxy -> host:port ---
-            upstream = socket.create_connection((self.pre_host, self.pre_port), timeout=40)
-            _socks5_client_handshake(upstream, self.pre_auth)
-            _socks5_request(upstream, self.tgt_host, self.tgt_port)
-            _http_connect(upstream, host, port, self.tgt_auth)
+            # --- 建立链 ---
+            if self.pre_host:
+                # 两层：本机 -> pre_proxy(socks5) -> target_proxy(http) -> host:port
+                upstream = socket.create_connection((self.pre_host, self.pre_port), timeout=40)
+                _socks5_client_handshake(upstream, self.pre_auth)
+                _socks5_request(upstream, self.tgt_host, self.tgt_port)
+                _http_connect(upstream, host, port, self.tgt_auth)
+            else:
+                # 单层（OVH 直连场景）：直接连 target_proxy
+                upstream = socket.create_connection((self.tgt_host, self.tgt_port), timeout=40)
+                _http_connect(upstream, host, port, self.tgt_auth)
 
             client.sendall(b"\x05\x00\x00\x01" + b"\x00" * 6)
             self._pump(client, upstream)
@@ -206,7 +214,8 @@ class ChainGateway:
 class GatewayPool:
     """每个 sid 一个 gateway，复用"""
 
-    def __init__(self, pre_proxy: str = "socks5h://127.0.0.1:10808"):
+    def __init__(self, pre_proxy: str = ""):
+        # 空字符串 = 直连第二跳（OVH 等海外机器无需本地第一跳）
         self.pre_proxy = pre_proxy
         self._gws: dict[str, ChainGateway] = {}
         self._lock = threading.Lock()
