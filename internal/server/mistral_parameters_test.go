@@ -42,8 +42,8 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 	e := newMistralEnv(t)
 	for _, tc := range []struct{ fields, message string }{
 		{`"thinking":{"type":"enabled"},"enable_thinking":false`, "conflict"},
-		{`"thinking":{"type":"disabled"},"reasoning_effort":"medium"`, "conflict"},
-		{`"enable_thinking":true,"reasoning_effort":"none"`, "conflict"},
+		{`"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning_effort":null`, "conflict"},
+		{`"thinking":{"type":"disabled"},"enable_thinking":true,"reasoning":{"effort":null}`, "conflict"},
 		{`"thinking":{"type":"enabled","budget_tokens":1024}`, "budgets"},
 		{`"thinking":{"type":"disabled","budget_tokens":null}`, "budgets"},
 		{`"thinking":{"type":"enabled","type":"disabled"}`, "requires only"},
@@ -57,8 +57,7 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"reasoning":{"effort":"low"},"reasoning_effort":"high"`, "conflict"},
 		{`"reasoning_effort":null,"reasoning":{"effort":"high"}`, "conflict"},
 		{`"reasoning_effort":"high","reasoning":{"effort":null}`, "conflict"},
-		{`"thinking":{"type":"disabled"},"reasoning":{"effort":"low"}`, "conflict"},
-		{`"enable_thinking":true,"reasoning":{"effort":"none"}`, "conflict"},
+
 		{`"reasoning":{"effort":"minimal"}`, "reasoning_effort"},
 		{`"reasoning":{"effort":42}`, "reasoning_effort"},
 		{`"reasoning":{"effort":{}}`, "reasoning_effort"},
@@ -100,6 +99,10 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"messages":[{"role":"developer","role":"user","content":"private-body"}]`, "duplicate"},
 		{`"messages":[{"role":"assistant","content":"a","content":"b","reasoning_content":"private-body"}]`, "duplicate"},
 		{`"messages":[{"role":"assistant","reasoning_content":null,"reasoning_content":"private-body"}]`, "duplicate"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":42}}]}]`, "image_url.url"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":null}}]}]`, "image_url.url"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"private-body","url":"other"}}]}]`, "duplicate"},
+		{`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"private-body"},"image_url":"other"}]}]`, "duplicate"},
 		{`"store":true,"thinking":{"type":"enabled"}`, "stateless"},
 		{`"store":false,"st\u006fre":null`, "stateless"},
 	} {
@@ -256,6 +259,7 @@ func TestMistralNewParametersScope(t *testing.T) {
 		` {"model":"deepseek-v4-1-flash-1017","thinking":{"type":"disabled"},"seed":42,"store":false,"messages":[{"role":"developer","content":"keep"}]} `,
 		` {"model":"deepseek-v4-1-flash-1017","messages":[{"role":"user","content":"keep"}]} `,
 		` {"model":"deepseek-v4-1-flash-1017","reasoning":{"effort":"low"},"messages":[{"role":"user","content":"keep"}]} `,
+		` {"model":"deepseek-v4-1-flash-1017","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}]}]} `,
 	} {
 		before := e.count()
 		st, reply := e.post(t, "/v1/chat/completions", body, map[string]string{"Authorization": "Bearer other-client"})

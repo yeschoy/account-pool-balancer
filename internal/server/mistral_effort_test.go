@@ -36,6 +36,22 @@ func TestMistralDeepSeekDefaultEffort(t *testing.T) {
 		{"equal normalized aliases", `"reasoning_effort":"medium","reasoning":{"effort":"high"},`, `"high"`},
 		{"equal normalized reverse aliases", `"reasoning":{"effort":"medium"},"reasoning_effort":"high",`, `"high"`},
 		{"escaped alias values", `"reasoning_effort":"h\u0069gh","reasoning":{"effort":"high"},`, `"h\u0069gh"`},
+		{"disabled with low", `"thinking":{"type":"disabled"},"reasoning_effort":"low",`, `"low"`},
+		{"disabled with medium", `"thinking":{"type":"disabled"},"reasoning_effort":"medium",`, `"high"`},
+		{"disabled with high", `"thinking":{"type":"disabled"},"reasoning_effort":"high",`, `"high"`},
+		{"disabled with xhigh", `"thinking":{"type":"disabled"},"reasoning_effort":"xhigh",`, `"xhigh"`},
+		{"disabled with max", `"thinking":{"type":"disabled"},"reasoning_effort":"max",`, `"max"`},
+		{"boolean disabled with xhigh", `"enable_thinking":false,"reasoning_effort":"xhigh",`, `"xhigh"`},
+		{"boolean disabled with max", `"enable_thinking":false,"reasoning_effort":"max",`, `"max"`},
+		{"enabled with none", `"thinking":{"type":"enabled"},"reasoning_effort":"none",`, `"none"`},
+		{"boolean enabled with none", `"enable_thinking":true,"reasoning_effort":"none",`, `"none"`},
+		{"disabled with nested low", `"thinking":{"type":"disabled"},"reasoning":{"effort":"low"},`, `"low"`},
+		{"disabled with nested xhigh", `"thinking":{"type":"disabled"},"reasoning":{"effort":"xhigh"},`, `"xhigh"`},
+		{"disabled with nested max", `"enable_thinking":false,"reasoning":{"effort":"max"},`, `"max"`},
+		{"enabled with nested none", `"enable_thinking":true,"reasoning":{"effort":"none"},`, `"none"`},
+		{"switch disagreement with explicit high", `"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning_effort":"high",`, `"high"`},
+		{"switch disagreement with explicit none", `"thinking":{"type":"disabled"},"enable_thinking":true,"reasoning_effort":"none",`, `"none"`},
+		{"switch disagreement with nested max", `"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning":{"effort":"max"},`, `"max"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{ "model":"deepseek-v4-1-flash-1017", ` + tc.fields + `"messages":[{"role":"user","content":"mock"}], "tools":[{"n":9007199254740993}], "metadata": {"session_id":"client-session"}, "prompt_cache_key":null, "max_tokens":16000 }`)

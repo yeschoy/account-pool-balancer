@@ -183,13 +183,7 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		return err
 	}
 	var enabled *bool
-	setThinking := func(value bool) error {
-		if enabled != nil && *enabled != value {
-			return errors.New("Mistral Chat thinking and enable_thinking conflict")
-		}
-		enabled = &value
-		return nil
-	}
+	conflictingSwitches := false
 	if raw := o.get("thinking"); raw != nil {
 		thinking := scanMistralObject(raw)
 		if thinking == nil || len(thinking.fields) != 1 || thinking.fields[0].key != "type" {
@@ -207,9 +201,9 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
 			return errors.New("Mistral Chat enable_thinking must be boolean")
 		}
-		if err := setThinking(bytes.Equal(raw, []byte("true"))); err != nil {
-			return err
-		}
+		value := bytes.Equal(raw, []byte("true"))
+		conflictingSwitches = enabled != nil && *enabled != value
+		enabled = &value
 		o.set("enable_thinking", nil)
 	}
 	nativeEffort := o.get("reasoning_effort")
@@ -239,19 +233,21 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		}
 		o.set("reasoning", nil)
 	}
-	effort := mistralString(effortRaw)
-	if enabled != nil {
-		if effort == "" {
+	// A valid explicit tier is authoritative; client-default switches must not
+	// reject or lower it. Missing/null effort still defers to explicit switches.
+	if mistralString(effortRaw) == "" {
+		if conflictingSwitches {
+			return errors.New("Mistral Chat thinking and enable_thinking conflict without an explicit reasoning effort")
+		}
+		if enabled != nil {
 			effortRaw = []byte(`"none"`)
 			if *enabled {
 				effortRaw = []byte(`"high"`) // explicit compatibility default, not a token budget
 			}
-		} else if *enabled == (effort == "none") {
-			return errors.New("Mistral Chat thinking switch conflicts with explicit reasoning_effort")
+		} else if effortRaw == nil {
+			// Default only omitted controls; preserve explicit tiers and native null.
+			effortRaw = []byte(`"high"`)
 		}
-	} else if effortRaw == nil {
-		// Default only omitted controls; preserve explicit tiers and native null.
-		effortRaw = []byte(`"high"`)
 	}
 	// Write once: a missing native field is appended, not updated in-place.
 	if !bytes.Equal(effortRaw, nativeEffort) {
@@ -349,6 +345,11 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 			if developer && role == "developer" {
 				message.set("role", []byte(`"system"`))
 			}
+			if developer && role == "user" {
+				if err := mistralUserImages(message); err != nil {
+					return nil, false, err
+				}
+			}
 			if role == "assistant" {
 				reasoning := message.get("reasoning_content")
 				// The exact DeepSeek Chat endpoint also rejects the string
@@ -399,6 +400,51 @@ func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
 	}
 	out.Write(raw[last:])
 	return out.Bytes(), true, nil
+}
+
+// Mistral's native vision form uses image_url as a string. Unwrap only a
+// URL-only OpenAI object; preserve extra options rather than discarding them.
+func mistralUserImages(message *mistralWireObject) error {
+	content := message.get("content")
+	if len(content) == 0 || content[0] != '[' {
+		return nil
+	}
+	if err := message.unique("content"); err != nil {
+		return err
+	}
+	var chunks []json.RawMessage
+	_ = json.Unmarshal(content, &chunks)
+	changed := false
+	for i, raw := range chunks {
+		chunk := scanMistralObject(raw)
+		if chunk == nil || mistralString(chunk.get("type")) != "image_url" {
+			continue
+		}
+		if err := chunk.unique("type", "image_url"); err != nil {
+			return err
+		}
+		image := scanMistralObject(chunk.get("image_url"))
+		if image == nil {
+			continue // already native or unrelated malformed input: retain upstream validation
+		}
+		if err := image.unique("url"); err != nil {
+			return err
+		}
+		if len(image.fields) != 1 || image.fields[0].key != "url" {
+			continue // never drop detail or any other requested option
+		}
+		url := image.get("url")
+		if len(url) == 0 || url[0] != '"' {
+			return errors.New("Mistral DeepSeek user image_url.url must be a string")
+		}
+		chunk.set("image_url", url)
+		chunks[i], changed = chunk.render(), true
+	}
+	if changed {
+		content, _ = json.Marshal(chunks)
+		message.set("content", content)
+	}
+	return nil
 }
 
 func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte) error {
