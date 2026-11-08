@@ -620,6 +620,14 @@ func (p *Pool) deleteBindingLocked(key string) {
 	}
 }
 
+func (p *Pool) trimBindingsLocked() {
+	for p.lru.Len() > maxBindings {
+		// Evict through the common remover so persisted response-chain removal
+		// marks metadata dirty as well; it must not reappear after a restart.
+		p.deleteBindingLocked(p.lru.Back().Value.(*binding).key)
+	}
+}
+
 func ttl(cfg *config.Config, explicit bool) time.Duration {
 	if explicit {
 		return time.Duration(cfg.Routing.ExplicitTTLSec) * time.Second
@@ -633,11 +641,7 @@ func (p *Pool) putProvisionalLocked(cfg *config.Config, req Request, accountID s
 	b := &binding{key: req.Affinity, accountID: accountID, explicit: req.Explicit,
 		expiresAt: now.Add(ttl(cfg, req.Explicit)), generation: p.gen, owner: req.RequestID}
 	p.bindings[req.Affinity] = p.lru.PushFront(b)
-	for p.lru.Len() > maxBindings {
-		old := p.lru.Back()
-		p.lru.Remove(old)
-		delete(p.bindings, old.Value.(*binding).key)
-	}
+	p.trimBindingsLocked()
 	return p.gen, true
 }
 
@@ -660,11 +664,7 @@ func (p *Pool) BindWithSession(cfg *config.Config, key, accountID, session strin
 		p.dirty = true
 	}
 	p.bindings[key] = p.lru.PushFront(b)
-	for p.lru.Len() > maxBindings {
-		old := p.lru.Back()
-		p.lru.Remove(old)
-		delete(p.bindings, old.Value.(*binding).key)
-	}
+	p.trimBindingsLocked()
 }
 
 type candidate struct {
@@ -1331,6 +1331,9 @@ func (p *Pool) BoundAccount(key string) (string, bool) {
 	}
 	return b.accountID, true
 }
+
+// BindingLimit is the global shared LRU capacity, not a per-account allowance.
+func (p *Pool) BindingLimit() int { return maxBindings }
 
 func (p *Pool) BindingCount() int {
 	p.mu.Lock()

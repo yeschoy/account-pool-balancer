@@ -47,10 +47,11 @@ func thIdentityValues(h http.Header, body map[string]any, extra []string) []stri
 	for _, x := range bodyKeys {
 		add(lookup(body, x.path))
 	}
-	for _, x := range []string{"previous_response_id", "metadata.user_id", "metadata.parent_session_id"} {
+	for _, x := range []string{"previous_response_id", "metadata.user_id", "metadata.parent_session_id", "user"} {
 		add(lookup(body, x))
 	}
 	add(claudeUserSession(lookup(body, "metadata.user_id")))
+	add(claudeUserSession(lookup(body, "user")))
 	return out
 }
 

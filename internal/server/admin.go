@@ -1613,6 +1613,8 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		"authFailed":     authFailed,
 		"workspaces":     len(seenWS),
 		"bindings":       bindings,
+		"bindingLimit":   s.pool.BindingLimit(),
+		"globalBindings": s.pool.BindingCount(),
 		"stats":          s.stats.SummaryFor(want),
 		"logsDropped":    s.logs.Dropped(),
 		"clientKeys":     clientKeys,

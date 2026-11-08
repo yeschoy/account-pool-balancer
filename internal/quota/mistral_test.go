@@ -27,6 +27,10 @@ func TestMistralCatalogAndBudgetRefreshAndSource(t *testing.T) {
 			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":25,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
 			return
 		}
+		if r.URL.Path == "/v1/billing/subscription" {
+			fmt.Fprint(w, `{"plan_name":"INDIVIDUAL","payg_enabled":false}`)
+			return
+		}
 		calls.Add(1)
 		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer mstrl_mock_secret" {
 			t.Error("wrong metadata target/auth")
@@ -120,6 +124,8 @@ func TestMistralBudgetTypesAndValidation(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/vibe/whoami":
 					fmt.Fprintf(w, `{"plan_type":%q,"plan_name":"INDIVIDUAL","email":"private@example.invalid","domains":{"api":"https://untrusted.invalid"}}`, tc.kind)
+				case "/v1/billing/subscription":
+					fmt.Fprint(w, `{"plan_name":"INDIVIDUAL","payg_enabled":false}`)
 				case "/v1/billing/budget":
 					if tc.status != 0 {
 						w.WriteHeader(tc.status)

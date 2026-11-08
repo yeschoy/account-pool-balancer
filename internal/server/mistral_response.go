@@ -14,6 +14,9 @@ var errMistralContent = errors.New("Mistral Chat content cannot be represented a
 // tool arguments, token counts and unknown fields; ordinary string chunks retain
 // their original wire bytes. Responses/FIM and other providers never call it.
 func mistralChatResponse(body []byte, stream bool) ([]byte, error) {
+	if !mistralMayHaveContentList(body) {
+		return body, nil
+	}
 	var root map[string]json.RawMessage
 	if json.Unmarshal(body, &root) != nil {
 		return body, nil // errors and non-JSON events retain their native handling
@@ -100,6 +103,31 @@ func mistralChatResponse(body []byte, stream bool) ([]byte, error) {
 	return json.Marshal(root)
 }
 
+// Native string deltas dominate streaming traffic. Avoid decoding maps just to
+// discover that nothing needs adapting. Escaped keys conservatively use the
+// full decoder; false positives are harmless, false negatives are not.
+func mistralMayHaveContentList(body []byte) bool {
+	if bytes.Contains(body, []byte(`\u`)) {
+		return true
+	}
+	key := []byte(`"content"`)
+	for rest := body; ; {
+		i := bytes.Index(rest, key)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(key):]
+		v := bytes.TrimLeft(rest, " \t\r\n")
+		if len(v) == 0 || v[0] != ':' {
+			continue
+		}
+		v = bytes.TrimLeft(v[1:], " \t\r\n")
+		if len(v) > 0 && v[0] == '[' {
+			return true
+		}
+	}
+}
+
 func mistralTextChunk(chunk map[string]json.RawMessage) (string, error) {
 	var typ, text string
 	if json.Unmarshal(chunk["type"], &typ) != nil || typ != "text" || json.Unmarshal(chunk["text"], &text) != nil || bytes.Equal(bytes.TrimSpace(chunk["text"]), []byte("null")) {
@@ -116,6 +144,9 @@ func mistralTextChunk(chunk map[string]json.RawMessage) (string, error) {
 // Normalize a single complete event, never the full stream. Keep SSE metadata,
 // comments, delimiters and terminal events; replace only the data lines.
 func mistralChatEvent(event []byte) ([]byte, error) {
+	if bytes.Count(event, []byte("data:")) <= 1 && !mistralMayHaveContentList(event) {
+		return event, nil
+	}
 	_, data, _ := sseFields(event)
 	normalized, err := mistralChatResponse(data, true)
 	if err != nil || bytes.Equal(data, normalized) {

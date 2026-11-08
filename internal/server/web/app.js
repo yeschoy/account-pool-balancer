@@ -379,7 +379,7 @@ async function loadOverview() {
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), pool === 'opencode-go' ? `有测量缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 覆盖 ${num(st.ckr || 0)} / ${num(st.r)} 次；写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 写入 ${num(st.kw || 0)}` : `缓存 ${num(st.k)} / 提示 ${num(st.p)} token`],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
     [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 缓存读取 ${st.ckr ? num(st.ck) : '未知'}（测量覆盖见缓存卡片）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
-    ['会话绑定', num(o.bindings), `策略 ${o.strategy}`],
+    ['会话绑定', num(o.bindings), `${o.bindingLimit ? '全局 ' + num(o.globalBindings) + ' / ' + num(o.bindingLimit) + ' · LRU淘汰 · ' : ''}策略 ${o.strategy}`],
   ];
   $('#ov-cards').innerHTML = cards.map(([l, v, s]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
   const models = Object.entries(o.stats.models || {}).sort((a, b) => b[1].r - a[1].r);
@@ -555,7 +555,15 @@ function mistralQuotaHTML(a) {
   const m = a.quota?.mistral, b = m?.budget;
   const type = m?.keyType === 'API' ? 'Studio API' : m?.keyType === 'CHAT' ? 'Vibe' : 'Key 类型未知';
   const fresh = !!a.quotaFresh && !m?.error && !!b && Date.parse(b.resetsAt) > Date.now();
-  let text = `<span class="badge ${fresh ? 'ok' : 'warn'}">${esc(type)}${m?.plan ? ' · ' + esc(m.plan) : ''}</span>`;
+  let text = `<span class="badge ${fresh ? 'ok' : 'warn'}">${esc(type)}${m?.plan ? ' · Key访问等级 ' + esc(m.plan) : ''}</span>`;
+  const sub = m?.subscription;
+  if (sub?.plan) text += `<div class="acc-sub">${fresh && !sub.error ? '' : '上次'}组织订阅：${esc(sub.plan)}</div>`;
+  else text += '<div class="acc-sub">组织订阅未知，刷新额度后读取</div>';
+  if (sub?.error) text += `<div class="acc-sub warn">${esc(sub.error)}（不影响已获取的套餐预算）</div>`;
+  if (sub?.payg != null || sub?.vibePayg != null) {
+    const flag = (v) => v === true ? '开启' : v === false ? '关闭' : '未知';
+    text += `<div class="acc-sub">${fresh && !sub.error ? '' : '上次'}组织 PAYG：API ${flag(sub.payg)} / Vibe ${flag(sub.vibePayg)}（只读）</div>`;
+  }
   if (b) {
     const money = (v) => esc(b.currency) + ' ' + Number(v).toFixed(2);
     text += `<div class="acc-sub">${fresh ? '' : '上次'}约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
@@ -1417,6 +1425,11 @@ function hitRate(b) {
   return b.p ? Math.min(b.k / b.p, 1) : null;
 }
 function costCell(r) { return r.cost === undefined || r.cost === null ? '—' : esc(money(r.cost, r.currency)); }
+function upstreamTPSCell(r) {
+  if (typeof r.upstreamTps !== 'number' || !Number.isFinite(r.upstreamTps)) return '<span class="acc-sub">上游 TPS —</span>';
+  const basis = r.upstreamTpsBasis === 'post-first-event' ? '流式首事件后平均输出速率' : '非流式上游调用平均速率（含首响应等待）';
+  return `<span class="acc-sub" title="${basis}；使用上游真实输出用量（含其计入的思考 token），非服务端内部解码速度">上游 ${num(r.upstreamTps)} tok/s</span>`;
+}
 function keyCell(r) { return esc(r.clientKeyName || r.clientKeyId || '—'); }
 function requestRow(r) {
   const tok = [r.inputTokens, r.outputTokens, r.cachedTokens].map((v) => v === null || v === undefined ? '—' : num(v)).join(' / ');
@@ -1425,7 +1438,7 @@ function requestRow(r) {
     <td>${esc(r.accountName || '—')}${r.switched ? ' <span class="badge warn">换号</span>' : ''}${r.overflow ? ' <span class="badge warn">溢出</span>' : ''}</td>
     <td>${statusBadge(r.status, r.result)}${r.upstreamStatus && r.upstreamStatus !== r.status ? `<div class="acc-sub">上游 ${esc(r.upstreamStatus)}</div>` : ''}${r.errorCategory ? `<div class="acc-sub">${esc(r.errorCategory)}${r.blockedBy ? '/' + esc(r.blockedBy) : ''}</div>` : ''}</td>
     <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
-    <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div class="acc-sub">${costCell(r)}</div></td>
+    <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div>${upstreamTPSCell(r)}</div><div class="acc-sub">${costCell(r)}</div></td>
     <td class="num">${tok}<div>${cacheRateCell(r)}</div>${r.cacheCreationTokens != null ? `<div class="acc-sub">缓存写入 ${num(r.cacheCreationTokens)}</div>` : ''}${r.egressStatus ? `<div class="acc-sub">${esc(r.proxy)}${r.egressIp ? ' / ' + esc(r.egressIp) : ''} · ${esc(GO_EGRESS_LABEL[r.egressStatus] || r.egressStatus)}</div>` : ''}</td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
     <td class="act"><button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }

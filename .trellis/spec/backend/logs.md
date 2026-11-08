@@ -39,6 +39,12 @@ Request, error, detailed-body, Perch event and TokenHarbor event logs under DATA
 Wrong: file.mtime older than retention ⇒ delete it, and trust the in-memory ring forever.
 Correct: prune by record timestamps in one writer, atomically preserve retained bytes, and enforce the same cutoff at query boundaries.
 
+## Mistral upstream throughput
+
+Request summaries add optional upstreamDurationMs, upstreamOutputMs, upstreamTps and upstreamTpsBasis. They describe only the delivered actual attempt, never total request upload/admission/selection time or earlier retries. Timing begins at the upstream HTTP call and ends when response/event bytes are read, before decoding/downstream flush. Streaming post-first-event basis divides provider completion_tokens by the read interval from the first real event through completion; this is observed average output throughput, not provider-internal decode speed, and can include network/backpressure. Nonstreaming request-average includes upstream first-response wait and must be labeled separately. Do not double-count reasoning tokens already included by the upstream completion count.
+
+Only successful requests with real output usage and a positive timing window get TPS. Missing usage, failures, zero windows and legacy logs show unknown, not estimated characters or fabricated zero. A genuinely reported zero remains zero. UI shows tok/s with the basis explained; logs retain raw final-attempt usage and timings. Timing tests use deterministic synthetic windows plus existing streaming usage/flush integration; no production inference or load testing is required.
+
 ## TokenHarbor independent detail capture
 
 ### 1. Scope / Trigger

@@ -19,16 +19,17 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 ## 会话粘性与调度
 
 - 与 OpenDesign 相同的策略、优先级、权重、最大并发、RPM、健康过滤及故障切换；`smart` 等额度策略在余额未知时使用现有未知额度排序，不伪造额度。
-- 识别 Codex 的 `Session_id` / `X-Codex-Session-Id` / `X-Codex-Thread-Id`，Claude 的 `X-Claude-Code-Session-Id` 与 `metadata.user_id` 中的会话，pi 可传的 `X-Session-Id` / `X-Session-Affinity` / `X-Pi-Session-Id` / `X-Pi-Session`，以及现有父会话、OpenCode 等会话头、正文会话字段和 `prompt_cache_key`。任意额外稳定头可在「额外会话头」配置。
-- 优先级沿用 OpenDesign：`previous_response_id`（本池不支持，Responses 请求会本地拒绝）、自定义头、父会话、正文身份、Claude 元数据、内置会话头、可选首条消息 HMAC 弱粘性。不会把每次变化的请求 ID 当成会话。客户端必须实际发送稳定标识；仅凭客户端名称不能保证粘性。
+- 识别 Codex 当前官方的 `Session-Id` / `Thread-Id` 及旧 `Session_id` / `Thread_id`、`X-Codex-Session-Id` / `X-Codex-Thread-Id` 等兼容头；Claude 的 `X-Claude-Code-Session-Id` / `X-Claude-Session-Id` / Anthropic 会话头，以及 `metadata.user_id` 或跨协议搬到根 `user` 的 `_session_UUID` / JSON-string `session_id`。普通user标签不是会话。pi 可传的 `X-Session-Id` / `X-Session-Affinity` / `X-Pi-Session-Id` / `X-Pi-Session`，以及现有父会话、OpenCode 等会话头、正文会话字段和 `prompt_cache_key`。任意额外稳定头可在「额外会话头」配置。
+- 优先级沿用 OpenDesign：`previous_response_id`（本池不支持，Responses 请求会本地拒绝）、自定义头、父会话、正文身份、Claude 会话结构、内置会话头、最后的 `X-Prompt-Cache-Key` / `Prompt-Cache-Key` 头兼容、可选首条消息 HMAC 弱粘性。不会把每次变化的请求 ID 当成会话。客户端必须实际发送稳定标识；仅凭客户端名称不能保证粘性。
+- 旧下划线头必须先由 Nginx 放行；应用无法恢复已被入口删除的字段。双跳采样若已无任何身份，仍会合理回退message_hmac，不凭空造会话。概览显示当前池绑定数及**全局共享4096条LRU硬上限**，不是每池/每账号4096。淘汰持久化严格续传绑定会同步保存删除，缺失所有者仍拒绝续传，不静默换号。
 - 会话 HMAC 按分组和下游密钥隔离。TTL 与忙时 `overflow` / `wait-overflow` / `reject` 策略沿用现有配置，临时借号不改原绑定。
 - Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 且已识别会话时，自动填入 `apb-mistral-<现有会话HMAC>`；HMAC按分组与下游密钥隔离，不暴露原始会话或凭据。客户端已有字段（包括显式null/空串）原样保留；没有身份不随机生成。共享前缀与同一账号有利于缓存命中，但不保证命中；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
 - 仅 Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。不支持的类型本地400，不丢弃思考或换号重试。Responses和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
-- 仅对 Chat 模型 `deepseek-v4-1-flash-1017`：根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。两种写法按相同规则校验/归一化，同值合并、冲突拒绝（显式 null 与非 null 也视为冲突）；嵌套 effort 为 null 且无开关时保留为原生 null。Responses、其他模型和号池不做此别名转换。
+- 仅对 Chat 模型 `deepseek-v4-1-flash-1017`：根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。两种写法按相同规则校验/归一化，归一化后同值合并、冲突拒绝；null/未传/无效档位按下条最新high策略处理。Responses、其他模型和号池不做此别名转换。
 - 仅对同一精确 Chat 模型，按用户最新要求只保留 `low` / `high` 两档；未传、null、空值、其他档位（包括 max/none/medium/xhigh/minimal）或非法档位类型统一映射为 `reasoning_effort:"high"`。根 `reasoning_effort` 与 `reasoning.effort` 共用此规则，归一化后同值合并、冲突仍拒绝。`thinking` / `enable_thinking` 仅校验结构后移除，不再产生不支持的 none 或压低有效档位；未知预算/额外字段和重复字段仍本地拒绝。high 可能增加思考用量和耗时，不自动增大 `max_tokens`；其他模型、协议及号池不套用此规则。
 - 同一精确 DeepSeek Chat 的 user 图片块中，先清除 NewAPI 泄漏的空内部 `MimeType:""/null`（已实测被上游以 `extra_forbidden` 拒绝），再将仅含 `url` 的 `image_url:{"url":"..."}` 对象转成原生字符串 `image_url:"..."`，支持 data URL，保留图片和原有文本/顺序；带 detail 等额外选项的对象保留这些选项，不丢弃语义，非空 MimeType 不擅自删除。其他模型/协议/号池不套用此转换。
 - 除上述明确的缓存补齐、思考格式及精确模型参数兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。精确 DeepSeek Chat 仅省略不支持的根 `store:false/null`，`store:true` 本地拒绝；其他模型/协议不套用该规则。未知字段不静默丢弃，不支持时明确报错。
-- 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；临时 5xx 短冷却。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
+- 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；其他临时 5xx 短冷却。明确的503+顶层code3800视为模型服务不可用，不扣账号健康、不重复换号，并保留上游Retry-After；旧的完整出厂规则自动升级，任何自定义规则/顺序/备注/空列表保留。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
 
 ## 原生接口与额度
 
@@ -36,7 +37,9 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整历史，`previous_response_id` 必须省略或 null，`store` 必须省略、false 或 null。不建立服务器端 Responses 续传绑定。
 
-“刷新额度”与自动轮询现已同时接入模型目录和本 Key 对应的套餐预算；预算沿现有 Snapshot/metadata 保存，页面显示币种、约剩余/总额、已用百分比、重置/检测时间和 PAYG 状态。失败保留上次值但标为历史/未知，403不把仍可推理的Key判失效；目录失败与预算失败分别记录。更换 Key / Base / 代理后失效旧快照，晚返回不能复活旧数据。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。真实且未过期的预算参与 smart/least-used/pace 的余量排序；未知不伪造零，不把 Mistral 预算放进 OpenDesign 付费分类，不代改官网 PAYG 或凭预算假造钱包余额。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
+“刷新额度”与自动轮询同时接入模型目录、本 Key 对应的套餐预算及独立组织订阅；预算沿现有 Snapshot/metadata 保存，页面显示币种、约剩余/总额、已用百分比、重置/检测时间和 PAYG 状态。失败保留上次值但标为历史/未知，403不把仍可推理的Key判失效；目录失败与预算失败分别记录。更换 Key / Base / 代理后失效旧快照，晚返回不能复活旧数据。同工作区多个 Key 可能共享限额，不能累加成独立账号额度。真实且未过期的预算参与 smart/least-used/pace 的余量排序；未知不伪造零，不把 Mistral 预算放进 OpenDesign 付费分类，不代改官网 PAYG 或凭预算假造钱包余额。Mistral `base_model_id` 是模型来源，不当作别名，避免将微调模型改发成基础模型。
+
+组织订阅读取额外以3秒为上限，不跟随重定向。UI明确区分Key访问等级与组织套餐（真实样本API访问等级Free、组织订阅Student）；订阅失败不会使成功预算失效，保留上次订阅并标错误。组织API/Vibe PAYG可空，未知不伪造关闭，也不代用户开启。预算reset_at是额度重置，不冒充账单续费日期。
 
 ### API Key 读取套餐额度（2026-11-08 实测）
 
@@ -53,6 +56,12 @@ Mistral Responses 为**无状态预览接口**：每次在 `input` 携带完整�
 管理台「真实请求」测试 Mistral 时，未填写模型默认使用 `deepseek-v4-1-flash-1017`，仍为 `max_tokens=1`；显式填写的模型保留。「免费检查」只读目录，不发推理请求。
 
 参考：[官方文档](https://docs.mistral.ai/)、[Responses](https://docs.mistral.ai/inference/conversations/responses)、[用量和限制](https://docs.mistral.ai/admin/billing-usage/usage-limits)。
+
+## TPS与局部性能
+
+请求日志新增真实上游输出用量对应的tok/s。流式为首个真实事件到完成事件的观测平均，非流式为上游整次调用平均（含首响应等待）；排除选号/本地排队和先前重试，未知usage/失败/零窗口及旧日志显示未知。这不是服务端内部解码速度，可能受网络和背压影响。
+
+同一Apple M4短基准：原生字符串SSE约2613→135ns/帧、46→0次分配；128条约1KB文本块历史准备约801→274μs、379→104KB分配。原生帧和纯文本历史仅跳过无用解码，内容数组/转义键/多行SSE保守回退，不删思考、图片、工具或校验。这是局部基准，不代表模型生成或端到端耗时相同比例提速；无生产压测。
 
 ## 验证
 

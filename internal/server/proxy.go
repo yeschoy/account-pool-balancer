@@ -91,6 +91,10 @@ type requestLog struct {
 	RetryAfter          *int         `json:"retryAfter,omitempty"`
 	DurationMs          int64        `json:"durationMs"`
 	TTFTMs              *int64       `json:"ttftMs"`
+	UpstreamDurationMs  *int64       `json:"upstreamDurationMs,omitempty"`
+	UpstreamOutputMs    *int64       `json:"upstreamOutputMs,omitempty"`
+	UpstreamTPS         *float64     `json:"upstreamTps,omitempty"`
+	UpstreamTPSBasis    string       `json:"upstreamTpsBasis,omitempty"`
 	InputTokens         *int64       `json:"inputTokens"`
 	OutputTokens        *int64       `json:"outputTokens"`
 	CachedTokens        *int64       `json:"cachedTokens"`
@@ -226,6 +230,10 @@ type attemptResult struct {
 	downstreamStatus int
 	ruleID           string
 	ttft             *int64
+	upstreamStarted  time.Time
+	upstreamFirst    time.Time
+	upstreamLast     time.Time
+	upstreamStream   bool
 	usage            usage
 	ms               int64
 	// turn is what this attempt asked and answered, for the Perch pool's
@@ -416,6 +424,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				rec.CacheHit = &hit
 			}
 			rec.TTFTMs = res.ttft
+			if rec.Provider == config.ProviderMistral {
+				applyUpstreamTiming(rec, res)
+			}
 			if res.upstreamStatus != 0 {
 				us := res.upstreamStatus
 				rec.UpstreamStatus = &us
@@ -638,7 +649,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral {
 		identityScope += "\x00" + ck.ID
 	}
-	ident := s.identity(cfg, identityScope, r.Header, obj)
+	var ident Identity
 	cacheAffinity := ""
 	if rec.Provider == config.ProviderOpenCodeGo {
 		ident, cacheAffinity, rec.CacheHintSource = s.goIdentity(cfg, identityScope, r.Header, obj)
@@ -648,6 +659,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	} else if rec.Provider == config.ProviderTokenHarbor {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
 		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
+	} else if rec.Provider == config.ProviderMistral {
+		ident = s.mistralIdentity(cfg, identityScope, r.Header, obj)
+		rec.ClientFamily = goClientFamily(r.Header, obj)
+	} else {
+		ident = s.identity(cfg, identityScope, r.Header, obj)
 	}
 	stateful := config.StrictResponses(rec.Provider) && lookup(obj, "previous_response_id") != ""
 	routeGroup := ck.Group
@@ -1133,6 +1149,11 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 // 401/402/403: a relay such as new-api would disable the whole channel.
 func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto string, res *attemptResult, attempts int) int {
 	w.Header().Set("X-Attempts", strconv.Itoa(attempts))
+	if res.ruleID == "mistral-service-unavailable" && res.header != nil {
+		if hint := res.header.Get("Retry-After"); hint != "" {
+			w.Header().Set("Retry-After", hint)
+		}
+	}
 	st := res.status
 	switch {
 	case res.ruleID == "tokenharbor-spend-confirmation":
@@ -1429,6 +1450,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
+	res.upstreamStarted = time.Now()
 	resp, err := client.Do(req)
 	if config.IsOpenCode(acct.Provider) && r.Context().Err() == nil {
 		if err == nil {
@@ -1489,6 +1511,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 512<<20))
+	res.upstreamLast = time.Now()
 	if err != nil {
 		res.kind = outFailed
 		switch {
@@ -1754,6 +1777,7 @@ func isTerminalEvent(event string, data []byte) bool {
 type evMsg struct {
 	ev  []byte
 	err error
+	at  time.Time // upstream read completion, before downstream parsing/flush
 }
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
@@ -1766,7 +1790,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		for {
 			ev, err := readEvent(rd)
 			select {
-			case events <- evMsg{ev, err}:
+			case events <- evMsg{ev: ev, err: err, at: time.Now()}:
 			case <-done:
 				return
 			}
@@ -1796,6 +1820,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		m := <-events
 		if event, data, real := sseFields(m.ev); real && (m.err == nil || m.err == io.EOF) {
 			first, firstEvent, firstData, firstErr = m.ev, event, data, m.err
+			res.upstreamStream, res.upstreamFirst, res.upstreamLast = true, m.at, m.at
 			break
 		}
 		if m.err != nil {
@@ -1876,6 +1901,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		select {
 		case m := <-events:
 			if len(m.ev) > 0 {
+				res.upstreamLast = m.at
 				event, data, _ := sseFields(m.ev)
 				done := isTerminalEvent(event, data)
 				outEvent := m.ev

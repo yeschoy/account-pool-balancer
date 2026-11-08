@@ -30,14 +30,15 @@ func FetchMistralCatalog(ctx context.Context, hc *http.Client, base, key, seed s
 // MistralState records only the budget this key spends, never both organization
 // budgets and never identity details returned by whoami.
 type MistralState struct {
-	Source    string         `json:"source"`
-	KeyType   string         `json:"keyType,omitempty"`
-	Plan      string         `json:"plan,omitempty"`
-	Budget    *MistralBudget `json:"budget,omitempty"`
-	At        time.Time      `json:"at,omitzero"`
-	CheckedAt time.Time      `json:"checkedAt,omitzero"`
-	Error     string         `json:"error,omitempty"`
-	Failures  int            `json:"failures,omitempty"`
+	Source       string               `json:"source"`
+	KeyType      string               `json:"keyType,omitempty"`
+	Plan         string               `json:"plan,omitempty"`
+	Budget       *MistralBudget       `json:"budget,omitempty"`
+	Subscription *MistralSubscription `json:"subscription,omitempty"`
+	At           time.Time            `json:"at,omitzero"`
+	CheckedAt    time.Time            `json:"checkedAt,omitzero"`
+	Error        string               `json:"error,omitempty"`
+	Failures     int                  `json:"failures,omitempty"`
 }
 
 type MistralBudget struct {
@@ -49,11 +50,35 @@ type MistralBudget struct {
 	PAYG        *bool     `json:"payg,omitempty"`
 }
 
+// Subscription describes the organization's billing plan, which can differ
+// from whoami's access plan for this specific API key (e.g. Free versus EDU).
+// Its optional read must not invalidate a successfully measured budget.
+type MistralSubscription struct {
+	Plan      string    `json:"plan,omitempty"`
+	PAYG      *bool     `json:"payg,omitempty"`
+	VibePAYG  *bool     `json:"vibePayg,omitempty"`
+	At        time.Time `json:"at,omitzero"`
+	CheckedAt time.Time `json:"checkedAt,omitzero"`
+	Error     string    `json:"error,omitempty"`
+}
+
 func (m *MistralState) clone() *MistralState {
 	if m == nil {
 		return nil
 	}
 	c := *m
+	if m.Subscription != nil {
+		v := *m.Subscription
+		c.Subscription = &v
+		if v.PAYG != nil {
+			b := *v.PAYG
+			c.Subscription.PAYG = &b
+		}
+		if v.VibePAYG != nil {
+			b := *v.VibePAYG
+			c.Subscription.VibePAYG = &b
+		}
+	}
 	if m.Budget != nil {
 		b := *m.Budget
 		c.Budget = &b
@@ -117,11 +142,42 @@ func FetchMistralBudget(ctx context.Context, hc *http.Client, base, key, seed st
 	if b.Reset.IsZero() || !b.Reset.After(time.Now()) {
 		return nil, errors.New("Mistral 套餐重置时间未知或已过期")
 	}
-	plan := map[string]string{"FREE": "Free", "INDIVIDUAL": "Pro", "EDU": "Student", "TEAM": "Team", "ENTERPRISE": "Enterprise"}[strings.ToUpper(who.Plan)]
-	return &MistralState{KeyType: kind, Plan: plan, Budget: &MistralBudget{
+	return &MistralState{KeyType: kind, Plan: mistralPlanName(who.Plan), Subscription: fetchMistralSubscription(ctx, client, key, seed), Budget: &MistralBudget{
 		Total: *b.Total, UsedPercent: *b.Used, Remaining: *b.Total * math.Max(0, 1-*b.Used/100),
 		Currency: b.Currency, ResetsAt: b.Reset, PAYG: b.PAYG,
 	}}, nil
+}
+
+func mistralPlanName(value string) string {
+	value = strings.TrimSpace(value)
+	if name := map[string]string{"FREE": "Free", "INDIVIDUAL": "Pro", "EDU": "Student", "TEAM": "Team", "ENTERPRISE": "Enterprise"}[strings.ToUpper(value)]; name != "" {
+		return name
+	}
+	if len(value) <= 64 && strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) < 0 {
+		return value
+	}
+	return ""
+}
+
+func fetchMistralSubscription(ctx context.Context, client *Client, key, seed string) *MistralSubscription {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	s := &MistralSubscription{CheckedAt: time.Now()}
+	var reply struct {
+		Plan     string `json:"plan_name"`
+		PAYG     *bool  `json:"payg_enabled"`
+		VibePAYG *bool  `json:"vibe_payg_enabled"`
+	}
+	if err := client.get(ctx, key, "/billing/subscription", "", seed, &reply); err != nil {
+		s.Error = "Mistral 订阅信息读取失败: " + err.Error()
+		return s
+	}
+	if s.Plan = mistralPlanName(reply.Plan); s.Plan == "" {
+		s.Error = "Mistral 订阅名称缺失或无效"
+		return s
+	}
+	s.PAYG, s.VibePAYG, s.At = reply.PAYG, reply.VibePAYG, time.Now()
+	return s
 }
 
 func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.Account, force bool) error {
@@ -166,6 +222,11 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 		s.Failures = max(s.Failures, s.Mistral.Failures)
 		s.NextAt = schedule(now.Add(backoff(s.Mistral.Failures)))
 	} else {
+		if m.Subscription != nil && m.Subscription.Error != "" && s.Mistral != nil && s.Mistral.Subscription != nil {
+			previous := s.Mistral.clone().Subscription
+			previous.CheckedAt, previous.Error = m.Subscription.CheckedAt, m.Subscription.Error
+			m.Subscription = previous
+		}
 		m.Source, m.At, m.CheckedAt = source, now, now
 		s.Mistral = m
 		s.NextAt = schedule(now.Add(interval))

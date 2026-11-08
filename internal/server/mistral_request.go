@@ -380,6 +380,9 @@ func mistralUserImages(message *mistralWireObject) error {
 	if err := message.unique("content"); err != nil {
 		return err
 	}
+	if !bytes.Contains(content, []byte(`"image_url"`)) && !bytes.Contains(content, []byte(`\u`)) {
+		return nil // pure-text content arrays need no image decoding or copies
+	}
 	var chunks []json.RawMessage
 	_ = json.Unmarshal(content, &chunks)
 	changed := false

@@ -4,6 +4,8 @@ package rules
 // are not independent quota; this gateway never invents a remaining balance.
 func DefaultMistralErrorRules() []ErrorRule {
 	return []ErrorRule{
+		{ID: "mistral-service-unavailable", Scope: ScopeModel, Action: ActionIgnore,
+			When: Match{Statuses: []int{503}, BodyCodes: []string{"3800"}}, Note: "上游模型服务暂不可用，不扣账号健康；停止无收益换号，由客户端稍后重试"},
 		{ID: "mistral-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 502,
 			When: Match{Statuses: []int{401}}, Note: "Mistral API Key 无效或已撤销，更换后恢复"},
 		{ID: "mistral-insufficient-credits", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
@@ -16,6 +18,10 @@ func DefaultMistralErrorRules() []ErrorRule {
 }
 
 func DefaultMistralRetryRules() []RetryRule {
-	return []RetryRule{{ID: "mistral-request-error", Decision: DecisionStop,
-		When: Match{Statuses: []int{400, 403, 404, 405, 409, 413, 422}}, Note: "请求、模型或权限错误停止，不遍历账号"}}
+	return []RetryRule{
+		{ID: "mistral-service-unavailable", Decision: DecisionStop,
+			When: Match{Statuses: []int{503}, BodyCodes: []string{"3800"}}, Note: "明确的上游服务故障停止换号，避免同一失败重复等待；429保留原策略"},
+		{ID: "mistral-request-error", Decision: DecisionStop,
+			When: Match{Statuses: []int{400, 403, 404, 405, 409, 413, 422}}, Note: "请求、模型或权限错误停止，不遍历账号"},
+	}
 }

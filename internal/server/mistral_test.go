@@ -37,6 +37,10 @@ func newMistralEnv(t *testing.T) *mistralEnv {
 			fmt.Fprint(w, `{"plan_type":"API","plan_name":"FREE"}`)
 			return
 		}
+		if r.URL.Path == "/v1/billing/subscription" {
+			fmt.Fprint(w, `{"plan_name":"INDIVIDUAL","payg_enabled":false,"vibe_payg_enabled":false}`)
+			return
+		}
 		if r.URL.Path == "/v1/billing/budget" {
 			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":25,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
 			return

@@ -96,6 +96,18 @@ func TestMistralChatResponseUnchangedAndUnsupported(t *testing.T) {
 	}
 }
 
+func TestMistralResponseFastPathKeepsArrayAdaptation(t *testing.T) {
+	for _, body := range []string{
+		`{"choices":[{"delta":{"co\u006etent":[{"type":"text","text":"ok"}]}}]}`,
+		"{\"choices\":[{\"delta\":{\"content\" \n : \t [{\"type\":\"text\",\"text\":\"ok\"}]}}]}",
+	} {
+		out, err := mistralChatResponse([]byte(body), true)
+		if err != nil || !bytes.Contains(out, []byte(`"content":"ok"`)) {
+			t.Fatalf("fast path skipped escaped/whitespace array content: %s %v", out, err)
+		}
+	}
+}
+
 func TestMistralChatEventPreservesSSEFraming(t *testing.T) {
 	wire := ": comment\r\nid: frame-1\r\nevent: message\r\nretry: 1000\r\ndata: {\"choices\":[{\"delta\":\r\ndata: {\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}]}\r\n\r\n"
 	out, err := mistralChatEvent([]byte(wire))
@@ -147,7 +159,7 @@ func TestMistralContentStreamFlushesBeforeUpstreamCompletes(t *testing.T) {
 	}
 	logs, _ := e.s.logs.Query("requests", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
 	var rec requestLog
-	if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.InputTokens == nil || *rec.InputTokens != 17 || rec.OutputTokens == nil || *rec.OutputTokens != 5 || rec.Result != "success" {
+	if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &rec) != nil || rec.InputTokens == nil || *rec.InputTokens != 17 || rec.OutputTokens == nil || *rec.OutputTokens != 5 || rec.Result != "success" || rec.UpstreamTPS == nil || *rec.UpstreamTPS <= 0 || rec.UpstreamTPSBasis != "post-first-event" {
 		t.Fatal("lost measured usage or success outcome")
 	}
 }

@@ -26,12 +26,16 @@ type Identity struct {
 
 // Headers new-api passes through, in priority order: parents first so a
 // parent agent and its sub-agents land on one account.
-var parentHeaders = []string{"X-Opencode-Parent-Session-Id", "X-Parent-Session-Id", "X-Parent-Session-Affinity", "X-Codex-Parent-Thread-Id", "X-Claude-Code-Parent-Agent-Id"}
+var parentHeaders = []string{"X-Opencode-Parent-Session-Id", "X-Parent-Session-Id", "X-Parent-Session-Affinity", "X-Codex-Parent-Thread-Id", "X-Codex-Parent-Session-Id", "X-Claude-Code-Parent-Agent-Id", "X-Claude-Code-Parent-Session-Id"}
 
 var sessionHeaders = []struct{ name, keyType string }{
 	{"X-Claude-Code-Session-Id", "session_id"},
+	{"X-Claude-Session-Id", "session_id"},
+	{"X-Anthropic-Session-Id", "session_id"},
+	{"Anthropic-Session-Id", "session_id"},
 	{"X-Codex-Session-Id", "session_id"},
 	{"X-Codex-Thread-Id", "thread_id"},
+	{"X-Codex-Conversation-Id", "conversation_id"},
 	{"X-Pi-Session-Id", "session_id"},
 	{"X-Pi-Session", "session_id"},
 	{"Session-Id", "session_id"},
@@ -39,6 +43,7 @@ var sessionHeaders = []struct{ name, keyType string }{
 	{"X-Session-Id", "session_id"},
 	{"X-Session-Affinity", "session_id"},
 	{"Thread-Id", "thread_id"},
+	{"Thread_id", "thread_id"},
 	{"X-Thread-Id", "thread_id"},
 	{"Conversation-Id", "conversation_id"},
 	{"Conversation_id", "conversation_id"},
@@ -115,6 +120,7 @@ var claudeSessionRe = regexp.MustCompile(`_session_([0-9a-fA-F-]{8,})`)
 // claudeUserSession pulls the session out of Claude Code's metadata.user_id,
 // either "user_<h>_account_<u>_session_<s>" or a JSON object string.
 func claudeUserSession(uid string) string {
+	uid = strings.TrimSpace(uid)
 	if uid == "" {
 		return ""
 	}
@@ -148,6 +154,14 @@ func (s *Server) responseFingerprint(group, responseID string) string {
 // configured and parent headers, body fields, session headers, and as a
 // fallback an HMAC of the first system and user messages.
 func (s *Server) identity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
+	return s.identityWithFallbackHeaders(cfg, group, h, body, nil)
+}
+
+func (s *Server) mistralIdentity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
+	return s.identityWithFallbackHeaders(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"})
+}
+
+func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h http.Header, body map[string]any, hints []string) Identity {
 	if v, ok := validValue(lookup(body, "previous_response_id")); ok {
 		return Identity{Source: "body", KeyType: "previous_response_id", Confidence: "explicit", Fingerprint: s.responseFingerprint(group, v)}
 	}
@@ -175,9 +189,19 @@ func (s *Server) identity(cfg *config.Config, group string, h http.Header, body 
 	if v, ok := validValue(claudeUserSession(lookup(body, "metadata.user_id"))); ok {
 		return explicit("body", "claude_user_session", v)
 	}
+	// Some Claude-to-Chat relays move metadata.user_id into user. Only a
+	// recognized session-bearing structure counts; a generic user label does not.
+	if v, ok := validValue(claudeUserSession(lookup(body, "user"))); ok {
+		return explicit("body", "claude_user_session", v)
+	}
 	for _, sh := range sessionHeaders {
 		if v, ok := validValue(headerValue(h, sh.name)); ok {
 			return explicit("header", sh.keyType, v)
+		}
+	}
+	for _, name := range hints {
+		if v, ok := validValue(headerValue(h, name)); ok {
+			return explicit("header", "prompt_cache_key", v)
 		}
 	}
 	if cfg.Routing.FallbackHash {
@@ -274,7 +298,7 @@ func stableConversation(body map[string]any) string {
 // bodyKeysKept are the top-level fields identity and routing read; the rest
 // of a request body (tools, the long message history) is never decoded.
 var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true, "previous_response_id": true, "prompt_cache_key": true,
-	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true}
+	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true, "user": true}
 
 // parseRequestBody decodes just what routing needs from a request body: the
 // fields in bodyKeysKept, plus the leading messages/input items up to the
@@ -325,6 +349,9 @@ func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
 		}
 		switch {
 		case bodyKeysKept[key]:
+			if key == "user" && ve-vs > 2048 {
+				break // identity-only compatibility must not decode an unbounded label
+			}
 			var x any
 			if json.Unmarshal(b[vs:ve], &x) != nil {
 				return nil, errBad

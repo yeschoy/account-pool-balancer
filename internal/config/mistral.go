@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 
 	"account-pool-balancer/internal/rules"
@@ -44,11 +45,14 @@ func (c *Config) normalizeMistral() error {
 	if m.ModelSyncSec != nil && (*m.ModelSyncSec < 0 || *m.ModelSyncSec > 86400 || *m.ModelSyncSec > 0 && *m.ModelSyncSec < 60) {
 		return fmt.Errorf("mistral.modelSyncSec must be 0 or 60–86400")
 	}
-	if c.MistralErrorRules == nil {
-		c.MistralErrorRules = rules.DefaultMistralErrorRules()
+	errors, retries := rules.DefaultMistralErrorRules(), rules.DefaultMistralRetryRules()
+	// Upgrade only the exact previous factory defaults. Any administrator
+	// edits (including notes/order/empty lists) remain authoritative.
+	if c.MistralErrorRules == nil || reflect.DeepEqual(c.MistralErrorRules, errors[1:]) {
+		c.MistralErrorRules = errors
 	}
-	if c.MistralRetryRules == nil {
-		c.MistralRetryRules = rules.DefaultMistralRetryRules()
+	if c.MistralRetryRules == nil || reflect.DeepEqual(c.MistralRetryRules, retries[1:]) {
+		c.MistralRetryRules = retries
 	}
 	if err := rules.ValidateErrorRules(c.MistralErrorRules); err != nil {
 		return fmt.Errorf("mistral: %w", err)

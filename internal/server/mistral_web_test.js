@@ -64,7 +64,7 @@ vm.runInContext(source.slice(source.indexOf('function mistralQuotaHTML('), sourc
 const future = new Date(Date.now()+86400000).toISOString();
 const budgetAccount = { provider:'mistral',quotaFresh:true,quota:{mistral:{keyType:'CHAT',plan:'Pro',at:new Date().toISOString(),checkedAt:new Date().toISOString(),budget:{total:300,usedPercent:10,remaining:270,currency:'EUR',resetsAt:future,payg:false}}} };
 let quotaHTML = context.mistralQuotaHTML(budgetAccount);
-assert.match(quotaHTML,/Vibe · Pro/);
+assert.match(quotaHTML,/Vibe · Key访问等级 Pro/);
 assert.match(quotaHTML,/EUR 270\.00/);
 assert.doesNotMatch(quotaHTML,/USD|当前额度未知/);
 budgetAccount.quota.mistral.error='<img onerror=bad>';
@@ -76,6 +76,17 @@ budgetAccount.quota.mistral.error='';
 budgetAccount.quota.mistral.budget.resetsAt='2000-01-01T00:00:00Z';
 assert.match(context.mistralQuotaHTML(budgetAccount),/当前额度未知/);
 assert.match(context.mistralQuotaHTML({provider:'mistral'}),/套餐额度未知/);
+const subscribed = { provider:'mistral',quotaFresh:true,quota:{mistral:{keyType:'API',plan:'Free',subscription:{plan:'Student',payg:true,vibePayg:false},budget:{total:15,remaining:13.5,usedPercent:10,currency:'USD',resetsAt:future}}} };
+assert.match(context.mistralQuotaHTML(subscribed),/Key访问等级 Free.*组织订阅：Student/s);
+subscribed.quota.mistral.subscription.error='HTTP403 <private>';
+const optionalFailure = context.mistralQuotaHTML(subscribed);
+assert.match(optionalFailure,/上次组织订阅：Student/);
+assert.match(optionalFailure,/不影响已获取的套餐预算/);
+assert.doesNotMatch(optionalFailure,/<private>|当前额度未知/);
+vm.runInContext(source.slice(source.indexOf('function upstreamTPSCell('), source.indexOf('function keyCell(')), context);
+assert.match(context.upstreamTPSCell({upstreamTps:42,upstreamTpsBasis:'post-first-event'}),/42 tok\/s/);
+assert.match(context.upstreamTPSCell({upstreamTps:0,upstreamTpsBasis:'request-average'}),/0 tok\/s/);
+assert.match(context.upstreamTPSCell({}),/TPS —/);
 vm.runInContext(source.slice(source.indexOf('async function testAccount('), source.indexOf('// ---- device authorization ----')), context);
 (async () => {
   let dialog;

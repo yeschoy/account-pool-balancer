@@ -51,7 +51,7 @@ func goClientFamily(h http.Header, body map[string]any) string {
 	if strings.Contains(strings.ToLower(h.Get("Originator")), "codex") {
 		return "codex"
 	}
-	if headerValue(h, "X-Claude-Code-Session-Id") != "" || claudeUserSession(lookup(body, "metadata.user_id")) != "" {
+	if headerValue(h, "X-Claude-Code-Session-Id") != "" || claudeUserSession(lookup(body, "metadata.user_id")) != "" || claudeUserSession(lookup(body, "user")) != "" {
 		return "claude-code"
 	}
 	return "other"
