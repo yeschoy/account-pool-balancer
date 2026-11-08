@@ -2,6 +2,8 @@
 
 Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转换。默认上游 `https://api.mistral.ai/v1`。
 
+缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）：包含固定源码、本地合成验证与改进优先级；属于研究结论，未实施建议或验证生产命中率提升。
+
 ## 管理与接入
 
 1. 管理台选择 **Mistral 号池 → 账号**，手动添加或批量导入 API Key。每行 `API Key[,名称[,代理URL]]`。不需要控制密钥；按用户要求，已登录管理员可在账号列表/编辑窗口直接查看、复制完整 Key 和代理地址。它们沿用 config.json 明文存储，不新增加密或迁移密码/Cookie；接口仍需管理员会话并禁止缓存，普通日志继续脱敏。
