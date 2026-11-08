@@ -38,7 +38,34 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 思考档位优先级及图片格式兼容（2026-11-08 12:57 UTC，a2fdba1）
+## 当前部署：Mistral 图片 MimeType 修复与最终思考规则（2026-11-08 13:18 UTC，3ed0ad8）
+
+- 截图北京时间20:58:48/49两条请求 `req_78b430e23d83d38978c2422a` / `req_ee38b187ecbf9b2b68cfe80f` 都是第29条user图片消息携带 `image_url.MimeType:""` 导致422；两条NewAPI预览均含该空字段/PNG data URL。此前合成一像素图校验已证实该字段触发 `extra_forbidden`，去掉后图片schema通过；故不是请求体上限或模型不支持图片。
+- `54b5b26` 修复仅精确DeepSeek Chat user图片块的空/null内部MimeType，保留图片、完整历史、detail等有效选项，重复字段本地拒绝，不擅自删除非空MIME。其后用户连续追加要求：`89a4cdc` 默认/非法档位统一high、保留low/high/max；最终 `3ed0ad86d05e27c6174fe31562e0bbe2a0ff299c` **max也映射high，仅low/high保留**。根reasoning_effort和reasoning.effort共用归一化；省略/null/空值/其他字符串或非法档位类型均high，兼容开关不再产生none。额外预算/未知reasoning结构、重复字段及归一化后冲突仍拒绝。其他模型/Responses/FIM/号池不变；不增输出预算、不改调度/重试/账号配置。
+- 三次业务提交均推送master。按用户要求，每个新增改动只跑一次相关定向Go回归（1.015秒、1.833秒、1.884秒），以及gofmt/diff check和必要镜像构建；未跑全仓/race/vet/长观察或主动生产推理，不重放用户失败请求。Trellis规格随代码提交。
+- 复用既有部署脚本仅内存适配，每次守卫精确旧container/image/revision及注册任务空闲，干净提交快照472文件逐项SHA256核验。首轮未压缩传输超时90秒，确认远端只有部分源码、服务仍旧版健康且未开始构建/停服后，改用同一提交的压缩归档补齐并重新核验；没有盲目在不完整源码上构建，也没有额外废弃release。后两次是用户新增要求后的明确更新，不是记录变更引发重复发布。
+- 三次均在镜像就绪后干净停进程、完整一致备份data并gzip校验，沿线上Compose仅覆盖image；**191账号、186条TH注册记录核心资产、routingSecret、完整config、Mistral明文注册库以及用户/环境/健康检查/卷/端口/网络/资源参数全部保留**。Docker healthy/重启0，ai-internal双别名保留，每次都从new-api分别验证account-pool-balancer和opendesign-balancer的healthz成功。没有在旧e6f063b工作树构建，也未抹平分叉、覆盖在线配置或新增功能开关。
+- 最终镜像 `account-pool-balancer:release-3ed0ad8-20261108T131646Z`，ID `sha256:0a0905df542b15eb9853884006d6d695e55a64f30702a2fe8af94046ef1efa23`。13:18:24.177 UTC真实未登录公网登录页正常、healthz及四资源200，保留 `?v=a5bb5ebec0` 且四资源SHA256与源码一致。54b5b26先前亦于13:10:13.021公网验收；89a4cdc通过内部验收后被用户追加要求的3ed0ad8替代，未单列其公网验收。上线/健康验收通过即反馈，浏览器已关闭；补记录不再次重启。
+- 只读自然流量快照截至13:18:25.500 UTC，按请求起始ts分段且仅计已落盘记录：54b5b26阶段141次200/21次499，89a4cdc阶段32次200/2次499，最终3ed0ad8初步8次200；各段无新Mistral错误事件/422。499单列客户端取消，不冒充服务成功；这是跨版本初步自然样本，不是同一失败请求重放、具体档位生产对照或完整10分钟验收，不承诺第三方503根治。
+
+| 阶段（UTC） | 54b5b26 | 89a4cdc | 3ed0ad8 |
+|---|---|---|---|
+| 构建 | 13:07:54.546–13:08:01.856（7.31秒） | 13:14:00.608–13:14:07.623（7.01秒） | 13:17:13.051–13:17:19.712（6.66秒） |
+| 停止请求 / 旧进程退出 | 13:08:01.946 / 13:08:06.654 | 13:14:07.712 / 13:14:07.858 | 13:17:19.802 / 13:17:19.938 |
+| 完整一致备份及核验 | 13:08:06.975–13:08:12.109 | 13:14:08.112–13:14:13.276 | 13:17:20.199–13:17:25.393 |
+| 切换请求 / 新容器启动 | 13:08:12.109 / 13:08:12.361 | 13:14:13.276 / 13:14:13.519 | 13:17:25.393 / 13:17:25.622 |
+| 首HTTP可达 / Docker healthy | 13:08:13.470 / 13:08:42.701 | 13:14:14.634 / 13:14:43.875 | 13:17:26.720 / 13:17:55.964 |
+| 双入口 / 本机验收 | 13:08:42.755 / 13:08:42.845 | 13:14:43.928 / 13:14:44.019 | 13:17:56.017 / 13:17:56.121 |
+
+正式release位于 `/home/ubuntu/project/account-pool-balancer-releases/` 下对应stamp-版本目录；正式备份位于 `/home/ubuntu/backups/account-pool-balancer/`，保留data、SHA256、原Compose/.env、build/switch日志与deploy.json：
+
+- `20261108T130440Z-mistral-mime-54b5b26/`，data SHA256 `fe322e93b7e6be66d0ec2a8ff8abdb4d5d65b7a5f127ec7efde0c782bb3e3994`。
+- `20261108T131342Z-mistral-high-89a4cdc/`，data SHA256 `a6af9b742ea0a8a3bf6595de979d33419536344c6473304883b38b894c4f7b8c`。
+- `20261108T131646Z-mistral-max-high-3ed0ad8/`，data SHA256 `00ea6857d857acc1c7289c0e7eafcca9b7cb0b01216641d8fcf278427cc3ca97`。
+
+各自 `account-pool-balancer:rollback-<stamp>` 及新镜像均保留；回退前确认后续写入，不自动覆盖旧data。未采样精确停机，三次旧进程退出至首HTTP可达观测间隔均约6.8秒；不把源码传输、构建、请求排空或健康检查等待当停机。无新增临时脚本/压缩包/敏感下载；临时产物规则见 `_tmp_artifacts.md`，Trellis和正式审计/回退资料保留。
+
+## 历史部署：Mistral 思考档位优先级及图片格式兼容（2026-11-08 12:57 UTC，a2fdba1）
 
 - 用户报告本地400思考开关/档位冲突及422，明确要求少做测试、直接自动上线。`a2fdba1b20a5bcf0b710538848f189c3ee1f17b7` 已提交推送并部署：有效显式effort优先于兼容开关，缺失/null才按开关；精确DeepSeek Chat的user图片URL-only对象转原生字符串，保留图片和额外选项，不改模型/Responses/其他池。仅跑一次相关定向回归（1.450秒）及必要build，不跑全仓/race/长观察，不发生产推理。
 - 一次预检确认原4f8a680 healthy/零重启及双入口正常；干净472文件快照逐项SHA256核对后复用原脚本，仅内存适配。构建镜像 `account-pool-balancer:release-a2fdba1-20261108T125534Z`，ID `sha256:a42b17de515ef2e78e2fa88ed1ab2da45513f785d8c4690ac4cade6cb142784d`。完整一致备份 `/home/ubuntu/backups/account-pool-balancer/20261108T125534Z-mistral-compat-a2fdba1/` 保留data、Compose/.env、日志及回执，gzip校验通过，SHA256 `69c4cbf168c95bba980ec2ef90576533bfbb04dcdc3febe2b195e7055532dbd0`；回退镜像 `account-pool-balancer:rollback-20261108T125534Z` 保留。
