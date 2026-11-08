@@ -29,7 +29,7 @@ func TestMistralThinkingParameters(t *testing.T) {
 			t.Fatalf("%s: %s %v", tc.fields, out, err)
 		}
 	}
-	for _, effort := range []string{"low", "high", "max"} {
+	for _, effort := range []string{"low", "high"} {
 		body := []byte(fmt.Sprintf(`{"model":"deepseek-v4-1-flash-1017","reasoning_effort":%q,"thinking":{"type":"enabled"}}`, effort))
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
 		if err != nil || !bytes.Contains(out, []byte(`"reasoning_effort":"`+effort+`"`)) {
@@ -52,6 +52,7 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"enable_thinking":"false"`, "boolean"},
 
 		{`"reasoning":{"effort":"low"},"reasoning_effort":"high"`, "conflict"},
+		{`"reasoning":{"effort":"low"},"reasoning_effort":"max"`, "conflict"},
 
 		{`"reasoning":{"effort":"high","summary":"private-body"}`, "only effort"},
 		{`"reasoning":{"summary":"private-body"}`, "only effort"},

@@ -25,14 +25,15 @@ func TestMistralDeepSeekDefaultEffort(t *testing.T) {
 		{"invalid boolean", `"reasoning_effort":false,`, `"high"`},
 		{"invalid object", `"reasoning_effort":{},`, `"high"`},
 		{"invalid array", `"reasoning_effort":[],`, `"high"`},
-		{"max", `"reasoning_effort":"max",`, `"max"`},
+		{"max", `"reasoning_effort":"max",`, `"high"`},
 		{"nested high", `"reasoning":{"effort":"high"},`, `"high"`},
 		{"nested none", `"reasoning":{"effort":"none"},`, `"high"`},
 		{"nested low", `"reasoning":{"effort":"low"},`, `"low"`},
 		{"nested xhigh", `"reasoning":{"effort":"xhigh"},`, `"high"`},
 		{"nested unknown", `"reasoning":{"effort":"minimal"},`, `"high"`},
 		{"nested invalid type", `"reasoning":{"effort":{}},`, `"high"`},
-		{"nested max", `"reasoning":{"effort":"max"},`, `"max"`},
+		{"nested max", `"reasoning":{"effort":"max"},`, `"high"`},
+		{"max and high aliases", `"reasoning_effort":"max","reasoning":{"effort":"high"},`, `"high"`},
 		{"nested medium", `"reasoning":{"effort":"medium"},`, `"high"`},
 		{"nested null", `"reasoning":{"effort":null},`, `"high"`},
 		{"nested null enabled", `"reasoning":{"effort":null},"thinking":{"type":"enabled"},`, `"high"`},
@@ -50,19 +51,19 @@ func TestMistralDeepSeekDefaultEffort(t *testing.T) {
 		{"disabled with medium", `"thinking":{"type":"disabled"},"reasoning_effort":"medium",`, `"high"`},
 		{"disabled with high", `"thinking":{"type":"disabled"},"reasoning_effort":"high",`, `"high"`},
 		{"disabled with xhigh", `"thinking":{"type":"disabled"},"reasoning_effort":"xhigh",`, `"high"`},
-		{"disabled with max", `"thinking":{"type":"disabled"},"reasoning_effort":"max",`, `"max"`},
+		{"disabled with max", `"thinking":{"type":"disabled"},"reasoning_effort":"max",`, `"high"`},
 		{"boolean disabled with xhigh", `"enable_thinking":false,"reasoning_effort":"xhigh",`, `"high"`},
-		{"boolean disabled with max", `"enable_thinking":false,"reasoning_effort":"max",`, `"max"`},
+		{"boolean disabled with max", `"enable_thinking":false,"reasoning_effort":"max",`, `"high"`},
 		{"enabled with none", `"thinking":{"type":"enabled"},"reasoning_effort":"none",`, `"high"`},
 		{"boolean enabled with none", `"enable_thinking":true,"reasoning_effort":"none",`, `"high"`},
 		{"disabled with nested low", `"thinking":{"type":"disabled"},"reasoning":{"effort":"low"},`, `"low"`},
 		{"disabled with nested xhigh", `"thinking":{"type":"disabled"},"reasoning":{"effort":"xhigh"},`, `"high"`},
-		{"disabled with nested max", `"enable_thinking":false,"reasoning":{"effort":"max"},`, `"max"`},
+		{"disabled with nested max", `"enable_thinking":false,"reasoning":{"effort":"max"},`, `"high"`},
 		{"enabled with nested none", `"enable_thinking":true,"reasoning":{"effort":"none"},`, `"high"`},
 		{"switch disagreement with explicit high", `"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning_effort":"high",`, `"high"`},
 		{"switch disagreement with explicit none", `"thinking":{"type":"disabled"},"enable_thinking":true,"reasoning_effort":"none",`, `"high"`},
 		{"switch disagreement without effort", `"thinking":{"type":"enabled"},"enable_thinking":false,`, `"high"`},
-		{"switch disagreement with nested max", `"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning":{"effort":"max"},`, `"max"`},
+		{"switch disagreement with nested max", `"thinking":{"type":"enabled"},"enable_thinking":false,"reasoning":{"effort":"max"},`, `"high"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{ "model":"deepseek-v4-1-flash-1017", ` + tc.fields + `"messages":[{"role":"user","content":"mock"}], "tools":[{"n":9007199254740993}], "metadata": {"session_id":"client-session"}, "prompt_cache_key":null, "max_tokens":16000 }`)
@@ -147,7 +148,7 @@ func TestMistralEffortCompatibilityScope(t *testing.T) {
 	for _, model := range []string{"deepseek-v4-1-flash-1017", "mistral-large-latest", "other-model"} {
 		for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/fim/completions"} {
 			for _, effort := range []string{"", `"none"`, `"low"`, `"high"`, `"xhigh"`, `"max"`, `null`, `"medium"`} {
-				if model == "deepseek-v4-1-flash-1017" && path == "/v1/chat/completions" && effort != `"low"` && effort != `"high"` && effort != `"max"` {
+				if model == "deepseek-v4-1-flash-1017" && path == "/v1/chat/completions" && effort != `"low"` && effort != `"high"` {
 					continue
 				}
 				fields := ""

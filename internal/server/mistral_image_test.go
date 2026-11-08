@@ -25,7 +25,7 @@ func TestMistralDeepSeekUserImageCompatibility(t *testing.T) {
 			body := []byte(`{ "model":"deepseek-v4-1-flash-1017", "thinking":{"type":"disabled"}, "reasoning_effort":"max", "messages":[` + history + `{"role":"user","content":[{"type":"text","text":"question"},{"image_url":` + tc.image + `,"type":"image_url"},{"type":"text","text":"tail","n":9007199254740993}]}], "tools":[{"n":9007199254740993}], "metadata":{"session_id":"keep"}, "prompt_cache_key":"keep" }`)
 			out, key, err := prepareMistralRequest(body, "/v1/chat/completions", "scope")
 			var original, got map[string]json.RawMessage
-			if err != nil || json.Unmarshal(out, &got) != nil || key != "" || string(got["reasoning_effort"]) != `"max"` || got["thinking"] != nil {
+			if err != nil || json.Unmarshal(out, &got) != nil || key != "" || string(got["reasoning_effort"]) != `"high"` || got["thinking"] != nil {
 				t.Fatalf("image/explicit effort preparation failed: %s %v", out, err)
 			}
 			_ = json.Unmarshal(body, &original)

@@ -220,7 +220,7 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		}
 		o.set("reasoning", nil)
 	}
-	// The operator's supported tiers are low/high/max. Missing or unsupported
+	// The operator's supported tiers are low/high. Missing or unsupported
 	// effort always becomes high; compatibility switches cannot emit none.
 	// Write once: a missing native field is appended, not updated in-place.
 	if !bytes.Equal(effortRaw, nativeEffort) {
@@ -278,7 +278,7 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 
 func mistralDeepSeekEffort(raw []byte) []byte {
 	switch mistralString(raw) {
-	case "low", "high", "max":
+	case "low", "high":
 		return raw
 	default:
 		return []byte(`"high"`)
