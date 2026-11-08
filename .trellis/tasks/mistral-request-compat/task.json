@@ -1,0 +1,7 @@
+{
+  "name": "mistral-request-compat",
+  "status": "in_progress",
+  "branch": "mistral-request-compat",
+  "description": "用户已确认的精确Mistral DeepSeek Chat参数兼容、上线与渠道规则收敛",
+  "validation": "validation.md"
+}

@@ -4,168 +4,370 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"sort"
+	"fmt"
+	"math/big"
 )
 
-// prepareMistralRequest only adapts Mistral generation requests. Unchanged
-// fields retain their wire bytes, including tools, model IDs and numeric values.
-// It does not implement response conversion or server-side continuation.
-func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, string, error) {
-	if path != "/v1/chat/completions" && path != "/v1/responses" {
-		return body, "", nil
+// mistralWireObject is a view over already validated JSON. Replacement values
+// are raw JSON; nil removes a field. Never decode unrelated numbers or collapse
+// duplicate keys through a map. Each retained field owns its preceding comma,
+// so consecutive removals cannot overlap (including at the end of an object).
+type mistralWireField struct {
+	key            string
+	start, vs, end int
+	value          []byte
+	changed        bool
+}
+
+type mistralWireObject struct {
+	body      []byte
+	fields    []mistralWireField
+	additions [][]byte
+	end       int
+}
+
+func scanMistralObject(body []byte) *mistralWireObject {
+	open := skipSpace(body, 0)
+	if open >= len(body) || body[open] != '{' {
+		return nil
 	}
-	type change struct {
-		start, end int
-		value      []byte
-	}
-	var changes []change
-	var model string
-	var effort, store *change
-	var storeValue []byte
-	storeCount := 0
-	cacheSeen := false
-	i := skipSpace(body, 0) + 1 // caller already validated the root JSON object
-	i = skipSpace(body, i)
+	o := &mistralWireObject{body: body}
+	i := skipSpace(body, open+1)
 	for body[i] != '}' {
 		ke := skipString(body, i)
 		var key string
 		_ = json.Unmarshal(body[i:ke], &key)
 		vs := skipSpace(body, skipSpace(body, ke)+1)
 		ve := skipValue(body, vs)
-		switch key {
-		case "model":
-			_ = json.Unmarshal(body[vs:ve], &model)
-		case "reasoning_effort":
-			if bytes.Equal(bytes.TrimSpace(body[vs:ve]), []byte(`"medium"`)) {
-				effort = &change{vs, ve, []byte(`"high"`)}
-			}
-		case "store":
-			storeCount++
-			storeValue = body[vs:ve]
-			start, end := i, ve
-			if next := skipSpace(body, ve); body[next] == ',' {
-				end = skipSpace(body, next+1)
-			} else {
-				// A final field owns its preceding separator; an initial field
-				// instead owns the following separator. Never touch its neighbor.
-				for start > 0 && (body[start-1] == ' ' || body[start-1] == '\n' || body[start-1] == '\r' || body[start-1] == '\t') {
-					start--
-				}
-				if start > 0 && body[start-1] == ',' {
-					start--
-				}
-			}
-			store = &change{start, end, nil}
-		case "prompt_cache_key":
-			cacheSeen = true // preserve even explicit null/empty/invalid client values
-		case "messages":
-			if path == "/v1/chat/completions" {
-				messages, changed, err := mistralReasoningMessages(body[vs:ve])
-				if err != nil {
-					return nil, "", err
-				}
-				if changed {
-					changes = append(changes, change{vs, ve, messages})
-				}
-			}
-		}
+		o.fields = append(o.fields, mistralWireField{key: key, start: i, vs: vs, end: ve, value: body[vs:ve]})
 		i = skipSpace(body, ve)
 		if body[i] == ',' {
 			i = skipSpace(body, i+1)
 		}
 	}
-	// This Mistral-hosted model explicitly rejects the generic OpenAI medium
-	// tier (3051). Prefer its supported high tier rather than disabling or
-	// lowering reasoning. Do not rewrite other models/protocols or native tiers.
-	if path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017" {
-		if effort != nil {
-			changes = append(changes, *effort)
-		}
-		if store != nil {
-			if storeCount != 1 || !bytes.Equal(storeValue, []byte("false")) && !bytes.Equal(storeValue, []byte("null")) {
-				return nil, "", errors.New("Mistral Chat is stateless: omit store or use false/null; store=true is not supported")
-			}
-			// This API rejects even false/null. Omission preserves stateless
-			// Chat semantics; it does not promise provider-level data retention.
-			changes = append(changes, *store)
-		}
-		sort.Slice(changes, func(i, j int) bool { return changes[i].start < changes[j].start })
-	}
-	generated := ""
-	if !cacheSeen && fingerprint != "" {
-		generated = "apb-mistral-" + fingerprint
-		key, _ := json.Marshal(generated)
-		field := append([]byte(`"prompt_cache_key":`), key...)
-		if skipSpace(body, skipSpace(body, 0)+1) != i {
-			field = append([]byte{','}, field...)
-		}
-		changes = append(changes, change{i, i, field})
-	}
-	if len(changes) == 0 {
-		return body, "", nil
-	}
-	var out bytes.Buffer
-	last := 0
-	for _, c := range changes {
-		out.Write(body[last:c.start])
-		out.Write(c.value)
-		last = c.end
-	}
-	out.Write(body[last:])
-	return out.Bytes(), generated, nil
+	o.end = i
+	return o
 }
 
-func mistralReasoningMessages(raw []byte) ([]byte, bool, error) {
-	var messages []json.RawMessage
-	if json.Unmarshal(raw, &messages) != nil {
+func (o *mistralWireObject) get(key string) []byte {
+	for i := len(o.fields) - 1; i >= 0; i-- {
+		if o.fields[i].key == key {
+			return o.fields[i].value
+		}
+	}
+	return nil
+}
+
+func (o *mistralWireObject) unique(keys ...string) error {
+	for _, key := range keys {
+		seen := false
+		for _, f := range o.fields {
+			if f.key == key {
+				if seen {
+					return fmt.Errorf("Mistral Chat duplicate %s is ambiguous; provide it once", key)
+				}
+				seen = true
+			}
+		}
+	}
+	return nil
+}
+
+func (o *mistralWireObject) set(key string, value []byte) {
+	found := false
+	for i := range o.fields {
+		if o.fields[i].key == key {
+			o.fields[i].value, o.fields[i].changed = value, true
+			found = true
+		}
+	}
+	if !found && value != nil {
+		name, _ := json.Marshal(key)
+		o.additions = append(o.additions, append(append(name, ':'), value...))
+	}
+}
+
+func (o *mistralWireObject) render() []byte {
+	changed := len(o.additions) != 0
+	for _, f := range o.fields {
+		changed = changed || f.changed
+	}
+	if !changed {
+		return o.body
+	}
+	var out bytes.Buffer
+	prefix, tail := o.end, o.end
+	if len(o.fields) > 0 {
+		prefix, tail = o.fields[0].start, o.fields[len(o.fields)-1].end
+	}
+	out.Write(o.body[:prefix])
+	kept := false
+	for i, f := range o.fields {
+		if f.changed && f.value == nil {
+			continue
+		}
+		if kept {
+			// The separator before this field contains no other field bytes.
+			out.Write(o.body[o.fields[i-1].end:f.start])
+		}
+		out.Write(o.body[f.start:f.vs])
+		out.Write(f.value)
+		kept = true
+	}
+	for _, field := range o.additions {
+		if kept {
+			out.WriteByte(',')
+		}
+		out.Write(field)
+		kept = true
+	}
+	out.Write(o.body[tail:])
+	return out.Bytes()
+}
+
+// prepareMistralRequest runs after strict JSON/model validation and original
+// identity selection, but before account/RPM acquisition. Only the exact
+// DeepSeek Chat model consumes generic parameters; other paths remain native.
+func prepareMistralRequest(body []byte, path, fingerprint string) ([]byte, string, error) {
+	if path != "/v1/chat/completions" && path != "/v1/responses" {
+		return body, "", nil
+	}
+	o := scanMistralObject(body)
+	deepSeek := path == "/v1/chat/completions" && mistralString(o.get("model")) == "deepseek-v4-1-flash-1017"
+	if deepSeek {
+		if err := adaptMistralDeepSeekParameters(o); err != nil {
+			return nil, "", err
+		}
+	}
+	if path == "/v1/chat/completions" {
+		for i := range o.fields {
+			if o.fields[i].key != "messages" {
+				continue
+			}
+			messages, changed, err := mistralChatMessages(o.fields[i].value, deepSeek)
+			if err != nil {
+				return nil, "", err
+			}
+			if changed {
+				o.fields[i].value, o.fields[i].changed = messages, true
+			}
+		}
+	}
+	generated := ""
+	if o.get("prompt_cache_key") == nil && fingerprint != "" {
+		generated = "apb-mistral-" + fingerprint
+		key, _ := json.Marshal(generated)
+		o.set("prompt_cache_key", key)
+	}
+	return o.render(), generated, nil
+}
+
+func mistralString(raw []byte) string {
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
+}
+
+func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
+	// Keep the existing stateless error contract, including duplicate store.
+	if err := o.unique("store"); err != nil {
+		return errors.New("Mistral Chat is stateless: duplicate store is not supported")
+	}
+	if store := o.get("store"); store != nil {
+		if !bytes.Equal(store, []byte("false")) && !bytes.Equal(store, []byte("null")) {
+			return errors.New("Mistral Chat is stateless: omit store or use false/null; store=true is not supported")
+		}
+		o.set("store", nil)
+	}
+	if err := o.unique("messages", "thinking", "enable_thinking", "reasoning_effort", "seed", "random_seed", "logit_bias", "verbosity", "user", "safety_identifier", "prompt_cache_retention", "prompt_cache_key", "metadata"); err != nil {
+		return err
+	}
+	var enabled *bool
+	setThinking := func(value bool) error {
+		if enabled != nil && *enabled != value {
+			return errors.New("Mistral Chat thinking and enable_thinking conflict")
+		}
+		enabled = &value
+		return nil
+	}
+	if raw := o.get("thinking"); raw != nil {
+		thinking := scanMistralObject(raw)
+		if thinking == nil || len(thinking.fields) != 1 || thinking.fields[0].key != "type" {
+			return errors.New("Mistral Chat thinking requires only type=enabled/disabled; budgets and unknown structures cannot be preserved")
+		}
+		kind := mistralString(thinking.get("type"))
+		if kind != "enabled" && kind != "disabled" {
+			return errors.New("Mistral Chat thinking.type must be enabled or disabled")
+		}
+		value := kind == "enabled"
+		enabled = &value
+		o.set("thinking", nil)
+	}
+	if raw := o.get("enable_thinking"); raw != nil {
+		if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
+			return errors.New("Mistral Chat enable_thinking must be boolean")
+		}
+		if err := setThinking(bytes.Equal(raw, []byte("true"))); err != nil {
+			return err
+		}
+		o.set("enable_thinking", nil)
+	}
+	effortRaw := o.get("reasoning_effort")
+	effort := mistralString(effortRaw)
+	if effortRaw != nil && !bytes.Equal(effortRaw, []byte("null")) {
+		switch effort {
+		case "none", "low", "high", "xhigh", "max":
+		case "medium":
+			effort = "high"
+			o.set("reasoning_effort", []byte(`"high"`))
+		default:
+			return errors.New("Mistral DeepSeek Chat reasoning_effort must be none/low/high/xhigh/max (medium maps to high)")
+		}
+	}
+	if enabled != nil {
+		if effort == "" {
+			effort = "none"
+			if *enabled {
+				effort = "high" // explicit compatibility default, not a token budget
+			}
+			value, _ := json.Marshal(effort)
+			o.set("reasoning_effort", value)
+		} else if *enabled == (effort == "none") {
+			return errors.New("Mistral Chat thinking switch conflicts with explicit reasoning_effort")
+		}
+	}
+	if seed := o.get("seed"); seed != nil {
+		if !bytes.Equal(seed, []byte("null")) {
+			n, valid := mistralSeed(seed)
+			if !valid {
+				return errors.New("Mistral Chat seed must be an integer or null; reproducibility cannot be silently discarded")
+			}
+			if native := o.get("random_seed"); native != nil {
+				other, ok := mistralSeed(native)
+				if !ok || n.Cmp(other) != 0 {
+					return errors.New("Mistral Chat seed conflicts with explicit random_seed; neither value was overwritten")
+				}
+			} else {
+				o.set("random_seed", seed)
+			}
+		}
+		o.set("seed", nil)
+	}
+	if bias := o.get("logit_bias"); bias != nil {
+		empty := bytes.Equal(bias, []byte("null"))
+		if obj := scanMistralObject(bias); obj != nil && len(obj.fields) == 0 {
+			empty = true
+		}
+		if !empty {
+			return errors.New("Mistral DeepSeek Chat does not support nonempty logit_bias; requested token bias was not discarded")
+		}
+		o.set("logit_bias", nil)
+	}
+	if v := o.get("verbosity"); v != nil {
+		if !bytes.Equal(v, []byte("null")) && mistralString(v) != "medium" {
+			return errors.New("Mistral DeepSeek Chat does not support explicit verbosity; only null/default medium may be omitted")
+		}
+		o.set("verbosity", nil)
+	}
+	for _, key := range []string{"user", "safety_identifier"} {
+		if v := o.get(key); v != nil {
+			if !bytes.Equal(v, []byte("null")) && v[0] != '"' {
+				return fmt.Errorf("Mistral Chat %s must be a string or null; it is only a compatibility label, not an upstream tracking/safety feature", key)
+			}
+			o.set(key, nil)
+		}
+	}
+	if v := o.get("prompt_cache_retention"); v != nil {
+		if !bytes.Equal(v, []byte("null")) && !bytes.Equal(v, []byte(`""`)) {
+			return errors.New("Mistral DeepSeek Chat cannot guarantee prompt_cache_retention; explicit retention is not supported")
+		}
+		o.set("prompt_cache_retention", nil)
+	}
+	return nil
+}
+
+func mistralSeed(raw []byte) (*big.Int, bool) {
+	// JSON was validated already. Do not round through float64 or accept a
+	// fractional/exponential representation that would require rewriting it.
+	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) || bytes.ContainsAny(raw, ".eE") {
+		return nil, false
+	}
+	return new(big.Int).SetString(string(raw), 10)
+}
+
+func mistralChatMessages(raw []byte, developer bool) ([]byte, bool, error) {
+	if len(raw) == 0 || raw[0] != '[' {
 		return raw, false, nil // native validation owns unrelated malformed messages
 	}
-	changed := false
-	for i, message := range messages {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(message, &fields) != nil {
-			continue
-		}
-		var role string
-		_ = json.Unmarshal(fields["role"], &role)
-		reasoning, exists := fields["reasoning_content"]
-		if role != "assistant" || !exists {
-			continue
-		}
-		var text *string
-		if json.Unmarshal(reasoning, &text) != nil {
-			return nil, false, errors.New("Mistral assistant reasoning_content must be a string or null")
-		}
-		if text != nil && *text != "" {
-			thinking, _ := json.Marshal(map[string]any{
-				"type":     "thinking",
-				"thinking": []map[string]string{{"type": "text", "text": *text}},
-			})
-			chunks := []json.RawMessage{thinking}
-			content := bytes.TrimSpace(fields["content"])
-			switch {
-			case len(content) == 0 || bytes.Equal(content, []byte("null")):
-			case content[0] == '"':
-				var answer string
-				_ = json.Unmarshal(content, &answer)
-				chunk, _ := json.Marshal(map[string]string{"type": "text", "text": answer})
-				chunks = append(chunks, chunk)
-			case content[0] == '[':
-				var existing []json.RawMessage
-				_ = json.Unmarshal(content, &existing)
-				chunks = append(chunks, existing...)
-			default:
-				return nil, false, errors.New("Mistral assistant content must be text, chunks or null to preserve reasoning")
+	var out bytes.Buffer
+	changed, last := false, 0
+	for i := skipSpace(raw, 1); raw[i] != ']'; {
+		end := skipValue(raw, i)
+		message := scanMistralObject(raw[i:end])
+		if message != nil {
+			role := mistralString(message.get("role"))
+			if developer || message.get("reasoning_content") != nil {
+				if err := message.unique("role"); err != nil {
+					return nil, false, err
+				}
 			}
-			fields["content"], _ = json.Marshal(chunks)
+			if developer && role == "developer" {
+				message.set("role", []byte(`"system"`))
+			}
+			if role == "assistant" && message.get("reasoning_content") != nil {
+				if err := message.unique("content", "reasoning_content"); err != nil {
+					return nil, false, err
+				}
+				if err := mistralAssistantReasoning(message); err != nil {
+					return nil, false, err
+				}
+			}
+			prepared := message.render()
+			if !bytes.Equal(prepared, raw[i:end]) {
+				out.Write(raw[last:i])
+				out.Write(prepared)
+				last, changed = end, true
+			}
 		}
-		delete(fields, "reasoning_content")
-		messages[i], _ = json.Marshal(fields)
-		changed = true
+		i = skipSpace(raw, end)
+		if raw[i] == ',' {
+			i = skipSpace(raw, i+1)
+		}
 	}
 	if !changed {
 		return raw, false, nil
 	}
-	out, err := json.Marshal(messages)
-	return out, true, err
+	out.Write(raw[last:])
+	return out.Bytes(), true, nil
+}
+
+func mistralAssistantReasoning(message *mistralWireObject) error {
+	var text *string
+	if json.Unmarshal(message.get("reasoning_content"), &text) != nil {
+		return errors.New("Mistral assistant reasoning_content must be a string or null")
+	}
+	if text != nil && *text != "" {
+		thinking, _ := json.Marshal(map[string]any{
+			"type":     "thinking",
+			"thinking": []map[string]string{{"type": "text", "text": *text}},
+		})
+		chunks := []json.RawMessage{thinking}
+		content := message.get("content")
+		switch {
+		case len(content) == 0 || bytes.Equal(content, []byte("null")):
+		case content[0] == '"':
+			chunk, _ := json.Marshal(map[string]string{"type": "text", "text": mistralString(content)})
+			chunks = append(chunks, chunk)
+		case content[0] == '[':
+			var existing []json.RawMessage
+			_ = json.Unmarshal(content, &existing)
+			chunks = append(chunks, existing...)
+		default:
+			return errors.New("Mistral assistant content must be text, chunks or null to preserve reasoning")
+		}
+		content, _ = json.Marshal(chunks)
+		message.set("content", content)
+	}
+	message.set("reasoning_content", nil)
+	return nil
 }
