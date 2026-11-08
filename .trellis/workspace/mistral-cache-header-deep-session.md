@@ -48,3 +48,33 @@
 参考：
 - https://nginx.org/en/docs/http/ngx_http_core_module.html#underscores_in_headers
 - https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
+
+## 2026-11-08 05:36 UTC：渠道180参数改写方案复核（只读建议）
+
+用户提供另一处操作截图：已将developer改为system并删除若干根参数，询问如何处理，不要求照搬。未授权本轮写配置/代码或部署，因此仅核对DB、日志、源码与公开文档。
+
+### 实际配置与确定性问题
+
+- 只读SQL确认渠道180当前operations：`messages.*.role`精确developer→system；无条件delete根logit_bias、user、seed、store、verbosity、safety_identifier、metadata、prompt_cache_key、prompt_cache_retention；header通配仍在。实际删除范围比截图列出的更广。
+- 截图备份目录`/home/ubuntu/backups/channel-180-param-override-20261108T122937`存在，是正式恢复资产，不下载、不改动或清理。将来渠道保存必须保留已确认规则，不盲目用旧整行覆盖。
+- metadata与prompt_cache_key是Balancer身份识别来源。即使上游准备会补一个fallback HMAC key，也不能弥补在NewAPI处丢掉的客户端原始身份；不应为兼容422一刀切删除。当前官方Chat请求schema本身列有metadata和prompt_cache_key，支持恢复这两项而不是假定其不受支持。
+- 无条件delete store还会使store=true在到达Balancer前消失，绕过既有“明确拒绝不支持服务端存储”的保护；不能用HTTP200伪装满足原始语义。
+
+### 最新422已定位，不是缓存头或账号容量错误
+
+- 05:06:13–05:36:13 UTC的8条Mistral 422全部为`extra_forbidden / body.thinking`，包含上次快照尚未定位的4条；模型均deepseek-v4-1-flash-1017。developer改写不能解决这一独立字段不兼容。
+- 当前部署后的422错误事件中，成功结构化分类到：thinking22、user19、enable_thinking1、messages[0] union_tag_invalid5；另78条短通用reason无法从现有日志进一步细分，不能冒充全部定位。
+- thinking22条的脱敏input形态：12条`{"type":"enabled"}`、10条`{"type":"disabled"}`，均只有type，没有budget_tokens。直接删除会丢掉“启用/禁用思考”的意图，尤其disabled可能被模型默认思考反转。
+- 错误reason有一层OpenAI式JSON envelope，message内部又是JSON验证列表；分类需递归解码message，不能只读根detail。解析时仅输出loc/type/开关类型，不回显input正文或凭据。
+
+### 文档复核与推荐边界
+
+- 真实浏览器渲染的官方Chat schema：messages枚举SystemMessage/UserMessage/AssistantMessage/ToolMessage；请求字段有metadata、prompt_cache_key、random_seed。prompt_cache_key说明明确要求共享前缀/多轮保持同key。页面未列根store/verbosity不能单凭“未出现”断定所有模型拒绝；具体模型验证优先（此前medium就是反例）。静态fetch摘录未展开schema，已以浏览器DOM实际内容复核。
+- 建议在Balancer的精确Mistral DeepSeek Chat边界收敛兼容，而不是继续叠渠道全局delete：developer→system保留内容/顺序；thinking.disabled或enable_thinking=false→reasoning_effort=none；enabled保留兼容的显式档位，无档位时制定明确默认，冲突/未知结构/无法保真的budget本地清晰拒绝，不悄悄删除思考。
+- seed优先评估映射random_seed，但泛Mistral文档不等于本DeepSeek型号已验证支持；非空logit_bias/verbosity等不支持的生成语义应明确拒绝或由用户选择降级，空值/无意义默认才可窄省略。store继续false/null窄省略、true明确拒绝；不改Responses/FIM/其他池。
+- 恢复缓存/身份字段透传，不用root user当会话ID。NewAPI临时兼容应在Balancer新版已上线后才按项收敛，避免先移除规则导致回归；不清空所有参数规则、不覆盖整行渠道。
+- 最小验收为定向mock测试（disabled/enabled/冲突、developer原序、store=true拒绝、缓存与metadata保留、大数/工具不丢）、一次必要上线验收及自然业务日志，不跑重复全量测试或对每个账号发推理。
+
+本轮没有实施上述建议，没有更改线上配置、开启日志、部署、重启或发起推理；公开文档浏览器已关闭，临时快照已登记。后续实现必须先更新Mistral规范，当前规范明确禁止静默删除thinking等未知字段。
+
+文档：https://docs.mistral.ai/api/endpoint/chat
