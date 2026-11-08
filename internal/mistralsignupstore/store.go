@@ -64,7 +64,7 @@ type Candidate struct {
 	// ImportToPool 表示注册成功后自动加入 Mistral 账号池。
 	ImportToPool bool `json:"import_to_pool,omitempty"`
 	// ProxyIndex 是分配到的代理序号（按 candidates 顺序轮转）。
-	ProxyIndex int `json:"proxy_index,omitempty"`
+	ProxyIndex int `json:"proxy_index"`
 	// ImportedAccountID 是入池后的账号 ID，空表示未入池。
 	ImportedAccountID string    `json:"imported_account_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
