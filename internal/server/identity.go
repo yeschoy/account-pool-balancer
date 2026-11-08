@@ -158,6 +158,23 @@ func (s *Server) identity(cfg *config.Config, group string, h http.Header, body 
 }
 
 func (s *Server) mistralIdentity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
+	// A reusable cache prefix is not necessarily a conversation. First use
+	// the existing true-session precedence without a cache hint or fallback;
+	// then retain body-cache > cache-header > message-HMAC as the fallback.
+	local := *cfg
+	local.Routing.FallbackHash = false
+	sessionBody := body
+	if _, exists := body["prompt_cache_key"]; exists {
+		sessionBody = make(map[string]any, len(body)-1)
+		for k, v := range body {
+			if k != "prompt_cache_key" {
+				sessionBody[k] = v
+			}
+		}
+	}
+	if id := s.identity(&local, group, h, sessionBody); id.Fingerprint != "" {
+		return id
+	}
 	return s.identityWithFallbackHeaders(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"})
 }
 
@@ -297,7 +314,7 @@ func stableConversation(body map[string]any) string {
 
 // bodyKeysKept are the top-level fields identity and routing read; the rest
 // of a request body (tools, the long message history) is never decoded.
-var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true, "previous_response_id": true, "prompt_cache_key": true,
+var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true, "previous_response_id": true, "prompt_cache_key": true, "promptCacheKey": true,
 	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true, "user": true}
 
 // parseRequestBody decodes just what routing needs from a request body: the

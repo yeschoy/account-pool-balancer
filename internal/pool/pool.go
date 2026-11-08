@@ -114,6 +114,8 @@ type binding struct {
 	session     string // opaque gateway session, never a raw client identifier
 	cache       bool   // model-scoped preference, not a conversation/response chain
 	cacheSource string
+	mistral     bool   // ordinary persisted preference, not a strict response owner
+	clientKeyID string // Mistral downstream owner; source also pins its credential
 }
 
 type healthSlot struct {
@@ -223,6 +225,7 @@ type Request struct {
 	// Affinity is the session fingerprint; "" when the request has none.
 	Affinity      string
 	CacheAffinity string // optional secondary preference; never overrides a session
+	ClientKeyID   string // used only for ordinary Mistral binding persistence
 	Explicit      bool
 	Excluded      map[string]bool
 	Wait          time.Duration
@@ -640,6 +643,10 @@ func (p *Pool) putProvisionalLocked(cfg *config.Config, req Request, accountID s
 	p.gen++
 	b := &binding{key: req.Affinity, accountID: accountID, explicit: req.Explicit,
 		expiresAt: now.Add(ttl(cfg, req.Explicit)), generation: p.gen, owner: req.RequestID}
+	if a, ok := cfg.Account(accountID); ok && a.Provider == config.ProviderMistral {
+		b.source = mistralBindingSource(cfg, a, req.ClientKeyID)
+		b.mistral, b.clientKeyID = b.source != "", req.ClientKeyID
+	}
 	p.bindings[req.Affinity] = p.lru.PushFront(b)
 	p.trimBindingsLocked()
 	return p.gen, true
@@ -844,7 +851,12 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	var retry time.Duration
 	if sticky {
 		d.BindingResult = "miss"
-		if b := p.getBindingLocked(req.Affinity, now); b != nil {
+		b := p.getBindingLocked(req.Affinity, now)
+		if b != nil && b.mistral && !p.validMistralBinding(cfg, b, req.ClientKeyID) {
+			p.deleteBindingLocked(req.Affinity)
+			b, d.BindingResult = nil, "invalidated"
+		}
+		if b != nil {
 			idx := -1
 			for i, c := range cands {
 				if c.a.ID == b.accountID {
@@ -871,9 +883,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				ok, by, ra := p.admitLocked(a, now)
 				if ok {
 					b.expiresAt = now.Add(ttl(cfg, b.explicit)) // sliding
-					if b.source != "" {
-						p.dirty = true
-					}
+					p.touchBindingLocked(b)
 					p.lru.MoveToFront(p.bindings[req.Affinity])
 					d.AccountID, d.Reason = a.ID, "binding"
 					if req.CacheAffinity != "" {
@@ -1079,6 +1089,7 @@ func (l *Lease) MarkSent() {
 		if el := p.bindings[l.bindKey]; el != nil {
 			if b := el.Value.(*binding); b.generation == l.bindGen {
 				b.confirmed = true
+				p.touchBindingLocked(b)
 			}
 		}
 	}
@@ -1354,9 +1365,10 @@ type PersistedBinding struct {
 }
 
 type Export struct {
-	States   map[string]*AccountState `json:"accountStates"`
-	Health   HealthExport             `json:"health"`
-	Bindings []PersistedBinding       `json:"responseBindings,omitempty"`
+	States          map[string]*AccountState  `json:"accountStates"`
+	Health          HealthExport              `json:"health"`
+	Bindings        []PersistedBinding        `json:"responseBindings,omitempty"`
+	MistralBindings []PersistedMistralBinding `json:"mistralBindings,omitempty"`
 }
 
 // Dirty says, without clearing anything, whether the states or the health
@@ -1378,7 +1390,11 @@ func (p *Pool) ExportState() (Export, bool) {
 	for el := p.lru.Front(); el != nil; el = el.Next() {
 		b := el.Value.(*binding)
 		if b.confirmed && b.source != "" && p.now().Before(b.expiresAt) {
-			e.Bindings = append(e.Bindings, PersistedBinding{Key: b.key, AccountID: b.accountID, Source: b.source, ExpiresAt: b.expiresAt, Session: b.session})
+			if b.mistral {
+				e.MistralBindings = append(e.MistralBindings, PersistedMistralBinding{Key: b.key, AccountID: b.accountID, ClientKeyID: b.clientKeyID, Source: b.source, Explicit: b.explicit, ExpiresAt: b.expiresAt})
+			} else {
+				e.Bindings = append(e.Bindings, PersistedBinding{Key: b.key, AccountID: b.accountID, Source: b.source, ExpiresAt: b.expiresAt, Session: b.session})
+			}
 		}
 	}
 	for id, st := range p.states {

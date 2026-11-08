@@ -2,7 +2,7 @@
 
 Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转换。默认上游 `https://api.mistral.ai/v1`。
 
-缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）：包含固定源码、本地合成验证与改进优先级；属于研究结论，未实施建议或验证生产命中率提升。
+缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）。后续已在本地落实普通绑定持久化、真实会话优先与OpenCode缓存别名兼容，定向Mock/构建通过；尚未部署或验证生产命中率提升。
 
 ## 管理与接入
 
@@ -22,9 +22,11 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 
 - 与 OpenDesign 相同的策略、优先级、权重、最大并发、RPM、健康过滤及故障切换；`smart` 等额度策略在余额未知时使用现有未知额度排序，不伪造额度。
 - 识别 Codex 当前官方的 `Session-Id` / `Thread-Id` 及旧 `Session_id` / `Thread_id`、`X-Codex-Session-Id` / `X-Codex-Thread-Id` 等兼容头；Claude 的 `X-Claude-Code-Session-Id` / `X-Claude-Session-Id` / Anthropic 会话头，以及 `metadata.user_id` 或跨协议搬到根 `user` 的 `_session_UUID` / JSON-string `session_id`。普通user标签不是会话。pi 可传的 `X-Session-Id` / `X-Session-Affinity` / `X-Pi-Session-Id` / `X-Pi-Session`，以及现有父会话、OpenCode 等会话头、正文会话字段和 `prompt_cache_key`。任意额外稳定头可在「额外会话头」配置。
-- 优先级沿用 OpenDesign：`previous_response_id`（本池不支持，Responses 请求会本地拒绝）、自定义头、父会话、正文身份、Claude 会话结构、内置会话头、最后的 `X-Prompt-Cache-Key` / `Prompt-Cache-Key` 头兼容、可选首条消息 HMAC 弱粘性。不会把每次变化的请求 ID 当成会话。客户端必须实际发送稳定标识；仅凭客户端名称不能保证粘性。
+- Mistral优先使用真正会话：自定义头、父会话、正文会话字段、Claude会话结构、内置会话头；无真实会话时才回退正文 `prompt_cache_key`、`X-Prompt-Cache-Key` / `Prompt-Cache-Key` 头、首条消息HMAC弱粘性。其他池优先级不变；`previous_response_id`在本池Responses仍不支持。已有缓存键原值不被改写，不能把缓存提示当成必然唯一的会话。不会把每次变化的请求ID或UA当会话，客户端必须实际发送稳定标识。
 - 旧下划线头必须先由 Nginx 放行；应用无法恢复已被入口删除的字段。双跳采样若已无任何身份，仍会合理回退message_hmac，不凭空造会话。概览显示当前池绑定数及**全局共享4096条LRU硬上限**，不是每池/每账号4096。淘汰持久化严格续传绑定会同步保存删除，缺失所有者仍拒绝续传，不静默换号。
 - 会话 HMAC 按分组和下游密钥隔离。TTL 与忙时 `overflow` / `wait-overflow` / `reject` 策略沿用现有配置，临时借号不改原绑定。
+- 普通Mistral已发送确认绑定保存在现有 `metadata.pool.mistralBindings`，正常退出强制保存，启动验证后恢复原账号、绝对到期时间及显式/弱身份类型；不持久化提示词/原始会话/凭据或在途/RPM状态。与严格绑定共用4096 LRU，严格绑定先恢复。来源同时校验账号、分组、上游Key/Base/代理及下游Key ID/hash/启用状态；变更、过期、删除、淘汰后不复活。普通新增/续期按既有一分钟节奏合并写盘，崩溃可能丢最近未保存记录，不承诺零丢失。新增可选metadata字段可能被旧版严格JSON读取器拒绝，降版前须备份并仅移除本次派生字段，不能恢复旧data覆盖后续写入。
+- Mistral Chat在身份解析前兼容OpenCode的 `promptCacheKey`→`prompt_cache_key`；字符串/null/空串保留，同值双拼写合并且保留蛇形原字节，冲突/非法类型/重复键本地400、零账号尝试。其他池及Responses/FIM等路径不转换；两种拼写在日志中都脱敏。
 - Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 且已识别会话时，自动填入 `apb-mistral-<现有会话HMAC>`；HMAC按分组与下游密钥隔离，不暴露原始会话或凭据。客户端已有字段（包括显式null/空串）原样保留；没有身份不随机生成。共享前缀与同一账号有利于缓存命中，但不保证命中；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
 - Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。下表三种推理模型的 assistant 字符串 `reasoning` 也作为同义字段处理，同值合并、冲突/重复/不可表示的类型本地400，不丢弃思考或换号重试。Responses历史和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
 - 对下表三种推理模型的 Chat，根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。`thinking:{"type":"enabled|disabled"}` / 布尔 `enable_thinking` 仅校验结构后移除，不压低有效档位或产生不支持的 none；未知预算/额外字段仍本地拒绝。
