@@ -287,6 +287,48 @@
           <p class="hint">注册为串行执行，一次一个。完成后状态变为「就绪」。</p>
         </section>
       </div>
+
+      <section class="panel" style="margin-top:16px">
+        <div class="head-row">
+          <h2>代理与运行设置</h2>
+          <span id="mr-settings-msg" class="muted" role="status"></span>
+        </div>
+        <form id="mr-settings-form" autocomplete="off">
+          <div class="mr-grid">
+            <div>
+              <label for="ms-user-tpl">用户名模板</label>
+              <input id="ms-user-tpl" placeholder="user-region-{region}-sid-{sid}-t-10">
+              <span class="hint">{region} 与 {sid} 会在每次注册时替换</span>
+            </div>
+            <div>
+              <label for="ms-password">代理密码</label>
+              <input id="ms-password" type="text" autocomplete="off">
+            </div>
+            <div>
+              <label for="ms-hostport">代理入口</label>
+              <input id="ms-hostport" placeholder="us-eu.zooproxy.com:5000">
+            </div>
+            <div>
+              <label for="ms-region">地区</label>
+              <input id="ms-region" placeholder="CA">
+            </div>
+            <div class="mr-grid-full">
+              <label for="ms-sids">SID 列表</label>
+              <textarea id="ms-sids" rows="3" placeholder="每行一个，或逗号分隔"></textarea>
+              <span class="hint">粘性会话；每次注册挑一个</span>
+            </div>
+            <div class="mr-grid-full">
+              <label for="ms-mailbox-proxy">接码代理（可选，留空直连）</label>
+              <input id="ms-mailbox-proxy" placeholder="socks5h://127.0.0.1:10808">
+            </div>
+          </div>
+          <div class="actions" style="margin-top:12px">
+            <button type="submit" class="btn primary" id="mr-settings-save">保存设置</button>
+            <button type="button" class="btn" id="mr-proxy-test">测试代理</button>
+            <span id="mr-proxy-result" class="muted"></span>
+          </div>
+        </form>
+      </section>
     </section>
 
     <section id="page-pautosignup" class="page hidden">
