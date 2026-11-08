@@ -38,6 +38,25 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 默认测试模型（2026-11-08 10:43 UTC，aaa09a6）
+
+- 用户要求提交、推送并部署此前改动，暂不做 service。`aaa09a661bc1eda246b2938a14b804bde6adca99` 已推送 master：Mistral 管理台真实请求未指定模型时默认 `deepseek-v4-1-flash-1017`，保留显式模型与 `max_tokens=1`，免费检查仍不推理；同步前端提示与回归测试。`docs/mistral.md` 记录普通 API Key 可读 whoami/billing/budget 的真实证据，**本版未接入自动额度展示**。
+- 复用既有定向 Go/Mistral/Modal、race、vet、Node 语法/行为和必要构建结果，不重复全仓测试，不主动生产推理。一次预检确认原容器 healthy/重启0、191账号、40个Mistral（30个zxg）、固定data挂载、256GiB余量及NewAPI双别名通路正常；旧工作树e6f063b干净但分叉3/141，未在旧树构建。原镜像无revision，使用精确container/image作切换守卫，不猜其Git版本。
+- 干净 `git archive` 源码 `/home/ubuntu/project/account-pool-balancer-releases/20261108T104040Z-aaa09a6`，固定镜像 `account-pool-balancer:release-aaa09a6-20261108T104040Z`，ID `sha256:b5ca2f9e93ecb5edc9bb775155bd928def7399303394af8871c740829e5387c2`；显式设置OCI revision。无存储变更，不额外复制敏感数据做离线预检；构建完成后停旧进程、完整一致备份并gzip核验，仅以线上Compose的image覆盖切换。
+- 验收：healthy、重启0，**191账号、186条TokenHarbor注册记录核心资产、routingSecret、完整config、Mistral明文注册库及原用户/环境/健康/卷/端口/网络/资源参数保留**。`ai-internal` 同时保留 `account-pool-balancer` / `opendesign-balancer`，从 `new-api` 容器访问两个名字的healthz均成功。真实未登录公网登录页正常，healthz和四资源200，保留 `?v=dc01f90104`，SHA256逐项匹配且新默认模型提示存在；验收通过即反馈。
+- 正式备份 `/home/ubuntu/backups/account-pool-balancer/20261108T104040Z-mistral-test-aaa09a6/` 保留data/校验、原Compose/.env、构建/切换日志与deploy.json；data SHA256 `1c7c7bb2f69b817d3d5e19aa1d30a954c72eef1f72cabfcfabe50bd6c072dc53`。回退镜像 `account-pool-balancer:rollback-20261108T104040Z` 保留，回退前须确认上线后的写入，不自动覆盖旧data。
+
+| 阶段 | UTC 时间 |
+|---|---|
+| 构建 | 10:41:05.801–10:41:52.165（46.36秒） |
+| 停止请求 / 旧进程退出 | 10:41:52.247 / 10:41:52.353 |
+| 完整一致备份及核验 | 10:41:53.255–10:41:56.692 |
+| 切换请求 / 新容器启动 | 10:41:56.692 / 10:41:56.913 |
+| 首HTTP可达 / Docker healthy | 10:41:58.021 / 10:42:27.261 |
+| 本机及双渠道验收 / 公网验收 | 10:42:27.402 / 10:43:09.106 |
+
+未采样精确停机；旧进程退出至首HTTP可达的观测间隔约5.67秒，不把构建或健康等待当成停机。仅内存适配既有部署脚本，没有新增临时脚本、容器或敏感下载；正式release/镜像/备份保留，既有临时产物仍按 `_tmp_artifacts.md` 待同意清理，Trellis记录保留。后续记录提交仅改文档，不再次部署。
+
 ## 线上故障恢复：补回渠道依赖的内网别名（2026-11-08 09:57 UTC）
 
 - 现象：Balancer 宿主机 `/healthz` 为200、进程 running/restart0/无OOM，但
