@@ -102,7 +102,14 @@ func TestMistralReasoningAliasScope(t *testing.T) {
 	}
 	body := []byte(` {"model":"deepseek-v4-1-flash-1017","messages":[{"role":"user","reasoning":"native","content":"answer"}]} `)
 	out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
-	if err != nil || !bytes.Equal(out, body) {
-		t.Fatal("non-assistant alias changed")
+	var original, got map[string]json.RawMessage
+	_ = json.Unmarshal(body, &original)
+	if err != nil || json.Unmarshal(out, &got) != nil || len(got) != len(original)+1 || string(got["reasoning_effort"]) != `"high"` {
+		t.Fatal("default effort missing or unrelated field added")
+	}
+	for key, value := range original {
+		if !bytes.Equal(got[key], value) {
+			t.Fatalf("non-assistant alias or unrelated field changed: %s", key)
+		}
 	}
 }

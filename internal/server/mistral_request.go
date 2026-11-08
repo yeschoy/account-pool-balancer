@@ -235,6 +235,9 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		} else if *enabled == (effort == "none") {
 			return errors.New("Mistral Chat thinking switch conflicts with explicit reasoning_effort")
 		}
+	} else if effortRaw == nil {
+		// Default only omitted controls; preserve explicit tiers and native null.
+		o.set("reasoning_effort", []byte(`"high"`))
 	}
 	if seed := o.get("seed"); seed != nil {
 		if !bytes.Equal(seed, []byte("null")) {

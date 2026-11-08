@@ -94,7 +94,7 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 
 func TestMistralDeveloperRoleOnlyAndCombinedWirePreservation(t *testing.T) {
 	messages := `[ { "role" : "developer", "content" : [{"type":"text","text":"original"}], "n":9007199254740993, "tag":1,"tag":2 }, {"role":"user","content":"q"}, {"role":"developer","content":"late","tool_call_id":"opaque"}, {"role":"assistant","tool_calls":[{"id":"tool-id","function":{"arguments":"{\"large\":9007199254740993}"}}]}, {"role":"tool","tool_call_id":"tool-id","content":"result"} ]`
-	body := []byte(`{ "model":"deepseek-v4-1-flash-1017", "messages":` + messages + `, "prompt_cache_key":null }`)
+	body := []byte(`{ "model":"deepseek-v4-1-flash-1017", "reasoning_effort":"low", "messages":` + messages + `, "prompt_cache_key":null }`)
 	out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "scope")
 	want := strings.ReplaceAll(string(body), `"developer"`, `"system"`)
 	if err != nil || string(out) != want {
@@ -232,9 +232,14 @@ func TestMistralNewParametersScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := ` {"model":"deepseek-v4-1-flash-1017","thinking":{"type":"disabled"},"seed":42,"store":false,"messages":[{"role":"developer","content":"keep"}]} `
-	st, reply := e.post(t, "/v1/chat/completions", body, map[string]string{"Authorization": "Bearer other-client"})
-	if st != 200 || e.count() != 1 || e.call(0).body != body {
-		t.Fatalf("other provider changed: %d %s", st, reply)
+	for _, body := range []string{
+		` {"model":"deepseek-v4-1-flash-1017","thinking":{"type":"disabled"},"seed":42,"store":false,"messages":[{"role":"developer","content":"keep"}]} `,
+		` {"model":"deepseek-v4-1-flash-1017","messages":[{"role":"user","content":"keep"}]} `,
+	} {
+		before := e.count()
+		st, reply := e.post(t, "/v1/chat/completions", body, map[string]string{"Authorization": "Bearer other-client"})
+		if st != 200 || e.count() != before+1 || e.call(before).body != body {
+			t.Fatalf("other provider changed: %d %s", st, reply)
+		}
 	}
 }

@@ -7,6 +7,48 @@ import (
 	"testing"
 )
 
+func TestMistralDeepSeekDefaultEffort(t *testing.T) {
+	e := newMistralEnv(t)
+	for _, tc := range []struct{ name, fields, want string }{
+		{"missing", "", `"high"`},
+		{"enabled", `"thinking":{"type":"enabled"},`, `"high"`},
+		{"disabled", `"thinking":{"type":"disabled"},`, `"none"`},
+		{"boolean disabled", `"enable_thinking":false,`, `"none"`},
+		{"native null", `"reasoning_effort":null,`, `null`},
+		{"none", `"reasoning_effort":"none",`, `"none"`},
+		{"low", `"reasoning_effort":"low",`, `"low"`},
+		{"high", `"reasoning_effort":"high",`, `"high"`},
+		{"xhigh", `"reasoning_effort":"xhigh",`, `"xhigh"`},
+		{"max", `"reasoning_effort":"max",`, `"max"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{ "model":"deepseek-v4-1-flash-1017", ` + tc.fields + `"messages":[{"role":"user","content":"mock"}], "tools":[{"n":9007199254740993}], "metadata": {"session_id":"client-session"}, "prompt_cache_key":null, "max_tokens":16000 }`)
+			out, generated, err := prepareMistralRequest(body, "/v1/chat/completions", "scope")
+			var original, got map[string]json.RawMessage
+			if err != nil || json.Unmarshal(out, &got) != nil || generated != "" || string(got["reasoning_effort"]) != tc.want {
+				t.Fatalf("wrong default or explicit effort: %s %v", out, err)
+			}
+			_ = json.Unmarshal(body, &original)
+			for _, key := range []string{"model", "messages", "tools", "metadata", "prompt_cache_key", "max_tokens"} {
+				if !bytes.Equal(got[key], original[key]) {
+					t.Fatalf("unrelated wire field changed: %s", key)
+				}
+			}
+			if got["thinking"] != nil || got["enable_thinking"] != nil {
+				t.Fatal("compatibility switch was not converted to native effort")
+			}
+			before := e.count()
+			st, reply := e.post(t, "/v1/chat/completions", string(body), nil)
+			if st != 200 || e.count() != before+1 {
+				t.Fatalf("request did not reach mock upstream exactly once: %d %s", st, reply)
+			}
+			if e.call(before).body != string(out) {
+				t.Fatal("upstream did not receive the prepared effort and preserved wire fields")
+			}
+		})
+	}
+}
+
 func TestMistralDeepSeekMediumEffortCompatibility(t *testing.T) {
 	for _, body := range []string{
 		`{ "model":"deepseek-v4-1-flash-1017", "reasoning_effort":"medium", "messages":[{"role":"assistant","content":"answer","reasoning_content":"thought"}], "tools":[{"number":9007199254740993}], "prompt_cache_key":"client-cache" }`,
@@ -30,11 +72,15 @@ func TestMistralDeepSeekMediumEffortCompatibility(t *testing.T) {
 func TestMistralEffortCompatibilityScope(t *testing.T) {
 	for _, model := range []string{"deepseek-v4-1-flash-1017", "mistral-large-latest", "other-model"} {
 		for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/fim/completions"} {
-			for _, effort := range []string{`"none"`, `"low"`, `"high"`, `"xhigh"`, `"max"`, `null`, `"medium"`} {
-				if model == "deepseek-v4-1-flash-1017" && path == "/v1/chat/completions" && effort == `"medium"` {
+			for _, effort := range []string{"", `"none"`, `"low"`, `"high"`, `"xhigh"`, `"max"`, `null`, `"medium"`} {
+				if model == "deepseek-v4-1-flash-1017" && path == "/v1/chat/completions" && (effort == "" || effort == `"medium"`) {
 					continue
 				}
-				body := []byte(`{ "model":"` + model + `", "reasoning_effort":` + effort + `, "messages":[], "prompt_cache_key":"keep" }`)
+				fields := ""
+				if effort != "" {
+					fields = `"reasoning_effort":` + effort + `, `
+				}
+				body := []byte(`{ "model":"` + model + `", ` + fields + `"messages":[], "prompt_cache_key":"keep" }`)
 				out, _, err := prepareMistralRequest(body, path, "scope")
 				if err != nil || !bytes.Equal(out, body) {
 					t.Fatalf("another model/native effort/protocol changed: %s %s %s", model, path, effort)
