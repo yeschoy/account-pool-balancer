@@ -29,6 +29,7 @@ from core.browser import BrowserOptions, SignupBrowser
 from core.chain_gateway import GatewayPool, find_working_proxy
 from core.fingerprint import billing_address, build_profile
 from core.mailbox import ICloudMailbox, Mailbox
+from core.pacing import Pacer
 from core.protocol import (
     AdminProtocol, ChatProtocol, ConsoleProtocol, KratosProtocol,
     ProtocolClient, ProtocolSession, parse_trpc, trpc_batch,
@@ -53,7 +54,7 @@ def browser_accept_studio_tos(page) -> dict:
         return {"ok": False, "error": str(e)[:100]}
 
 
-def browser_chat_actions(page) -> dict:
+def browser_chat_actions(page, pacer=None) -> dict:
     """
     chat.mistral.ai 全流程——必须在浏览器里做（CF 拦截协议访问）。
 
@@ -119,8 +120,13 @@ def browser_chat_actions(page) -> dict:
         except Exception:
             return None
 
+    # 三个隐私开关同样是连续请求，逐条拉开
     out["training"] = _post("user.setMessageTrainingUse", {"enabled": False})
+    if pacer:
+        pacer.wait("after_chat_tos")
     out["knowledge"] = _post("user.setKnowledgeEnabled", {"enabled": False})
+    if pacer:
+        pacer.wait("after_chat_tos")
     out["localisation"] = _post("user.setLocalisationConsent", {"consent": False})
 
     # ---- 3. 展开 Advanced ----
@@ -201,10 +207,12 @@ class HybridRunner:
         self.gw = gw or GatewayPool()
         self.headless = headless
         self._log = lambda *a, **k: None
+        self.pacer = Pacer(debug=self._log)
 
     def debug(self, on=True):
         if on:
             self._log = print
+            self.pacer = Pacer(debug=print)
         return self
 
     # ---------- 入口 ----------
@@ -223,6 +231,7 @@ class HybridRunner:
 
             # ========== 阶段 A: 注册 + 验证（协议） ==========
             if not skip_register:
+                self.pacer.wait("register_start")
                 with SignupBrowser(prof, local, BrowserOptions(headless=self.headless)) as sb:
                     sb.page.goto("https://v2.auth.mistral.ai/login",
                                  wait_until="domcontentloaded", timeout=60000)
@@ -236,29 +245,41 @@ class HybridRunner:
                 r.identity_id = reg["identity_id"]
                 self._log(f"[A] registered identity={r.identity_id}")
 
+                self.pacer.wait("after_register")
+                self.pacer.wait("before_send_code")
                 flow = k.start_verification(email)
                 self._log("[A] code sent")
+                self.pacer.wait("after_send_code")
 
                 code = self._wait_code(mailbox_url, email)
                 if not code:
                     raise RuntimeError("no verification code")
                 self._log(f"[A] code={code}")
 
+                self.pacer.wait("before_submit_code")
                 ver = k.submit_code(flow, code)
                 if not ver.get("passed"):
                     raise RuntimeError(f"verify failed: {ver}")
                 self._log("[A] verified")
+                self.pacer.wait("after_verify")
 
             # ========== 阶段 B: 登录 + 协议业务 ==========
+            if not skip_register:
+                self.pacer.wait("register_to_login")
             with SignupBrowser(prof, local, BrowserOptions(headless=self.headless)) as sb:
                 page = sb.page
                 self._login(page, email, password, sb)
+                self.pacer.wait("after_login")
                 cookies = {c["name"]: c["value"] for c in sb.context.cookies()}
 
                 # --- 浏览器侧：console / chat ---
+                self.pacer.wait("before_studio_tos")
                 r.tos["studio"] = browser_accept_studio_tos(page)
                 self._log(f"[B] studio tos {r.tos['studio']}")
-                chat_res = browser_chat_actions(page)
+                self.pacer.wait("after_studio_tos")
+
+                self.pacer.wait("before_chat_act")
+                chat_res = browser_chat_actions(page, pacer=self.pacer)
                 r.tos["chat"] = chat_res.get("tos_call")
                 r.vibe_cli_key = chat_res.get("vibe_cli_key", "")
                 self._log(f"[B] chat actions {list(chat_res.keys())}")
@@ -274,10 +295,14 @@ class HybridRunner:
             self._log(f"[C] org={r.org_uuid} ws={r.workspace_uuid}")
 
             if r.workspace_uuid:
-                for prod in ("API", "Vibe", "Studio"):
+                for i, prod in enumerate(("API", "Vibe", "Studio")):
+                    if i > 0:
+                        # 连发三把 Key 是典型机器特征，这里拉开间隔
+                        self.pacer.wait("between_keys")
                     kr = adm.create_api_key(r.workspace_uuid, product=prod)
                     r.keys[prod] = kr.get("key", "")
                     self._log(f"[C] {prod}: {r.keys[prod][:20]}...")
+                self.pacer.wait("after_keys")
 
             r.status = "ok"
         except Exception as e:

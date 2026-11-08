@@ -42,6 +42,9 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
                        例如 4633433883347213----05/28----913
                        仅包含通过位数与 Luhn 校验的行；供后续订阅步骤使用，
                        当前注册流程不读取它。
+  MISTRAL_PACE_SCALE   节奏缩放系数，默认 1.0。0 表示关闭全部停顿（仅测试用）。
+                       对 lognormal 采样结果整体相乘，不改变各步比例。
+  MISTRAL_PACE_OFF     设为 1 时完全关闭停顿，优先于 SCALE。
   MISTRAL_WORKER_ROOT   代码根目录（默认上级目录）
 """
 from __future__ import annotations
