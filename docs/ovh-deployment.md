@@ -38,7 +38,27 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral JSON 会话别名与客户端请求头诊断（2026-11-08 19:57 UTC，f5b2e60）
+## 当前部署：Mistral 下游会话/缓存头原值补齐（2026-11-08 20:26 UTC，be14987）
+
+- 用户明确授权合入master、提交推送并部署OVH。业务提交`d6caba5`与远端会话别名/客户端头诊断正常合并为`be149876b647db580b8656f807e6bdfd76e311dc`，已非强制推送master；其他窗口未提交的注册相关改动未提交、未打包、未部署。
+- Mistral Chat/Responses缺少正文`prompt_cache_key`时，优先取缓存头、再取额外/父/内置会话头的有效原值直接填入，不做HMAC或前缀。正文已有值（含null/空串）保留；无有效头才保留HMAC兜底。账号绑定仍按分组/下游Key做HMAC隔离，X-Affinity和日志脱敏规则不变。保留线上已有JSON会话别名和客户端头诊断，不改其他池。
+- 复用业务提交已通过的全仓normal/race/vet/build，合并后补一次Mistral定向回归（5.938秒）和客户端头Node UI测试，均通过；不重复全仓检查，不发生产推理。一次预检确认旧f5b2e60 healthy/restart0、双入口正常、247.6GiB余量及旧e6f063b工作树干净；旧树未构建/重置。
+- 522个干净提交文件逐项SHA256核验，复用现有部署脚本仅内存适配。存储格式不变，不另造敏感副本；新镜像就绪且TH/Mistral无queued/running后停旧进程，退出0并完整一致备份/gzip/SHA256核验，以线上Compose仅追加image覆盖切换。
+- **191账号、186条TH核心注册记录、routingSecret、完整config.json字节、Mistral注册库及用户/环境/healthcheck/卷/端口/网络/资源参数全部保留**；Docker healthy/restart0、无OOM、Healthcheck存在，ai-internal双别名及NewAPI容器到两个healthz均成功，四项本机资源SHA256匹配。未修改NewAPI渠道、线上配置或功能开关。
+- 20:26:01.825 UTC真实未登录公网浏览器登录页正常，healthz及四资源均200，保留`?v=c7f1808904`且SHA256逐项匹配发布源码；验收后已立即反馈，专用浏览器关闭，公网回执写入正式备份deploy.json。**本轮验收为部署/数据/入口/资源验收，不是生产缓存命中率或真实上游推理对照。**补记录不再构建/重启。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 20:24:42.675–20:24:49.805（7.13秒） |
+| 停止请求 / 旧进程退出 | 20:24:49.918 / 20:24:50.049 |
+| 完整一致备份核验 | 20:24:50.320–20:24:55.072 |
+| 切换请求 / 新容器启动 | 20:24:55.072 / 20:24:55.294 |
+| 首HTTP可达 / Docker healthy | 20:24:56.396 / 20:25:25.632 |
+| 双内网入口及本机验收 / 公网验收 | 20:25:25.799 / 20:26:01.825 |
+
+正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261108T202426Z-be14987`；镜像`account-pool-balancer:release-be14987-20261108T202426Z`（ID`sha256:8097925decb78d0a89d549bd761498c87ccedce9d46e2baa2d2f7e53cd06d3d0`）。受限完整备份`/home/ubuntu/backups/account-pool-balancer/20261108T202426Z-mistral-cache-headers-be14987/`含data、原Compose/.env、构建/切换日志和deploy.json；data SHA256`553dc2b2ab4561645f6cdd013e8405466bc0b9e7cf63bc38ee91556a7b56aab3`。旧镜像`account-pool-balancer:rollback-20261108T202426Z`保留，回退先确认新写入，不自动覆盖旧data。未采样精确停机，旧退出至首HTTP观测约6.35秒，不把构建/排空/健康检查等待算作停机。无新增临时脚本/归档/敏感下载，正式审计/回退资料与Trellis保留。
+
+## 历史部署：Mistral JSON 会话别名与客户端请求头诊断（2026-11-08 19:57 UTC，f5b2e60）
 
 - 按授权在独立工作树合并最新master，保留2629255的绑定持久化、真实会话优先与缓存别名归一；合并提交`f5b2e60e7fc898477549563ab893fe48a37cab22`已快进推送远端master。未修改原工作区或其他窗口的Trellis任务。Mistral新增8个Claude JSON-string会话别名及日志私密值补齐；请求摘要新增有界、脱敏的客户端头、候选有效性和最终身份来源，关闭正文详情仍可用，其他池不变。
 - 合并一次定向Go回归通过（0.898秒），复用此前通过的客户端头UI/语法检查，无全仓/race/vet/压测或真实推理。解决身份优先级冲突时，两阶段Mistral解析均使用本池别名解析器；新增两个cache-hint共存用例，其他池公共解析器不变。
