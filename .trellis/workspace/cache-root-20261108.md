@@ -77,6 +77,7 @@
 - 当前 NewAPI 180/182/183 都使用同一 Mistral 下游 Key、同一 Balancer 入口；header_override 都含 `*`，param_override 为空，pass_through_body_enabled=false。旧文档所记录的无条件 delete metadata/prompt_cache_key 当前不存在，不能拿旧配置当现状根因。
 - 对应 NewAPI 固定时间段成功计数：180=176，182=472，183=8，共 656；input=75,766,841，cached=54,645,632。与 Balancer 的 658 不是严格一对一窗口，日志开始/完成计时边界等尚未逐条对齐，**不声称聚合完全相等**。多个具体 input/cached 样本已对齐；仅查 180 会漏掉大多数 182 流量。
 - `scanUsage` 只在真实字段存在时更新 cached；Mistral Chat 的 prompt_tokens 已含 cached。官方及代码的单请求 cached/input 算法一致。没有发现本轮样本的本地统计计算错误。
+- 核对上述三次1001消息样本和0/99.645%两次样本：普通日志的 upstreamRequestId 均为 null。文中的 req_* 都是 Balancer 内部请求ID，不是可直接提交给 Mistral 检索的服务商追踪ID。向上游升级需提供精确UTC/模型/受影响账号的受限证据，或另获授权采集其实际相关响应头；这属于诊断可追溯性缺口，不能冒充缓存低命中的原因。
 
 ## 5. 采样期间发生另一轮部署：必须切段，不误判成神秘换号
 
@@ -100,7 +101,7 @@ https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
 - 当前公开文档没有证据证明额外 X-Affinity 能锁定该托管 DeepSeek 的实际缓存节点；不能把它写成有保证的修复合同。
 
 建议：
-1. 先停止以“再补一个头/全池固定号/反复重启”冒充优化。向 Mistral 提交上述同账号、重复消息、极低缓存和稳定前缀复用的 requestId 证据，核对其 prompt_cache_key 的实际 DeepSeek 路由支持、缓存存活/驱逐以及 cached_tokens 上报含义。没有提供商侧证据前，分片/容量驱逐/隐藏路由/上报缺陷均只是假设。
+1. 先停止以“再补一个头/全池固定号/反复重启”冒充优化。向 Mistral 提交上述同账号、重复消息、极低缓存和稳定前缀复用的精确时间与脱敏证据（本地 req_* 仅供内部关联，当前没有上游追踪ID），核对其 prompt_cache_key 的实际 DeepSeek 路由支持、缓存存活/驱逐以及 cached_tokens 上报含义。没有提供商侧证据前，分片/容量驱逐/隐藏路由/上报缺陷均只是假设。
 2. 可控客户端提供真正固定的 Session-Id/X-Session-Id 或正文 prompt_cache_key；透传保留已有配置。修复弱身份可减少不必要的新绑定，但不是稳定前缀零缓存的充分修复。
 3. 将普通 Mistral 亲和绑定跨发布保存列为独立改进，评估下游 Key/分组隔离、TTL、删除账号和凭据变化的失效规则。不是简单把每个池固定到一账号。当前只诊断，未实现/部署。
 4. 若需要受控 A/B，应另定窄范围，用同一精确 payload/稳定身份/相同账号比较链路与上游；涉及真实推理成本，不能拿本轮只读采样伪称已经做过。
