@@ -1,0 +1,10 @@
+File: pool.test
+Type: delay
+Time: 2026-11-09 16:03:08 CST
+Showing nodes accounting for 35.73s, 100% of 35.73s total
+Dropped 103 nodes (cum <= 0.18s)
+      flat  flat%   sum%        cum   cum%
+    35.73s   100%   100%     35.73s   100%  sync.(*Mutex).Unlock (partial-inline)
+         0     0%   100%     35.70s 99.89%  account-pool-balancer/internal/pool.(*Pool).Acquire
+         0     0%   100%     35.73s   100%  account-pool-balancer/internal/pool.BenchmarkCapacityResearchPool.func1.1
+         0     0%   100%     35.73s   100%  testing.(*B).RunParallel.func1

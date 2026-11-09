@@ -1,0 +1,75 @@
+package pool
+
+// Research-only fixture, loaded with go test -overlay. No real credentials,
+// outbound requests, production state, or changed scheduler behavior.
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
+)
+
+func capacityResearchPool(n int, health bool) (*Pool, *config.Config, Request) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "smart"
+	cfg.Routing.HealthFilter = health
+	cfg.Routing.Sticky = true
+	cfg.ClientKeys = []config.ClientKey{{ID: "research-client", Group: config.MistralGroup, KeyHash: config.HashKey("synthetic-downstream"), Enabled: true}}
+	now := time.Now()
+	snaps := make(map[string]*quota.Snapshot, n)
+	for i := 0; i < n; i++ {
+		a := config.Account{ID: fmt.Sprintf("research-%d", i), Provider: config.ProviderMistral, Group: config.MistralGroup, RuntimeKey: fmt.Sprintf("mstrl_synthetic_%08d", i), Enabled: true, Weight: 1}
+		cfg.Accounts = append(cfg.Accounts, a)
+		source := quota.ResponseBindingSource(cfg, a)
+		snaps[a.ID] = &quota.Snapshot{CatalogSource: source, CatalogAt: now, Catalog: map[string]bool{"deepseek-v4-1-flash-1017": true}, Mistral: &quota.MistralState{Source: source, At: now, Budget: &quota.MistralBudget{Total: 300, UsedPercent: 20, Remaining: 240, Currency: "USD", ResetsAt: now.Add(24 * time.Hour)}}}
+	}
+	poller := quota.NewPoller(func() *config.Config { return cfg }, nil)
+	poller.Load(snaps)
+	p := New(poller.View)
+	if health {
+		for _, a := range cfg.Accounts {
+			p.health[a.ID] = &HealthRing{}
+			r := p.health[a.ID]
+			r[now.Unix()/60%1440] = healthSlot{minute: now.Unix() / 60, succ: 100}
+		}
+	}
+	a := cfg.Accounts[n/2]
+	key := config.HashKey("synthetic-session")
+	p.ImportMistralBindings([]PersistedMistralBinding{{Key: key, AccountID: a.ID, ClientKeyID: "research-client", Source: mistralBindingSource(cfg, a, "research-client"), Explicit: true, ExpiresAt: now.Add(time.Hour)}}, cfg)
+	return p, cfg.ForProvider(config.ProviderMistral), Request{Group: config.MistralGroup, Model: "deepseek-v4-1-flash-1017", Affinity: key, Explicit: true, ClientKeyID: "research-client", RequestID: "synthetic-request"}
+}
+
+func BenchmarkCapacityResearchPool(b *testing.B) {
+	for _, n := range []int{40, 400, 4000} {
+		for _, health := range []bool{false, true} {
+			for _, hit := range []bool{false, true} {
+				b.Run(fmt.Sprintf("accounts=%d/health=%t/hit=%t", n, health, hit), func(b *testing.B) {
+					p, cfg, req := capacityResearchPool(n, health)
+					if !hit {
+						req.Affinity = ""
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					b.RunParallel(func(pb *testing.PB) {
+						for pb.Next() {
+							lease, err := p.Acquire(context.Background(), cfg, req)
+							if err != nil {
+								b.Error(err)
+								return
+							}
+							if hit && lease.Decision.BindingResult != "hit" {
+								b.Error("expected confirmed binding hit")
+								return
+							}
+							lease.MarkSent()
+							lease.Release()
+						}
+					})
+				})
+			}
+		}
+	}
+}

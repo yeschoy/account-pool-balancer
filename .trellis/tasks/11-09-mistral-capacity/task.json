@@ -1,0 +1,8 @@
+{
+  "name": "mistral-capacity",
+  "status": "planning",
+  "description": "深度审计Mistral完整调用链，设计3亿TPM容量优化及可配置会话绑定容量",
+  "research": "research.md",
+  "validation": "validation.md",
+  "waiting_for": "完整链路审计、本地基准与owner-only隔离实验已完成；待用户确认全局/本池/每账号绑定容量语义，审阅方案后再正式实现。3亿TPM口径、典型工作负载和真实压测预算仍需确认。未改生产代码/设置、未部署、未发真实推理，不标功能完成。"
+}

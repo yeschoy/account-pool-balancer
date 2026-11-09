@@ -1,0 +1,19 @@
+File: pool.test
+Type: alloc_space
+Time: 2026-11-09 16:03:08 CST
+Showing nodes accounting for 5828.87MB, 99.82% of 5839.16MB total
+Dropped 47 nodes (cum <= 29.20MB)
+      flat  flat%   sum%        cum   cum%
+ 4867.13MB 83.35% 83.35%  5531.67MB 94.73%  account-pool-balancer/internal/pool.(*Pool).tryLocked
+  353.02MB  6.05% 89.40%   353.02MB  6.05%  encoding/hex.EncodeToString (inline)
+  293.70MB  5.03% 94.43%   300.74MB  5.15%  account-pool-balancer/internal/pool.capacityResearchPool
+  160.01MB  2.74% 97.17%   513.03MB  8.79%  account-pool-balancer/internal/config.HashKey
+  155.01MB  2.65% 99.82%   667.54MB 11.43%  account-pool-balancer/internal/quota.ResponseBindingSource
+         0     0% 99.82%  5531.67MB 94.73%  account-pool-balancer/internal/pool.(*Pool).Acquire
+         0     0% 99.82%   662.04MB 11.34%  account-pool-balancer/internal/pool.(*Pool).unavailableLocked
+         0     0% 99.82%   300.74MB  5.15%  account-pool-balancer/internal/pool.BenchmarkCapacityResearchPool.func1
+         0     0% 99.82%  5531.67MB 94.73%  account-pool-balancer/internal/pool.BenchmarkCapacityResearchPool.func1.1
+         0     0% 99.82%  5531.67MB 94.73%  testing.(*B).RunParallel.func1
+         0     0% 99.82%   195.26MB  3.34%  testing.(*B).launch
+         0     0% 99.82%   105.49MB  1.81%  testing.(*B).run1.func1
+         0     0% 99.82%   301.24MB  5.16%  testing.(*B).runN

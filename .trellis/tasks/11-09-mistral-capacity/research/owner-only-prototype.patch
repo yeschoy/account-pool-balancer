@@ -1,0 +1,21 @@
+--- a/internal/pool/pool.go
++++ b/internal/pool/pool.go
+@@ -759,0 +760,18 @@
++		}
++	}
++	// RESEARCH ONLY: verify the potential of owner-only Mistral sticky hits.
++	// This is not production implementation or a new scheduling policy.
++	if cfg.Routing.Sticky && req.Affinity != "" && req.CacheAffinity == "" && cfg.GroupPool(req.Group) == config.ProviderMistral {
++		if b := p.getBindingLocked(req.Affinity, now); b != nil && b.mistral && !req.Excluded[b.accountID] && p.validMistralBinding(cfg, b, req.ClientKeyID) {
++			if a, ok := cfg.Account(b.accountID); ok && a.Provider == config.ProviderMistral && a.Group == req.Group && p.unavailableLocked(cfg, a, req.Model, now) == "" && !p.healthExcludedLocked(cfg, a.ID, now) {
++				if admitted, _, _ := p.admitLocked(a, now); admitted {
++					b.expiresAt = now.Add(ttl(cfg, b.explicit))
++					p.touchBindingLocked(b)
++					p.lru.MoveToFront(p.bindings[req.Affinity])
++					result := "hit"
++					if !b.confirmed {
++						result = "provisional"
++					}
++					return p.leaseLocked(a, Decision{AccountID: a.ID, Reason: "binding", BindingResult: result, Candidates: 1}, false), nil
++				}
++			}

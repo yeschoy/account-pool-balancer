@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/pool
+cpu: Apple M4
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=true           	   63984	      3635 ns/op	    3736 B/op	      16 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=true-8         	   61623	      3816 ns/op	    3736 B/op	      16 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=true          	   36339	      6492 ns/op	    3736 B/op	      16 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=true-8        	   34891	      6954 ns/op	    3736 B/op	      16 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=true         	    5182	     46236 ns/op	    3736 B/op	      16 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=true-8       	    4960	     48239 ns/op	    3740 B/op	      16 allocs/op
+PASS
+ok  	account-pool-balancer/internal/pool	2.585s

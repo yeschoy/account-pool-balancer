@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/server
+cpu: Apple M4
+BenchmarkCapacityResearchHandler/accounts=40/detail=false-8         	     200	    301455 ns/op	 446.34 MB/s	         0 log-dropped	         3.210 p95-ms	         5.856 p99-ms	    599040 stats-bytes/account	  836412 B/op	    2498 allocs/op
+BenchmarkCapacityResearchHandler/accounts=40/detail=true-8          	     200	   1204068 ns/op	 111.75 MB/s	         0 log-dropped	        13.53 p95-ms	        14.82 p99-ms	    599040 stats-bytes/account	 4406070 B/op	    8522 allocs/op
+BenchmarkCapacityResearchHandler/accounts=400/detail=false-8        	     200	    393419 ns/op	 342.00 MB/s	         0 log-dropped	         4.158 p95-ms	         6.492 p99-ms	    599040 stats-bytes/account	 1430196 B/op	    3156 allocs/op
+BenchmarkCapacityResearchHandler/accounts=400/detail=true-8         	     200	   1639002 ns/op	  82.09 MB/s	         0 log-dropped	        17.71 p95-ms	        19.53 p99-ms	    599040 stats-bytes/account	 6151121 B/op	   15103 allocs/op
+PASS
+ok  	account-pool-balancer/internal/server	2.241s

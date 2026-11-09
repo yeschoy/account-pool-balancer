@@ -1,0 +1,26 @@
+File: pool.test
+Type: cpu
+Time: 2026-11-09 16:03:03 CST
+Duration: 5.04s, Total samples = 4.76s (94.40%)
+Showing nodes accounting for 4.35s, 91.39% of 4.76s total
+Dropped 64 nodes (cum <= 0.02s)
+Showing top 18 nodes out of 88
+      flat  flat%   sum%        cum   cum%
+     2.09s 43.91% 43.91%      2.15s 45.17%  account-pool-balancer/internal/pool.(*Pool).healthLocked
+     0.99s 20.80% 64.71%      0.99s 20.80%  runtime.pthread_cond_signal
+     0.28s  5.88% 70.59%      3.23s 67.86%  account-pool-balancer/internal/pool.(*Pool).tryLocked
+     0.15s  3.15% 73.74%      0.15s  3.15%  encoding/hex.Encode (inline)
+     0.13s  2.73% 76.47%      0.13s  2.73%  runtime.madvise
+     0.12s  2.52% 78.99%      0.12s  2.52%  runtime.memmove
+     0.11s  2.31% 81.30%      0.11s  2.31%  runtime.memclrNoHeapPointers
+     0.11s  2.31% 83.61%      0.11s  2.31%  runtime.pthread_cond_wait
+     0.07s  1.47% 85.08%      0.10s  2.10%  runtime.mapaccess1_faststr
+     0.06s  1.26% 86.34%      0.06s  1.26%  crypto/internal/fips140/sha256.blockSHA2
+     0.05s  1.05% 87.39%      0.05s  1.05%  runtime.usleep
+     0.04s  0.84% 88.24%      0.07s  1.47%  runtime.concatstrings
+     0.03s  0.63% 88.87%      0.07s  1.47%  account-pool-balancer/internal/quota.(*Snapshot).NotEntitled
+     0.03s  0.63% 89.50%      0.03s  0.63%  runtime.pthread_kill
+     0.03s  0.63% 90.13%      0.04s  0.84%  runtime.scanObjectsSmall
+     0.02s  0.42% 90.55%      0.03s  0.63%  account-pool-balancer/internal/pool.capacityResearchPool
+     0.02s  0.42% 90.97%      0.07s  1.47%  runtime.scanObject
+     0.02s  0.42% 91.39%      0.03s  0.63%  runtime.tryDeferToSpanScan

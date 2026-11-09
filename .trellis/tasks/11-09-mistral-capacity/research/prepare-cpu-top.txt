@@ -1,0 +1,24 @@
+File: server.test
+Type: cpu
+Time: 2026-11-09 16:05:19 CST
+Duration: 3.82s, Total samples = 3.01s (78.74%)
+Showing nodes accounting for 2.89s, 96.01% of 3.01s total
+Dropped 42 nodes (cum <= 0.02s)
+Showing top 16 nodes out of 73
+      flat  flat%   sum%        cum   cum%
+     1.82s 60.47% 60.47%      1.91s 63.46%  account-pool-balancer/internal/server.skipString
+     0.21s  6.98% 67.44%      0.41s 13.62%  encoding/json.checkValid
+     0.18s  5.98% 73.42%      0.18s  5.98%  encoding/json.stateInString
+     0.16s  5.32% 78.74%      0.16s  5.32%  runtime.madvise
+     0.14s  4.65% 83.39%      0.14s  4.65%  runtime.kevent
+     0.10s  3.32% 86.71%      0.10s  3.32%  runtime.memclrNoHeapPointers
+     0.09s  2.99% 89.70%      0.09s  2.99%  runtime.asyncPreempt
+     0.04s  1.33% 91.03%      0.04s  1.33%  encoding/json.unquoteBytes
+     0.04s  1.33% 92.36%      0.04s  1.33%  runtime.(*mspan).moveInlineMarks
+     0.02s  0.66% 93.02%      0.02s  0.66%  encoding/json.(*decodeState).rescanLiteral
+     0.02s  0.66% 93.69%      0.02s  0.66%  internal/runtime/atomic.(*UnsafePointer).Load (inline)
+     0.02s  0.66% 94.35%      0.02s  0.66%  runtime.(*lfstack).pop
+     0.02s  0.66% 95.02%      0.02s  0.66%  runtime.findRunnable
+     0.01s  0.33% 95.35%      0.08s  2.66%  runtime.(*sweepLocked).sweep
+     0.01s  0.33% 95.68%      0.19s  6.31%  runtime.mallocgc
+     0.01s  0.33% 96.01%      0.10s  3.32%  runtime.newobject

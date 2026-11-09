@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/pool
+cpu: Apple M4
+BenchmarkCapacityResearchPool/accounts=40/health=false/hit=false           	    3517	     63637 ns/op	  101786 B/op	     390 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=false/hit=false-8         	    3716	     59765 ns/op	  101796 B/op	     390 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=false/hit=true            	    7428	     34807 ns/op	   78792 B/op	     180 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=false/hit=true-8          	    8199	     29027 ns/op	   78794 B/op	     180 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=false            	    2455	     98033 ns/op	  101788 B/op	     390 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=false-8          	    2426	     94695 ns/op	  101803 B/op	     390 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=true             	    3540	     68870 ns/op	   78792 B/op	     180 allocs/op
+BenchmarkCapacityResearchPool/accounts=40/health=true/hit=true-8           	    3525	     64923 ns/op	   78802 B/op	     180 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=false/hit=false          	     373	    648300 ns/op	  871915 B/op	    3638 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=false/hit=false-8        	     450	    536862 ns/op	  871919 B/op	    3638 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=false/hit=true           	     670	    353843 ns/op	  629705 B/op	    1623 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=false/hit=true-8         	     876	    264799 ns/op	  629734 B/op	    1623 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=false           	     273	    854290 ns/op	  871967 B/op	    3638 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=false-8         	     296	    800260 ns/op	  872018 B/op	    3638 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=true            	     386	    600829 ns/op	  629705 B/op	    1623 allocs/op
+BenchmarkCapacityResearchPool/accounts=400/health=true/hit=true-8          	     415	    567034 ns/op	  629775 B/op	    1623 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=false/hit=false         	      40	   7029699 ns/op	10850066 B/op	   36050 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=false/hit=false-8       	      44	   5212749 ns/op	10850218 B/op	   36052 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=false/hit=true          	      78	   4407874 ns/op	 8408017 B/op	   16029 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=false/hit=true-8        	      76	   2859270 ns/op	 8408159 B/op	   16030 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=false          	      26	   8810962 ns/op	10850014 B/op	   36050 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=false-8        	      26	   8556675 ns/op	10850216 B/op	   36052 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=true           	      34	   6706610 ns/op	 8408030 B/op	   16029 allocs/op
+BenchmarkCapacityResearchPool/accounts=4000/health=true/hit=true-8         	      37	   6171776 ns/op	 8408273 B/op	   16031 allocs/op
+PASS
+ok  	account-pool-balancer/internal/pool	7.522s

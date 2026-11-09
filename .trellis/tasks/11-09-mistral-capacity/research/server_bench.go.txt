@@ -1,0 +1,197 @@
+package server
+
+// Research-only fixtures: local synthetic traffic, no real credentials. The
+// handler benchmark includes local HTTP upstream, logs and stats, but excludes
+// NewAPI/Nginx/TLS, real model generation, persistent run loops and front TCP.
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/stats"
+)
+
+func capacityResearchBody(kb int, system bool) []byte {
+	first := `{"role":"user","content":"question"},`
+	if system {
+		first = `{"role":"system","content":"instructions"},` + first
+	}
+	return []byte(`{"model":"deepseek-v4-1-flash-1017","stream":true,"messages":[` + first + strings.Repeat(`{"role":"assistant","content":"`+strings.Repeat("x", kb*1024/128)+`"},`, 127) + `{"role":"user","content":"next question"}]}`)
+}
+
+func BenchmarkCapacityResearchPrepare(b *testing.B) {
+	for _, kb := range []int{128, 512, 2048} {
+		for _, system := range []bool{false, true} {
+			b.Run(fmt.Sprintf("KB=%d/system=%t", kb, system), func(b *testing.B) {
+				body := capacityResearchBody(kb, system)
+				s := &Server{secret: []byte("synthetic-only")}
+				cfg := config.Default()
+				h := http.Header{"X-Session-Id": []string{"synthetic-session"}}
+				b.SetBytes(int64(len(body)))
+				b.ReportAllocs()
+				for b.Loop() {
+					obj, err := parseRoutingBody(body, true)
+					if err != nil {
+						b.Fatal(err)
+					}
+					alias, err := normalizeMistralCacheAlias(body, "/v1/chat/completions")
+					if err != nil {
+						b.Fatal(err)
+					}
+					ident := s.mistralIdentity(cfg, "mistral\x00synthetic-client", h, obj)
+					key, _ := mistralRequestCacheKey(cfg, h, ident)
+					prepared, _, err := prepareMistralRequest(alias, "/v1/chat/completions", key)
+					if err != nil {
+						b.Fatal(err)
+					}
+					out := make(http.Header)
+					ensureMistralXAffinity(out, prepared)
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkCapacityResearchSSE(b *testing.B) {
+	ev := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"native text\"}}],\"usage\":null}\n\n")
+	b.ReportAllocs()
+	for b.Loop() {
+		_, data, _ := sseFields(ev)
+		_, _, _ = sseError("", data)
+		_ = hasUsage(data)
+		if _, err := mistralChatEvent(ev); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// The account replacer caches by cfg pointer; ForProvider currently returns a
+// fresh pointer. Both fixtures replace the same text with identical secrets.
+func BenchmarkCapacityResearchRedact(b *testing.B) {
+	for _, n := range []int{40, 400, 4000} {
+		for _, fresh := range []bool{false, true} {
+			b.Run(fmt.Sprintf("accounts=%d/freshProviderView=%t", n, fresh), func(b *testing.B) {
+				cfg := config.Default()
+				for i := 0; i < n; i++ {
+					cfg.Accounts = append(cfg.Accounts, config.Account{RuntimeKey: fmt.Sprintf("mstrl_synthetic_%08d", i)})
+				}
+				text := strings.Repeat(`{"message":"synthetic body preview"}`, 512)
+				view := cfg.ForProvider(config.ProviderMistral)
+				b.ReportAllocs()
+				for b.Loop() {
+					if fresh {
+						view = cfg.ForProvider(config.ProviderMistral)
+					}
+					_ = redactSecrets(view, text)
+				}
+			})
+		}
+	}
+}
+
+type capacityResearchWriter struct {
+	header http.Header
+	status int
+}
+
+func (w *capacityResearchWriter) Header() http.Header { return w.header }
+func (w *capacityResearchWriter) WriteHeader(n int) {
+	if w.status == 0 {
+		w.status = n
+	}
+}
+func (w *capacityResearchWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = 200
+	}
+	return len(p), nil
+}
+func (w *capacityResearchWriter) Flush() {}
+
+func BenchmarkCapacityResearchHandler(b *testing.B) {
+	for _, n := range []int{40, 400} {
+		for _, detail := range []bool{false, true} {
+			b.Run(fmt.Sprintf("accounts=%d/detail=%t", n, detail), func(b *testing.B) {
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.Copy(io.Discard, r.Body)
+					w.Header().Set("Content-Type", "text/event-stream")
+					for range 16 {
+						_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"native text\"}}],\"usage\":null}\n\n")
+					}
+					_, _ = io.WriteString(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":16}}\n\ndata: [DONE]\n\n")
+				}))
+				defer up.Close()
+				s, err := New(b.TempDir(), Options{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer s.logs.Close()
+				defer func() {
+					for _, t := range s.transports {
+						t.CloseIdleConnections()
+					}
+				}()
+				_, err = s.cfg.Update(-1, func(c *config.Config) error {
+					c.Mistral.BaseURL = up.URL + "/v1"
+					c.Mistral.DetailLog = &detail
+					c.Quota.Enabled = false
+					c.Routing.HealthFilter = false
+					c.Routing.ConcurrencyWaitMs = 0
+					c.ClientKeys = []config.ClientKey{{ID: "synthetic-client", Provider: config.ProviderMistral, Group: config.MistralGroup, KeyHash: config.HashKey("synthetic-downstream"), Enabled: true}}
+					for i := 0; i < n; i++ {
+						c.Accounts = append(c.Accounts, config.Account{ID: fmt.Sprintf("research-%d", i), Provider: config.ProviderMistral, Group: config.MistralGroup, RuntimeKey: fmt.Sprintf("mstrl_synthetic_%08d", i), Enabled: true, Weight: 1})
+					}
+					return nil
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				for !s.logs.Ready() {
+					time.Sleep(time.Millisecond)
+				}
+				body := capacityResearchBody(128, true)
+				handler := s.Handler()
+				lat := make([]int64, b.N)
+				var seq, workers atomic.Int64
+				b.SetBytes(int64(len(body)))
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.RunParallel(func(pb *testing.PB) {
+					session := fmt.Sprintf("synthetic-session-%d", workers.Add(1))
+					for pb.Next() {
+						i := seq.Add(1) - 1
+						start := time.Now()
+						r := httptest.NewRequest(http.MethodPost, "http://local.test/v1/chat/completions", bytes.NewReader(body))
+						r.Header.Set("Authorization", "Bearer synthetic-downstream")
+						r.Header.Set("Content-Type", "application/json")
+						r.Header.Set("X-Session-Id", session)
+						w := &capacityResearchWriter{header: make(http.Header)}
+						handler.ServeHTTP(w, r)
+						lat[i] = time.Since(start).Nanoseconds()
+						if w.status != 200 {
+							b.Errorf("local status=%d", w.status)
+							return
+						}
+					}
+				})
+				b.StopTimer()
+				sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+				if len(lat) > 0 {
+					b.ReportMetric(float64(lat[(len(lat)-1)*95/100])/1e6, "p95-ms")
+					b.ReportMetric(float64(lat[(len(lat)-1)*99/100])/1e6, "p99-ms")
+				}
+				b.ReportMetric(float64(s.logs.Dropped()), "log-dropped")
+				b.ReportMetric(float64(2*1440*unsafe.Sizeof(stats.Bucket{})), "stats-bytes/account")
+			})
+		}
+	}
+}
