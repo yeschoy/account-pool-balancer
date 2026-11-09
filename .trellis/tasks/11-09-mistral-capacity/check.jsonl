@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/index.md","reason":"normal/race/vet/build质量门禁"}
+{"file":".trellis/spec/backend/mistral.md","reason":"跨池/协议/身份/不重放与持久化回归"}
+{"file":".trellis/spec/frontend/index.md","reason":"设置保存/重载真实浏览器往返"}
+{"file":".trellis/spec/backend/cache-stats.md","reason":"真实计量与reset跨池隔离"}
+{"file":".trellis/tasks/11-09-mistral-capacity/prd.md","reason":"A语义与用户授权后的验收"}

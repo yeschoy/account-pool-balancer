@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/mistral.md","reason":"缓存/原字节/协议/身份与持久化不变量"}
+{"file":".trellis/spec/backend/mistral-quota.md","reason":"独立设置/来源校验/旧配置兼容"}
+{"file":".trellis/spec/backend/cache-stats.md","reason":"分钟统计、缓存率重置与元数据往返"}
+{"file":".trellis/spec/backend/logs.md","reason":"日志有界队列、原生详情隐私与单写者"}
+{"file":".trellis/tasks/11-09-mistral-capacity/lane-board.md","reason":"用户授权、文件所有权和共享接口"}
+{"file":"docs/mistral-capacity.md","reason":"性能瓶颈实测与不可夸大生产能力边界"}
