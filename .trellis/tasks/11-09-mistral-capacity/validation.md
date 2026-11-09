@@ -6,6 +6,8 @@
 - 原始/改写/响应/SSE原事件字节预算、读/逐次写deadline、取消归还/读goroutine退出、响应超限不重放/不扣健康；独立Transport及安全换代；JSON/SSE/脱敏/采样/稀疏Stats/日志队列字节预算。
 
 ## 质量门禁
+业务代码已提交 `1c0a410`；提交后仅在干净隔离检出该commit，构建及config/pool/logstore/stats/quota/server定向回归（server9.542秒）、全部Node/语法再次通过，见 `research/implementation/clean-commit-tests.txt`。该树干净，未带主树其他窗口注册/Dockerfile等未提交修改。
+
 全仓 `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、构建及所有Node行为套件/JS语法通过。原始回执和改后基准在本目录 `research/implementation/`；临时构建/假data/浏览器回执在登记的 `.analysis/mistral-capacity-implementation/`。专项覆盖上传/下游慢读真实socket、并发取消归零、队列满/组隔离、账号换组后的释放唤醒/旧Revision防回滚、响应预算、不误重放/不扣健康、LRU迁移/缩容/恢复、Config mutation索引及24h稀疏投影。
 
 ## 本地真实浏览器
