@@ -3,5 +3,5 @@
   "status": "in_progress",
   "description": "仅检查自测-test的详情，审计Mistral账号池是否改写/重排前缀并修复有证据的缺陷",
   "validation": "validation.md",
-  "waiting_for": "已完成6+4次授权对照；完整出站/顺序/读取/连接诊断已实现并通过全仓normal/race/vet/build、9套Node与本地假数据浏览器；默认关闭。待另获授权按OVH流程部署并仅对自测-test临时采样自然请求，不再追加主动推理；生产因果证据及低缓存根因仍未确认，不标完成/归档"
+  "waiting_for": "2026-11-09用户明确要求少做无关测试、直接部署，并限定Mistral渠道GLM5.3。已核对渠道188/目标Key ck_5295bcdb9c215fffaf6e5f59的14条同会话同账号原始统计；沿OVH流程部署已通过质量门禁的trace修复/完整出站诊断，仅对该Key限时自然采样。历史无完整正文，缓存根因尚未确认，不用诊断部署冒称缓存修复，不主动推理或归档"
 }
