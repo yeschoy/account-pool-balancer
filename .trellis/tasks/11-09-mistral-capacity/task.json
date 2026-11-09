@@ -4,5 +4,5 @@
   "description": "深度审计Mistral完整调用链，设计3亿TPM容量优化及可配置会话绑定容量",
   "research": "research.md",
   "validation": "validation.md",
-  "waiting_for": "用户确认A并授权落实审计瓶颈；正在按lane-board进行正式实现/本地验证。真实3亿TPM工作负载/上游授权/费用窗口仍是生产验收前置。禁止擅自部署、生产推理或修改在线设置。"
+  "waiting_for": "用户确认A并授权优化，实施计划已提交62ac872；Pi后台child缺失@earendil-works/chord及/context，workflow b99d9f8c-b7d2-43aa-8bba-efd3d3307058四个child启动前失败，无业务代码写入，两个隔离工作树干净。详见execution-blocker.md。待用户批准主会话直接串行实施，或修好环境后同协议重试；不自动切模式/改全局依赖。"
 }
