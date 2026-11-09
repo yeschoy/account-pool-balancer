@@ -1,7 +1,7 @@
 {
   "name": "mistral-cache-order-audit",
   "status": "in_progress",
-  "description": "仅检查自测-test的详情，审计Mistral账号池是否改写/重排前缀并修复有证据的缺陷",
+  "description": "按当前授权渠道/Key审计Mistral入站、准备、真实attempt与usage，修复有证据的本地低缓存缺陷；协议兼容与模型缓存根因独立验收",
   "validation": "validation.md",
-  "waiting_for": "400/422兼容已提交部署；另一窗口现已升级包含相同协议修复的c1aebbc。本轮UTC13:14:12–13:24:12完整600秒只读观察，Mistral88成功/1个600秒超时/4客户端取消，无400/422/最终429/503，版本全程稳定，两服务healthy/restart0；配置有非本轮写入，不冒称固定配置实验。GLM188窗口无流量，原低缓存仍缺长会话完整前缀证据，不归档；OpenCode Go37个400、OpenDesign2个业务失败等另池问题单列，未越权修改或主动推理/重放。详见research/observe-10min-20261109.md"
+  "waiting_for": "协议400/422修复保留于线上c1aebbc，不等于缓存已修。UTC14:03自然180/user67长会话25→29消息，全部旧消息/132工具原始JSON精确相同、同号绑定hit且各单attempt，缓存73445/0→82441/6016仍7.297%；原始usage、日志、NewAPI一致。缺本轮实际attempt/Reader完整出站证据，不能最终定责池端或Mistral内部；需新的单Key有界诊断授权，不擅自重启/续采/付费推理。GLM188仅13-token检测，当前其他GLM业务属182/user604，不混用。外部NewAPI一度unhealthy/restart15，重建后healthy及双入口通过，原因未确认且非本轮操作。详见research/current-low-cache-20261109.md，任务不归档"
 }
