@@ -23,5 +23,9 @@
 ## 本地验证
 
 - 干净提交源码快照+新增精确回归，旧实现首先复现同样400（TestMistralReasoningWhitespacePlaceholder，2.471秒）；没有在其他窗口未完成容量代码上运行。
-- 修复后一次相关Reasoning/Alias/PrefixStability/CacheHeaders回归通过，0.936秒；仅本地HTTP mock，无真实推理、全仓/race/vet或压测。三精确模型、正反字段空白、ASCII/Unicode空白、原思考前后空白完整保留、历史/工具/大数、原生其他模型/Responses/FIM范围及真正冲突零上游尝试均覆盖。
+- 修复后一次相关定向回归通过，0.936秒；实际命令筛选TestMistral.*(Reasoning|PrefixStability|CacheHeaders)，不将名字未匹配的用例冒称已执行。仅本地HTTP mock，无真实推理、全仓/race/vet或压测。新增三精确模型、正反字段空白、ASCII/Unicode空白、原思考前后空白完整保留、历史/工具/大数、原生其他模型/Responses/FIM范围及真正冲突零上游尝试均覆盖。
 - gofmt与本轮精确路径diff检查通过。部署前源码差异必须仅含本次请求适配及测试/文档，不带未提交容量/注册/Dockerfile。
+
+## 已部署
+
+b5d0dbb已提交推送并于UTC12:09:50上线，构建7.08秒，12:10:20 healthy/双内网入口/数据与配置/静态资源验收通过，12:20:47真实公网200与资源SHA256通过。旧诊断变量已显式设空。首批6条自然完成请求200；截至12:20:19同渠道共121完成、无400（另有16上游422、2官方503、1客户端499），这些其他状态未掩盖。随后按用户继续要求以72d1e42补齐已证实的文本块422，仍保留本修复；两次正式备份/镜像/阶段时间见docs/ovh-deployment.md。原GLM188低缓存任务未完成，不归档。
