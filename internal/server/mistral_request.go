@@ -288,8 +288,12 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		}
 	}
 	if v := o.get("prompt_cache_retention"); v != nil {
-		if !bytes.Equal(v, []byte("null")) && !bytes.Equal(v, []byte(`""`)) {
-			return errors.New("Mistral DeepSeek Chat cannot guarantee prompt_cache_retention; explicit retention is not supported")
+		// OpenAI clients send these as cache-performance hints. Native Chat
+		// has no retention field: keep its normal best-effort caching and
+		// existing cache key, without promising a TTL or data-storage policy.
+		var retention *string
+		if err := json.Unmarshal(v, &retention); err != nil || retention != nil && *retention != "" && *retention != "in_memory" && *retention != "24h" {
+			return errors.New("Mistral DeepSeek Chat prompt_cache_retention must be in_memory, 24h, empty or null; cache retention is best-effort")
 		}
 		o.set("prompt_cache_retention", nil)
 	}

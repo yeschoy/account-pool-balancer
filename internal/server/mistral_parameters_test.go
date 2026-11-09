@@ -83,8 +83,13 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 		{`"verbosity":"high"`, "verbosity"},
 		{`"user":{}`, "user"},
 		{`"safety_identifier":123`, "safety_identifier"},
-		{`"prompt_cache_retention":"24h"`, "cannot guarantee"},
-		{`"prompt_cache_retention":"in_memory"`, "cannot guarantee"},
+		{`"prompt_cache_retention":"forever-private-body"`, "prompt_cache_retention"},
+		{`"prompt_cache_retention":24`, "prompt_cache_retention"},
+		{`"prompt_cache_retention":true`, "prompt_cache_retention"},
+		{`"prompt_cache_retention":{}`, "prompt_cache_retention"},
+		{`"prompt_cache_retention":[]`, "prompt_cache_retention"},
+		{`"prompt_cache_retention":"24h","prompt_cache_retention":"24h"`, "duplicate"},
+		{`"prompt_cache_retention":"24h","prompt_cache_retent\u0069on":null`, "duplicate"},
 		{`"prompt_cache_key":"a","prompt_cache_key":"b"`, "duplicate"},
 		{`"metadata":{},"metadata":{}`, "duplicate"},
 		{`"messages":[],"messages":[]`, "duplicate"},
@@ -106,6 +111,44 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 				t.Fatalf("not rejected safely before upstream: %d %s", st, reply)
 			}
 		})
+	}
+}
+
+// Retention is an OpenAI client cache-performance hint, not Mistral's TTL or
+// data-storage promise. Consume only known values; preserve every real input.
+func TestMistralCacheRetentionHints(t *testing.T) {
+	e := newMistralEnv(t)
+	for _, retention := range []string{`"24h"`, `"in_memory"`, `"\u0032\u0034h"`, `"in_\u006demory"`, `null`, `""`} {
+		for _, key := range []string{`"caller-cache"`, `null`, `""`} {
+			body := ` { "model":"deepseek-v4-1-flash-1017", "prompt_cache_retention":` + retention + `, "prompt_cache_key":` + key + `, "reasoning_effort":"max", "metadata": {"session_id":"retention-session","n":9007199254740993}, "tools":[{"type":"function","function":{"name":"tool","parameters":{"n":9007199254740993}}}], "messages":[{"role":"user","content":"question"},{"role":"assistant","reasoning_content":"whole thought","content":"whole answer","tool_calls":[{"id":"call","function":{"name":"tool","arguments":"{\"n\":9007199254740993}"}}]},{"role":"tool","tool_call_id":"call","content":"whole result"}] } `
+			before := e.count()
+			status, reply := e.post(t, "/v1/chat/completions", body, nil)
+			if status != 200 || e.count() != before+1 {
+				t.Fatalf("known cache hint rejected or replayed: %s %d %s", retention, status, reply)
+			}
+			var got, original map[string]json.RawMessage
+			_ = json.Unmarshal([]byte(e.call(before).body), &got)
+			_ = json.Unmarshal([]byte(body), &original)
+			if got["prompt_cache_retention"] != nil {
+				t.Fatal("unsupported retention leaked to native Chat")
+			}
+			for _, field := range []string{"model", "prompt_cache_key", "reasoning_effort", "metadata", "tools"} {
+				if !bytes.Equal(got[field], original[field]) {
+					t.Fatalf("cache hint changed %s", field)
+				}
+			}
+			withoutHint := strings.Replace(body, `"prompt_cache_retention":`+retention+`, `, "", 1)
+			want, _, err := prepareMistralRequest([]byte(withoutHint), "/v1/chat/completions", "")
+			if err != nil || !bytes.Equal([]byte(e.call(before).body), want) {
+				t.Fatal("retention hint changed thought/history/tools/order/numbers")
+			}
+		}
+		// Missing cache keys still use the same existing header/session chain.
+		before := e.count()
+		status, reply := e.post(t, "/v1/chat/completions", `{"model":"deepseek-v4-1-flash-1017","prompt_cache_retention":`+retention+`,"messages":[]}`, map[string]string{"X-Prompt-Cache-Key": "retention-header-cache"})
+		if status != 200 || e.count() != before+1 || !strings.Contains(e.call(before).body, `"prompt_cache_key":"retention-header-cache"`) {
+			t.Fatalf("cache routing lost: %d %s", status, reply)
+		}
 	}
 }
 
