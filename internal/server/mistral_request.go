@@ -422,6 +422,11 @@ func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bo
 					return nil, false, err
 				}
 			}
+			if developer && (role == "user" || role == "assistant") {
+				if err := mistralDeepSeekTextChunks(message, role == "assistant"); err != nil {
+					return nil, false, err
+				}
+			}
 			if role == "assistant" {
 				reasoning := message.get("reasoning_content")
 				// All three reasoning models use Mistral's native typed chunks.
