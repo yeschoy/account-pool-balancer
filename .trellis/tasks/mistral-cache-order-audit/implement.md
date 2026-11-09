@@ -61,3 +61,11 @@
 - [x] 定向normal1.958秒/race3.176秒通过，包含既有reasoning冲突/占位、JSON/SSE响应、完整132工具历史、原身份不可变与本地TLS/HTTP2；无真实推理或生产部署。
 - [ ] 原188是否触发重复字段/实际生产Reader及缓存效果未验证；不能以本地缺陷修复关闭原问题。
 - [ ] 原生text/thinking交错经scalar响应再重建会损失块布局：已加12种往返characterization，仍待独立无损方案，不假称本次去重已解决。
+
+## 无损载体继续核对（2026-11-10）
+
+- [x] 只读实际容器：Balancer仍c1aebbc，NewAPI已为cb5b639标签镜像；两服务healthy/0。固定公开cb5源码，不碰本地NewAPI未提交工作。
+- [x] 目标长请求UA14条opencode/latest，不能固定客户端版本；本机1.2.16仅参考，固定对应公开tag及两SDK精确版本。
+- [x] 编译当前NewAPI DTO合成验证native流数组拒绝、annotations双向保留、另两额外字段丢弃。
+- [x] SDK内存mock验证默认布局不回传、OpenAI-compatible发送合并字段、参考Mistral SDK请求合入普通答案；显式模型类extractor+message providerOptions回传annotations通过，无真实fetch。
+- [ ] 待用户定实施边界：允许provider适配器/配置改动，或必须不动客户端；决策后再进入完整codec/集成实现，当前未改生产/客户端、未部署。

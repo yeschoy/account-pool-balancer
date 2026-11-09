@@ -48,3 +48,9 @@
 用户进一步要求查转换内容变化/零缓存，新增等价表示而非仅相同输入测试。三模型native-only原有1个thinking，加同值reasoning/reasoning_content后原转换会prepend为2个，12真实本地HTTP先红；已最小修复只在完整plain-native文本与legacy逐字相同才保留原生content原字节、不重复插入，空白/closed/part/工具/键不改，非匹配及签名/未知/歧义/其他模型保守不折叠。抽取既有响应plain-thinking文本解析共用，normal1.958秒/race3.176秒通过。**本地已修，未部署，未证原188触发或缓存改善**。
 
 另有已确认未解决边界：原生text→thinking→text经scalar reasoning/content再组请求会重排成thinking→text；12种JSON/逐delta往返已characterize，普通布局文字/空白保留，结构差异不能直接断言token失配或0缓存。未来需无损native/client边界，不用删思考/全局trim/存用户正文的临时cache伪补。正式证据research/native-thought-replay-20261109.md；任务不归档，临时回执已登记。
+
+## 无损载体能力核对（2026-11-10）
+
+只读发现当前NewAPI已为yeschoy/new-api:cb5b639，非此前官方48；Balancer仍c1、两服务healthy/0。原188的14业务UA仅opencode/latest，无法确证版本，本机OpenCode1.2.16只作参考。拉固定cb5实际DTO并编译合成探针：native SSE数组拒绝，annotations RawMessage双向保留，reasoning_details/provider_metadata丢弃。隔离安装参考SDK1.0.32/2.0.27，全部fetch用内存fake；默认不回传布局，nativeSDK请求还会把R合入答案，不能拍脑袋切SDK。显式模型类metadataExtractor+message providerOptions回传annotations通过，但未实现完整codec/真实客户端自动echo。
+
+推荐经协商的私有布局字段+客户端provider适配器，避免存原文；若必须不改客户端，另需批准有界状态/迁移/持久化/过期/歧义策略。已在PRD/design记录唯一范围门禁，等待能否改客户端的决策再实现。本轮无生产采样/配置/重启/推理或部署，170be84仍未部署；证据research/lossless-carrier-20261110.md，临时公开源码/npm缓存/探针回执已登记。
