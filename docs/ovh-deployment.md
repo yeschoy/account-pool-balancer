@@ -58,6 +58,14 @@
 
 正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261109T130529Z-c1aebbc`；镜像`account-pool-balancer:release-c1aebbc-20261109T130529Z`（ID`sha256:b0f664ea2c2e80aec19f75afa3d7ee708606804656be84e5d462253d04038332`）。完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261109T130529Z-mistral-capacity-c1aebbc/`含data、原Compose/.env、构建/切换日志及deploy.json，data SHA256`6756319ccddf4ba6d21b227fa2d2dcf229062f98166839758ce230e7307d8501`；旧镜像`account-pool-balancer:rollback-20261109T130529Z`保留。回退先确认新写入，不自动覆盖data。旧退出至首HTTP观测约6.81秒，非精确停机，不把构建/健康等待算停机。无新增待清理本地部署产物，正式备份/Trellis保留。
 
+## 上线后完整10分钟只读观察（2026-11-09 13:14–13:24 UTC，c1aebbc）
+
+用户明确要求观察10min；实际固定窗口UTC13:14:12–13:24:12（北京时间21:14:12–21:24:12），600秒，边界补采不扩大窗口。以当前实际c1aebbc为基线（其请求适配字节与72d1e42相同），43次运行采样均为同一revision、两服务healthy/restart0/无OOM。期间config文件hash有外部/后台写入，未保存原文、不能定位具体字段；本轮无任何配置/功能开关写入，不冒称固定配置实验。
+
+Mistral按完成时刻共93条：**88成功200、1超时504、4客户端取消499；无400/422/最终429/503**。唯一504请求UTC13:07:26在窗口前发起，13:17:26达到600秒响应等待上限，单attempt、无上游HTTP状态/TTFT/usage，未重放。窗口内1次429事件关联最终200、2attempt，不能当最终失败；request/error两行同一504不算两次失败。NewAPI180/182共享Key，36+52成功、4取消、1错误逐项对齐，88成功流均ok/done。GLM188/185/187及183本窗口无流量，不能据此宣称GLM缓存已修复。
+
+其他池仍有错误：OpenCode Go37条最终400（另38成功）、OpenDesign2条HTTP200但业务failed（另48成功）；NewAPI另有渠道71的12条503和162的一条流式失败，均单列不混成Mistral回归。本轮只读自然流量、不主动推理/压测、不改代码/配置/重启，观察已正常结束。详细口径、时间与请求关联见`.trellis/tasks/mistral-cache-order-audit/research/observe-10min-20261109.md`；补记录不触发新部署。
+
 ## 历史部署：Mistral思考空白占位与DeepSeek文本块兼容（2026-11-09 13:00 UTC，72d1e42）
 
 - 用户提供精确400并连续要求继续、急需，沿其此前“只做必要回归后直接部署”授权，先上线`b5d0dbb`修复空白占位误判，再上线独立发布提交`72d1e42114f89238d972f53f07899de731622aef`补齐已证实的两个422格式问题。**真实思考/文字/图片/工具/历史不删除**：三精确推理模型的Chat双思考字段仅忽略空白占位，真正非空冲突仍拒绝；DeepSeek Chat补type-only助手空文本槽的text=""，只消费标准单字段ephemeral提示，TTL/未知结构保留原生、不承诺Anthropic分块语义。没有修原GLM188缓存掉零、原生web_search或官方503。

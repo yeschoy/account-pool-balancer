@@ -12,3 +12,9 @@
 业务提交b5d0dbb、fbee8e9；独立运行发布72d1e42。详细阶段时间、镜像/正式备份/回退见docs/ovh-deployment.md，取证/验收见任务research/reasoning-placeholder-fix-20261109.md与text-block-compat-20261109.md。
 
 本轮兼容修复已完成，但原GLM188缓存根因仍未确认，所属mistral-cache-order-audit保持in_progress，不归档。临时产物登记_tmp_artifacts.md，未经同意不清理；正式备份/Trellis永久保留。仅补记录不再次部署。
+
+## 后续用户要求完整10分钟观察
+
+另一窗口已按其授权上线包含相同协议修复的c1aebbc。本轮只读观察UTC13:14:12–13:24:12完整600秒，43次运行采样均为该revision、两服务healthy/restart0/无OOM。Mistral完成93条：88成功、1条窗口前发起且等待600秒后504、4客户端取消；400/422未复现，1次窗口内429事件最终恢复200。NewAPI180/182共享Key的窗口统计逐项对齐。GLM188无流量，不能证明原缓存问题已解决。配置hash出现非本轮写入，不声称受控固定配置；未改任何配置/代码或重启、不主动推理/重放。
+
+其他池仍有OpenCode Go37条400、OpenDesign2条业务失败等，单列不掩盖。观察已正常结束；详细证据research/observe-10min-20261109.md。仅提交本轮日志/文档，不归档未完成缓存任务，不清理未经同意的临时产物。
