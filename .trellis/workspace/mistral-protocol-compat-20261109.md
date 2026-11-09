@@ -34,3 +34,9 @@
 另定位182/user821四消息组在进入NewAPI前第3条已改写（4.35%→0），不是只追加；另一组原输入system就在末尾。只是源端构造线索，可能辅助调用，不认定为原188同会话/全因，也不擅自移system/改历史。通用Mistral文档未列max_completion_tokens，但不能因此断言模型忽略或把参数乱改。
 
 新增mistral_param_order_audit_test.go，复用现有fixture/独立解码/Reader，三模型×显式/兜底、132工具、25→29→33历史、数值/参数/工具关联/完整实际HTTP mock接收；和既有TLS/HTTP2定向在干净c1副本1.762秒通过。只新增测试/记录，不改生产，mock不当真实TLS出站证明；GLM生产业务样本仍缺。详细证据research/parameter-message-order-20261109.md；临时产物已登记、专用文档浏览器已关闭、Trellis保留，任务不归档。
+
+## 用户追加HMAC计算稳定性
+
+区分真实routing HMAC与每次诊断采样换盐的标签。实际fingerprint每调用新建hash、复用metadata持久化secret，值为固定kind/caller scope/选中身份；无时间/随机nonce/请求ID/整段历史参与。新增mistral_hmac_stability_test.go：10000串行/并发、fake数据真实Server保存复建一致，normal1.104秒/race2.446秒通过。UTC15:59:58只读metadata三读同32字节secret、远端合成1000次一致，两内网入口同一c1容器，两服务healthy/0，没输出密钥/hash或重启。
+
+发现并复现现有contentText短字符串与单文本块多一个LF的边界，会使message fallback输入变化；未证原会话触发，未改共享提取器/缓存命名空间。原188已证session_header，上游key是稳定会话头原值，不经过消息HMAC，不能用该边界解释原14条掉缓存。详细research/hmac-stability-20261109.md；仅提交回归/spec/证据，未改生产或做推理，核心缓存任务不归档。

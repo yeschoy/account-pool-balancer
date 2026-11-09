@@ -45,3 +45,10 @@
 - [x] 检查max_completion_tokens32768/effort max等实值；官方通用schema未列不等于模型无效，未静默换参数。相同参数实际亦有95%–98%命中。
 - [x] 新增三精确模型×显式/兜底的132工具/25→29→33历史HTTP上传回归；与既有TLS/HTTP2适配一起在干净c1aebbc副本通过1.762秒，不混入其他窗口未提交代码、不跑付费推理或无关全仓。
 - [ ] 原188/GLM业务自然流量及真正生产attempt/Reader证据仍缺；没有重启/部署或自动续采，不能据mock关闭原缓存任务。
+
+## 用户追加：HMAC重复调用是否不一致
+
+- [x] 审计实际secret生命周期、固定kind/scope/value拼接、惰性历史/固定数组JSON与直接缓存/会话头优先；区分随机诊断盐与实际routingSecret。
+- [x] 新增10000次串行/并发、相同fake metadata真实Server复建、短字符串/文本块LF与UTF-8截断边界回归；clean c1副本normal1.104秒/race2.446秒通过，不做真实推理/生产重启。
+- [x] 本机只读验证32字节metadata密钥三读稳定、公开合成输入1000次一致、两内网兼容入口同一容器且两服务healthy/0重启，不打印任何secret/hash。
+- [x] 明确表示边界尚未证目标触发，不改共享contentText；原188稳定session_header上游提示非消息HMAC，不用新边界冒充原根因，核心任务仍未完成。
