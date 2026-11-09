@@ -4,5 +4,5 @@
   "description": "Mistral全链路容量审计及正式优化、独立会话容量；本地验证完成，待真实3亿TPM验收",
   "research": "research.md",
   "validation": "validation.md",
-  "waiting_for": "业务代码已提交1c0a410，干净检出构建及定向/Node回归通过；用户已批准主会话串行实施，代码/API/UI/持久化及全仓normal/race/vet/build、Node、真实本地浏览器保存/刷新/进程重启和跨池隔离已验证；详见validation.md和docs/mistral-capacity.md第8节。未部署、未改线上配置、无真实推理/独立agent审阅。待确认真实工作负载/token口径/RPS/持流/SLO、上游组织限额和费用上限后再另行授权端到端持续压测及部署；不宣称3亿TPM已通过，任务不归档。"
+  "waiting_for": "业务代码已提交1c0a410，干净检出构建及定向/Node回归通过；用户已批准主会话串行实施，代码/API/UI/持久化及全仓normal/race/vet/build、Node、真实本地浏览器保存/刷新/进程重启和跨池隔离已验证；详见validation.md和docs/mistral-capacity.md第8节。已按用户授权于2026-11-09 13:07UTC部署c1aebbc，健康/双内网入口/公网静态资源验收通过，配置字节保留；无真实推理/独立agent审阅。待确认真实工作负载/token口径/RPS/持流/SLO、上游组织限额和费用上限后再另行授权端到端持续压测；不宣称3亿TPM已通过，任务不归档。"
 }
