@@ -138,3 +138,11 @@
 用户明确继续。隔夜超过7小时原绑定已过期，预检后已说明改为原账号4次全新Transport直连，避免改绑定或重新选号；第一条只当可能冷启动。精确复用上一轮公开fixture/诊断身份，守卫同账号/代理端点、200599字节、每次input34485/max_tokens1，HTTP trace确认各1次新连接/握手/成功写入、无TLS恢复。结果0%→99.8463%→99.8463%→99.8463%；input137940/cached103296/output4，退出0、stderr空、无后台进程，停在4次上限。
 
 因此不能把新TCP/TLS或未复用连接本身当作必然低命中原因，没有依据加“强制新建连接/固定单连接”补丁。也不能把第一条跨夜0误作原暖请求异常或将当前3个暖样本视为已排除共享池/上游随机路由。核心问题仍未修复；应转自测-test自然流量的完整出站指纹/连接标识取证，不再追加付费猜测。证据见`.trellis/tasks/mistral-cache-order-audit/research/fresh-connections-20261109.md`；本轮只提交业务证据，临时探针/脱敏回执继续等待同意清理，不归档未解决任务。
+
+## 10. 自然流量完整指纹与连接诊断（2026-11-09，本地开发）
+
+用户批准继续补齐完整实际出站取证，明确先本地实现/回归，不再主动推理、不部署。已新增可选启动Key ID的Mistral专属诊断：默认关闭、30分钟/128请求，独立进程HMAC/runId，有界历史消息/工具与schema/root顺序指纹、原始入站→准备→实际attempt/Reader比对、GetBody读取和完整/部分/不匹配检测、全值X-Affinity/source/target指纹、原生trace及不透明Go连接/TLS复用观测。保持原转发、MarkSent/重试/选号/usage和流首帧语义，无正文/原始会话/凭据持久化。
+
+新元数据复用admin-only/no-store请求日志，UI仅已采集行出现「缓存诊断」。全仓Go normal/race/vet/build及9套Node行为和web JS语法通过；真实本地浏览器使用1假账号/loopback mock验证关闭详情仍可观察完整174291字节实际读取、旧消息前缀/工具不变、复用连接、假trace和API往返/无注入/无秘密。receipt1005bytes已核验allPassed=true；专用浏览器已关闭，PID81080退出、60065监听关闭，文件经同意再清理。
+
+详见`docs/mistral-cache-diagnostics.md`及本任务validation.md。原始6+4次受控生产调用不再追加；核心低缓存仍未解决。后续需要另获授权部署并只为自测-test临时启用自然采样，不能把诊断代码通过当作缓存率已改善。其他窗口注册/Dockerfile改动保留，Trellis不归档未解决任务。

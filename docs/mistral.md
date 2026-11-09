@@ -2,7 +2,7 @@
 
 Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转换。默认上游 `https://api.mistral.ai/v1`。
 
-缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）。后续已落实普通绑定持久化、真实会话优先与OpenCode缓存别名兼容，定向Mock/构建通过，`2629255`于2026-11-08 19:44 UTC完成部署验收；自然流量已有6条普通绑定落盘，尚未做生产缓存命中率受控对照。
+缓存相关研究见 [Magpie / Mistral 实现深度对比](mistral-magpie-cache-comparison.md)（2026-11-09）。后续已落实普通绑定持久化、真实会话优先与OpenCode缓存别名兼容，定向Mock/构建通过，`2629255`于2026-11-08 19:44 UTC完成部署验收；自然流量已有6条普通绑定落盘，该次部署本身未做生产缓存命中率受控对照。后续自测-test的6+4次公开完整样本对照已记入Trellis，尚未确认具体低命中根因或缓存率修复。
 
 ## 管理与接入
 
@@ -102,6 +102,10 @@ X-Kilocode-Taskid
 Claude结构支持 `_session_UUID`，以及包含会话字段的JSON**字符串**，字段顺序为 `session_id` → `claude_session_id` → `agent_id` → `thread_id` → `conversation_id` → `parent_session_id` → `parent_agent_id` → `parent_thread_id` → `parent_conversation_id`；普通user标签不是会话。正文会话只用于身份解析，无可用HTTP头时通过HMAC兜底补缓存键，不是直接复制正文会话原值。
 
 **管理员「客户端头」原值展示（已随a6d7d38部署OVH）**：按用户明确授权，新采集的Mistral请求摘要保留会话头、父会话头、额外会话头、缓存键及 `X-Affinity` 原值，保留原始空白和多值；仍限制前64个头、每头4个值、每值512字节、总量8KiB，超限会标记截断。`Authorization`、API Key、Cookie等认证凭证及已知密钥继续隐藏，即使被配置为额外会话头也不能绕过。日志API只允许管理员会话访问并设置 `Cache-Control: no-store`，不会通过下游运行Key开放；正文、上游详情、错误日志及其他号池的脱敏规则不变。旧日志中的 `[REDACTED]` 无法还原，并不代表NewAPI屏蔽了头值。识别与转发始终使用原始请求，不因展示规则改变；实现见 `internal/server/identity.go`、`mistral_request.go`、`mistral_client_headers.go`。
+
+## 临时完整前缀与连接诊断（本地已验证，未部署）
+
+新增默认关闭、按精确下游Key ID临时启用的[缓存链路诊断](mistral-cache-diagnostics.md)：30分钟/128请求上限，不必开启正文详情，即可在请求日志查看入站、准备后、实际HTTP正文的HMAC，旧消息完整前缀/消息与工具排列变化、schema属性顺序与连接复用信息。只观测自然流量，不主动发推理或改变缓存/连接/调度策略；不记录正文、原始会话或凭据，不能把诊断交付称作缓存问题已解决。生产启用须另获部署授权。
 
 ## 原生接口与额度
 

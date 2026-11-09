@@ -1456,6 +1456,12 @@ function upstreamTPSCell(r) {
   return average + `<br><span class="acc-sub" title="${basis}；仅最后实际上游尝试，使用真实输出用量，非服务端内部解码速度">${streaming ? '首事件后' : '上游均速'} ${num(r.upstreamTps)} tok/s</span>`;
 }
 function keyCell(r) { return esc(r.clientKeyName || r.clientKeyId || '—'); }
+function showMistralCacheAudit(r) {
+  const a = r.cacheAudit;
+  const supported = a?.version === 1;
+  const explanation = '临时诊断，仅记录脱敏HMAC、结构计数与HTTP读取/连接观测，不保存正文。指纹只在同一runId内可比较；不同账号、源配置或并发请求不能直接当作已预热缓存对照。读取完整不等于上游已收到全部字节，须结合写入状态、服务商追踪ID和真实用量。连接标识不是模型缓存节点，也不覆盖其他Key的连接使用。';
+  modal({ title:'缓存链路诊断 · ' + r.requestId, wide:true, body:`<p class="acc-sub">${esc(explanation)}</p>${supported ? `<p>采样 ${esc(a.sample)} / ${esc(a.sampleLimit ?? '—')} · 本次进程 ${esc(a.runId)} · 新请求采集截止 ${esc(fmtTime(a.expiresAt))}</p><p class="acc-sub">client → prepared 检查适配；previousClient / previousPrepared / attempts[].previous 对比前序观测；sequenceComplete/toolsComplete=false 或缺失的比较字段表示未知。previousSequenceRetained 表示旧消息JSON字节前缀保留，不保证提供商缓存命中；sequenceReordered/toolsReordered 只识别字节相同元素的纯排列变化。</p><pre>${esc(JSON.stringify(a, null, 2))}</pre>` : '<p class="acc-sub">未采集或诊断格式不受支持；旧日志不能补算完整指纹。</p>'}` });
+}
 function showClientRequestHeaders(r) {
   const states = { valid:'有效候选（不代表最终选中）', empty:'空值', invalid:'无效值（控制字符或超过512字节）' };
   const candidates = Object.entries(r.clientSessionHeaderStatus || {}).map(([name, state]) => `${name}: ${states[state] || state}`).join('\n');
@@ -1473,7 +1479,7 @@ function requestRow(r) {
     <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.provider === 'mistral' ? `<div class="acc-sub">来源 ${esc(r.sessionSource || '—')}</div>` : ''}${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
     <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div>${upstreamTPSCell(r)}</div><div class="acc-sub">${costCell(r)}</div></td>
     <td class="num">${tok}<div>${cacheRateCell(r)}</div>${r.cacheCreationTokens != null ? `<div class="acc-sub">缓存写入 ${num(r.cacheCreationTokens)}</div>` : ''}${r.egressStatus ? `<div class="acc-sub">${esc(r.proxy)}${r.egressIp ? ' / ' + esc(r.egressIp) : ''} · ${esc(GO_EGRESS_LABEL[r.egressStatus] || r.egressStatus)}</div>` : ''}</td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
-    <td class="act">${r.provider === 'mistral' ? `<button type="button" class="btn small ghost rq-headers" data-rid="${esc(r.requestId)}">客户端头</button>` : ''}<button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
+    <td class="act">${r.provider === 'mistral' && r.cacheAudit ? `<button type="button" class="btn small ghost rq-audit" data-rid="${esc(r.requestId)}">缓存诊断</button>` : ''}${r.provider === 'mistral' ? `<button type="button" class="btn small ghost rq-headers" data-rid="${esc(r.requestId)}">客户端头</button>` : ''}<button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }
 function detailRow(d) {
   const sz = (n, cut) => num(n) + ' B' + (cut ? ' <span class="badge warn">截断</span>' : '');
@@ -1552,6 +1558,8 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
     try { await api('DELETE', `/api/logs/${kind}`); loadLogs(kind, true); } catch (e) { toast(e.message); }
   });
   $(`#${p}-table tbody`).addEventListener('click', (ev) => {
+    const audit = ev.target.closest('.rq-audit');
+    if (audit) { const item = logState.requests.items.find(r => r.requestId === audit.dataset.rid); if (item) showMistralCacheAudit(item); return; }
     const headers = ev.target.closest('.rq-headers');
     if (headers) { const item = logState.requests.items.find(r => r.requestId === headers.dataset.rid); if (item) showClientRequestHeaders(item); return; }
     const detail = ev.target.closest('.er-detail');

@@ -99,6 +99,17 @@ assert.match(bothTPS,/全程平均 25 tok\/s/);
 assert.match(bothTPS,/首事件后 50 tok\/s/);
 assert.match(context.upstreamTPSCell({averageTps:25.6}),/全程平均 26 tok\/s/);
 assert.match(context.upstreamTPSCell({outputTokens:100,durationMs:4000}),/全程平均 TPS —/); // never backfill old logs
+vm.runInContext(source.slice(source.indexOf('function showMistralCacheAudit('), source.indexOf('function showClientRequestHeaders(')), context);
+context.modal = options => { context.auditDialog = options; };
+context.showMistralCacheAudit({requestId:'audit-request',cacheAudit:{version:1,runId:'<img src=x onerror=bad>',sample:2,sampleLimit:128,expiresAt:'future',prepared:{sequenceComplete:false},attempts:[{bodyReads:[{complete:false,matchesExpected:false}]}]}});
+assert.match(context.auditDialog.body,/2 \/ 128/);
+for (const label of ['不保存正文','同一runId','读取完整不等于','不是模型缓存节点','表示未知','不保证提供商缓存命中','matchesExpected']) assert.ok(context.auditDialog.body.includes(label), label);
+assert.doesNotMatch(context.auditDialog.body,/<img/);
+assert.match(context.auditDialog.body,/&lt;img/);
+context.showMistralCacheAudit({requestId:'legacy'});
+assert.match(context.auditDialog.body,/旧日志不能补算/);
+context.showMistralCacheAudit({cacheAudit:{version:99,runId:'unsupported'}});
+assert.match(context.auditDialog.body,/格式不受支持/);
 vm.runInContext(source.slice(source.indexOf('function showDetail('), source.indexOf('function errorRow(')), context);
 context.modal = options => { context.wireDialog = options; };
 context.showDetail({provider:'mistral',wireVersion:1,method:'POST',path:'/v1/chat/completions',status:200,requestBody:'<img src=x onerror=bad>',responseBody:'adapted',upstreamAttempts:[{attemptIndex:0,method:'POST',path:'/v1/chat/completions',status:200,sent:true,request:{body:'prepared'},response:{body:'native',bodyTruncated:true,bodyBytes:99999}}]});

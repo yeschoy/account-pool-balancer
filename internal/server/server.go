@@ -38,13 +38,14 @@ type metadata struct {
 }
 
 type Server struct {
-	dataDir string
-	cfg     *config.Store
-	pool    *pool.Pool
-	quota   *quota.Poller
-	logs    *logstore.Store
-	stats   *stats.Stats
-	secret  []byte
+	dataDir      string
+	cfg          *config.Store
+	pool         *pool.Pool
+	quota        *quota.Poller
+	logs         *logstore.Store
+	stats        *stats.Stats
+	secret       []byte
+	mistralAudit *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect
 
 	requestMu      sync.Mutex
 	draining       bool
@@ -134,8 +135,9 @@ const (
 // Options for New; zero values are fine.
 type Options struct {
 	// AdminPassword initializes the admin password when none is set yet.
-	AdminPassword         string
-	TokenHarborBufferedMB int // 0 uses 2048 MiB, capped at a third of GOMEMLIMIT
+	AdminPassword          string
+	TokenHarborBufferedMB  int    // 0 uses 2048 MiB, capped at a third of GOMEMLIMIT
+	MistralCacheAuditKeyID string // optional exact downstream Key ID; 30 min / 128 requests
 }
 
 func New(dataDir string, opt Options) (*Server, error) {
@@ -143,6 +145,10 @@ func New(dataDir string, opt Options) (*Server, error) {
 		return nil, err
 	}
 	store, err := config.Load(filepath.Join(dataDir, "config.json"))
+	if err != nil {
+		return nil, err
+	}
+	audit, err := newMistralCacheAudit(store.Get(), opt.MistralCacheAuditKeyID, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +163,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if soft := debug.SetMemoryLimit(-1); soft > 0 && soft/3 < bufferLimit {
 		bufferLimit = max(1<<20, soft/3)
 	}
-	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now(), thBufferLimit: bufferLimit}
+	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now(), thBufferLimit: bufferLimit, mistralAudit: audit}
 	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
 	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
@@ -391,6 +397,7 @@ func (s *Server) Run(ctx context.Context) {
 				log.Printf("save counters: %v", err)
 			}
 		case <-meta.C:
+			s.mistralAudit.expire(time.Now())
 			if err := s.saveMetadata(false); err != nil {
 				log.Printf("save metadata: %v", err)
 			}

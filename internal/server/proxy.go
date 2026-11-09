@@ -125,8 +125,10 @@ type requestLog struct {
 	ClientSessionHeaderStatus     map[string]string   `json:"clientSessionHeaderStatus,omitempty"`
 	ClientRequestHeadersTruncated bool                `json:"clientRequestHeadersTruncated,omitempty"`
 
-	upstreamDetails    []upstreamWireLog // sanitized, attached only to detail logs
-	upstreamIdentities []string          // ephemeral response secrets; never serialized
+	CacheAudit         *mistralCacheAuditLog `json:"cacheAudit,omitempty"`
+	cacheAudit         *mistralAuditRequest  // private ephemeral per-request fingerprint state
+	upstreamDetails    []upstreamWireLog     // sanitized, attached only to detail logs
+	upstreamIdentities []string              // ephemeral response secrets; never serialized
 }
 
 type errorLog struct {
@@ -462,6 +464,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if (rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor) && result == "failed" && len(rec.Attempts) == 0 {
 			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: rec.Provider + " gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
 		}
+		if rec.cacheAudit != nil {
+			rec.cacheAudit.done.Store(true)
+		}
 		s.logs.Append("requests", rec.TS, rec)
 		if cw != nil && detailEnabled && (rec.Provider != config.ProviderTokenHarbor || result != "failed" || len(rec.failureDetails) == 0) {
 			max := cw.max
@@ -727,6 +732,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			detailIdentities = append(detailIdentities, generatedCacheKey)
 			rec.CacheHintSource = cacheSource
 		}
+		rec.cacheAudit = s.mistralAudit.begin(rec, ident, reqBody, body, time.Now())
 	}
 
 	excluded := map[string]bool{}
@@ -1486,6 +1492,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.ContentLength = int64(len(body))
+	if audit := rec.cacheAudit.attempt(req, trace, cfg, acct, body, attemptNo-1, privateIdentities); audit != nil {
+		defer audit.finish(res)
+	}
 	wireCapture := newMistralUpstreamDetail(cfg, req, rec, body, attemptNo, privateIdentities)
 	if wireCapture != nil {
 		trace.WroteHeaderField = wireCapture.recordHeader

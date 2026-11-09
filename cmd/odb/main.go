@@ -33,9 +33,10 @@ func main() {
 	bufferMB := flag.Int("th-buffer-mb", budget, "TokenHarbor shared input-buffer budget in MiB (also capped by GOMEMLIMIT)")
 	addr := flag.String("addr", env("ODB_ADDR", ":8790"), "listen address")
 	dataDir := flag.String("data", env("ODB_DATA_DIR", "./data"), "data directory (config, metadata, logs)")
+	auditKeyID := flag.String("mistral-cache-audit-key-id", env("ODB_MISTRAL_CACHE_AUDIT_KEY_ID", ""), "opt-in Mistral cache fingerprints for one enabled client key ID (30 minutes / 128 requests; no bodies)")
 	flag.Parse()
 
-	srv, err := server.New(*dataDir, server.Options{AdminPassword: os.Getenv("ODB_ADMIN_PASSWORD"), TokenHarborBufferedMB: *bufferMB})
+	srv, err := server.New(*dataDir, server.Options{AdminPassword: os.Getenv("ODB_ADMIN_PASSWORD"), TokenHarborBufferedMB: *bufferMB, MistralCacheAuditKeyID: *auditKeyID})
 	if err != nil {
 		log.Fatalf("startup: %v", err)
 	}

@@ -15,6 +15,7 @@ introduce a new frontend build system. Keep node/pnpm artifacts ignored.
   wallet0 is not plan exhaustion. Keep historical values/times clearly labeled,
   never display an expired window as measured replenishment, and honor refresh
   ok/quotaRefreshed instead of treating HTTP200 as upstream success.
+- Mistral's optional cacheAudit request summaries expose a separate administrator “缓存诊断” button only for collected records. Escape all JSON/text, explain same-runId comparisons, structural caps/unknown fields, observed reads vs actual sending, concurrent predecessors and opaque client connections vs provider cache nodes. Do not reconstruct legacy/truncated bodies, expose raw identities in audit metadata, persist diagnostics in localStorage or imply collection improved caching. Reuse the existing request-log/admin/no-store boundary; startup opt-in is temporary, not a new persistent routing setting.
 - Clearly label unknown/stale quota, subscription-wide percentages and buffered
   compatibility. Do not display missing measurements as zero balances.
 - Validate with node --check and a real local browser when changing flows.
