@@ -49,6 +49,12 @@ Only successful requests with real output usage and a positive timing window get
 
 Request summaries also carry optional useTimeSec/averageTps. finish samples the end once: useTimeSec=end.Unix()-request.ts.Unix(), not floor(durationMs/1000); averageTps=actual outputTokens/useTimeSec only for successful positive-output requests and a positive whole-second window. This intentionally mirrors NewAPI's request-log formula, including whole-second boundary effects. The UI rounds once to an integer like NewAPI; the stored rate is not pre-rounded. Include this gateway's upload/admission/TTFT/retries inside its recorded request clock; observation points differ from NewAPI, so equal numbers are not guaranteed. Do not subtract TTFT or use input/cached/reasoning tokens as additional output. Keep existing upstreamTps unchanged and label streaming as first-event-after throughput, nonstreaming as upstream call average. Missing/failed/zero-window/legacy values remain unknown, with no frontend historical backfill.
 
+## Queue bytes and Mistral sampling (2026-11-09)
+
+- `logstore.Limits.MaxQueuedBytes<=0` defaults to64MiB. Reserve actual marshaled JSON line bytes atomically before nonblocking enqueue; keep8192-record bound. Full bytes/channel drops disk jobs, increments existing dropped, never blocks inference; writer success/error and close-drain return reservations. `QueuedBytes/QueueLength` are observations, not a process/RSS bound; memory rings retain existing separate limits.
+- Mistral `performance.detailSamplePercent` samples once perrequest deterministically from request-ID inside the existing effective detail switch. 0 skips new client/upstream body capture,100 preserves switch behavior; summaries, historical details and independently opt-in cacheAudit remain. Stable immutable account-slice+Revision caching must never weaken credential/session redaction or retain unbounded config versions.
+- Regression: queue byte/channel/close/concurrency/retention tests; Mistral sample0/100 and all privacy tests. See `mistral-capacity.md`.
+
 ## Mistral native exchange details (2026-11-09)
 
 - Existing admin-only detailLog requestHeaders/requestBody remain the original client input; responseHeaders/responseBody remain the downstream adapted result. New wireVersion=1/upstreamAttempts[] correlates each actual Mistral HTTP attempt by zero-based attemptIndex/accountId; each has method/path, sent-header flag, native HTTP status/terminal, request and optional response message (headers/body/bodyBytes/bodyTruncated).

@@ -65,16 +65,6 @@ func (b *Bucket) add(o Bucket) {
 	b.CostUSD += o.CostUSD
 }
 
-type ring [1440]Bucket
-
-func (r *ring) slot(m int64) *Bucket {
-	b := &r[m%1440]
-	if b.Minute != m {
-		*b = Bucket{Minute: m}
-	}
-	return b
-}
-
 // scope is one set of rings: everything, or one provider's share of it.
 type scope struct {
 	global  ring
@@ -88,14 +78,15 @@ func newScope() *scope {
 }
 
 type Stats struct {
-	mu   sync.Mutex
-	all  *scope
-	prov map[string]*scope // per provider (opendesign, river)
-	now  func() time.Time
+	mu           sync.Mutex
+	all          *scope
+	prov         map[string]*scope // per provider (opendesign, river)
+	now          func() time.Time
+	accountOwner map[string]string // sole-provider rings can share overall storage
 }
 
 func New() *Stats {
-	return &Stats{all: newScope(), prov: map[string]*scope{}, now: time.Now}
+	return &Stats{all: newScope(), prov: map[string]*scope{}, now: time.Now, accountOwner: map[string]string{}}
 }
 
 // maxModels bounds the per-model rings: model names come from clients.
@@ -123,8 +114,16 @@ type Sample struct {
 	Cost                float64
 }
 
-func slotOf(m map[string]*ring, key string, limit int) *ring {
+func slotOf(m map[string]*ring, key string, limit int, minute int64) *ring {
 	r := m[key]
+	if r == nil && len(m) >= limit {
+		for id, old := range m {
+			old.prune(minute - 1440)
+			if len(old.slots) == 0 {
+				delete(m, id)
+			}
+		}
+	}
 	if r == nil && len(m) < limit {
 		r = &ring{}
 		m[key] = r
@@ -132,19 +131,19 @@ func slotOf(m map[string]*ring, key string, limit int) *ring {
 	return r
 }
 
-func (sc *scope) record(m int64, d Bucket, x Sample) {
-	sc.global.slot(m).add(d)
-	if x.AccountID != "" {
-		slotOf(sc.account, x.AccountID, 1<<30).slot(m).add(d)
+func (sc *scope) record(m int64, d Bucket, x Sample, account bool) {
+	sc.global.record(m, d)
+	if account && x.AccountID != "" {
+		slotOf(sc.account, x.AccountID, 1<<30, m).record(m, d)
 	}
 	if x.Proxy != "" {
-		if r := slotOf(sc.proxy, x.Proxy, maxProxies); r != nil {
-			r.slot(m).add(d)
+		if r := slotOf(sc.proxy, x.Proxy, maxProxies, m); r != nil {
+			r.record(m, d)
 		}
 	}
 	if x.Model != "" {
-		if r := slotOf(sc.model, x.Model, maxModels); r != nil {
-			r.slot(m).add(d)
+		if r := slotOf(sc.model, x.Model, maxModels, m); r != nil {
+			r.record(m, d)
 		}
 	}
 }
@@ -209,14 +208,45 @@ func (s *Stats) Record(x Sample) {
 		d.CacheCached = *x.Cached
 		d.CacheKnownRequests = 1
 	}
-	s.all.record(m, d, x)
+	var scoped *scope
 	if x.Provider != "" {
-		sc := s.prov[x.Provider]
-		if sc == nil {
-			sc = newScope()
-			s.prov[x.Provider] = sc
+		scoped = s.prov[x.Provider]
+		if scoped == nil {
+			scoped = newScope()
+			s.prov[x.Provider] = scoped
 		}
-		sc.record(m, d, x)
+	}
+	if x.AccountID != "" {
+		owner, seen := s.accountOwner[x.AccountID]
+		if !seen {
+			s.accountOwner[x.AccountID] = x.Provider
+			if scoped != nil && s.all.account[x.AccountID] == nil {
+				r := &ring{}
+				s.all.account[x.AccountID] = r
+				scoped.account[x.AccountID] = r
+			}
+		} else if owner == x.Provider && scoped != nil {
+			// One projection may have been pruned while the other was idle.
+			a, r := s.all.account[x.AccountID], scoped.account[x.AccountID]
+			if a == nil && r == nil {
+				r = &ring{}
+				s.all.account[x.AccountID] = r
+				scoped.account[x.AccountID] = r
+			} else if a == nil {
+				s.all.account[x.AccountID] = r
+			} else if r == nil {
+				scoped.account[x.AccountID] = a
+			}
+		} else if owner != x.Provider && owner != "\x00multiple" {
+			if r := s.all.account[x.AccountID]; r != nil {
+				s.all.account[x.AccountID] = cloneRing(r)
+			}
+			s.accountOwner[x.AccountID] = "\x00multiple"
+		}
+	}
+	s.all.record(m, d, x, true)
+	if scoped != nil {
+		scoped.record(m, d, x, x.AccountID == "" || scoped.account[x.AccountID] != s.all.account[x.AccountID])
 	}
 }
 
@@ -230,20 +260,15 @@ type Summary struct {
 	Generated time.Time         `json:"generated"`
 }
 
-func sumRing(r *ring, cut int64) (t Bucket) {
-	for _, b := range r {
-		if b.Minute > cut {
-			t.add(b)
-		}
-	}
-	return t
-}
+func sumRing(r *ring, cut int64) Bucket { r.prune(cut); return r.total }
 
 func sumMap(src map[string]*ring, cut int64) map[string]Bucket {
 	out := map[string]Bucket{}
 	for k, r := range src {
 		if t := sumRing(r, cut); t.Requests > 0 {
 			out[k] = t
+		} else if len(r.slots) == 0 {
+			delete(src, k)
 		}
 	}
 	return out
@@ -270,16 +295,16 @@ func (s *Stats) SummaryFor(provider string) Summary {
 	for i := range out.Hourly {
 		out.Hourly[i].Minute = hourStart + int64(i)*60
 	}
-	for _, b := range sc.global {
+	for _, b := range sc.global.slots {
 		if b.Minute <= cut || b.Requests == 0 {
 			continue
 		}
-		out.Total.add(b)
+		out.Total.add(*b)
 		if b.Minute > m-60 {
-			out.LastHour.add(b)
+			out.LastHour.add(*b)
 		}
 		if h := (b.Minute - hourStart) / 60; h >= 0 && h < 24 {
-			out.Hourly[h].add(b)
+			out.Hourly[h].add(*b)
 		}
 	}
 	out.Accounts = sumMap(sc.account, cut)
@@ -299,15 +324,7 @@ type Export struct {
 }
 
 func (sc *scope) export(cut int64) Export {
-	pick := func(r *ring) []Bucket {
-		var out []Bucket
-		for _, b := range r {
-			if b.Minute > cut && b.Requests > 0 {
-				out = append(out, b)
-			}
-		}
-		return out
-	}
+	pick := func(r *ring) []Bucket { return r.pick(cut) }
 	e := Export{Global: pick(&sc.global), Accounts: map[string][]Bucket{}, Models: map[string][]Bucket{}, Proxies: map[string][]Bucket{}}
 	for id, r := range sc.account {
 		if l := pick(r); len(l) > 0 {
@@ -353,14 +370,14 @@ func withPrompt(b Bucket) Bucket {
 func loadRing(l []Bucket) *ring {
 	r := &ring{}
 	for _, b := range l {
-		r[b.Minute%1440] = withPrompt(b)
+		r.set(withPrompt(b))
 	}
 	return r
 }
 
 func (sc *scope) load(e Export) {
 	for _, b := range e.Global {
-		sc.global[b.Minute%1440] = withPrompt(b)
+		sc.global.set(withPrompt(b))
 	}
 	for id, l := range e.Accounts {
 		sc.account[id] = loadRing(l)
@@ -382,6 +399,10 @@ func (sc *scope) load(e Export) {
 func (s *Stats) Import(e Export) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.relinkAccountsLocked()
+	s.all = newScope()
+	s.prov = map[string]*scope{}
+	s.accountOwner = map[string]string{}
 	s.all.load(e)
 	if len(e.Providers) == 0 {
 		// written before providers existed: everything was OpenDesign
@@ -408,14 +429,21 @@ func (s *Stats) ResetCacheRates(provider string) {
 		return
 	}
 	reset := func(r, all *ring) {
-		for i := range r {
-			b := &r[i]
-			if all != nil && all[i].Minute == b.Minute {
-				a := &all[i]
-				a.CachePrompt = max(0, a.CachePrompt-b.CachePrompt)
-				a.CacheCached = max(0, a.CacheCached-b.CacheCached)
-				a.CacheKnownRequests = max(0, a.CacheKnownRequests-b.CacheKnownRequests)
+		for i, b := range r.slots {
+			if all != nil && all != r {
+				if a := all.slots[i]; a != nil && a.Minute == b.Minute {
+					cp, ck, cn := min(a.CachePrompt, b.CachePrompt), min(a.CacheCached, b.CacheCached), min(a.CacheKnownRequests, b.CacheKnownRequests)
+					a.CachePrompt -= cp
+					a.CacheCached -= ck
+					a.CacheKnownRequests -= cn
+					all.total.CachePrompt -= cp
+					all.total.CacheCached -= ck
+					all.total.CacheKnownRequests -= cn
+				}
 			}
+			r.total.CachePrompt -= b.CachePrompt
+			r.total.CacheCached -= b.CacheCached
+			r.total.CacheKnownRequests -= b.CacheKnownRequests
 			b.CachePrompt, b.CacheCached, b.CacheKnownRequests = 0, 0, 0
 		}
 	}
@@ -432,6 +460,7 @@ func (s *Stats) ResetCacheRates(provider string) {
 func (s *Stats) Forget(id string) {
 	s.mu.Lock()
 	delete(s.all.account, id)
+	delete(s.accountOwner, id)
 	for _, sc := range s.prov {
 		delete(sc.account, id)
 	}

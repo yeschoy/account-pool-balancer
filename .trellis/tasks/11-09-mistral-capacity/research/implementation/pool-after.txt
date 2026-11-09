@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/pool
+cpu: Apple M4
+BenchmarkMistralCapacityFlow/accounts=40/health=false/hit=false-8         	    6684	     71664 ns/op	   17138 B/op	      66 allocs/op
+BenchmarkMistralCapacityFlow/accounts=40/health=false/hit=true-8          	  120883	      2510 ns/op	    1064 B/op	       6 allocs/op
+BenchmarkMistralCapacityFlow/accounts=40/health=true/hit=false-8          	    4520	     45311 ns/op	   17134 B/op	      66 allocs/op
+BenchmarkMistralCapacityFlow/accounts=40/health=true/hit=true-8           	  126727	      2268 ns/op	    1064 B/op	       6 allocs/op
+BenchmarkMistralCapacityFlow/accounts=400/health=false/hit=false-8        	     793	    256770 ns/op	  152410 B/op	     433 allocs/op
+BenchmarkMistralCapacityFlow/accounts=400/health=false/hit=true-8         	  135087	      1954 ns/op	    1064 B/op	       6 allocs/op
+BenchmarkMistralCapacityFlow/accounts=400/health=true/hit=false-8         	    1107	    227360 ns/op	  152436 B/op	     432 allocs/op
+BenchmarkMistralCapacityFlow/accounts=400/health=true/hit=true-8          	  135226	      1611 ns/op	    1064 B/op	       6 allocs/op
+BenchmarkMistralCapacityFlow/accounts=4000/health=false/hit=false-8       	     163	   1251980 ns/op	 1527031 B/op	    4045 allocs/op
+BenchmarkMistralCapacityFlow/accounts=4000/health=false/hit=true-8        	  236972	       910.6 ns/op	    1064 B/op	       6 allocs/op
+BenchmarkMistralCapacityFlow/accounts=4000/health=true/hit=false-8        	     171	   1736794 ns/op	 1532399 B/op	    4045 allocs/op
+BenchmarkMistralCapacityFlow/accounts=4000/health=true/hit=true-8         	  268731	       836.2 ns/op	    1064 B/op	       6 allocs/op
+PASS
+ok  	account-pool-balancer/internal/pool	4.561s

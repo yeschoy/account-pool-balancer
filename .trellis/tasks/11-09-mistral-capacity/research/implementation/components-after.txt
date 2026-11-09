@@ -1,0 +1,19 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/server
+cpu: Apple M4
+BenchmarkCapacityResearchPrepare/KB=128/system=false         	     489	    462387 ns/op	 290.90 MB/s	  253382 B/op	    1735 allocs/op
+BenchmarkCapacityResearchPrepare/KB=128/system=true          	     655	    360666 ns/op	 373.06 MB/s	  254196 B/op	    1747 allocs/op
+BenchmarkCapacityResearchPrepare/KB=512/system=false         	     212	   1107146 ns/op	 473.88 MB/s	  646640 B/op	    1736 allocs/op
+BenchmarkCapacityResearchPrepare/KB=512/system=true          	     212	   1149029 ns/op	 456.64 MB/s	  647454 B/op	    1748 allocs/op
+BenchmarkCapacityResearchPrepare/KB=2048/system=false        	      55	   5338928 ns/op	 390.57 MB/s	 2203153 B/op	    1736 allocs/op
+BenchmarkCapacityResearchPrepare/KB=2048/system=true         	      55	   5708808 ns/op	 365.27 MB/s	 2203966 B/op	    1748 allocs/op
+BenchmarkCapacityResearchSSE                                 	 1000000	       215.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCapacityResearchRedact/accounts=40/freshProviderView=false         	    3499	     67032 ns/op	   36891 B/op	       3 allocs/op
+BenchmarkCapacityResearchRedact/accounts=40/freshProviderView=true          	    3758	     63795 ns/op	   38938 B/op	       4 allocs/op
+BenchmarkCapacityResearchRedact/accounts=400/freshProviderView=false        	    3684	     63973 ns/op	   36913 B/op	       3 allocs/op
+BenchmarkCapacityResearchRedact/accounts=400/freshProviderView=true         	    3756	     64115 ns/op	   38960 B/op	       4 allocs/op
+BenchmarkCapacityResearchRedact/accounts=4000/freshProviderView=false       	    3390	     64416 ns/op	   37198 B/op	       4 allocs/op
+BenchmarkCapacityResearchRedact/accounts=4000/freshProviderView=true        	    3454	     64901 ns/op	   39240 B/op	       5 allocs/op
+PASS
+ok  	account-pool-balancer/internal/server	3.600s

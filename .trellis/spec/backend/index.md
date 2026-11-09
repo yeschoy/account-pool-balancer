@@ -13,7 +13,7 @@ TokenHarbor Key reveal/copy or its admin credential boundary.
 Read [Registration profiles and workers](tokenharbor-registration-identity.md)
 for saved browser identities, completion order, task chronology and1–5 workers.
 Read [Mistral quota and settings](mistral-quota.md) before changing Mistral budget reads, refresh/status projections, polling, routing or settings isolation.
-For Mistral capacity/session-limit work, first read `docs/mistral-capacity.md` and `.trellis/tasks/11-09-mistral-capacity/`; these are research/proposed changes, not a shipped capacity contract. Do not equate mock usage, larger binding limits or HTTP2 connection counts with verified production TPM.
+Read [Mistral capacity and resource admission](mistral-capacity.md) for independent session LRU, immutable indexes, hot-owner checks, byte/wait/deadline/Transport protections and sparse stats/log budgets. `docs/mistral-capacity.md` preserves pre-change research and separately reports implemented/local-tested changes; no deployment or real300M TPM certification is implied. Do not equate mock usage, larger binding limits or HTTP2 connection counts with verified production TPM.
 Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
 assistant reasoning normalization or user-authorized admin Key/proxy display.
 Read [Mistral Responses completion](mistral-responses.md) before changing native

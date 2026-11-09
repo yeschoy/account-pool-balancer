@@ -25,9 +25,9 @@ func (p *Pool) RememberCache(cfg *config.Config, key, accountID, model string) {
 		}
 	}
 	p.deleteBindingLocked(key)
-	if len(p.bindings) >= maxBindings {
+	if p.sharedLRU.Len() >= maxBindings {
 		victim := ""
-		for el := p.lru.Back(); el != nil; el = el.Prev() {
+		for el := p.sharedLRU.Back(); el != nil; el = el.Prev() {
 			if b := el.Value.(*binding); b.cache {
 				victim = b.key
 				break
@@ -44,15 +44,8 @@ func (p *Pool) RememberCache(cfg *config.Config, key, accountID, model string) {
 		return
 	}
 	b := &binding{key: key, accountID: accountID, cache: true, cacheSource: quota.OpenCodeSource(cfg, a), confirmed: true, expiresAt: now.Add(ttl(cfg, false)), generation: p.gen}
-	p.bindings[key] = p.lru.PushFront(b)
-	for p.lru.Len() > maxBindings {
-		old := p.lru.Back()
-		if old.Value.(*binding).source != "" {
-			p.dirty = true
-		}
-		delete(p.bindings, old.Value.(*binding).key)
-		p.lru.Remove(old)
-	}
+	p.addBindingLocked(b, false)
+	p.trimBindingsLocked()
 }
 
 func (p *Pool) UpstreamSession(key string) string {

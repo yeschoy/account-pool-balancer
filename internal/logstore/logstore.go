@@ -33,9 +33,10 @@ const (
 )
 
 type Limits struct {
-	RetentionDays int
-	MaxRecords    map[string]int
-	MaxTotalBytes int64
+	RetentionDays  int
+	MaxRecords     map[string]int
+	MaxTotalBytes  int64
+	MaxQueuedBytes int64 // <=0: default64MiB, shared by all log kinds
 }
 
 type record struct {
@@ -136,6 +137,7 @@ type Store struct {
 	kinds   map[string]*kind
 	ch      chan job
 	dropped atomic.Int64
+	queued  atomic.Int64
 	ready   atomic.Bool
 	closed  chan struct{}
 }
@@ -175,8 +177,24 @@ func Open(dir string, limits func() Limits) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) Dropped() int64 { return s.dropped.Load() }
-func (s *Store) Ready() bool    { return s.ready.Load() }
+func (s *Store) Dropped() int64     { return s.dropped.Load() }
+func (s *Store) QueuedBytes() int64 { return s.queued.Load() }
+func (s *Store) QueueLength() int   { return len(s.ch) }
+func (s *Store) reserveQueue(n, limit int64) bool {
+	if limit <= 0 {
+		limit = 64 << 20
+	}
+	for {
+		used := s.queued.Load()
+		if n > limit-used {
+			return false
+		}
+		if s.queued.CompareAndSwap(used, used+n) {
+			return true
+		}
+	}
+}
+func (s *Store) Ready() bool { return s.ready.Load() }
 
 func keyString(v any) (string, bool) {
 	switch x := v.(type) {
@@ -232,6 +250,11 @@ func (s *Store) Append(kindName string, ts time.Time, rec any) {
 	if ts.Before(retentionCutoff(lim, time.Now())) {
 		return
 	}
+	charge := int64(len(data) + 1)
+	if !s.reserveQueue(charge, lim.MaxQueuedBytes) {
+		s.dropped.Add(1)
+		return
+	}
 	// Open the job under the same lock as the ring insert: the writer may bump
 	// k.current between these two steps otherwise, and the record would be
 	// stamped with the previous segment.
@@ -242,6 +265,7 @@ func (s *Store) Append(kindName string, ts time.Time, rec any) {
 	select {
 	case s.ch <- j:
 	default:
+		s.queued.Add(-charge)
 		s.dropped.Add(1)
 	}
 }
@@ -311,6 +335,7 @@ func (s *Store) writer() {
 			if err := s.write(j.k, j.line); err != nil {
 				s.dropped.Add(1)
 			}
+			s.queued.Add(-int64(len(j.line)))
 		case <-enforce.C:
 			s.enforce()
 		case <-flush.C:

@@ -395,7 +395,8 @@ async function loadOverview() {
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
     [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 累计缓存读取 ${num(st.k || 0)}（缺失的上游用量不计）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
-    ['会话绑定', num(o.bindings), `${o.bindingLimit ? '全局 ' + num(o.globalBindings) + ' / ' + num(o.bindingLimit) + ' · LRU淘汰 · ' : ''}策略 ${o.strategy}`],
+    ['会话绑定', num(o.bindings), `${o.bindingLimit ? (o.bindingIndependent ? 'Mistral独立 ' + num(o.bindings) : '共享 ' + num(o.sharedBindings ?? o.globalBindings)) + ' / ' + num(o.bindingLimit) + ' · LRU淘汰 · ' : ''}策略 ${o.strategy}`],
+    ...(isMistral() && o.mistralBufferLimitBytes ? [['本地字节预算', (o.mistralBufferedBytes / 1048576).toFixed(1) + ' / ' + (o.mistralBufferLimitBytes / 1048576).toFixed(0) + ' MiB', `日志排队 ${(Number(o.logQueuedBytes || 0) / 1048576).toFixed(1)} MiB · ${num(o.logQueueLength || 0)} 条 · 累计丢弃 ${num(o.logsDropped || 0)}；不等于进程RSS`]] : []),
   ];
   $('#ov-cards').innerHTML = cards.map(([l, v, s]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
   const models = Object.entries(o.stats.models || {}).sort((a, b) => b[1].r - a[1].r);
@@ -1154,7 +1155,18 @@ const OPENCODE_FIELDS = [
   ['goPolicyCooldownSec', 'Go 政策拒绝暂停（秒）', 'int', '1–86400；不换号/出口，不清空订阅额度，可人工恢复'],
 ];
 const openCodeFields = () => OPENCODE_FIELDS.filter(([k]) => pool === 'opencode-go' ? !k.startsWith('zen') && k !== 'goFallbackGroup' : !['goEgressCheckUrl','goEgressCheckSec','goPolicyCooldownSec'].includes(k));
-const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback') : ROUTING_FIELDS;
+const MISTRAL_PERFORMANCE_FIELDS = [
+  ['maxBufferedMB', '字节预算（MiB）', 'int', '1–65536；缺省2048，并收紧至Go软内存上限的1/3；满额明确拒绝，不无界排队'],
+  ['maxWaitingRequests', '每组最多等待请求数', 'int', '0不等待；1–100000，缺省1024。满载等待毫秒仍决定等待时长，不是并发数'],
+  ['uploadTimeoutSec', '上传读取超时（秒）', 'int', '1–3600，缺省60；只约束读入，不截断正常长流'],
+  ['writeTimeoutSec', '单次流写超时（秒）', 'int', '1–600，缺省30；每次刷新续期，防止慢读客户端长期占号'],
+  ['detailSamplePercent', '正文详情采样（%）', 'int', '0–100，缺省100保持原全量；须开启本池详情开关，同一请求两端一致采样'],
+];
+const MISTRAL_CONNECTION_FIELDS = [
+  ['directMaxConns', '直连每Host连接上限', 'int', '1–100000，本池独立Transport实际生效；HTTP2连接数不等于流并发'],
+  ['proxyMaxConns', '固定代理每Host连接上限', 'int', '1–10000，仍走账号固定代理；变更只关闭旧空闲连接，不中断在途'],
+];
+const routingFields = () => pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback').concat(MISTRAL_CONNECTION_FIELDS) : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1351,6 +1363,8 @@ async function loadSettings() {
   $('#mistral-base').value = s.mistral?.baseUrl || 'https://api.mistral.ai/v1';
   $('#mistral-sync').value = s.mistral?.modelSyncSec ?? 600;
   $('#mistral-detail-log').checked = s.mistral?.detailLog ?? s.logs.detail;
+  $('#mistral-binding-capacity').value = s.mistral?.bindingCapacity ?? 0;
+  renderForm($('#form-mistral-performance'), MISTRAL_PERFORMANCE_FIELDS, s.mistral?.performance ?? settingsCache.defaults.mistralPerformance, 'mp');
   $('#tokenharbor-settings').classList.toggle('hidden', !isTokenHarbor());
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
   $('#th-sync').value = s.tokenHarbor?.modelSyncSec ?? 1800;
@@ -1380,7 +1394,8 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
-  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), detailLog: $('#mistral-detail-log').checked };
+  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), detailLog: $('#mistral-detail-log').checked,
+    bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance) };
   if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});

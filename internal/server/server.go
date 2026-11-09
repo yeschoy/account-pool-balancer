@@ -96,9 +96,10 @@ type Server struct {
 	thRegMu   sync.Mutex
 	thReg     *thRegistrar
 	// Local admission/return commits are serialized; upstream checks never hold it.
-	thAdmissionMu sync.Mutex
-	thBuffered    atomic.Int64
-	thBufferLimit int64
+	thAdmissionMu   sync.Mutex
+	mistralBuffered atomic.Int64 // input/prepared/response/queued-event wire bytes
+	thBuffered      atomic.Int64
+	thBufferLimit   int64
 	// The registration log, kept live for the console's tail panel.
 	thLogMu sync.Mutex
 	thLogs  *thLogHub
@@ -178,6 +179,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 		}
 	}
 	s.pool = pool.New(s.quota.View)
+	s.pool.ConfigureBindings(store.Get())
 
 	valid := map[string]bool{}
 	for _, a := range store.Get().Accounts {
@@ -262,6 +264,8 @@ func New(dataDir string, opt Options) (*Server, error) {
 
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
+	s.pool.ConfigureBindings(next)
+	s.pruneMistralTransports(old, next)
 	s.rebindPerch(next)
 	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
@@ -409,12 +413,15 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) Reload() error { return s.cfg.Reload() }
 
 func (s *Server) transport(proxyURL string) *http.Transport {
+	return s.transportFor(proxyURL, s.cfg.Get().Routing, proxyURL)
+}
+
+func (s *Server) transportFor(proxyURL string, cfg config.Routing, key string) *http.Transport {
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
-	if t := s.transports[proxyURL]; t != nil {
+	if t := s.transports[key]; t != nil {
 		return t
 	}
-	cfg := s.cfg.Get().Routing
 	t := &http.Transport{
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          1024,
@@ -435,7 +442,7 @@ func (s *Server) transport(proxyURL string) *http.Transport {
 		}
 		t.MaxIdleConnsPerHost, t.MaxConnsPerHost = cfg.ProxyMaxConns, cfg.ProxyMaxConns
 	}
-	s.transports[proxyURL] = t
+	s.transports[key] = t
 	return t
 }
 

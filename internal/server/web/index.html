@@ -650,7 +650,9 @@
         <p class="muted small">本池独立保存下方选号/粘性/健康/超时、额度轮询、错误规则和重试规则。Studio 与 Vibe 按真实 Key 类型读取各自套餐预算；预算参与余量排序，未知/过期不伪造零。同组织同类预算共享，不能逐 Key 累加。钱包余额未知，不使用 OpenDesign 钱包参数，也不代改官网 PAYG。原生 Chat / Responses / FIM / Embeddings；Responses 无状态，不支持 previous_response_id 或 store=true。</p>
         <div class="form"><label for="mistral-base">API Base（含 /v1）</label><input id="mistral-base" placeholder="https://api.mistral.ai/v1">
           <label for="mistral-sync">目录刷新间隔（秒）</label><input id="mistral-sync" type="number" min="0" max="86400"><span></span><span class="hint">默认600秒；0关闭目录周期更新，首次与手动刷新仍读取目录；启用时60–86400秒。下方额度轮询参数仅保存到Mistral，关闭不影响手动刷新；首次保存前继承共享额度设置。</span>
+          <label for="mistral-binding-capacity">本池会话绑定容量</label><input id="mistral-binding-capacity" type="number" min="0" max="1000000" step="1"><span></span><span class="hint">0沿用旧的全池共享4096条；1–1000000为Mistral独立LRU容量，与其他号池互不淘汰。不是每账号会话数或请求并发。缩容只淘汰未来路由偏好，不中断在途；大容量会增加内存和快照开销。</span>
           <label for="mistral-detail-log">Mistral 详情日志</label><label class="check"><input type="checkbox" id="mistral-detail-log">开启</label><span></span><span class="hint">仅控制本池请求/响应头体，凭据和会话脱敏，单体最多64KB；首次保存前继承原共享开关。日志保留/容量参数仍为全局共享，修改会影响其他池。</span></div>
+        <h3>Mistral 本地资源保护</h3><p class="muted small">输入、适配后正文、非流式响应与排队SSE事件共用字节预算；实际预算还受Go软内存的1/3约束，不是进程硬内存上限，也不保证上游TPM。其他池原设置保持。采样只影响新正文详情，不关闭请求/错误摘要或删除历史。</p><div class="form" id="form-mistral-performance"></div>
       </div>
       <div class="panel hidden" id="tokenharbor-settings">
         <h2>Token Harbor 独立设置</h2>

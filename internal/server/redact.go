@@ -27,8 +27,10 @@ var secretPatterns = []*regexp.Regexp{
 var secretHints = []string{"bearer", "sk-", "rv_", "thk_", "mstrl_", "vela_ctrl_", "://", "__secure-better-auth"}
 
 type replacerCache struct {
-	cfg *config.Config
-	r   *strings.Replacer // nil: no account secrets to replace
+	accounts *config.Account
+	count    int
+	revision int64
+	r        *strings.Replacer // nil: no account secrets to replace
 }
 
 var lastReplacer atomic.Pointer[replacerCache]
@@ -36,7 +38,11 @@ var lastReplacer atomic.Pointer[replacerCache]
 // accountReplacer is the replacer for cfg's account secrets, rebuilt only
 // when the config snapshot changes.
 func accountReplacer(cfg *config.Config) *strings.Replacer {
-	if c := lastReplacer.Load(); c != nil && c.cfg == cfg {
+	var first *config.Account
+	if len(cfg.Accounts) > 0 {
+		first = &cfg.Accounts[0]
+	}
+	if c := lastReplacer.Load(); c != nil && c.accounts == first && c.count == len(cfg.Accounts) && c.revision == cfg.Revision {
 		return c.r
 	}
 	var pairs []string
@@ -47,7 +53,7 @@ func accountReplacer(cfg *config.Config) *strings.Replacer {
 			}
 		}
 	}
-	c := &replacerCache{cfg: cfg}
+	c := &replacerCache{accounts: first, count: len(cfg.Accounts), revision: cfg.Revision}
 	if len(pairs) > 0 {
 		c.r = strings.NewReplacer(pairs...)
 	}

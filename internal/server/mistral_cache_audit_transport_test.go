@@ -61,7 +61,7 @@ func TestMistralCacheAuditHTTPFullBodyAndConnections(t *testing.T) {
 	body := fmt.Sprintf(`{"model":"m","messages":[{"role":"user","content":%q}],"tools":[{"function":{"parameters":{"properties":{"z":{},"a":{}}}}}],"prompt_cache_key":"private-cache"}`, text)
 	for i := 0; i < 3; i++ {
 		if i == 2 {
-			e.s.httpClient("").CloseIdleConnections()
+			e.s.mistralHTTPClient(e.s.cfg.Get(), "").CloseIdleConnections()
 		}
 		if status, _ := e.post(t, "/v1/chat/completions", body, map[string]string{"Session-Id": "private-session"}); status != 200 {
 			t.Fatal(status)
@@ -137,9 +137,9 @@ func TestMistralCacheAuditHTTP2TLSAndAdaptation(t *testing.T) {
 	transport := tlsUp.Client().Transport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
 	defer transport.CloseIdleConnections()
-	e.s.tmu.Lock()
-	e.s.transports[""] = transport
-	e.s.tmu.Unlock()
+	// Trust the mock certificate only on Mistral's independent transport.
+	mistralTransport := e.s.mistralHTTPClient(e.s.cfg.Get(), "").Transport.(*http.Transport)
+	mistralTransport.TLSClientConfig = transport.TLSClientConfig.Clone()
 	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error { c.Mistral.BaseURL = tlsUp.URL + "/v1"; return nil }); err != nil {
 		t.Fatal(err)
 	}

@@ -1225,7 +1225,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
 		"provider":   prov,
 		"strategies": config.Strategies,
-		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults()},
+		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults(), "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
 	})
 }
 
@@ -1267,6 +1267,14 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				if in.Mistral.DetailLog != nil {
 					c.Mistral.DetailLog = in.Mistral.DetailLog
+				}
+				if in.Mistral.BindingCapacity != nil {
+					v := *in.Mistral.BindingCapacity
+					c.Mistral.BindingCapacity = &v
+				}
+				if in.Mistral.Performance != nil {
+					v := *in.Mistral.Performance
+					c.Mistral.Performance = &v
 				}
 			}
 			c.Mistral.Quota = &in.Quota
@@ -1600,29 +1608,37 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	bindingLimit, bindingIndependent := s.pool.BindingCapacityFor(want)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"go":             goView,
-		"accounts":       len(views),
-		"status":         statusCount,
-		"groups":         groupList,
-		"windows":        wl,
-		"walletUsd":      wallet,
-		"walletAccounts": walletKnown,
-		"ollamaCredits":  ollamaCredits,
-		"ollamaAccounts": ollamaKnown,
-		"modalEndpoints": modalEndpoints,
-		"modalAccounts":  modalKnown,
-		"authFailed":     authFailed,
-		"workspaces":     len(seenWS),
-		"bindings":       bindings,
-		"bindingLimit":   s.pool.BindingLimit(),
-		"globalBindings": s.pool.BindingCount(),
-		"stats":          s.stats.SummaryFor(want),
-		"logsDropped":    s.logs.Dropped(),
-		"clientKeys":     clientKeys,
-		"provider":       want,
-		"uptimeSec":      int64(time.Since(s.started).Seconds()),
-		"strategy":       strategy,
+		"go":                      goView,
+		"accounts":                len(views),
+		"status":                  statusCount,
+		"groups":                  groupList,
+		"windows":                 wl,
+		"walletUsd":               wallet,
+		"walletAccounts":          walletKnown,
+		"ollamaCredits":           ollamaCredits,
+		"ollamaAccounts":          ollamaKnown,
+		"modalEndpoints":          modalEndpoints,
+		"modalAccounts":           modalKnown,
+		"authFailed":              authFailed,
+		"workspaces":              len(seenWS),
+		"bindings":                bindings,
+		"bindingLimit":            bindingLimit,
+		"bindingIndependent":      bindingIndependent,
+		"sharedBindingLimit":      s.pool.BindingLimit(),
+		"sharedBindings":          s.pool.SharedBindingCount(),
+		"globalBindings":          s.pool.BindingCount(),
+		"mistralBufferedBytes":    s.mistralBuffered.Load(),
+		"mistralBufferLimitBytes": s.mistralBufferLimit(cfg),
+		"logQueuedBytes":          s.logs.QueuedBytes(),
+		"logQueueLength":          s.logs.QueueLength(),
+		"stats":                   s.stats.SummaryFor(want),
+		"logsDropped":             s.logs.Dropped(),
+		"clientKeys":              clientKeys,
+		"provider":                want,
+		"uptimeSec":               int64(time.Since(s.started).Seconds()),
+		"strategy":                strategy,
 	})
 }
 

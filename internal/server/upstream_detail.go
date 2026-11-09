@@ -49,7 +49,7 @@ func newMistralUpstreamDetail(cfg *config.Config, req *http.Request, rec *reques
 	if cfg.Mistral.DetailLog != nil {
 		enabled = *cfg.Mistral.DetailLog
 	}
-	if !enabled {
+	if !enabled || rec.detailSelected != nil && !*rec.detailSelected {
 		return nil
 	}
 	limit := min(cfg.Logs.DetailBodyKB, 64) << 10

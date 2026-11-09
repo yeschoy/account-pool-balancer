@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -222,7 +223,7 @@ func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h
 		}
 	}
 	if cfg.Routing.FallbackHash {
-		if stable := stableConversation(body); stable != "" {
+		if stable := stableConversation(routingHistory(body)); stable != "" {
 			return Identity{Source: "message_hmac", KeyType: "message_hmac", Confidence: "fallback", Fingerprint: s.fingerprint(group, "messages", stable)}
 		}
 	}
@@ -326,6 +327,10 @@ var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true,
 func parseRequestBody(b []byte) (map[string]any, error) { return parseRoutingBody(b, false) }
 
 func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
+	return parseRoutingBodyWithHistory(b, strictModel, true)
+}
+
+func parseRoutingBodyWithHistory(b []byte, strictModel, history bool) (map[string]any, error) {
 	errBad := errors.New("not an unambiguous JSON object")
 	if strictModel && !json.Valid(b) {
 		return nil, errBad
@@ -365,6 +370,28 @@ func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
 			return nil, errBad
 		}
 		switch {
+		case key == "metadata" && !history:
+			// Mistral identity uses only these scalar fields. Do not inflate an
+			// arbitrary metadata tree; the native wire object is still forwarded.
+			if vs < ve && b[vs] == '{' {
+				if !strictModel && !json.Valid(b[vs:ve]) {
+					return nil, errBad
+				}
+				meta := map[string]any{}
+				fields := scanMistralObject(b[vs:ve])
+				for _, name := range []string{"parent_session_id", "session_id", "conversation_id", "thread_id", "sessionId", "user_id"} {
+					if raw := fields.get(name); len(raw) > 0 && (raw[0] == '"' || bytes.Equal(raw, []byte("null"))) {
+						var x any
+						if json.Unmarshal(raw, &x) != nil {
+							return nil, errBad
+						}
+						meta[name] = x
+					}
+				}
+				obj[key] = meta
+			} else {
+				obj[key] = nil
+			}
 		case bodyKeysKept[key]:
 			if key == "user" && ve-vs > 2048 {
 				break // identity-only compatibility must not decode an unbounded label
@@ -375,7 +402,11 @@ func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
 			}
 			obj[key] = x
 		case key == "messages" || key == "input":
-			obj[key] = leadingItems(b[vs:ve])
+			if history {
+				obj[key] = leadingItems(b[vs:ve])
+			} else {
+				obj[key] = json.RawMessage(b[vs:ve])
+			}
 		}
 		i = skipSpace(b, ve)
 		if i < len(b) && b[i] == ',' {
@@ -388,6 +419,27 @@ func parseRoutingBody(b []byte, strictModel bool) (map[string]any, error) {
 		return nil, errBad
 	}
 	return obj, nil
+}
+
+// Decode lazy history only when no explicit identity/cache hint won. Keep the
+// original body map immutable for log redaction and other consumers.
+func routingHistory(body map[string]any) map[string]any {
+	var out map[string]any
+	for _, key := range []string{"messages", "input"} {
+		if raw, ok := body[key].(json.RawMessage); ok {
+			if out == nil {
+				out = make(map[string]any, len(body))
+				for k, v := range body {
+					out[k] = v
+				}
+			}
+			out[key] = leadingItems(raw)
+		}
+	}
+	if out != nil {
+		return out
+	}
+	return body
 }
 
 // leadingItems decodes a messages/input value: a string stays one, an array
@@ -444,13 +496,20 @@ func skipSpace(b []byte, i int) int {
 
 // skipString returns the index after the string starting at b[i] == '"', or -1.
 func skipString(b []byte, i int) int {
-	for j := i + 1; j < len(b); j++ {
-		switch b[j] {
-		case '\\':
-			j++
-		case '"':
-			return j + 1
+	for j := i + 1; j < len(b); {
+		q := bytes.IndexByte(b[j:], '"')
+		if q < 0 {
+			return -1
 		}
+		end := j + q
+		slashes := 0
+		for k := end - 1; k > i && b[k] == '\\'; k-- {
+			slashes++
+		}
+		if slashes%2 == 0 {
+			return end + 1
+		}
+		j = end + 1
 	}
 	return -1
 }

@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: account-pool-balancer/internal/stats
+cpu: Apple M4
+BenchmarkSparseAccounts-10    	     176	   1909924 ns/op	 4023604 B/op	   16159 allocs/op
+PASS
+ok  	account-pool-balancer/internal/stats	0.880s

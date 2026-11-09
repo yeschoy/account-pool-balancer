@@ -1,6 +1,8 @@
 # 实施lane board — 2026-11-09
 
-分类：multi-seam。Pool/配置和UI、请求转发资源、Stats/Logstore有独立源码与验证边界。用户已选择A并授权落实瓶颈；按Trellis主会话dispatch约定采用隔离组件worker，主线程保留集成/审阅/提交/发布决定。
+分类：multi-seam。Pool/配置和UI、请求转发资源、Stats/Logstore有独立源码与验证边界。
+
+**执行方式更新**：初次dispatch因Pi缺失chord依赖全部在启动前失败，两个隔离树均干净，见execution-blocker.md。用户已明确批准主会话直接继续，当前由主线程在主工作树串行拥有下表全部实现/验证边界；不再启动子agent，不修改全局工具依赖，也没有独立agent审阅证据。下表保留原分区以明确逻辑seam和验证，不再表示活动writer分配。两个隔离树未经清理同意保留。
 
 所有lane禁止真实凭据/生产推理/配置变更/部署/清理既有产物，禁止嵌套agent；遇到跨边界改动先contact_supervisor。初始Dockerfile/注册机改动留在主树，不带入组件树、不提交。
 

@@ -110,12 +110,15 @@ type binding struct {
 	generation uint64
 	owner      string
 	// source is set only for persisted OpenCode Responses bindings.
-	source      string
-	session     string // opaque gateway session, never a raw client identifier
-	cache       bool   // model-scoped preference, not a conversation/response chain
-	cacheSource string
-	mistral     bool   // ordinary persisted preference, not a strict response owner
-	clientKeyID string // Mistral downstream owner; source also pins its credential
+	source        string
+	session       string // opaque gateway session, never a raw client identifier
+	cache         bool   // model-scoped preference, not a conversation/response chain
+	cacheSource   string
+	mistral       bool   // ordinary persisted preference, not a strict response owner
+	clientKeyID   string // Mistral downstream owner; source also pins its credential
+	mistralPool   bool   // independent budget even before persistence confirmation
+	budgetElement *list.Element
+	expiryIndex   int
 }
 
 type healthSlot struct {
@@ -144,25 +147,33 @@ const MinHealthSamples = 20
 const maxBindings = 4096
 
 type Pool struct {
-	mu           sync.Mutex
-	states       map[string]*AccountState
-	active       map[string]int
-	rpm          map[string]*rpmWindow
-	bindings     map[string]*list.Element
-	lru          *list.List
-	gen          uint64
-	counters     Counters
-	health       map[string]*HealthRing
-	tokens       map[string]*decay
-	changed      chan struct{}
-	classes      map[string]classEntry
-	cursor       int64
-	quota        func(id string) *quota.Snapshot // read-only: may be the poller's own snapshot
-	now          func() time.Time
-	dirty        bool // states changed since the last export
-	samplesDirty bool // health samples changed since the last export
-	cntDirty     bool
-	OnRefresh    func(accountID string) // a rule asked to read quota again
+	mu              sync.Mutex
+	states          map[string]*AccountState
+	active          map[string]int
+	rpm             map[string]*rpmWindow
+	bindings        map[string]*list.Element
+	lru             *list.List
+	sharedLRU       *list.List
+	mistralLRU      *list.List
+	mistralCapacity int
+	bindingConfig   *config.Config // latest publication; also tracks account group moves
+	bindingCounts   map[string]int
+	expiry          bindingExpiry
+	healthCache     map[string]healthTotal
+	waiters         map[string]*groupWaiters
+	gen             uint64
+	counters        Counters
+	health          map[string]*HealthRing
+	tokens          map[string]*decay
+	changed         chan struct{}
+	classes         map[string]classEntry
+	cursor          int64
+	quota           func(id string) *quota.Snapshot // read-only: may be the poller's own snapshot
+	now             func() time.Time
+	dirty           bool // states changed since the last export
+	samplesDirty    bool // health samples changed since the last export
+	cntDirty        bool
+	OnRefresh       func(accountID string) // a rule asked to read quota again
 }
 
 func New(quotaFn func(string) *quota.Snapshot) *Pool {
@@ -171,7 +182,7 @@ func New(quotaFn func(string) *quota.Snapshot) *Pool {
 	}
 	return &Pool{
 		states: map[string]*AccountState{}, active: map[string]int{}, rpm: map[string]*rpmWindow{},
-		bindings: map[string]*list.Element{}, lru: list.New(),
+		bindings: map[string]*list.Element{}, lru: list.New(), sharedLRU: list.New(), mistralLRU: list.New(), bindingCounts: map[string]int{}, healthCache: map[string]healthTotal{}, waiters: map[string]*groupWaiters{},
 		counters: Counters{Version: 1, Accounts: map[string]*Counter{}},
 		health:   map[string]*HealthRing{}, tokens: map[string]*decay{},
 		changed: make(chan struct{}), quota: quotaFn, now: time.Now, classes: map[string]classEntry{},
@@ -182,6 +193,9 @@ func New(quotaFn func(string) *quota.Snapshot) *Pool {
 func (p *Pool) SetClock(now func() time.Time) { p.now = now }
 
 func (p *Pool) broadcastLocked() {
+	for group := range p.waiters {
+		p.notifyGroupLocked(group)
+	}
 	close(p.changed)
 	p.changed = make(chan struct{})
 }
@@ -229,6 +243,7 @@ type Request struct {
 	Explicit      bool
 	Excluded      map[string]bool
 	Wait          time.Duration
+	MaxWaiters    int // 0: legacy caller has no additional queue-length cap
 }
 
 type Decision struct {
@@ -242,16 +257,17 @@ type Decision struct {
 }
 
 type Lease struct {
-	p           *Pool
-	Account     config.Account
-	Decision    Decision
-	bindKey     string
-	bindGen     uint64
-	provisional bool
-	permit      bool // an RPM permit reserved and not committed yet
-	counter     *Counter
-	sent        bool
-	released    bool
+	p            *Pool
+	Account      config.Account
+	Decision     Decision
+	bindKey      string
+	bindGen      uint64
+	provisional  bool
+	bindingOwner bool // only the creator may remove an unconfirmed preference
+	permit       bool // an RPM permit reserved and not committed yet
+	counter      *Counter
+	sent         bool
+	released     bool
 }
 
 // stateLocked returns the account's state, clearing expired cooldowns.
@@ -528,14 +544,19 @@ func (p *Pool) healthLocked(id string, now time.Time) (rate float64, samples int
 	if r == nil {
 		return 0, 0, false
 	}
-	cut := now.Unix()/60 - 1440
-	var s, d int
-	for _, slot := range r {
-		if slot.minute > cut {
-			s += int(slot.succ)
-			d += int(slot.degr)
+	minute := now.Unix() / 60
+	v, cached := p.healthCache[id]
+	if !cached || v.minute != minute || v.ring != r {
+		v = healthTotal{ring: r, minute: minute}
+		for _, slot := range r {
+			if slot.minute > minute-1440 {
+				v.success += int(slot.succ)
+				v.degraded += int(slot.degr)
+			}
 		}
+		p.healthCache[id] = v
 	}
+	s, d := v.success, v.degraded
 	n := s + d
 	if n < MinHealthSamples {
 		return 0, n, false
@@ -603,11 +624,7 @@ func (p *Pool) getBindingLocked(key string, now time.Time) *binding {
 	}
 	b := el.Value.(*binding)
 	if !now.Before(b.expiresAt) {
-		if b.source != "" {
-			p.dirty = true
-		}
-		p.lru.Remove(el)
-		delete(p.bindings, key)
+		p.deleteBindingLocked(key)
 		return nil
 	}
 	return b
@@ -618,16 +635,28 @@ func (p *Pool) deleteBindingLocked(key string) {
 		if el.Value.(*binding).source != "" {
 			p.dirty = true
 		}
+		b := el.Value.(*binding)
+		p.budgetLocked(b).Remove(b.budgetElement)
+		removeBindingExpiry(&p.expiry, b)
+		if !b.cache {
+			p.bindingCounts[b.accountID]--
+			if p.bindingCounts[b.accountID] == 0 {
+				delete(p.bindingCounts, b.accountID)
+			}
+		}
 		p.lru.Remove(el)
 		delete(p.bindings, key)
 	}
 }
 
 func (p *Pool) trimBindingsLocked() {
-	for p.lru.Len() > maxBindings {
+	for p.mistralCapacity > 0 && p.mistralLRU.Len() > p.mistralCapacity {
+		p.deleteBindingLocked(p.mistralLRU.Back().Value.(*binding).key)
+	}
+	for p.sharedLRU.Len() > maxBindings {
 		// Evict through the common remover so persisted response-chain removal
 		// marks metadata dirty as well; it must not reappear after a restart.
-		p.deleteBindingLocked(p.lru.Back().Value.(*binding).key)
+		p.deleteBindingLocked(p.sharedLRU.Back().Value.(*binding).key)
 	}
 }
 
@@ -644,10 +673,11 @@ func (p *Pool) putProvisionalLocked(cfg *config.Config, req Request, accountID s
 	b := &binding{key: req.Affinity, accountID: accountID, explicit: req.Explicit,
 		expiresAt: now.Add(ttl(cfg, req.Explicit)), generation: p.gen, owner: req.RequestID}
 	if a, ok := cfg.Account(accountID); ok && a.Provider == config.ProviderMistral {
+		b.mistralPool = true
 		b.source = mistralBindingSource(cfg, a, req.ClientKeyID)
 		b.mistral, b.clientKeyID = b.source != "", req.ClientKeyID
 	}
-	p.bindings[req.Affinity] = p.lru.PushFront(b)
+	p.addBindingLocked(b, false)
 	p.trimBindingsLocked()
 	return p.gen, true
 }
@@ -670,13 +700,12 @@ func (p *Pool) BindWithSession(cfg *config.Config, key, accountID, session strin
 		b.source = quota.ResponseBindingSource(cfg, a)
 		p.dirty = true
 	}
-	p.bindings[key] = p.lru.PushFront(b)
+	p.addBindingLocked(b, false)
 	p.trimBindingsLocked()
 }
 
 type candidate struct {
-	a    config.Account
-	seat routes.Seat
+	a *config.Account
 }
 
 func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, now time.Time) routes.Seat {
@@ -754,6 +783,10 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 // bound account (wait-overflow after its budget).
 func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*Lease, error) {
 	now := p.now()
+	p.expireBindingsLocked(now, 64)
+	if l, err, handled := p.mistralHitLocked(cfg, req, now); handled {
+		return l, err
+	}
 	if req.RequireBinding {
 		if req.Affinity == "" || p.getBindingLocked(req.Affinity, now) == nil {
 			return nil, &BindingError{Reason: "missing or expired; resend full history without previous_response_id"}
@@ -773,12 +806,12 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 					if b.source != "" {
 						p.dirty = true
 					}
-					p.lru.MoveToFront(p.bindings[req.Affinity])
+					p.moveBindingLocked(b)
 					result := "hit"
 					if !b.confirmed {
 						result = "provisional"
 					}
-					return p.leaseLocked(a, Decision{AccountID: a.ID, Reason: "binding", BindingResult: result, Candidates: 1, Order: []string{a.ID}}, false), nil
+					return p.bindingLeaseLocked(a, Decision{AccountID: a.ID, Reason: "binding", BindingResult: result, Candidates: 1, Order: []string{a.ID}}, b), nil
 				} else if req.PreserveBinding || req.RequireBinding || cfg.Routing.OnBindingBusy == "reject" {
 					return nil, &CapacityError{BlockedBy: by, RetryAfter: ra}
 				}
@@ -788,7 +821,8 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 	var cands []candidate
 	details := map[string]int{}
 	inGroup := 0
-	for _, a := range cfg.Accounts {
+	for i := range cfg.Accounts {
+		a := &cfg.Accounts[i]
 		if a.Group != req.Group {
 			continue
 		}
@@ -797,7 +831,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 			details["excluded"]++
 			continue
 		}
-		if why := p.unavailableLocked(cfg, a, req.Model, now); why != "" {
+		if why := p.unavailableLocked(cfg, *a, req.Model, now); why != "" {
 			details[why]++
 			continue
 		}
@@ -876,7 +910,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				p.deleteBindingLocked(req.Affinity)
 				d.BindingResult = "invalidated"
 			} else {
-				a := cands[idx].a
+				a := *cands[idx].a
 				if req.RequireBinding && b.source != "" && b.source != quota.ResponseBindingSource(cfg, a) {
 					return nil, &BindingError{Reason: "credential or proxy changed"}
 				}
@@ -884,7 +918,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 				if ok {
 					b.expiresAt = now.Add(ttl(cfg, b.explicit)) // sliding
 					p.touchBindingLocked(b)
-					p.lru.MoveToFront(p.bindings[req.Affinity])
+					p.moveBindingLocked(b)
 					d.AccountID, d.Reason = a.ID, "binding"
 					if req.CacheAffinity != "" {
 						d.CacheResult = "session-preferred"
@@ -893,7 +927,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 					if !b.confirmed {
 						d.BindingResult = "provisional"
 					}
-					return p.leaseLocked(a, d, false), nil
+					return p.bindingLeaseLocked(a, d, b), nil
 				}
 				switch {
 				case req.PreserveBinding || req.RequireBinding || cfg.Routing.OnBindingBusy == "reject":
@@ -912,7 +946,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 
 	seats := make([]routes.Seat, len(cands))
 	for i, c := range cands {
-		seats[i] = p.seatLocked(cfg, c.a, req.Model, now)
+		seats[i] = p.seatLocked(cfg, *c.a, req.Model, now)
 	}
 	p.cursor++
 	order := routes.Order(cfg.Routing.Strategy, req.Group, seats, routes.Params{
@@ -923,7 +957,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		if b := p.getBindingLocked(req.CacheAffinity, now); b != nil && b.cache {
 			d.CacheResult = "unavailable"
 			for pos, i := range order {
-				if cands[i].a.ID == b.accountID && b.cacheSource != quota.OpenCodeSource(cfg, cands[i].a) {
+				if cands[i].a.ID == b.accountID && b.cacheSource != quota.OpenCodeSource(cfg, *cands[i].a) {
 					p.deleteBindingLocked(req.CacheAffinity)
 					d.CacheResult = "invalidated"
 					break
@@ -944,7 +978,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		}
 	}
 	for _, i := range order {
-		a := cands[i].a
+		a := *cands[i].a
 		ok, by, ra := p.admitLocked(a, now)
 		if !ok {
 			if a.ID == preferred {
@@ -968,6 +1002,7 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 		if sticky && !overflow {
 			l.bindGen, l.provisional = p.putProvisionalLocked(cfg, req, a.ID, now)
 			l.bindKey = req.Affinity
+			l.bindingOwner = true
 		}
 		return l, nil
 	}
@@ -988,19 +1023,33 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 func (p *Pool) Acquire(ctx context.Context, cfg *config.Config, req Request) (*Lease, error) {
 	deadline := time.Now().Add(req.Wait)
 	forceOverflow := false
+	var registered *groupWaiters
+	defer func() {
+		if registered != nil {
+			p.mu.Lock()
+			registered.count--
+			if registered.count == 0 {
+				delete(p.waiters, req.Group)
+			}
+			p.mu.Unlock()
+		}
+	}()
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		p.mu.Lock()
 		l, err := p.tryLocked(cfg, req, forceOverflow)
-		ch := p.changed
-		p.mu.Unlock()
 		var ce *CapacityError
 		if err == nil || !errors.As(err, &ce) {
+			p.mu.Unlock()
 			return l, err
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
+			p.mu.Unlock()
 			if ce.BlockedBy == "binding" && !forceOverflow {
-				forceOverflow = true // its wait is over: overflow with no further wait
+				forceOverflow = true
 				continue
 			}
 			if ce.BlockedBy == "binding" {
@@ -1008,8 +1057,22 @@ func (p *Pool) Acquire(ctx context.Context, cfg *config.Config, req Request) (*L
 			}
 			return nil, ce
 		}
-		wait := min(left, max(ce.RetryAfter, 50*time.Millisecond))
-		t := time.NewTimer(wait)
+		w := p.waiters[req.Group]
+		if w == nil {
+			w = &groupWaiters{changed: make(chan struct{})}
+			p.waiters[req.Group] = w
+		}
+		if registered == nil {
+			if req.MaxWaiters > 0 && w.count >= req.MaxWaiters {
+				p.mu.Unlock()
+				return nil, &CapacityError{BlockedBy: "wait-queue", RetryAfter: time.Second}
+			}
+			w.count++
+			registered = w
+		}
+		ch := w.changed
+		p.mu.Unlock()
+		t := time.NewTimer(min(left, max(ce.RetryAfter, 50*time.Millisecond)))
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -1119,13 +1182,18 @@ func (l *Lease) Release() {
 	}
 	if l.provisional {
 		l.provisional = false
-		if el := p.bindings[l.bindKey]; el != nil {
+		if el := p.bindings[l.bindKey]; l.bindingOwner && el != nil {
 			if b := el.Value.(*binding); b.generation == l.bindGen && b.owner != "" && !b.confirmed {
 				p.deleteBindingLocked(l.bindKey)
 			}
 		}
 	}
-	p.broadcastLocked()
+	p.notifyGroupLocked(l.Account.Group)
+	if p.bindingConfig != nil {
+		if a, ok := p.bindingConfig.Account(l.Account.ID); ok && a.Group != l.Account.Group {
+			p.notifyGroupLocked(a.Group)
+		}
+	}
 }
 
 // ---- outcomes ----
@@ -1148,6 +1216,14 @@ func (p *Pool) Sample(id string, success bool) {
 		slot.succ++
 	} else {
 		slot.degr++
+	}
+	if v, ok := p.healthCache[id]; ok && v.minute == m && v.ring == r {
+		if success {
+			v.success++
+		} else {
+			v.degraded++
+		}
+		p.healthCache[id] = v
 	}
 	p.samplesDirty = true
 }
@@ -1241,6 +1317,7 @@ func (p *Pool) ResetHealth(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.health, id)
+	delete(p.healthCache, id)
 	p.dirty = true
 }
 
@@ -1251,14 +1328,14 @@ func (p *Pool) Invalidate(id string, full bool) {
 	defer p.mu.Unlock()
 	for key, el := range p.bindings {
 		if el.Value.(*binding).accountID == id {
-			p.lru.Remove(el)
-			delete(p.bindings, key)
+			p.deleteBindingLocked(key)
 		}
 	}
 	delete(p.rpm, id)
 	if full {
 		delete(p.states, id)
 		delete(p.health, id)
+		delete(p.healthCache, id)
 		delete(p.tokens, id)
 		if _, ok := p.counters.Accounts[id]; ok {
 			delete(p.counters.Accounts, id)
@@ -1295,13 +1372,8 @@ func (p *Pool) Views(cfg *config.Config) map[string]View {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := p.now()
-	perAccount := map[string]int{}
-	for _, el := range p.bindings {
-		b := el.Value.(*binding)
-		if now.Before(b.expiresAt) && !b.cache {
-			perAccount[b.accountID]++
-		}
-	}
+	p.expireBindingsLocked(now, 0)
+	perAccount := p.bindingCounts
 	out := map[string]View{}
 	for _, a := range cfg.Accounts {
 		v := View{Active: p.active[a.ID], Bindings: perAccount[a.ID]}
@@ -1384,6 +1456,7 @@ func (p *Pool) Dirty() (states, samples bool) {
 func (p *Pool) ExportState() (Export, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.expireBindingsLocked(p.now(), 0)
 	changed := p.dirty || p.samplesDirty
 	p.dirty, p.samplesDirty = false, false
 	e := Export{States: map[string]*AccountState{}, Health: HealthExport{}}
@@ -1419,7 +1492,7 @@ func (p *Pool) ImportState(e Export, valid map[string]bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, b := range e.Bindings {
-		if len(p.bindings) >= maxBindings {
+		if p.sharedLRU.Len() >= maxBindings {
 			break
 		}
 		if !valid[b.AccountID] || len(b.Key) != 64 || len(b.Source) != 64 || !p.now().Before(b.ExpiresAt) || p.bindings[b.Key] != nil {
@@ -1433,7 +1506,7 @@ func (p *Pool) ImportState(e Export, valid map[string]bool) {
 			session = ""
 		}
 		v := &binding{key: b.Key, accountID: b.AccountID, source: b.Source, expiresAt: b.ExpiresAt, explicit: true, confirmed: true, generation: p.gen, session: session}
-		p.bindings[b.Key] = p.lru.PushBack(v)
+		p.addBindingLocked(v, true)
 	}
 	for id, st := range e.States {
 		if valid[id] && st != nil {
@@ -1449,6 +1522,7 @@ func (p *Pool) ImportState(e Export, valid map[string]bool) {
 			r[minute%1440] = healthSlot{minute: minute, succ: v[0], degr: v[1]}
 		}
 		p.health[id] = r
+		delete(p.healthCache, id)
 	}
 }
 

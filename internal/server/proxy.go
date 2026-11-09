@@ -127,6 +127,8 @@ type requestLog struct {
 
 	CacheAudit         *mistralCacheAuditLog `json:"cacheAudit,omitempty"`
 	cacheAudit         *mistralAuditRequest  // private ephemeral per-request fingerprint state
+	mistralCacheKey    *string               // final decoded hint; avoids scanning full history per attempt
+	detailSelected     *bool                 // one sampling decision shared by client/upstream capture
 	upstreamDetails    []upstreamWireLog     // sanitized, attached only to detail logs
 	upstreamIdentities []string              // ephemeral response secrets; never serialized
 }
@@ -551,8 +553,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 		if rec.Provider == config.ProviderTokenHarbor {
 			detailEnabled = cfg.TokenHarbor.DetailLog
-		} else if cfg.Mistral.DetailLog != nil {
-			detailEnabled = *cfg.Mistral.DetailLog
+		} else {
+			if cfg.Mistral.DetailLog != nil {
+				detailEnabled = *cfg.Mistral.DetailLog
+			}
+			detailEnabled = detailEnabled && mistralDetailSelected(cfg, rid)
+			rec.detailSelected = &detailEnabled
 		}
 		if !detailEnabled {
 			// No bytes have been written yet. Do not capture this pool even
@@ -582,7 +588,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	var err error
 	releaseBody := func() {}
-	if rec.Provider == config.ProviderTokenHarbor {
+	var inputBuffer *mistralBuffer
+	if rec.Provider == config.ProviderMistral {
+		body, inputBuffer, err = s.readMistralBody(w, r, cfg)
+		defer inputBuffer.release()
+	} else if rec.Provider == config.ProviderTokenHarbor {
 		body, releaseBody, err = s.readTHBody(w, r, int64(cfg.Routing.MaxBodyMB)<<20)
 	} else {
 		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, int64(cfg.Routing.MaxBodyMB)<<20))
@@ -590,7 +600,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	defer releaseBody()
 	reqBody, reqBodyIncomplete = body, err != nil
 	if err != nil {
-		if errors.Is(err, errTHBufferLimit) {
+		if errors.Is(err, errTHBufferLimit) || errors.Is(err, errMistralBufferLimit) {
 			rec.ErrorCategory = "gateway-buffer-limit"
 			writeLocalError(w, proto, 429, "rate_limit_error", "gateway_buffer_limit", "gateway input buffer budget is full; upstream was not contacted", 1)
 			finish(429, "failed")
@@ -618,7 +628,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		finish(499, "client_cancelled")
 		return
 	}
-	obj, err := parseRoutingBody(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral)
+	obj, err := parseRoutingBodyWithHistory(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral, rec.Provider != config.ProviderMistral)
 	if err != nil {
 		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
 			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
@@ -643,11 +653,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rec.Provider == config.ProviderMistral {
-		prepared, aliasErr := normalizeMistralCacheAlias(body, r.URL.Path)
+		prepared := body
+		var aliasErr error
+		if _, hasAlias := obj["promptCacheKey"]; hasAlias {
+			prepared, aliasErr = normalizeMistralCacheAlias(body, r.URL.Path)
+		}
 		if aliasErr == nil && !bytes.Equal(prepared, body) {
 			// The wire renderer preserves validated JSON. Re-read routing fields
 			// only for an actual alias rewrite, before any identity/account lease.
-			obj, aliasErr = parseRequestBody(prepared)
+			obj, aliasErr = parseRoutingBodyWithHistory(prepared, false, false)
 		}
 		if aliasErr != nil {
 			rec.ErrorCategory = "request"
@@ -732,7 +746,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			detailIdentities = append(detailIdentities, generatedCacheKey)
 			rec.CacheHintSource = cacheSource
 		}
+		finalKey := generatedCacheKey
+		if raw, exists := obj["prompt_cache_key"]; exists {
+			finalKey, _ = raw.(string)
+		}
+		finalKey = strings.TrimSpace(finalKey)
+		rec.mistralCacheKey = &finalKey
 		rec.cacheAudit = s.mistralAudit.begin(rec, ident, reqBody, body, time.Now())
+		if len(body) > 0 && (len(reqBody) == 0 || &body[0] != &reqBody[0]) {
+			if !inputBuffer.reserve(int64(cap(body))) {
+				rec.ErrorCategory = "gateway-buffer-limit"
+				writeLocalError(w, proto, 429, "rate_limit_error", "gateway_buffer_limit", "gateway prepared input buffer budget is full; upstream was not contacted", 1)
+				finish(429, "failed")
+				return
+			}
+		}
 	}
 
 	excluded := map[string]bool{}
@@ -752,13 +780,20 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	maxAttempts := rootCfg.ForProvider(keyPool(rootCfg, ck)).Routing.MaxAccounts
 	for i := 0; i < maxAttempts; i++ {
 		wait := time.Duration(cfg.Routing.ConcurrencyWaitMs) * time.Millisecond
-		if i > 0 {
-			wait = 0 // a switch probes the others without waiting
+		maxWaiters := 0
+		if rec.Provider == config.ProviderMistral {
+			maxWaiters = cfg.Mistral.EffectivePerformance().MaxWaitingRequests
+			if maxWaiters == 0 {
+				wait = 0
+			}
 		}
+		if i > 0 {
+			wait = 0
+		} // switches never queue behind the first attempt
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
 			Group: routeGroup, Model: rec.Model, RequestID: rid,
 			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit", ClientKeyID: ck.ID,
-			Excluded: excluded, Wait: wait,
+			Excluded: excluded, Wait: wait, MaxWaiters: maxWaiters,
 			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider),
 		})
 		if err != nil {
@@ -1159,7 +1194,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"
 		}
-	case "compatibility", "egress", "policy_pause", "incomplete_stream":
+	case "compatibility", "egress", "policy_pause", "incomplete_stream", "resource_limit":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
 		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
@@ -1486,7 +1521,13 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		req.Header.Set("Modal-Routing-Affinity-Key", ident.Fingerprint)
 	}
 	if acct.Provider == config.ProviderMistral {
-		ensureMistralXAffinity(req.Header, body)
+		if rec.mistralCacheKey != nil {
+			if req.Header.Get("X-Affinity") == "" && *rec.mistralCacheKey != "" {
+				req.Header.Set("X-Affinity", *rec.mistralCacheKey)
+			}
+		} else {
+			ensureMistralXAffinity(req.Header, body)
+		}
 	}
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -1505,7 +1546,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		}()
 	}
 
-	client := s.httpClient(acct.ProxyURL)
+	var client *http.Client
+	if acct.Provider == config.ProviderMistral {
+		client = s.mistralHTTPClient(cfg, acct.ProxyURL)
+	} else {
+		client = s.httpClient(acct.ProxyURL)
+	}
 	if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
@@ -1572,7 +1618,17 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities)
 	}
 
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 512<<20))
+	var b []byte
+	if acct.Provider == config.ProviderMistral {
+		var release func()
+		b, release, err = s.readMistralResponse(resp.Body, cfg)
+		defer release()
+		if errors.Is(err, errMistralBufferLimit) || errors.Is(err, errEventTooLarge) {
+			return mistralResourceFailure(res)
+		}
+	} else {
+		b, err = io.ReadAll(io.LimitReader(resp.Body, 512<<20))
+	}
 	res.upstreamLast = time.Now()
 	if err != nil {
 		res.kind = outFailed
@@ -1761,6 +1817,23 @@ func readEvent(rd *bufio.Reader) ([]byte, error) {
 }
 
 func sseFields(ev []byte) (event string, data []byte, real bool) {
+	// A single native data line is the common token frame. Borrow its bytes;
+	// comments, named events and multiline payloads retain the general parser.
+	if bytes.HasPrefix(ev, []byte("data:")) {
+		end := bytes.IndexByte(ev, '\n')
+		if end < 0 {
+			end = len(ev)
+		}
+		tail := ev[end:]
+		if len(tail) == 0 || bytes.Equal(tail, []byte("\n\n")) || bytes.Equal(tail, []byte("\n\r\n")) || bytes.Equal(tail, []byte("\n")) {
+			line := bytes.TrimRight(ev[:end], "\r")
+			start := 5
+			if len(line) > start && line[start] == ' ' {
+				start++
+			}
+			return "", line[start:], true
+		}
+	}
 	for _, line := range bytes.Split(ev, []byte("\n")) {
 		line = bytes.TrimRight(line, "\r")
 		switch {
@@ -1837,9 +1910,10 @@ func isTerminalEvent(event string, data []byte) bool {
 }
 
 type evMsg struct {
-	ev  []byte
-	err error
-	at  time.Time // upstream read completion, before downstream parsing/flush
+	ev      []byte
+	err     error
+	at      time.Time // upstream read completion, before downstream parsing/flush
+	release func()    // budget owned by this event until consumed/discarded
 }
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
@@ -1848,13 +1922,37 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
 	done := make(chan struct{})
-	defer close(done)
+	readerDone := make(chan struct{})
+	mistral := lease.Account.Provider == config.ProviderMistral
+	defer func() {
+		close(done)
+		cancel()
+		_ = resp.Body.Close()
+		<-readerDone
+		for len(events) > 0 {
+			m := <-events
+			if m.release != nil {
+				m.release()
+			}
+		}
+	}()
 	go func() {
+		defer close(readerDone)
 		for {
-			ev, err := readEvent(rd)
+			var ev []byte
+			var err error
+			var release func()
+			if mistral {
+				ev, release, err = s.readMistralEvent(rd, cfg)
+			} else {
+				ev, err = readEvent(rd)
+			}
 			select {
-			case events <- evMsg{ev: ev, err: err, at: time.Now()}:
+			case events <- evMsg{ev: ev, err: err, at: time.Now(), release: release}:
 			case <-done:
+				if release != nil {
+					release()
+				}
 				return
 			}
 			if err != nil {
@@ -1863,6 +1961,9 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 	}()
 	readFailure := func(err error) *attemptResult {
+		if mistral && (errors.Is(err, errMistralBufferLimit) || errors.Is(err, errEventTooLarge)) {
+			return mistralResourceFailure(res)
+		}
 		if mistralResponses && err == io.EOF && r.Context().Err() == nil && !timedOut.Load() {
 			return mistralResponsesTruncated(res)
 		}
@@ -1882,8 +1983,18 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	var first, firstData []byte
 	var firstEvent string
 	var firstErr error
+	var held func()
+	defer func() {
+		if held != nil {
+			held()
+		}
+	}()
 	for first == nil {
 		m := <-events
+		if held != nil {
+			held()
+		}
+		held = m.release
 		if event, data, real := sseFields(m.ev); real && (m.err == nil || m.err == io.EOF) {
 			first, firstEvent, firstData, firstErr = m.ev, event, data, m.err
 			res.upstreamStream, res.upstreamFirst, res.upstreamLast = true, m.at, m.at
@@ -1944,7 +2055,13 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			}
 		}
 	}
+	if mistral {
+		defer rc.SetWriteDeadline(time.Time{})
+	}
 	write := func(b []byte) bool {
+		if mistral {
+			_ = rc.SetWriteDeadline(time.Now().Add(time.Duration(cfg.Mistral.EffectivePerformance().WriteTimeoutSec) * time.Second))
+		}
 		if _, err := w.Write(b); err != nil {
 			return false
 		}
@@ -1975,6 +2092,10 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		return clientGone()
 	}
 	scan(firstEvent, firstData)
+	if held != nil {
+		held()
+		held = nil
+	}
 	if firstDone {
 		return res
 	}
@@ -1993,6 +2114,10 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	for {
 		select {
 		case m := <-events:
+			if held != nil {
+				held()
+			}
+			held = m.release
 			if len(m.ev) > 0 {
 				res.upstreamLast = m.at
 				event, data, _ := sseFields(m.ev)
@@ -2055,6 +2180,14 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				return res
 			}
 			if m.err != nil {
+				if mistral && (errors.Is(m.err, errMistralBufferLimit) || errors.Is(m.err, errEventTooLarge)) {
+					failure := mistralResourceFailure(&attemptResult{})
+					if !write(append(append([]byte("\n\nevent: error\ndata: "), failure.body...), '\n', '\n')) {
+						return clientGone()
+					}
+					res.result, res.terminal, res.category, res.evaluated = "failed", failure.terminal, failure.category, true
+					return res
+				}
 				if r.Context().Err() != nil {
 					return clientGone()
 				}

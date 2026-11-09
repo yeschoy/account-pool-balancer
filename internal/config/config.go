@@ -337,6 +337,11 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 // GroupProvider is the provider whose accounts group holds ("" when it has
 // none yet). Normalize keeps a group to one provider.
 func (c *Config) GroupProvider(group string) string {
+	if c.index != nil {
+		if i, ok := c.index.groups[group]; ok && i < len(c.Accounts) && c.Accounts[i].Group == group {
+			return c.Accounts[i].Provider
+		}
+	}
 	for _, a := range c.Accounts {
 		if a.Group == group {
 			return a.Provider
@@ -922,15 +927,16 @@ func DefaultPerch() Perch {
 }
 
 type Config struct {
-	Version    int         `json:"version"`
-	Revision   int64       `json:"revision"`
-	Upstream   Upstream    `json:"upstream"`
-	Admin      Admin       `json:"admin"`
-	ClientKeys []ClientKey `json:"clientKeys"`
-	ImportKeys []ImportKey `json:"importKeys"`
-	Accounts   []Account   `json:"accounts"`
-	Routing    Routing     `json:"routing"`
-	Quota      Quota       `json:"quota"`
+	index      *configIndex // immutable derived lookups; excluded from JSON/Clone
+	Version    int          `json:"version"`
+	Revision   int64        `json:"revision"`
+	Upstream   Upstream     `json:"upstream"`
+	Admin      Admin        `json:"admin"`
+	ClientKeys []ClientKey  `json:"clientKeys"`
+	ImportKeys []ImportKey  `json:"importKeys"`
+	Accounts   []Account    `json:"accounts"`
+	Routing    Routing      `json:"routing"`
+	Quota      Quota        `json:"quota"`
 	// ErrorRules / RetryRules are the OpenDesign pool's; River and Ollama
 	// have their own.
 	ErrorRules       []rules.ErrorRule `json:"errorRules"`
@@ -1261,6 +1267,7 @@ func (c *Config) DirectEgressAccounts() int {
 	return n
 }
 func (c *Config) Normalize() error {
+	c.index = nil // validation must inspect current mutable groups/credentials
 	d := Default()
 	if c.Version == 0 {
 		c.Version = 1
@@ -1734,6 +1741,7 @@ func (c *Config) Normalize() error {
 		}
 		*r = nested.Routing
 	}
+	c.buildIndex()
 	return nil
 }
 
@@ -1768,10 +1776,18 @@ func (c *Config) Clone() *Config {
 	if err := json.Unmarshal(data, out); err != nil {
 		panic(err)
 	}
+	if c.index != nil {
+		out.buildIndex()
+	} // own derived maps; no mutable alias to the published snapshot
 	return out
 }
 
 func (c *Config) Account(id string) (Account, bool) {
+	if c.index != nil {
+		if i, ok := c.index.accounts[id]; ok && i < len(c.Accounts) && c.Accounts[i].ID == id {
+			return c.Accounts[i], true
+		}
+	}
 	for _, a := range c.Accounts {
 		if a.ID == id {
 			return a, true
@@ -1782,6 +1798,11 @@ func (c *Config) Account(id string) (Account, bool) {
 
 // ClientKeyByHash finds an enabled client key.
 func (c *Config) ClientKeyByHash(h string) (ClientKey, bool) {
+	if c.index != nil {
+		if i, ok := c.index.clientHashes[h]; ok && i < len(c.ClientKeys) && c.ClientKeys[i].KeyHash == h && c.ClientKeys[i].Enabled {
+			return c.ClientKeys[i], true
+		}
+	}
 	for _, k := range c.ClientKeys {
 		if k.KeyHash == h && k.Enabled {
 			return k, true
@@ -1792,6 +1813,11 @@ func (c *Config) ClientKeyByHash(h string) (ClientKey, bool) {
 
 // ImportKeyByHash finds an enabled import key.
 func (c *Config) ImportKeyByHash(h string) (ImportKey, bool) {
+	if c.index != nil {
+		if i, ok := c.index.imports[h]; ok && i < len(c.ImportKeys) && c.ImportKeys[i].KeyHash == h && c.ImportKeys[i].Enabled {
+			return c.ImportKeys[i], true
+		}
+	}
 	for _, k := range c.ImportKeys {
 		if k.KeyHash == h && k.Enabled {
 			return k, true
@@ -1847,6 +1873,7 @@ func (s *Store) Update(expectedRevision int64, fn func(c *Config) error) (*Confi
 		return nil, ErrConflict
 	}
 	next := old.Clone()
+	next.index = nil // update callbacks mutate before the next immutable publication
 	if err := fn(next); err != nil {
 		return nil, err
 	}

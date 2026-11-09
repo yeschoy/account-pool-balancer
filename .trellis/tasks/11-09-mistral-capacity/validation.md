@@ -1,4 +1,28 @@
-# 本轮验证
+# 当前实施与本地验收（2026-11-09）
+
+## 已落地
+- 独立会话LRU（0沿用共享4096，1–1000000独立）、设置/概览/持久化往返；在途lease、跨池/Go cache优先级及恢复/source/TTL保留。
+- 不可变账号/组/Key/source索引、owner-only、健康聚合缓存、轻量候选、分组等待/唤醒；可变Update/Normalize阶段废弃旧索引；并发provisional的实际发送者可确认偏好。
+- 原始/改写/响应/SSE原事件字节预算、读/逐次写deadline、取消归还/读goroutine退出、响应超限不重放/不扣健康；独立Transport及安全换代；JSON/SSE/脱敏/采样/稀疏Stats/日志队列字节预算。
+
+## 质量门禁
+全仓 `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、构建及所有Node行为套件/JS语法通过。原始回执和改后基准在本目录 `research/implementation/`；临时构建/假data/浏览器回执在登记的 `.analysis/mistral-capacity-implementation/`。专项覆盖上传/下游慢读真实socket、并发取消归零、队列满/组隔离、账号换组后的释放唤醒/旧Revision防回滚、响应预算、不误重放/不扣健康、LRU迁移/缩容/恢复、Config mutation索引及24h稀疏投影。
+
+## 本地真实浏览器
+- 仅127.0.0.1:18793、0账号、独立假data；无真实Key、无上游推理。
+- 通过实际设置页保存容量50000、字节128MiB、等待16、上传45秒、写20秒、采样25%、独立连接7/3及本池quota=false。API、UI、配置文件读回一致，正常停止并重启同一data后再次核验全部值。
+- OpenDesign根连接仍512/32、根quota=true。概览显示独立0/50000和0/128MiB及日志队列/丢弃；接口实际limit=50000、independent=true，不只是点击成功。
+- 管理员已退出，专属mistral-capacity-local浏览器关闭，所属PID47284/55182停止；文件待同意清理，Trellis永久保留。
+
+## 改后测量边界
+详见 `docs/mistral-capacity.md` 第8节。4K账号健康开启已确认绑定lease周期836.2ns、1064B；冷选号1.737ms。400账号/详情关闭Mock Handler摊销163174ns、559790B、逐请求P95/P99=2.101/2.718ms。以上为Apple M4本地短测、非生产容量，未包含前置NewAPI/Nginx/真实生成/周期元数据写盘；不能宣称3亿TPM或相同倍数端到端提升。
+
+## 当前仍未完成
+未推送/部署/改线上设置/真实推理；未验证300M TPM、真实组织/模型额度、完整NewAPI/Nginx路径、持续开环长流/周期保存及目标SLO。冷选号全量过滤排序、无显式身份fallback、密集24h桶和百万绑定快照仍需按真实负载进一步测量。没有独立agent审阅证据：工具全部启动失败后由用户批准主会话串行。任务保持in_progress，不归档为容量认证完成。
+
+---
+
+# 首轮研究验证（历史快照）
 
 ## 已执行
 
