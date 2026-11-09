@@ -68,4 +68,13 @@
 - [x] 目标长请求UA14条opencode/latest，不能固定客户端版本；本机1.2.16仅参考，固定对应公开tag及两SDK精确版本。
 - [x] 编译当前NewAPI DTO合成验证native流数组拒绝、annotations双向保留、另两额外字段丢弃。
 - [x] SDK内存mock验证默认布局不回传、OpenAI-compatible发送合并字段、参考Mistral SDK请求合入普通答案；显式模型类extractor+message providerOptions回传annotations通过，无真实fetch。
-- [ ] 待用户定实施边界：允许provider适配器/配置改动，或必须不动客户端；决策后再进入完整codec/集成实现，当前未改生产/客户端、未部署。
+- [ ] 待用户定实施边界：允许provider适配器/配置改动，或必须不动客户端；决策后再进入完整codec/集成实现；此无损载体研究未改生产/客户端、未部署。
+
+## 最新报错修复/部署/600秒观察（2026-11-09 UTC 21时）
+
+- [x] 最近2小时13条Mistral本地400与NewAPI180全部retention错误精确对齐；同时审阅24小时各池错误，区分旧版/attempt/最终失败及不经过号池的渠道。
+- [x] 精确DeepSeek Chat消费24h/in_memory缓存性能提示，保留缓存键/完整历史/思考/工具/数字；不保证TTL，非法/重复仍拒绝，其他池/协议/模型不变。
+- [x] 干净提交副本精确红0.845秒→20项相关回归绿0.809秒；不做无关全仓/race/Node/真实推理。37332be已提交推送并沿既有OVH控制器上线，备份/运行参数/资产/双入口/公网资源验收通过。
+- [x] UTC21:11:35–21:21:35完整600秒、42次健康采样；Mistral原失败Key6成功零失败，OpenCode35成功，OpenDesign50成功1失败；配置始终不变、观察已退出。
+- [x] OpenDesign唯一503已追到并发400→换号余额402→触及maxAccountsPerRequest=2，非本次兼容代码异常。未擅调明确上限/开启付费，未声称问题消除；若需提高恢复机会，须确认资源或重试配置调整。166的2次GPT流式失败确认不经过号池。
+- [ ] 原GLM188缓存根因/交错块布局和OpenDesign可用资源/尝试上限仍独立未完成；不归档。详细证据research/recent-errors-retention-20261109.md。

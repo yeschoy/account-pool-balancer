@@ -28,4 +28,24 @@
 
 ## 发布与观察
 
-待本轮部署和600秒自然流量观察；不提前声称线上已修复或零错误。发布除本次retention外含已提交/已相关验证的原生thought+相同legacy去重（170be84），不包含任何注册/指纹/Dockerfile未提交改动。原交错块布局无损恢复及GLM188根因仍独立未完成。
+`37332be6577f9ced995d2cb7a1f960bac0c29612`已推送master并上线。发布除本次retention外含已提交/已相关验证的原生thought+相同legacy去重（170be84），不包含任何注册/指纹/Dockerfile未提交改动。614个干净提交文件哈希集合核验，旧c1 healthy/restart0、双内网入口正常；构建6.96秒，镜像就绪后干净停止旧进程、完整一致data备份/gzip/SHA256核验，沿实际Compose仅覆盖image、到期诊断变量仍为空。191账号/186TH核心资产/config完整字节/注册库/routingSecret和全部运行保护保留。
+
+- 构建UTC21:10:14.720–21:10:21.681；停止请求21:10:21.774、旧退出21:10:21.876；备份21:10:22.142–21:10:26.811；切换请求21:10:26.811、新启动21:10:27.131；首HTTP21:10:28.252、Docker healthy21:10:57.485；NewAPI双入口21:10:57.630、本机四资源21:10:57.633。
+- UTC21:12:20.013真实未登录公网浏览器登录页/healthz/四资源全部200，查询串?v=9d44d5ff6c和SHA256逐项匹配目标Git提交；回执写正式deploy.json，专用浏览器关闭。上线/入口验收后已立即反馈，不等文档提交。
+- 固定观察UTC **21:11:35–21:21:35**（北京时间次日05:11:35–05:21:35），完整600秒；21:21:37.114返回window_complete，42次两服务健康采样全为37332be/healthy/restart0/无OOM、配置hash始终不变。2秒边界补采不扩大统计区间，观察进程已退出，无后台采样或主动推理。
+
+| 号池最终完成结果 | 成功 | 失败 | 取消 |
+|---|---:|---:|---:|
+| Mistral | 6 | 0 | 0 |
+| OpenCode Go | 35 | 0 | 0 |
+| OpenDesign | 50 | 1（503） | 0 |
+
+Mistral6条均原13次retention失败的同一下游Key、同一DeepSeek模型，6条均单attempt200，没有400/422/429/503/504。NewAPI180的1非流式+5流式成功逐条口径对齐；流式均ok/done/completed。两层input=1008716/cached=643584完全一致，4条有缓存；这不是控制TTL或缓存改善试验，也没有留存成功请求正文来证明每条仍含retention。样本仅6条，不保证所有客户端/未来请求均无错。GLM188无本窗口业务，原交错块布局无损恢复及缓存根因仍独立未完成。
+
+## 观察中其他错误：不能隐瞒或误修
+
+1. OpenDesign `req_7e23e60557eaac28647fd269`：21:12:43首attempt上游400 membership-concurrency，换号后200，最终成功；不是最终失败。
+2. OpenDesign `req_232bb23ae205c3e9d31efb2a`：21:19:52首attempt400 membership-concurrency，第二attempt402 insufficient-balance，最终按计费规则映射503、555ms。两次均正常匹配cooldown与换号策略；实际`routing.maxAccountsPerRequest=2`，第二次后达到明确配置上限。workflow仍有其他候选，不能称全池全部余额为零或没有账号；也不能越过用户设置无限重试/开启付费来假装修复。**本项未消除**，需补可用并发/额度，或经确认调整现有尝试上限。未改线上配置、禁用账号或重启。
+3. NewAPI166另有2条GPT流式EOF/failed。只读渠道key哈希/入口对账确认166以及132/89/158/162/164等均不指向Balancer、无号池Key匹配；不在本仓服务转发路径，不能靠改此号池修复或混算为Mistral失败。
+
+正式release `/home/ubuntu/project/account-pool-balancer-releases/20261109T210951Z-37332be`；受限完整备份 `/home/ubuntu/backups/account-pool-balancer/20261109T210951Z-retention-compat-37332be/`，data SHA256 `40550a79331a681be5a2fde990d97c819773f7bb3f6f0114f5fdb6d8550c0d8c`；新镜像 `account-pool-balancer:release-37332be-20261109T210951Z`，旧镜像 `account-pool-balancer:rollback-20261109T210951Z`保留。回退先备份/确认后续写入，不自动覆盖data。旧退出至首HTTP约6.38秒仅为观测间隔，不把构建/健康等待称停机。临时目录已登记、未经同意未清理，Trellis/正式回退资料保留。
