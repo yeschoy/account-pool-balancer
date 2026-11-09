@@ -53,3 +53,11 @@
 - [x] 本机只读验证32字节metadata密钥三读稳定、公开合成输入1000次一致、两内网兼容入口同一容器且两服务healthy/0重启，不打印任何secret/hash。
 - [x] 明确表示边界尚未证目标触发，不改共享contentText；原188稳定session_header上游提示非消息HMAC，不用新边界冒充原根因，核心任务仍未完成。
 - [x] 用户追加查转换链路：确认别名统一→原身份HMAC→模型内容prepare→固定ident发送；新增三模型×fallback/Claude-carrier六组合60转换/12真实本地HTTP验证原字节/惰性投影不可变、转换输出稳定、身份不回灌。合跑原132工具18HTTP共30mock，normal1.517秒、新转换race2.234秒通过；不将本地转换证明当生产TLS/缓存恢复验收。
+
+## 最新：等价表示与响应往返
+
+- [x] 原生thinking与同值legacy字段重复插入缺陷：三模型native-only/两alias/双alias共12真实本地HTTP先红，证明冗余字段有无会改旧assistant原字节，缓存键不变也能发生。
+- [x] 最小三模型Chat修复：完全同值则原生content原字节优先，仅消费legacy；保留空白/closed/part顺序，不折叠不同思考或签名/未知metadata/歧义/其他模型。请求/响应共用plain-thinking解析。
+- [x] 定向normal1.958秒/race3.176秒通过，包含既有reasoning冲突/占位、JSON/SSE响应、完整132工具历史、原身份不可变与本地TLS/HTTP2；无真实推理或生产部署。
+- [ ] 原188是否触发重复字段/实际生产Reader及缓存效果未验证；不能以本地缺陷修复关闭原问题。
+- [ ] 原生text/thinking交错经scalar响应再重建会损失块布局：已加12种往返characterization，仍待独立无损方案，不假称本次去重已解决。

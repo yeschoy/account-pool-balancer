@@ -42,3 +42,9 @@
 发现并复现现有contentText短字符串与单文本块多一个LF的边界，会使message fallback输入变化；未证原会话触发，未改共享提取器/缓存命名空间。原188已证session_header，上游key是稳定会话头原值，不经过消息HMAC，不能用该边界解释原14条掉缓存。详细research/hmac-stability-20261109.md；仅提交回归/spec/证据，未改生产或做推理，核心缓存任务不归档。
 
 用户再问“转换乱序或结果不同是否导致HMAC不同”：追到proxy别名统一→原identity→prepare→固定ident发送，模型内容转换后不重算。新增转换HTTP回归三模型×fallback/Claude carrier六组合，各10次转换、2次mock HTTP；原字节、共享惰性投影/身份不变，输出逐字稳定且数组索引/非assistant文本保留。即使反事实对已插缓存key/已删user的结果重hash会不同，实际handler仍用原身份key。与原132工具回归共30次本地mock，normal1.517秒、新转换race2.234秒通过，零生产请求/变更。强调HMAC稳定不等于完整prepared历史稳定，真实目标生产TLS仍缺，不能宣称排除全部转换缺陷；证据追加在同research。
+
+## 最新发现：原生与legacy思考重复表达会改写出站历史
+
+用户进一步要求查转换内容变化/零缓存，新增等价表示而非仅相同输入测试。三模型native-only原有1个thinking，加同值reasoning/reasoning_content后原转换会prepend为2个，12真实本地HTTP先红；已最小修复只在完整plain-native文本与legacy逐字相同才保留原生content原字节、不重复插入，空白/closed/part/工具/键不改，非匹配及签名/未知/歧义/其他模型保守不折叠。抽取既有响应plain-thinking文本解析共用，normal1.958秒/race3.176秒通过。**本地已修，未部署，未证原188触发或缓存改善**。
+
+另有已确认未解决边界：原生text→thinking→text经scalar reasoning/content再组请求会重排成thinking→text；12种JSON/逐delta往返已characterize，普通布局文字/空白保留，结构差异不能直接断言token失配或0缓存。未来需无损native/client边界，不用删思考/全局trim/存用户正文的临时cache伪补。正式证据research/native-thought-replay-20261109.md；任务不归档，临时回执已登记。

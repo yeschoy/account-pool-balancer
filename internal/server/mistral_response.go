@@ -56,28 +56,11 @@ func mistralChatResponse(body []byte, stream bool) ([]byte, error) {
 				}
 				answer.WriteString(text)
 			case "thinking":
-				// A signed/reference block needs native replay semantics. Do not
-				// silently strip it to make an incompatible client appear healthy.
-				for key, value := range chunk {
-					switch key {
-					case "type", "thinking", "closed":
-					case "signature":
-						if !bytes.Equal(bytes.TrimSpace(value), []byte("null")) && !bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
-							return nil, errMistralContent
-						}
-					default:
-						return nil, errMistralContent
-					}
+				parts, err := mistralThinkingTextParts(chunk)
+				if err != nil {
+					return nil, err
 				}
-				var thoughts []map[string]json.RawMessage
-				if json.Unmarshal(chunk["thinking"], &thoughts) != nil || thoughts == nil {
-					return nil, errMistralContent
-				}
-				for _, thought := range thoughts {
-					text, err := mistralTextChunk(thought)
-					if err != nil {
-						return nil, err
-					}
+				for _, text := range parts {
 					reasoning.WriteString(text)
 				}
 				hasThinking = true
@@ -139,6 +122,36 @@ func mistralTextChunk(chunk map[string]json.RawMessage) (string, error) {
 		}
 	}
 	return text, nil
+}
+
+// Share the exact plain-thinking boundary between response adaptation and
+// redundant request-alias detection. Signed/reference/unknown metadata cannot
+// be represented by an ordinary reasoning string.
+func mistralThinkingTextParts(chunk map[string]json.RawMessage) ([]string, error) {
+	for key, value := range chunk {
+		switch key {
+		case "type", "thinking", "closed":
+		case "signature":
+			if !bytes.Equal(bytes.TrimSpace(value), []byte("null")) && !bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
+				return nil, errMistralContent
+			}
+		default:
+			return nil, errMistralContent
+		}
+	}
+	var thoughts []map[string]json.RawMessage
+	if json.Unmarshal(chunk["thinking"], &thoughts) != nil || thoughts == nil {
+		return nil, errMistralContent
+	}
+	parts := make([]string, 0, len(thoughts))
+	for _, thought := range thoughts {
+		text, err := mistralTextChunk(thought)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, text)
+	}
+	return parts, nil
 }
 
 // Normalize a single complete event, never the full stream. Keep SSE metadata,

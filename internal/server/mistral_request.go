@@ -459,7 +459,7 @@ func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bo
 					if err := message.unique("content", "reasoning_content"); err != nil {
 						return nil, false, err
 					}
-					if err := mistralAssistantReasoning(message, reasoning); err != nil {
+					if err := mistralAssistantReasoning(message, reasoning, reasoningAlias); err != nil {
 						return nil, false, err
 					}
 				}
@@ -540,7 +540,52 @@ func mistralUserImages(message *mistralWireObject) error {
 	return nil
 }
 
-func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte) error {
+// Compare decoded text exactly, without trimming or rebuilding native chunks.
+// Equal legacy/native representations describe one thought, not two. Preserve
+// the native order, text-part boundaries, closed flags and original JSON bytes.
+func mistralNativeThoughtMatches(chunks []json.RawMessage, text string) bool {
+	found, offset := false, 0
+	for _, raw := range chunks {
+		view := scanMistralObject(raw)
+		if view == nil {
+			return false
+		}
+		if mistralString(view.get("type")) != "thinking" {
+			continue
+		}
+		if view.unique("type", "thinking", "closed", "signature") != nil {
+			return false
+		}
+		var rawParts []json.RawMessage
+		if json.Unmarshal(view.get("thinking"), &rawParts) != nil {
+			return false
+		}
+		for _, part := range rawParts {
+			p := scanMistralObject(part)
+			if p == nil || p.unique("type", "text") != nil {
+				return false
+			}
+		}
+		var chunk map[string]json.RawMessage
+		if json.Unmarshal(raw, &chunk) != nil {
+			return false
+		}
+		parts, err := mistralThinkingTextParts(chunk)
+		if err != nil {
+			return false
+		}
+		for _, part := range parts {
+			if !strings.HasPrefix(text[offset:], part) {
+				return false
+			}
+			offset += len(part)
+		}
+		found = true
+	}
+	return found && offset == len(text)
+}
+
+func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte, preserveNative bool) error {
 	var text *string
 	if json.Unmarshal(reasoning, &text) != nil {
 		return errors.New("Mistral assistant reasoning_content must be a string or null")
@@ -560,6 +605,10 @@ func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte) err
 		case content[0] == '[':
 			var existing []json.RawMessage
 			_ = json.Unmarshal(content, &existing)
+			if preserveNative && mistralNativeThoughtMatches(existing, *text) {
+				message.set("reasoning_content", nil)
+				return nil
+			}
 			chunks = append(chunks, existing...)
 		default:
 			return errors.New("Mistral assistant content must be text, chunks or null to preserve reasoning")
