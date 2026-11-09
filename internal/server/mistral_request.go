@@ -437,10 +437,15 @@ func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bo
 					if reasoning != nil && json.Unmarshal(reasoning, &canonical) != nil {
 						return nil, false, errors.New("Mistral assistant reasoning_content must be a string or null")
 					}
-					if aliased != nil && *aliased != "" && canonical != nil && *canonical != "" && *aliased != *canonical {
+					// Some relays replay a space-only canonical placeholder next to
+					// the full alias. Compare meaningful thoughts, but never trim
+					// the selected original text or prefer one real conflict.
+					aliasHasThought := aliased != nil && strings.TrimSpace(*aliased) != ""
+					canonicalHasThought := canonical != nil && strings.TrimSpace(*canonical) != ""
+					if aliasHasThought && canonicalHasThought && *aliased != *canonical {
 						return nil, false, errors.New("Mistral assistant reasoning conflicts with reasoning_content; neither thought was discarded")
 					}
-					if reasoning == nil || canonical == nil || *canonical == "" {
+					if reasoning == nil || canonical == nil || !canonicalHasThought {
 						reasoning = alias
 					}
 					message.set("reasoning", nil)
