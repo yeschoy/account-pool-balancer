@@ -3,5 +3,5 @@
   "status": "in_progress",
   "description": "按当前授权渠道/Key审计Mistral入站、准备、真实attempt与usage，修复有证据的本地低缓存缺陷；协议兼容与模型缓存根因独立验收",
   "validation": "validation.md",
-  "waiting_for": "协议400/422修复保留于线上c1aebbc，不等于缓存已修。UTC14:03自然180/user67长会话25→29消息，全部旧消息/132工具原始JSON精确相同、同号绑定hit且各单attempt，缓存73445/0→82441/6016仍7.297%；原始usage、日志、NewAPI一致。缺本轮实际attempt/Reader完整出站证据，不能最终定责池端或Mistral内部；需新的单Key有界诊断授权，不擅自重启/续采/付费推理。GLM188仅13-token检测，当前其他GLM业务属182/user604，不混用。外部NewAPI一度unhealthy/restart15，重建后healthy及双入口通过，原因未确认且非本轮操作。详见research/current-low-cache-20261109.md，任务不归档"
+  "waiting_for": "用户最新明确查参数上传/消息排序，不以切号为主线。UTC14:31/14:36两轮双跳RAM观察12组唯一配对，messages/tools语义相同、无数组重排，关键参数实值保留，根字段仅模型映射不同；2歧义不猜。182/user821一类4消息上传在进入NewAPI前第3条已改写，不是末尾追加；另见system原已在末尾，是否正常辅助调用未知，不给用户擅自调序。三精确模型132工具25→29→33的6子用例及TLS/HTTP2 mock定向1.762秒通过；只新增回归未改生产，不把mock当生产出站证明。max_completion_tokens未在通用文档列出仍仅待核实，不作为缓存根因乱改。原188缺业务新会话/实际Reader证据，任务保持in_progress；详见research/parameter-message-order-20261109.md"
 }
