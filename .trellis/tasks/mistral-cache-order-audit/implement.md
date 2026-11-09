@@ -52,3 +52,4 @@
 - [x] 新增10000次串行/并发、相同fake metadata真实Server复建、短字符串/文本块LF与UTF-8截断边界回归；clean c1副本normal1.104秒/race2.446秒通过，不做真实推理/生产重启。
 - [x] 本机只读验证32字节metadata密钥三读稳定、公开合成输入1000次一致、两内网兼容入口同一容器且两服务healthy/0重启，不打印任何secret/hash。
 - [x] 明确表示边界尚未证目标触发，不改共享contentText；原188稳定session_header上游提示非消息HMAC，不用新边界冒充原根因，核心任务仍未完成。
+- [x] 用户追加查转换链路：确认别名统一→原身份HMAC→模型内容prepare→固定ident发送；新增三模型×fallback/Claude-carrier六组合60转换/12真实本地HTTP验证原字节/惰性投影不可变、转换输出稳定、身份不回灌。合跑原132工具18HTTP共30mock，normal1.517秒、新转换race2.234秒通过；不将本地转换证明当生产TLS/缓存恢复验收。

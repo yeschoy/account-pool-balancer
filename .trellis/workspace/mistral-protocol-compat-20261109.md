@@ -40,3 +40,5 @@
 区分真实routing HMAC与每次诊断采样换盐的标签。实际fingerprint每调用新建hash、复用metadata持久化secret，值为固定kind/caller scope/选中身份；无时间/随机nonce/请求ID/整段历史参与。新增mistral_hmac_stability_test.go：10000串行/并发、fake数据真实Server保存复建一致，normal1.104秒/race2.446秒通过。UTC15:59:58只读metadata三读同32字节secret、远端合成1000次一致，两内网入口同一c1容器，两服务healthy/0，没输出密钥/hash或重启。
 
 发现并复现现有contentText短字符串与单文本块多一个LF的边界，会使message fallback输入变化；未证原会话触发，未改共享提取器/缓存命名空间。原188已证session_header，上游key是稳定会话头原值，不经过消息HMAC，不能用该边界解释原14条掉缓存。详细research/hmac-stability-20261109.md；仅提交回归/spec/证据，未改生产或做推理，核心缓存任务不归档。
+
+用户再问“转换乱序或结果不同是否导致HMAC不同”：追到proxy别名统一→原identity→prepare→固定ident发送，模型内容转换后不重算。新增转换HTTP回归三模型×fallback/Claude carrier六组合，各10次转换、2次mock HTTP；原字节、共享惰性投影/身份不变，输出逐字稳定且数组索引/非assistant文本保留。即使反事实对已插缓存key/已删user的结果重hash会不同，实际handler仍用原身份key。与原132工具回归共30次本地mock，normal1.517秒、新转换race2.234秒通过，零生产请求/变更。强调HMAC稳定不等于完整prepared历史稳定，真实目标生产TLS仍缺，不能宣称排除全部转换缺陷；证据追加在同research。

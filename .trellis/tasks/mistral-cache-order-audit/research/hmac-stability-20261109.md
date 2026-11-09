@@ -71,3 +71,22 @@ UTC15:59:58只读快照：
 相同密钥/scope/实际身份输入的重复或并发计算，未发现HMAC本身随机不一致；代码/normal/race/本地保存重载与本机拓扑均支持这一窄结论。发现可复现的表示提取边界，须针对真实低缓存原会话验证是否发生字符串/文本块切换或首消息输入变化后再决定Mistral范围的修复；不伪称已修原缓存故障。
 
 本轮只新增定向回归和Trellis/spec记录，无生产逻辑、配置或部署变化。临时脚本/回执已登记_tmp_artifacts.md，经同意才清理；核心缓存任务保持in_progress。
+
+## 用户追加：转换是否造成乱序/结果变化，再影响HMAC
+
+这个问题不能仅凭“同输入HMAC计算10000次一致”排除，需要查实际时序与共享数据。重新核对c1代码及新增真实本地HTTP回归：
+
+1. `proxy.go:654–677`先统一Chat的promptCacheKey→prompt_cache_key别名。这只替换缓存字段，保留messages原字节，不是消息转换；别名冲突拒绝而非随机选值。
+2. `proxy.go:716`用原始（仅已统一别名）的身份投影计算mistralIdentity。
+3. `proxy.go:738`再prepareMistralRequest：处理effort、DeepSeek developer→system、思考块、图片形状/标准缓存提示，并填入最终缓存键。
+4. `proxy.go:795/887`使用固定ident选路并进入attempt；`1465–1473`Mistral跳过其他provider的upstreamBody改写，直接bytes.NewReader(body)构造HTTP请求；`1523–1530`复用既定缓存键做X-Affinity。**模型内容转换/后续attempt不重新计算该身份HMAC**。
+
+转换器逐项扫描原数组并写新bytes.Buffer，只改当前消息字段，不对messages或tools排序；改变role/type结构不等于移动消息。assistant正文字符串可因思考转为thinking/text数组，但消息兜底只看首system/user，不看assistant；当前号池适配器不会把首条user的文本字符串自动变成text数组，DeepSeek的user处理保持数组外形，仅改图片/提示字段。因此前述短文本LF边界不是“号池自动转换首user后再hash”造成的。
+
+新增`TestMistralConversionUsesOriginalHMACAndImmutableInput`：三精确模型×message fallback/Claude user会话carrier=6组合，每组对同一输入转换10次，核对原byte slice、仍引用原历史的惰性路由投影及从该投影重算身份均不被改写，且60次转换各组输出逐字稳定。验证role（DeepSeek的显式developer→system例外）、user/tool/system文本及tool_call_id所在索引不变；另外原132工具25→29→33消息测试复跑，检查完整旧历史前缀与所有工具/调用关联保留。
+
+每组还做2次真实本地HTTP post、共12次mock接收：实际上传正文逐字等于转换结果、X-Affinity/正文缓存键取转换前身份。测试刻意加入“若错误地对转换后的body重算，就确实得不同HMAC”的可区分样例：新增的prompt_cache_key会成为另一个身份提示；DeepSeek还会删除已提取会话的user兼容标签。实际handler仍上传转换前选定的key，不能将这种反事实手工hash结果当成真实发生的二次hash。原132工具回归另18次mock，共30次本地mock HTTP，均非生产推理。
+
+两项normal合跑1.517秒通过；新增转换链路6组合race2.234秒通过。没有原字节/投影突变、转换重复结果变化、消息重排或转换后重新hash的复现。
+
+**限制仍在**：这些检查说明本地当前转换链路的上述机制未复现缺陷，不是原188真实生产TLS上传已取证。NewAPI/客户端的转换发生在号池HMAC之前，若它改变选中的首消息文字/表示，确实可能改变输入；已有12组双跳只约束那些已观察样本。即使身份HMAC保持不变，转换后完整历史前缀若不稳定，模型缓存仍可能下降，因此不得用HMAC不变宣布转换没有任何问题或原缓存根因已修复。

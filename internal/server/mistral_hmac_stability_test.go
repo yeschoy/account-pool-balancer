@@ -160,3 +160,87 @@ func TestMistralHMACRepresentationBoundaries(t *testing.T) {
 	}
 	t.Log("string versus short text-chunk input adds LF and changes fallback; an explicit session bypasses this input boundary")
 }
+
+// Exercise the real HTTP handler, not just repeated calls to the hash helper.
+// A hypothetical rehash of the already prepared body can differ (for example,
+// its inserted cache key becomes an identity hint). The handler must keep the
+// original selected identity rather than feeding converted output back into it.
+func TestMistralConversionUsesOriginalHMACAndImmutableInput(t *testing.T) {
+	for _, model := range []string{"deepseek-v4-1-flash-1017", "zai-glm-5-3", "zai-glm-5-3-flash"} {
+		for _, carrier := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/claude-carrier=%t", model, carrier), func(t *testing.T) {
+				e := newMistralEnv(t)
+				role, user := "system", `[{"type":"text","text":"synthetic question <&>"}]`
+				if model == "deepseek-v4-1-flash-1017" {
+					role = "developer"
+					user = `[{"type":"text","text":"synthetic question <&>","cache_control":{"type":"ephemeral"}},{"type":"image_url","image_url":{"url":"https://example.invalid/synthetic.png","MimeType":""}}]`
+				}
+				label := ""
+				if carrier {
+					label = `,"user":"user_hash_account_org_session_12345678-abcd-1234-abcd-123456789abc"`
+				}
+				raw := []byte(fmt.Sprintf(`{"model":%q%s,"messages":[{"content":"synthetic instruction","role":%q},{"role":"user","content":%s},{"role":"assistant","reasoning":"complete synthetic thought","reasoning_content":" ","content":"answer","tool_calls":[{"id":"call-fixed","type":"function","function":{"name":"tool","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call-fixed","content":"tool-result"},{"role":"user","content":"next-user"}]}`, model, label, role, user))
+				original := bytes.Clone(raw)
+				obj, err := parseRoutingBodyWithHistory(raw, true, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				projection, _ := json.Marshal(obj)
+				cfg := e.s.cfg.Get().ForProvider(config.ProviderMistral)
+				scope := config.MistralGroup + "\x00client1"
+				id := e.s.mistralIdentity(cfg, scope, nil, obj)
+				if id.Fingerprint == "" || carrier && id.KeyType != "claude_user_session" || !carrier && id.Source != "message_hmac" {
+					t.Fatal("fixture did not select the intended original identity")
+				}
+				key, _ := mistralRequestCacheKey(cfg, nil, id)
+				var expected []byte
+				for repeat := 0; repeat < 10; repeat++ {
+					prepared, generated, err := prepareMistralRequest(raw, "/v1/chat/completions", key)
+					if err != nil || generated != key {
+						t.Fatal("unexpected preparation result", err)
+					}
+					afterProjection, err := json.Marshal(obj)
+					if err != nil || !bytes.Equal(raw, original) || !bytes.Equal(projection, afterProjection) || e.s.mistralIdentity(cfg, scope, nil, obj) != id {
+						t.Fatal("conversion mutated original bytes/projection/identity")
+					}
+					if repeat == 0 {
+						expected = bytes.Clone(prepared)
+					} else if !bytes.Equal(expected, prepared) {
+						t.Fatal("identical original input produced unstable converted bytes")
+					}
+				}
+				// The post-conversion hypothetical really differs for fallback
+				// (inserted prompt_cache_key) and DeepSeek's removed user label.
+				post, err := parseRoutingBodyWithHistory(expected, true, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (!carrier || model == "deepseek-v4-1-flash-1017") && e.s.mistralIdentity(cfg, scope, nil, post).Fingerprint == id.Fingerprint {
+					t.Fatal("counterfactual rehash must distinguish the two execution orders")
+				}
+				var before, after struct{ Messages []map[string]any }
+				if json.Unmarshal(original, &before) != nil || json.Unmarshal(expected, &after) != nil || len(before.Messages) != len(after.Messages) {
+					t.Fatal("invalid converted message count")
+				}
+				for i, message := range before.Messages {
+					wantRole := message["role"]
+					if wantRole == "developer" && model == "deepseek-v4-1-flash-1017" {
+						wantRole = "system"
+					}
+					if after.Messages[i]["role"] != wantRole || after.Messages[i]["tool_call_id"] != message["tool_call_id"] || message["role"] != "assistant" && contentText(message["content"]) != contentText(after.Messages[i]["content"]) {
+						t.Fatal("conversion moved a message or altered user/tool/system text")
+					}
+				}
+				for repeat := 0; repeat < 2; repeat++ {
+					if status, _ := e.post(t, "/v1/chat/completions", string(original), nil); status != 200 || e.count() != repeat+1 {
+						t.Fatal("local HTTP conversion failed")
+					}
+					call := e.call(repeat)
+					if call.body != string(expected) || call.header.Get("X-Affinity") != key {
+						t.Fatal("actual mock HTTP upload did not retain the pre-conversion HMAC key and prepared bytes")
+					}
+				}
+			})
+		}
+	}
+}
