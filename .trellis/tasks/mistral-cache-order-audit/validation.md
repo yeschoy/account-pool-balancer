@@ -1,5 +1,11 @@
 # 验证与交付状态
 
+## 最小单Key HTTP/usage诊断本地验证（2026-11-10，待发布）
+
+用户明确授权发布短重启和最多6次200K合成连续请求。扩展既有cacheAudit，仅受单Key/30min/128保护的attempt添加脱敏请求/响应头、协议/ALPN和有界完整usage，实际正文HMAC/流式/重试/统计不变。隔离HEAD干净副本+本轮四源码/测试文件验证，其他窗口注册/指纹/Dockerfile未带入：全部Mistral定向normal11.671秒、相关cacheAudit/Wire/前缀race8.143秒、server vet及cmd构建通过。覆盖JSON/SSE/full usage未知数值/大数、header trace与旧详情组合、Cookie/认证/未知值掩码、边界/晚回调快照与关闭零分配；初轮两条失败是关闭测试fixture分配及mock Host原文泄漏，已修正并全相关重验。
+
+正常admin API新建专用临时Key ck_058a943b722e55f52cf86276，独立空组mistral-http-audit-20261110，不移动现有业务/自测Key、暂未隔离账号或生成推理，其他配置保留并logout。当前尚未部署新补丁或采集新HTTP，后续状态追加，不冒称缓存修复。
+
 ## 最新真实实验：Flash ≥200K连续20轮及官方预算实扣（2026-11-10 UTC13:40–13:46）
 
 用户批准临时隔离可用账号/自测Key并恢复，明确不在乎本次额度。正式测试经f1024e9号池而非直连生成，不经NewAPI；同账号acc_78068235bc580c4f6eeb8bdb/代理/Session/cache/X-Affinity，20轮high/1536，实际input224081→245056且每轮≥200000。20次均HTTP200/自然stop/SSE DONE/单attempt，后19次binding hit，完整41消息与全部思考/答案哈希、末轮历史及20条usage日志对账通过。首1/2轮0，第8→9→10轮98.64%→0%→98.22%，其他17轮96.41%–98.96%；全程加权84.08%、第2–20轮88.31%。

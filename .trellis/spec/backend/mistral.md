@@ -106,7 +106,17 @@ Wrong: overwrite a caller's prompt_cache_key, hash an explicit header despite th
 - Existing body cache keys and direct cache/session header hints follow section3; a session_header-generated upstream key is the valid header value, not the routing HMAC. Built-in cacheAudit HMACs and external RAM observation tags have independent random per-process/run keys and never become the upstream cache key. Cross-run tags/full-body changes cannot prove cache-key drift; a stable identity HMAC cannot prove the full prompt prefix is stable either.
 - Focused executable checks: `mistral_hmac_stability_test.go` covers 10000 sequential/concurrent computations, unrelated parameter/root order/escape/tail changes, deliberate scope/secret separation, saved fake-data Server reconstruction and the short-string/text-chunk/UTF-8 clipping boundaries. These are local calculations, not paid inference or production restarts.
 
-## 11. Precise tier/capacity defaults (2026-11-10; deployed as f1024e9)
+## 11. Opt-in HTTP/usage evidence extension (2026-11-10)
+
+Extend only existing exact-Key `cacheAudit` startup opt-in (30min/128 requests), not normal summaries/detail settings. Request headers compose `httptrace.WroteHeaderField` with existing detail hooks, report observed status separately from pre-transport headers, and clone maps at finalization against late callbacks. Keep existing incremental Body/GetBody HMAC and original transport, retry, admission, SSE flush and usage accounting unchanged.
+
+Record at most64 sorted HTTP header names, four values/name and512 readable bytes/value; truncation is explicit. Only allowlisted technical headers have readable values; global/EU/US official Host values may be readable but custom/mock origins stay HMAC-private. Unknown/affinity/session values have random per-run HMACs, never raw. Authorization/token/cookie headers are redacted, cookie names only (max16) may be shown; do not store cookie values or introduce a cookie jar. Apply known account/client credentials and request identity checks even to technical header values/names. Header presence does not prove a forwarding requirement; provider trace is not a GPU/node ID.
+
+For successful native JSON/SSE preserve the last usage object (including unknown numeric/bool/null nested fields and exact JSON numbers) in optional attempt diagnostics, not in billing counters. Bound at8KiB/256 nodes/depth8/64 map entries or array elements; on overflow save only byte count/HMAC and mark truncated. Arbitrary string values are redacted except standard/priority/USD/EUR enums; unsafe/dynamic field names are tagged and sanitization flagged. No prompt/thought/tool body, unknown metadata, raw Cookie or credential logging. Keep original downstream bytes unchanged. Record upstream HTTP protocol/TLS ALPN, not internal region or worker inference from connection IDs.
+
+Tests: `mistral_cache_audit_http_test.go` covers JSON/SSE, detail-hook composition, complete usage extra fields/large numbers, technical versus unknown header privacy, cookie masking, size/depth/count bounds, late snapshot immutability and zero allocations on disabled calls; preserve existing `mistral_cache_audit_transport_test.go` real Reader/HTTP2/first-flush/retries/trace privacy. Real diagnostic deployment and inference require explicit authorization and a separate disposable Key, disabled after the bounded test; no full-pool body detail enabling.
+
+## 12. Precise tier/capacity defaults (2026-11-10; deployed as f1024e9)
 
 ### Scope / Trigger
 Mistral upstream HTTP403 with top-level code1910 is model-tier qualification, not an invalid key; HTTP429/code3505 is backend capacity, not an account quota measurement. Use existing rules and account×model state, no new scheduler or inference replay.

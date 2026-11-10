@@ -1,5 +1,11 @@
 # 设计
 
+## 最新授权最小HTTP诊断（2026-11-10）
+
+复用既有cacheAudit，不新开日志服务/UI/持久化设置。只在目标Key受预算保护的attempt中添加脱敏requestHTTP/responseHTTP、实际header trace观测标记、HTTP协议/TLS ALPN与最后原生usage。WroteHeaderField与旧wire detail钩子组合不覆盖；现有Reader/GetBody HMAC/写入/连接/trace保持。正文不落盘，未知头/会话/亲和值仅随机HMAC，凭据/Cookie值掩码，有限Cookie名可见；普通技术头白名单且强制已知敏感值替换。完整usage计数/未知数值/大数保留，任意字符串和不安全字段名脱敏，8KiB/256节点/8层/64条目等边界明确truncated/sanitized；不改实际SSE/JSON或费用统计。
+
+生产创建单独临时Key（不移动既有自测/业务Key），新Key空分组无账号直到正式实验；本次启动变量只指向此Key。复用线上Compose只覆盖已提交镜像/精确诊断变量，保留备份/旧镜像/内网双别名及全部现有配置。上线验收后隔离一个可用账号，最多6轮200K合成连续请求，结束禁用Key并恢复账号组/管理员logout。无额外直连A/B、开启全池detail、Priority/区域/付费切换；不保证6轮能复现掉零。
+
 沿用现有Mistral prepare/attempt/上游详情链路，不新增调度器或缓存代理。生产已有wireVersion1详情，先在远端只读解析精确Key所关联的15条记录，输出头尾一致性、root/数组顺序、字节计数与原生usage/服务商追踪头。64KiB中段截断是既有日志界限，不能恢复遗漏消息/工具；必要结论由生产源码确定性审计与完整合成HTTP回归共同补证，不能冒充历史完整线缆证据。
 
 审查请求RawMessage拼接、developer角色转换、reasoning/image/cache兼容、模型/路由/重试、响应SSE转换及下次历史重放。若发现可实证的变化，优先新增失败用例，再修改最小Mistral范围。若无本地致因，不虚构优化补丁；给出精确排除与剩余边界，并保留指纹/追踪诊断缺口供后续授权生产验证。

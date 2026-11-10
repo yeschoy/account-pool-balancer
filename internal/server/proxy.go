@@ -1547,12 +1547,19 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.ContentLength = int64(len(body))
-	if audit := rec.cacheAudit.attempt(req, trace, cfg, acct, body, attemptNo-1, privateIdentities); audit != nil {
+	audit := rec.cacheAudit.attempt(req, trace, cfg, acct, body, attemptNo-1, privateIdentities)
+	if audit != nil {
 		defer audit.finish(res)
 	}
 	wireCapture := newMistralUpstreamDetail(cfg, req, rec, body, attemptNo, privateIdentities)
 	if wireCapture != nil {
-		trace.WroteHeaderField = wireCapture.recordHeader
+		wroteHeader := trace.WroteHeaderField
+		trace.WroteHeaderField = func(name string, values []string) {
+			wireCapture.recordHeader(name, values)
+			if wroteHeader != nil {
+				wroteHeader(name, values)
+			}
+		}
 		defer func() {
 			wire, secrets := wireCapture.finish(res)
 			rec.upstreamDetails = append(rec.upstreamDetails, wire)
@@ -1596,6 +1603,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	markSent()
 	res.upstreamStatus = resp.StatusCode
 	res.header = resp.Header
+	audit.response(resp)
 	if wireCapture != nil {
 		wireCapture.attach(resp)
 	}
@@ -1629,7 +1637,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses") && acct.Provider != config.ProviderMistral
 	if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
-		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities)
+		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities, audit)
 	}
 
 	var b []byte
@@ -1662,6 +1670,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			res.kind, res.status, res.body, res.terminal, res.category = outFailed, errorStatus(m, b), b, "upstream_envelope", "upstream"
 			return res
 		}
+		audit.captureUsage(b)
 		scanUsage(m, &res.usage)
 		if isResponses {
 			if id, _ := m["id"].(string); id != "" {
@@ -1931,7 +1940,7 @@ type evMsg struct {
 }
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
-	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string) *attemptResult {
+	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string, audit *cacheAuditAttempt) *attemptResult {
 	mistralResponses := lease.Account.Provider == config.ProviderMistral && r.URL.Path == "/v1/responses"
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
@@ -2051,6 +2060,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		return res
 	}
 	scan := func(event string, data []byte) {
+		audit.captureUsage(data)
 		if !hasUsage(data) && !(isResponses && event == "response.created") && !bytes.Contains(data, []byte(`"response.created"`)) {
 			return
 		}

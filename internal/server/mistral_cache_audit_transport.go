@@ -3,10 +3,12 @@ package server
 import (
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"hash"
 	"io"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,28 +32,38 @@ type cacheAuditConnection struct {
 }
 
 type cacheAuditAttemptLog struct {
-	AttemptIndex      int                        `json:"attemptIndex"`
-	AccountID         string                     `json:"accountId"`
-	SourceTag         string                     `json:"sourceTag"`
-	TargetTag         string                     `json:"targetTag"`
-	AffinityTag       string                     `json:"affinityTag,omitempty"`
-	Expected          cacheBodyFingerprint       `json:"expected"`
-	Preparation       cacheFingerprintComparison `json:"preparation"`
-	Previous          *cachePreviousComparison   `json:"previous,omitempty"`
-	Connections       []cacheAuditConnection     `json:"connections"`
-	ConnectionEvents  int                        `json:"connectionEvents"`
-	TLSHandshakes     int                        `json:"tlsHandshakes"`
-	TLSResumed        bool                       `json:"tlsResumed"`
-	WriteSuccesses    int                        `json:"writeSuccesses"`
-	WriteFailures     int                        `json:"writeFailures"`
-	BodyReads         []cacheAuditBodyRead       `json:"bodyReads"`
-	BodyReadInstances int                        `json:"bodyReadInstances"`
-	EventsTruncated   bool                       `json:"eventsTruncated,omitempty"`
-	Sent              bool                       `json:"sent"`
-	Status            int                        `json:"status"`
-	Terminal          string                     `json:"terminal,omitempty"`
-	UpstreamRequestID string                     `json:"upstreamRequestId,omitempty"`
-	TraceRedacted     bool                       `json:"traceRedacted,omitempty"`
+	AttemptIndex           int                        `json:"attemptIndex"`
+	AccountID              string                     `json:"accountId"`
+	SourceTag              string                     `json:"sourceTag"`
+	TargetTag              string                     `json:"targetTag"`
+	AffinityTag            string                     `json:"affinityTag,omitempty"`
+	Expected               cacheBodyFingerprint       `json:"expected"`
+	Preparation            cacheFingerprintComparison `json:"preparation"`
+	Previous               *cachePreviousComparison   `json:"previous,omitempty"`
+	Connections            []cacheAuditConnection     `json:"connections"`
+	ConnectionEvents       int                        `json:"connectionEvents"`
+	TLSHandshakes          int                        `json:"tlsHandshakes"`
+	TLSResumed             bool                       `json:"tlsResumed"`
+	WriteSuccesses         int                        `json:"writeSuccesses"`
+	WriteFailures          int                        `json:"writeFailures"`
+	BodyReads              []cacheAuditBodyRead       `json:"bodyReads"`
+	BodyReadInstances      int                        `json:"bodyReadInstances"`
+	EventsTruncated        bool                       `json:"eventsTruncated,omitempty"`
+	Sent                   bool                       `json:"sent"`
+	Status                 int                        `json:"status"`
+	Terminal               string                     `json:"terminal,omitempty"`
+	UpstreamRequestID      string                     `json:"upstreamRequestId,omitempty"`
+	TraceRedacted          bool                       `json:"traceRedacted,omitempty"`
+	RequestHTTP            *cacheAuditHTTP            `json:"requestHTTP,omitempty"`
+	RequestHeadersObserved bool                       `json:"requestHeadersObserved,omitempty"`
+	ResponseHTTP           *cacheAuditHTTP            `json:"responseHTTP,omitempty"`
+	UpstreamProtocol       string                     `json:"upstreamProtocol,omitempty"`
+	TLSALPN                string                     `json:"tlsALPN,omitempty"`
+	Usage                  json.RawMessage            `json:"usage,omitempty"`
+	UsageBytes             int                        `json:"usageBytes,omitempty"`
+	UsageTag               string                     `json:"usageTag,omitempty"`
+	UsageTruncated         bool                       `json:"usageTruncated,omitempty"`
+	UsageSanitized         bool                       `json:"usageSanitized,omitempty"`
 }
 
 type cacheAuditReadState struct {
@@ -96,6 +108,17 @@ func (r *mistralAuditRequest) attempt(req *http.Request, trace *httptrace.Client
 	a := r.audit
 	fingerprint := a.fingerprint(body, r.prepared.view.Sequence, r.prepared)
 	c := &cacheAuditAttempt{request: r, cfg: cfg, identities: append(append([]string(nil), identities...), acct.RuntimeKey), log: cacheAuditAttemptLog{AttemptIndex: index, AccountID: acct.ID, Expected: fingerprint.view, Preparation: compareCacheFingerprints(r.prepared, fingerprint), Connections: []cacheAuditConnection{}, BodyReads: []cacheAuditBodyRead{}}}
+	headers := req.Header.Clone()
+	headers.Set("Host", req.URL.Host)
+	headers.Set("Content-Length", strconv.FormatInt(req.ContentLength, 10))
+	c.log.RequestHTTP = c.auditHeaders(headers)
+	wroteHeader := trace.WroteHeaderField
+	trace.WroteHeaderField = func(name string, values []string) {
+		c.recordHeader(name, values)
+		if wroteHeader != nil {
+			wroteHeader(name, values)
+		}
+	}
 	c.log.TargetTag = a.tag("target", []byte(req.URL.String()))
 	c.log.SourceTag = a.tag("source", []byte(acct.ID), []byte(acct.RuntimeKey), []byte(acct.ProxyURL), []byte(req.URL.Scheme+"://"+req.URL.Host))
 	if affinities := req.Header.Values("X-Affinity"); len(affinities) > 0 {
@@ -189,6 +212,14 @@ func (c *cacheAuditAttempt) finish(res *attemptResult) {
 	// Clone the event slice: HTTP trace may still report a failed asynchronous
 	// request write. The log is a snapshot, never shared mutable callback data.
 	out.Connections = append([]cacheAuditConnection{}, out.Connections...)
+	if out.RequestHTTP != nil {
+		snapshot := *out.RequestHTTP
+		snapshot.Headers = make(map[string]cacheAuditHeader, len(out.RequestHTTP.Headers))
+		for name, header := range out.RequestHTTP.Headers {
+			snapshot.Headers[name] = header
+		}
+		out.RequestHTTP = &snapshot
+	}
 	out.Sent, out.Status, out.Terminal = res.sent.Load(), res.upstreamStatus, res.terminal
 	id := upstreamRequestID(res.header, config.ProviderMistral)
 	private := c.cfg != nil && redactSecrets(c.cfg, id) != id
