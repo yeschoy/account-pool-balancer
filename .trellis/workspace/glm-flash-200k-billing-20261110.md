@@ -25,3 +25,7 @@ UTC13:46:12预算连续三次稳定后恢复目标账号/自测Key原group和全
 完整报告：`.trellis/tasks/mistral-cache-order-audit/research/glm-flash-200k-20turn-billing-20261110.md`。本轮没有业务生产代码改动，不跑无关全仓；复用旧控制器SHA256核验、无凭据脚本语法检查、真实独立核验和文档diff/JSON检查通过。
 
 已向用户立即反馈20轮完成、实际预算与官方计价吻合及恢复健康。缓存中途掉零已在200K Flash经号池受控会话复现，但生产实际Reader/上游内部缓存证据仍缺，核心任务保持in_progress，不归档，不擅自继续checkpoint/直连A/B。
+
+## 用户追问：是否号池转换错误
+
+UTC13:56仅在远端RAM按冻结合成checkpoint重建20轮body，复用已核对f1024e9/二进制本地远端SHA256一致的纯prepare探针，HTTP和inference均0、exit0/stderr0。20/20完整准备body与输入逐字节相同，19/19旧prepared消息完整保留；第8→9轮16条旧消息不变，第9→10轮18条不变，cache/affinity全程稳定且相等。没有legacy reasoning需要重写；本次请求转换改坏前缀的嫌疑显著下降。更像上游缓存路由/逐出/就绪问题，但未证具体机制；离线重算不是生产实际Reader，也不保证任意响应交错块元信息无损，不外推所有真实客户端。源码/脱敏回执登记_tmp_artifacts.md，不增加生产调用/改设置/重启/下载思考。

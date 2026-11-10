@@ -137,3 +137,16 @@ https://docs.mistral.ai/models/zai-glm-5-3-flash.md
 本次没有生产代码改动，不重跑无关Go/Node测试。无凭据控制器复用已核验相同SHA256的旧`probe.py`/`extended.py`，本地语法检查通过，最终真实独立核验通过。
 
 本次能确认：**200K以上连续Flash会话可以高命中，但同号稳定历史中途仍会掉零，并实际按零缓存价格扣套餐预算。** 不能据此宣布号池没有问题或全由官方导致；仍缺真实生产出站Reader/上游缓存节点内部证据，也不能替代用户真实NewAPI/OpenCode含工具场景。核心任务不归档，不擅自追加推理或继续checkpoint。
+
+## 6. 用户追问转换根因后的离线核对（UTC13:56，只读、无HTTP）
+
+为区分“入站旧历史相同”与“请求转换后旧历史相同”，在远端RAM读取本实验合成checkpoint的冻结消息，按原控制器字段/顺序重建20个请求；各轮request_bytes与真实回执一致，末轮重建body与checkpoint中的完整原请求逐字节一致。复用此前已核验与f1024e9生产源码相同的纯prepare探针，二进制SHA256本地/远端相等（ff6309ea16807b44b6ac875b1bd297044f281949a29537caca0d2207f1a52c52），探针仅执行identity/cache alias/prepare和有界指纹比较，不发送HTTP、不改线上配置/账号。
+
+结果（`offline-prepare-check.json`）：
+
+- **20/20轮准备后完整body与控制器输入body逐字节相同**。本次已发送原生assistant thinking/text块、显式high和prompt_cache_key，无legacy reasoning字段需要再转；转换路径执行检查但没有改动请求字节。
+- **19/19组相邻准备后历史完整保留**，未发生消息重排、root其他字段或工具变化；20轮cache/affinity指纹各自稳定且相等，未重新生成缓存键。
+- 重点第8→9轮保留第8轮全部16条旧消息原字节，仅追加第8轮assistant与第9轮user；第9→10轮保留全部18条旧消息。缓存仍为98.64%→0%→98.22%。
+- probe_exit0/stderr0、http_requests0、inference_requests0，无checkpoint/思考/凭据下载或回显。
+
+因此，本实验**不支持“请求prepare转换改坏旧历史导致第9轮掉零”**，该嫌疑显著降低；表现更符合上游缓存节点/路由未命中、缓存逐出或就绪延迟，但尚未区分具体原因。此次是事后按已部署纯函数离线重算（配置group已恢复，显式缓存键和正文不依赖此差异），**不是当时生产实际HTTP Reader/最终TLS发送字节证据**；也不证明响应scalar适配对任意原生交错块/closed元数据无损，不能将其泛化为所有用户NewAPI/OpenCode转换都无问题。
