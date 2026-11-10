@@ -29,3 +29,7 @@ UTC13:46:12预算连续三次稳定后恢复目标账号/自测Key原group和全
 ## 用户追问：是否号池转换错误
 
 UTC13:56仅在远端RAM按冻结合成checkpoint重建20轮body，复用已核对f1024e9/二进制本地远端SHA256一致的纯prepare探针，HTTP和inference均0、exit0/stderr0。20/20完整准备body与输入逐字节相同，19/19旧prepared消息完整保留；第8→9轮16条旧消息不变，第9→10轮18条不变，cache/affinity全程稳定且相等。没有legacy reasoning需要重写；本次请求转换改坏前缀的嫌疑显著下降。更像上游缓存路由/逐出/就绪问题，但未证具体机制；离线重算不是生产实际Reader，也不保证任意响应交错块元信息无损，不外推所有真实客户端。源码/脱敏回执登记_tmp_artifacts.md，不增加生产调用/改设置/重启/下载思考。
+
+## 用户追问路由参数和原始HTTP头
+
+UTC14时只读对照官方缓存、区域、优先级和Vibe源码：prompt_cache_key与X-Affinity已设置稳定；global端点不保证固定区域，但区域端点也不锁worker且1.1倍价格/需核对模型可用性。service_tier省略默认standard_only，auto优先级需资格且1.75倍，不是缓存锁。现有55条自测摘要、52个detail文件没有匹配自测detail，原实验原始上游全部头和完整usage未保存；只确认8/9/10轮实际upstreamStatus/usage/官方trace/TTFT，不能说Set-Cookie或node/region等不存在，也不能把trace变化当换节点或标准价对账当读到usage.service_tier。新增http-history-review.json仅脱敏计数/trace，推理/配置写入0，不擅自开全池正文日志/重启采样或继续消费；完整结论见research第7节。

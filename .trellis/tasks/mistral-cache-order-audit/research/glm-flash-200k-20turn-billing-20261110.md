@@ -150,3 +150,27 @@ https://docs.mistral.ai/models/zai-glm-5-3-flash.md
 - probe_exit0/stderr0、http_requests0、inference_requests0，无checkpoint/思考/凭据下载或回显。
 
 因此，本实验**不支持“请求prepare转换改坏旧历史导致第9轮掉零”**，该嫌疑显著降低；表现更符合上游缓存节点/路由未命中、缓存逐出或就绪延迟，但尚未区分具体原因。此次是事后按已部署纯函数离线重算（配置group已恢复，显式缓存键和正文不依赖此差异），**不是当时生产实际HTTP Reader/最终TLS发送字节证据**；也不证明响应scalar适配对任意原生交错块/closed元数据无损，不能将其泛化为所有用户NewAPI/OpenCode转换都无问题。
+
+## 7. 用户追问上游路由参数与HTTP头（UTC14时，只读）
+
+### 官方能力核对
+
+- [Prompt caching](https://docs.mistral.ai/inference/conversations/advanced/prompt-caching)：稳定body `prompt_cache_key`和兼容前缀可增加命中概率，明确不保证命中；没有在该页找到锁定GPU/worker的公开参数。本次已显式发送稳定缓存键。
+- 官方Vibe当前公开源码`harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_runtime_config.py`中`request_headers()`通过`affinity_id`设置`x-affinity`，Mistral adapter经SDK `http_headers`发送；证明官方客户端也用此头，不证明强制同节点。号池`proxy.go`保留客户端非空X-Affinity，否则复制最终cache key；本次测试显式传入相同值，离线prepare无变化。
+- [Regional inference](https://docs.mistral.ai/inference/regional-inference)：通过global `api.mistral.ai`、EU `api.eu.mistral.ai`、US `api.us.mistral.ai`端点选择处理地理范围；regional定价为标准1.1倍、模型可用性分区，不承诺单worker。当前配置固定`https://api.mistral.ai/v1`，未切区域；全球端点不承诺固定推理地理位置。不能未经核验GLM区域可用性/用户同意就改区域当缓存修复。
+- [Priority Tier](https://docs.mistral.ai/inference/priority-tier)：`service_tier`省略默认`standard_only`；`auto`仅在组织和模型已配置资格/额度时走priority，否则可回standard，响应usage报告实际处理层级。priority标准价1.75倍，不是缓存开关或节点锁定。此次body未设置service_tier、计费与标准价吻合，但没有保留完整usage，**不能冒称已读到served tier=standard**。不擅自启用priority。
+- 部分`.md`/旧API URL实际返回404或抽取内容不足，搜索也出现无关security页面；这些不是字段不存在的证据。上述结论来自实际可读官方专题页面与源码，未把无结果当成无支持。
+
+### 历史HTTP证据边界
+
+只读取自测Key的既有摘要/详情索引，不读取业务正文。UTC14:05:59查询近24小时索引55条自测Mistral请求，扫描52个details日志文件，匹配自测details=0；当前Mistral detailLog=false，本实验cacheAudit也为空。测试控制器仅保存选定usage计数/正文哈希和请求ID，未保存原始上游全部响应头/完整usage。因此这次历史中：
+
+| 轮次 | 上游状态 | input/cached | 上游请求ID | TTFT毫秒 |
+|---|---:|---|---|---:|
+| 8 | 200 | 231231/228096 | 01a1c5b1-f1cf-7db2-b93d-8dc40dcc41c9 | 2983 |
+| 9 | 200 | 232301/0 | 01a1c5b2-1929-7936-b8c1-457960445074 | 18565 |
+| 10 | 200 | 233403/229248 | 01a1c5b2-b928-78e1-af0b-49ef6d1311ef | 3499 |
+
+这些trace来自实际号池上游摘要，不是猜造值；它们是关联ID，不是节点ID，变化本身不证明换节点。**Set-Cookie、X-Affinity回显、X-Cache/Age/Via、region/worker头和Retry-After当时是否存在未知，不得说“上游没返回”；完整usage是否含实际service_tier也未知。** 号池下游响应头不能冒充上游原始头。尚未发现遗漏必填路由参数的证据，但原始HTTP取证确有缺口。
+
+本次保存`http-history-review.json`脱敏回执，推理请求0、配置修改0；未开启全池正文detail、生产诊断重启、区域/优先级切换或继续checkpoint。下一步可限定自测合成流量补采实际上游请求/响应头及完整usage（凭据和Cookie值不回显），确认是否有需要按账号处理的亲和提示；不是直接照搬任何Set-Cookie或更改业务流量，实施范围仍待确认。
