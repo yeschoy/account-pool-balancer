@@ -1,5 +1,13 @@
 # 验证与交付状态
 
+## 最新：US三模型请求与Flash≥250K×20轮（2026-11-10 UTC21:12–21:22）
+
+US目录200/21模型仅Flash，GLM5.3/DS单模型GET404 invalid_model/1500，未做其US长会话、不把EU/global替代或宣称三者成功。仅Flash使用92cc0d7同镜像新隔离US实例/Session/Key，2次只读计数可能预热已披露，首轮实际258027→280043，20/20成功/自然stop/单attempt，同号/代理/亲和与全部旧消息保留，每轮实际US Host、Reader=prepare=client、同HTTP2/ALPN h2；41消息思考答案哈希/末轮历史/完整usage核验通过。
+
+零轮1/2/**8**，7→8→9轮98.38%→0→98.85%，第8轮保留14旧消息/1513563字节Reader完整、cache/X-Affinity/source/target/同账号同连接不变，官方套餐按零缓存USD0.044028655扣额；trace01a1c752-4dab-7777-91fb-333e242f7d0f。总input5372714/cached4526208/output7971，加权84.2444%/中位6.81s/最大23.87s，20笔实扣USD0.293422404=官方精确Flash价×US1.1，不冒充现金。旧US200K无掉零不代表长期保证、此次EU优样本也非严格AB。
+
+21:19:42临时容器停/PID0/exit0/tmpfs释放，账号全部字段及正式全配置除revision恢复/logout、run0/stderr0/进程不存在；21:22独立核验正式92cc0d7启动未变/healthy0重启/无OOM/global Base不变/诊断空、NewAPI双入口，最终只读确认原13隔离一致。没有构建部署/业务源码修改或无关全仓验证，用户误发UI图随后要求忽略、未改UI或重跑测试。脱敏回执/完整20行对账及报告research/us-250k-20261110.md；停止容器待同意清理，生成已停，核心in_progress。
+
 ## 最新：EU三模型≥250K各20轮（2026-11-10 UTC20:47–21:03）
 
 用户要求提升250K测试GLM5.3/Flash/DS1017，统一EU目录复核可见，复用正式92cc0d7同镜像临时隔离Balancer/原账号代理，三独立新会话20轮共60成功生成，另只读计数2/2/1次（可能预热明确披露）。首轮GLM两者258027/DS260258，末轮279113/279976/278392，每轮≥250000；全部200/SSE DONE/自然stop/单attempt/同号，无换号/重试/重放。Reader=prepare=client/19组旧前缀完整、实际Host全EU/源目标/cache/X-Affinity稳定，各段单HTTP2/ALPN h2，41消息×3全部思考/答案哈希与末轮历史/usage核验。

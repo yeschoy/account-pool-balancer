@@ -1,5 +1,13 @@
 # 执行计划
 
+## US三模型请求与Flash250K复测（2026-11-10 UTC21:12–21:22）
+
+- [x] US目录200/21模型仅Flash，GLM5.3/DS精确模型GET均404 invalid_model/code1500，只读告知不可用，不做无效长会话/别名探测/global-EU回退，未冒称US三模型完成。
+- [x] 复用EU控制器及92cc0d7同镜像临时US Balancer，新Session/Key/容器、同原账号代理，2次计数后首轮实际258027→末280043、20/20成功/单attempt，无换号重试。计数可能预热披露、正式Base/诊断/业务Key/启动不改。
+- [x] 真实US Host/20次Reader=prepare=client、19组旧前缀、cache/X-Affinity/来源目标稳定、单HTTP2/ALPN h2。零轮1/2/**8**，第7→8→9轮98.38%→0→98.85%，第8轮14旧消息和1513563字节Reader完整，官方usage/预算均按零扣额，固定US仍不能杜绝。
+- [x] 实扣USD0.293422404=Flash标准价×US1.1逐笔吻合，全程加权84.2444%/中位6.81s。旧US200K好样本不保证长期，非同时随机AB不直接认定EU更稳。
+- [x] 21:19:42实例停exit0/tmpfs释放/账号全部字段和全配置除revision恢复/logout，run0/stderr0、进程不存在；21:22独立核验正式healthy0重启/无OOM/13隔离/双内网入口。UI误发忽略、不改UI、不重跑原进程，详research/us-250k-20261110.md，核心不结案。
+
 ## EU三模型≥250K各20轮（2026-11-10 UTC20:47–21:03）
 
 - [x] EU目录复核三精确模型可见，复用92cc0d7同镜像、原账号/代理的临时隔离Balancer；每模型新Key/Session/容器，正式Base/诊断/实例不改、不部署重启。
