@@ -1,5 +1,13 @@
 # 执行计划
 
+## 当前DS/GLM深查（2026-11-10 UTC10时）
+
+- [x] 最新分模型/分渠道用户用量、NewAPI READ ONLY及metadata三完整分钟cp/ck/ckr逐项对齐；未知失败usage不记0。
+- [x] 120s被动RAM入站23条+120s pure-prepare41条，均退出0，无pcap/正文落盘/生产推理；136个已部署生产Go文件SHA256核验，实际prepare代码仅离线管道执行，不启动Server。
+- [x] 发现DS同号/稳定明确Session/cache key/完整旧prepared前缀仍97.95%→0.62%→96.27%，trace/成功时序/原始usage及NewAPI消费对齐；另有同Session混两套system/tools，不能混成同前缀。
+- [x] 直接官方llms.txt/缓存/Chat schema/reasoning/三模型卡核对，纠正DS文档slug和精确cached价格；专用浏览器关闭、所属采样进程0。
+- [ ] 在线实际Reader/source/connection仍缺，生产启用新单Key诊断窗口/短重启须明确授权；GLM无新长业务，核心缓存仍未结案。
+
 ## 2026-11-10用户同意后的1910/3505本地修复
 
 - [x] 冻结旧出厂规则迁移与精确代码匹配红回归，隔离其他窗口未提交源码。

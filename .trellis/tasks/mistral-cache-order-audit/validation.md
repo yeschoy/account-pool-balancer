@@ -1,5 +1,9 @@
 # 验证与交付状态
 
+## 最新深查（2026-11-10 UTC10时，只读未改生产）
+
+见`research/ds-glm-deep-20261110.md`：实际f1024e9/NewAPI cb5 healthy/0，两次各120s被动RAM采样23+41条均capture_exit0，独立离线pure-prepare探针退出0/HTTP请求0，136生产Go文件与f1024e9逐项SHA256相等。41条全部稳定有效cache/affinity，31个相邻prepare比较26完整保留/5前缀真实变化/0纯重排；DS明确Session/同号/41工具/旧prepared前缀完整保留，成功97.95%→0.62%→96.27%，与NewAPI及原始usage对齐。另一Session混20/21工具及不同system/首user不能当同前缀；当前GLM只有3条13-token检测，无新版长会话验收。metadata10:15/16/17三分钟与日志r/cp/ck/ckr逐项一致。官方缓存/模型/ThinkChunk说明及价格已直接核对；未改配置、部署、重启、主动推理/重放或续开cacheAudit；观察/文档浏览器均结束。pure-prepare重算不是在线真实Reader/TLS证据，不能100%定责官方；新单Key真实出站诊断仍待授权，核心任务不归档。
+
 ## 最新部署验收（2026-11-10 UTC09:43）
 
 用户要求提交推送部署OVH、避免无用操作，f1024e9已推送master上线。复用相关回归、不重复测试；620文件干净源码哈希集合核验，构建7.09秒，完整一致备份后沿线上Compose仅镜像覆盖；191账号/186TH注册/routingSecret/Mistral注册及运行参数保留。新旧内网别名和NewAPI到两个healthz、Docker healthy/restart0/无OOM及真实公网登录/healthz/四资源200与源码SHA256全部通过。正常管理员API仅前置两条精确错误规则及3505重试stop，revision5672；其他配置/凭据逐字段相等，原13硬隔离保留、旧自定义规则不删不改，保存/GET/落盘一致并logout。UTC09:43最终验收并已反馈用户；短窗口无新1910/3505事件，不冒充真实错误重放或缓存改善。专用浏览器关闭，不续采/推理/追加10min观察；正式回退资料见docs/ovh-deployment.md，临时产物经同意再清理。
