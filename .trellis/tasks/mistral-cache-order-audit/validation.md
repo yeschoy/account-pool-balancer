@@ -1,6 +1,14 @@
 # 验证与交付状态
 
-## 最小单Key HTTP/usage诊断本地验证（2026-11-10，待发布）
+## 最新已部署/真实HTTP取证（2026-11-10 UTC14:40–14:48）
+
+92cc0d7已推送并上线，旧f1024e9→新版本构建7.35秒，629文件哈希核验、完整一致备份、Compose仅image+精确诊断Key变量，191账号/186注册/完整配置与13硬隔离/运行资源和双别名保留，Docker healthy0重启/无OOM、NewAPI双入口、公网页面/healthz/四资源200与提交SHA256通过。
+
+独立临时Key六轮Flash/high/1536合成长聊，input224081→229637，每轮≥200K/200/自然stop/单attempt，实际Reader完整HMAC=prepared=client、5组旧前缀保留/无并发重叠、同账号代理/稳定cache/真实X-Affinity、同一HTTP2连接ALPN h2。缓存0/0/0/0/98.82%/97.82%；原生完整usage与下游及日志usage匹配。响应头20个无截断、仅__cf_bm Cookie且不保存值，无节点/区域/亲和回显；CF DYNAMIC是CDN非KV状态，未知X-Max-Retry-Attempts-Reached只HMAC且6轮相同，不猜值/重试次数，usage没有service_tier。实扣Vibe USD0.15117091与官方价逐笔/总额吻合。
+
+UTC14:46:07专用Key已禁用/账号group恢复/logout，14:48:23独立验证exit0/stderr0/进程退出/healthy0重启/双入口；该Key采样6条、其他Key0。原控制器target_key_fields_restored=false仅因有意禁用新Key，最终对比部署前完整备份配置仅enabled/revision改变、13硬隔离一致。收尾发现启动校验要求Key启用，仅禁用Key却留变量会导致下次启动失败，已告知用户并用同镜像/不构建做必要关闭切换，完整一致备份后Compose仅清变量。14:57:25 healthy/双入口，14:58:01最终变量空/专用Key禁用/组恢复/13隔离不变、配置仅enabled/revision变化，公网healthz200，无追加推理。后续部署继续保持变量空，禁止无授权续采。无正文/凭据/Cookie值输出或全池detail/区域/Priority/PAYG变化。正式research/http-wire-six-turn-20261110.md；本次已实证不是请求prepare/Reader/连接漂移，但上游内部路由/缓存仍未知，核心任务不归档。
+
+## 最小单Key HTTP/usage诊断本地验证（2026-11-10，发布前记录）
 
 用户明确授权发布短重启和最多6次200K合成连续请求。扩展既有cacheAudit，仅受单Key/30min/128保护的attempt添加脱敏请求/响应头、协议/ALPN和有界完整usage，实际正文HMAC/流式/重试/统计不变。隔离HEAD干净副本+本轮四源码/测试文件验证，其他窗口注册/指纹/Dockerfile未带入：全部Mistral定向normal11.671秒、相关cacheAudit/Wire/前缀race8.143秒、server vet及cmd构建通过。覆盖JSON/SSE/full usage未知数值/大数、header trace与旧详情组合、Cookie/认证/未知值掩码、边界/晚回调快照与关闭零分配；初轮两条失败是关闭测试fixture分配及mock Host原文泄漏，已修正并全相关重验。
 

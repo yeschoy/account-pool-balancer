@@ -38,7 +38,26 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral1910模型资格与3505容量精确策略（2026-11-10 09:42 UTC，f1024e9）
+## 当前部署：Mistral专用Key原始HTTP/usage诊断（2026-11-10 14:40 UTC，92cc0d7）
+
+- 用户明确批准最小诊断发布/短重启与最多6次合成取证，`92cc0d7024c49c6da80c55a1a7b6a1e148b93e39`已推送master并上线。只包含cacheAudit HTTP/usage扩展与文档，不混入其他窗口注册/指纹/Dockerfile修改。相关Mistralnormal11.671秒/race8.143秒、server vet/cmd构建通过，不重复无关测试。
+- 正常admin API新建专用临时Key `ck_058a943b722e55f52cf86276`，独立空组，无业务Key移动。发布前一次预检确认f1024e9 healthy/0重启、双内网入口正常/Healthcheck与兼容别名存在、注册空闲、244.44GiB余量。629干净源码文件SHA256集合核验，复用既有发布引擎，构建7.35秒；干净退出旧实例后完整一致备份/gzip/SHA256核验，沿线上Compose仅覆盖image与明确授权诊断变量。
+- **191账号、186TH注册、routingSecret、Mistral注册库、13硬隔离、完整运行配置及用户/挂载/端口/网络/资源/Healthcheck保留**。切换配置字节不变，旧自定义1910/3505等规则不改；运行环境仅诊断Key变量改变。健康/0重启/无OOM、NewAPI到两个内网healthz及公网真实未登录登录页/healthz/四资源200和SHA256通过，已立即反馈上线。
+- UTC14:43:31–14:45:56完成6轮新合成Flash/high/1536连续长对话，经正式号池、input224081→229637，实际Reader完整HMAC=prepared=client、相邻旧前缀完整保留、稳定cache/实际X-Affinity、单attempt/写入、同HTTP2连接。前4轮缓存0、后2轮98.82%/97.82%；完整上游头仅`__cf_bm` Cookie，无路由节点/区域头或亲和回显；未存Cookie值。官方Vibe净扣USD0.15117091=官方usage计价，未发现遗漏必需路由参数，不能据此100%定责上游内部缓存。
+- UTC14:46:07专用Key已禁用、临时账号group恢复、管理员logout；14:48:23独立核验exit0/stderr0/进程退出、healthy/0重启/无OOM及双内网入口。对照发布一致备份，最终配置仅专用Key enabled=false与revision变化，原13硬隔离完全一致。随后发现启动校验要求目标Key启用，单独禁用Key却保留变量会造成下次启动失败，已主动告知用户并做必要收尾：同一镜像不构建，沿既有完整一致备份/Compose仅清空诊断变量，UTC14:56:54.934新进程、14:57:25.298 healthy、14:57:25.435双内网通过；公网healthz再次200。旧退出14:56:49.433至首HTTP14:56:56.066观测6.63秒，非精确停机。14:58:01最终变量为空/Key禁用/账号组恢复、配置除Key禁用/revision外与首次发布前备份相同、13硬隔离保留，healthy0/无OOM。**诊断已彻底关闭，不存在下次重启依赖禁用Key的问题，无追加推理；后续普通发布仍须显式保持变量空，不得无授权续采。**
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 14:39:50.951–14:39:58.300 |
+| 停止请求 / 旧退出 | 14:39:58.401 / 14:40:00.272 |
+| 一致备份 | 14:40:00.558–14:40:05.505 |
+| 切换请求 / 新启动 | 14:40:05.505 / 14:40:05.765 |
+| 首HTTP / Docker healthy | 14:40:06.882 / 14:40:36.113 |
+| 双内网入口 / 本机资源 | 14:40:36.255 / 14:40:36.258 |
+
+旧退出至首HTTP观测约6.61秒，非精确停机；构建和健康等待不算停机。运行镜像`account-pool-balancer:release-92cc0d7-20261110T143926Z`（ID`sha256:b51427e7b50f17f4ca9eaafd29dc5809be13c85555eaea72680cbc6f07b1d39b`）；正式release`/home/ubuntu/project/account-pool-balancer-releases/20261110T143926Z-92cc0d7`，备份`/home/ubuntu/backups/account-pool-balancer/20261110T143926Z-http-audit-92cc0d7`，旧镜像`account-pool-balancer:rollback-20261110T143926Z`保留。备份SHA256`1c93d7f6ad03ff49370a25c3a06de9a18c11ed430b7e3afe460fbc7c2419ee8c`。`deploy.json/http-audit-acceptance.json/preservation-final.json`保留验收；回退不得覆盖上线后新写入。关闭诊断的第二份一致备份`/home/ubuntu/backups/account-pool-balancer/20261110T145641Z-http-audit-off-92cc0d7`与rollback-20261110T145641Z保留，SHA256`ee6cbc5fc435a69a12e5010fabf299c4df20580df341dcb58188bcd0744da819`；当前Compose最后覆盖为同release的`deploy-diagnostic-off.override.json`（仍相同镜像、仅变量空）。临时产物见`_tmp_artifacts.md`，清理需同意；Trellis与正式回退资料保留。详见任务`research/http-wire-six-turn-20261110.md`，核心缓存不结案，补记录不再部署。
+
+## 历史部署：Mistral1910模型资格与3505容量精确策略（2026-11-10 09:42 UTC，f1024e9）
 
 - 用户明确要求提交推送、部署OVH，避免无用操作。`f1024e948b31bb3a51dbe7ae28d4ec8706966e62`已推送master并上线；复用已通过的相关normal/race/vet/build，不重复测试、不发生产推理。未提交/打包其他窗口注册、指纹或Dockerfile未提交修改。
 - 一次预检确认旧37332be healthy/零重启、双内网入口正常、245.02GiB余量，旧工作树干净但不是构建源。620个干净提交文件SHA256集合核验；复用既有发布控制器，仅内存替换版本/备份名，无新增部署系统。新镜像就绪后干净停止旧进程，完整一致data备份/gzip/SHA256核验，沿线上Compose仅覆盖image，已到期诊断变量继续为空。

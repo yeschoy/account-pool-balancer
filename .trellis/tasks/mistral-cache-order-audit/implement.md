@@ -5,8 +5,8 @@
 - [x] 复用cacheAudit单Key/30min/128保护，追加无正文脱敏HTTP头/协议/ALPN/有界完整usage，保留trace组合、真实Reader及SSE原样；不改区域/Priority/缓存策略。
 - [x] 隔离干净源码验证全部Mistral normal11.671s、相关race8.143s、server vet/cmd构建通过；其他窗口注册/指纹/Dockerfile不带入。
 - [x] admin新建临时专用Key ck_058a943b722e55f52cf86276/空独立组，其他配置保留、logout、推理0。
-- [ ] 提交推送最小补丁，复用OVH一次预检→构建→完整备份/Compose覆盖→健康/双内网入口/公网资源验收。
-- [ ] 隔离一个可用账号、排空后最多6次200K完整合成历史串行请求，验证实际Reader/写入/头/usage；停止后禁用专用Key/恢复账号group/进程和健康核验，保留证据边界。
+- [x] 92cc0d7已提交推送上线，复用OVH单次预检→构建7.35s→完整备份/Compose仅image+精确诊断变量→healthy/双内网入口/公网资源SHA256验收，191账号/186注册/配置/13硬隔离保留。
+- [x] 新专组账号排空/预算稳定后6次200K连续请求全成功，实际Reader=prepared=client、5组旧前缀完整、实际X-Affinity稳定、单写入/attempt、同HTTP2连接；缓存0/0/0/0/98.82%/97.82%，实扣USD0.15117091=usage。原始头只__cf_bm Cookie/无路由返回参数，service_tier未返回；未知重试头HMAC相同不猜值。14:46:07禁用专用Key/恢复账号group/logout，独立核验进程退出/healthy0重启/双入口。详research/http-wire-six-turn-20261110.md，未追加调用或关闭核心任务。
 
 ## 用户授权Flash ≥200K连续20轮及官方扣费（2026-11-10 UTC13时）
 
