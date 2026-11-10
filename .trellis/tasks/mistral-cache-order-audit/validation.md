@@ -1,5 +1,13 @@
 # 验证与交付状态
 
+## 最新区域实验：US固定端点20轮（2026-11-10 UTC20:26–20:31）
+
+用户要求试US或EU后，先只读两区/models均200，Flash均可见；US未列GLM5.3和DS、EU三者都有。仅US追加20轮生成，不改正式池Base，使用92cc0d7同生产镜像的隔离临时Balancer实例/loopback18790/单账号新临时Key、配置认证仅stdin→/data tmpfs，无生产data挂载/网络别名/正式重启；目标账号暂移独立空组排空，其他业务Key不动。
+
+20/20实际Host api.us.mistral.ai/200/自然stop/单attempt，input224081→245555，每轮≥200000/high/1536，实际Reader=prepared=client且完整，19组旧前缀保留、稳定cache/X-Affinity/source/target、同HTTP2/ALPN h2。首两轮0，第3–20轮96.10%–99.02%，全程加权89.1787%/第2–20轮93.6568%/第3–20轮98.6327%，中位5.56秒。总input4686606/cached4179456/output7441，官方标准价等效USD0.20517668，1.1倍区域价/官方Vibe净扣USD0.225694348逐笔吻合，正式账号预算窗口业务请求0，临时实例只有20条。非同时段/同实例A/B，不能据此认定区域根因或US永不掉零；EU未生成。
+
+20:30:42.569临时容器退出0/tmpfs凭据释放，20:30:42.588正式账号全部字段/全配置除revision外恢复并logout；20:31:06独立核验20段思考/答案哈希、41消息及末轮历史、实际usage/日志，正式实例ID/启动时间/全球Base未变、诊断空、healthy0重启/双内网入口成功，无OOM。controller和只读observer进程均不存在/stderr0；停止容器待用户同意清理，无额外生成/正文或凭据下载。仅实验控制器语法/SHA256和真实核验，不跑无关全仓；完整报告research/us-region-20turn-20261110.md，核心任务仍in_progress。
+
 ## 最新已部署/真实HTTP取证（2026-11-10 UTC14:40–14:48）
 
 92cc0d7已推送并上线，旧f1024e9→新版本构建7.35秒，629文件哈希核验、完整一致备份、Compose仅image+精确诊断Key变量，191账号/186注册/完整配置与13硬隔离/运行资源和双别名保留，Docker healthy0重启/无OOM、NewAPI双入口、公网页面/healthz/四资源200与提交SHA256通过。

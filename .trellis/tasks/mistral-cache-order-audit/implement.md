@@ -1,5 +1,13 @@
 # 执行计划
 
+## 固定US区域20轮实验（2026-11-10 UTC20时）
+
+- [x] US/EU目录均200且Flash可见；US不列GLM5.3/DS，EU三者均有。只选择US做生成，不自动追加EU或切全池。
+- [x] 复用正式92cc0d7同镜像临时隔离Balancer/loopback18790/单账号及新临时Key、认证仅stdin→tmpfs，无生产data挂载/别名/重启，正式账号暂换空组排空；原代理及路由策略保留，临时后台轮询关闭。
+- [x] US Host真实观测20/20，input224081→245555，每轮≥200K/high/1536/自然stop/单attempt/完整历史思考，实际Reader=prepare=client/19组前缀保留，cache/affinity稳定、同HTTP2。首两轮0，第3–20轮96.10%–99.02%，全程89.18%/第2–20轮93.66%，未中途掉零。
+- [x] 官方标准价等效USD0.20517668×1.1=区域价/实扣USD0.225694348，20笔至9位一致；预算窗口正式账号业务请求0、临时实例仅20条。不是同时段/同实例全球A/B，不能定根因或保证长期更稳。
+- [x] 20:30:42临时实例正常退出0/tmpfs释放、账号全部字段和正式配置除revision外恢复，管理员logout；20:31独立核验41消息/全部思考答案/usage，正式healthy0重启/双入口/全球Base与诊断关闭保留，controller/observer均退出stderr0。详research/us-region-20turn-20261110.md，停止容器待同意清理，核心任务不归档。
+
 ## 最小诊断发布与6次HTTP取证（2026-11-10，用户明确授权）
 
 - [x] 复用cacheAudit单Key/30min/128保护，追加无正文脱敏HTTP头/协议/ALPN/有界完整usage，保留trace组合、真实Reader及SSE原样；不改区域/Priority/缓存策略。
