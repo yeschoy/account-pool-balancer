@@ -1,5 +1,9 @@
 # 验证与交付状态
 
+## 最新真实实验：Flash连续20轮（2026-11-10 UTC12:36–12:40）
+
+用户明确授权后完成新的GLM5.3 Flash连续20轮（不是独立20问/旧结果），经过当前f1024e9号池、high/1536、初始25.4K→末轮47.0K输入，完整累积合成思考/回答、同Session/cache/X-Affinity/账号/代理、每轮1attempt200/自然stop。首两轮0，第3–20轮84.61%–93.34%，保留第2轮的热轮加权88.20%、全20轮85.07%；第4轮40.98s且缓存量少1152，未出现中后段归零。20条SSE与请求日志usage一致，41消息checkpoint全部思考/答案哈希及末轮请求历史验证通过；控制器exit0/stderr0/进程已结束、healthy0重启无OOM。相关路由/账号/测试Key/运行未变，完整config hash有外部变化明确披露，不冒称全配置冻结。估算USD0.0381303，未核对budget净扣。不下载思考/checkpoint，不改生产配置/启停账号/重启，无额外A/B或重放；正式证据research/glm-flash-20turn-20261110.md，业务缓存根因仍不结案。
+
 ## 最新深查（2026-11-10 UTC10时，只读未改生产）
 
 见`research/ds-glm-deep-20261110.md`：实际f1024e9/NewAPI cb5 healthy/0，两次各120s被动RAM采样23+41条均capture_exit0，独立离线pure-prepare探针退出0/HTTP请求0，136生产Go文件与f1024e9逐项SHA256相等。41条全部稳定有效cache/affinity，31个相邻prepare比较26完整保留/5前缀真实变化/0纯重排；DS明确Session/同号/41工具/旧prepared前缀完整保留，成功97.95%→0.62%→96.27%，与NewAPI及原始usage对齐。另一Session混20/21工具及不同system/首user不能当同前缀；当前GLM只有3条13-token检测，无新版长会话验收。metadata10:15/16/17三分钟与日志r/cp/ck/ckr逐项一致。官方缓存/模型/ThinkChunk说明及价格已直接核对；未改配置、部署、重启、主动推理/重放或续开cacheAudit；观察/文档浏览器均结束。pure-prepare重算不是在线真实Reader/TLS证据，不能100%定责官方；新单Key真实出站诊断仍待授权，核心任务不归档。
