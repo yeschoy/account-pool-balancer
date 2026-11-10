@@ -14,4 +14,12 @@
 
 最终：internal/rules全包0.675秒、internal/config全包1.083秒；server相关normal1.112秒/race1.906秒；定向vet、cmd构建及gofmt/diff检查通过。覆盖同模型排除/其他模型复用/Recover/上下游503、容量单attempt与下一请求仍可用、秒/日期/缺失hint、普通403/429保留、保存重载自定义策略、其他池与同名rule ID隔离。
 
-无全仓重复测试、Node、真实推理或线上配置写入。`.analysis/mistral-policy-20261110/`源码副本/脱敏回执登记`_tmp_artifacts.md`待同意清理，Trellis保留。实际运行仍以最近只读核验的37332be为准，不把本地验证/提交冒充已上线或缓存改善。
+开发阶段无全仓重复测试、Node、真实推理或线上配置写入。`.analysis/mistral-policy-20261110/`源码副本/脱敏回执登记`_tmp_artifacts.md`待同意清理，Trellis保留。
+
+## 用户随后授权提交推送部署OVH（UTC09:38–09:43）
+
+f1024e9已推送master并上线；复用既有控制器和已通过回归，620个干净提交文件SHA256集合核验，未混入其他窗口修改。构建09:38:05.417–12.511，旧退出12.704、完整一致备份12.983–18.619，新启动18.917、首HTTP20.033、Docker healthy49.268、NewAPI双内网入口49.414、本机资源49.418。191账号/186TH注册/routingSecret/Mistral注册及运行参数保留，原config字节切换阶段不变。
+
+09:41:07正常admin API仅前置1910/3505错误规则及3505重试stop，revision5672；旧自定义规则原序、其他配置/凭据逐字段相等，原13隔离未恢复，保存/GET/落盘一致，已logout。09:42:15.926真实未登录公网healthz/登录及四资源均200且SHA256匹配；09:43:01最终确认f1024e9 healthy/0重启/无OOM、旧隔离保留，已立即反馈。短窗口无新1910/3505自然错误，不冒充真实重放或缓存改善；不续采、不生成、不额外等10分钟。专用浏览器已关闭。
+
+正式release `/home/ubuntu/project/account-pool-balancer-releases/20261110T093736Z-f1024e9`、受限备份`/home/ubuntu/backups/account-pool-balancer/20261110T093736Z-tier-capacity-f1024e9/`及新旧镜像保留；完整备份SHA256和细节见docs/ovh-deployment.md。回退先确认新写入及策略与旧代码兼容，不自动覆盖data。仅补记录，不再重启。
