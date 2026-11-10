@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 
 	"account-pool-balancer/internal/rules"
@@ -81,12 +82,19 @@ func (c *Config) normalizeMistral() error {
 		}
 	}
 	errors, retries := rules.DefaultMistralErrorRules(), rules.DefaultMistralRetryRules()
-	// Upgrade only the exact previous factory defaults. Any administrator
-	// edits (including notes/order/empty lists) remain authoritative.
-	if c.MistralErrorRules == nil || reflect.DeepEqual(c.MistralErrorRules, errors[1:]) {
+	// The two shipped factory versions differed only by the leading 3800
+	// service rule. Remove just this upgrade's additions to recognize both;
+	// any administrator edit (notes/order/disabled/empty included) still wins.
+	previousErrors := slices.DeleteFunc(slices.Clone(errors), func(r rules.ErrorRule) bool {
+		return r.ID == "mistral-tier-not-allowed" || r.ID == "mistral-backend-out-of-capacity"
+	})
+	previousRetries := slices.DeleteFunc(slices.Clone(retries), func(r rules.RetryRule) bool {
+		return r.ID == "mistral-backend-out-of-capacity"
+	})
+	if c.MistralErrorRules == nil || reflect.DeepEqual(c.MistralErrorRules, previousErrors) || reflect.DeepEqual(c.MistralErrorRules, previousErrors[1:]) {
 		c.MistralErrorRules = errors
 	}
-	if c.MistralRetryRules == nil || reflect.DeepEqual(c.MistralRetryRules, retries[1:]) {
+	if c.MistralRetryRules == nil || reflect.DeepEqual(c.MistralRetryRules, previousRetries) || reflect.DeepEqual(c.MistralRetryRules, previousRetries[1:]) {
 		c.MistralRetryRules = retries
 	}
 	if err := rules.ValidateErrorRules(c.MistralErrorRules); err != nil {

@@ -236,6 +236,7 @@ type attemptResult struct {
 	goRecord          *requestLog
 	privateIdentities []string // request-local only; never serialized
 	wrapped           bool
+	mistralCapacity   bool // matched Mistral service-capacity policy, not just a user-chosen rule ID
 	accountScoped     bool
 	evaluated         bool
 	retryAfter        time.Duration
@@ -1119,10 +1120,16 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 			el.MatchedBy, el.RuleID, el.RuleScope, el.RuleAction = "rule", rule.ID, rule.Scope, rule.Action
 			ev.action, ev.ruleID = rule.Action, rule.ID
 			res.downstreamStatus, res.ruleID = rule.DownstreamStatus, rule.ID
+			res.mistralCapacity = acct.Provider == config.ProviderMistral && rule.ID == "mistral-backend-out-of-capacity" && rule.Scope == rules.ScopeModel && rule.Action == rules.ActionIgnore
 			switch rule.Action {
 			case rules.ActionIgnore:
 				sample, el.HealthAction = false, "none"
 			case rules.ActionCooldown:
+				if acct.Provider == config.ProviderMistral && rule.ID == "mistral-tier-not-allowed" && rule.Scope == rules.ScopeModel {
+					// A model's subscription qualification says nothing about
+					// this key's health or eligibility for other models.
+					sample, el.HealthAction = false, "none"
+				}
 				// what the cooldown covers: the account, one model, or a funding class
 				target, class := "account", ""
 				switch {
@@ -1228,7 +1235,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 // 401/402/403: a relay such as new-api would disable the whole channel.
 func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto string, res *attemptResult, attempts int) int {
 	w.Header().Set("X-Attempts", strconv.Itoa(attempts))
-	if res.ruleID == "mistral-service-unavailable" && res.header != nil {
+	if (res.ruleID == "mistral-service-unavailable" || res.mistralCapacity) && res.header != nil {
 		if hint := res.header.Get("Retry-After"); hint != "" {
 			w.Header().Set("Retry-After", hint)
 		}
@@ -1264,7 +1271,14 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 		return http.StatusBadGateway
 	case st == 429:
 		ra := ceilSeconds(res.retryAfter)
-		writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", "upstream_rate_limited", "upstream is rate limited, retry later", ra)
+		code, msg := "upstream_rate_limited", "upstream is rate limited, retry later"
+		if res.mistralCapacity {
+			// Keep the original service hint, including HTTP dates, rather
+			// than replacing a missing/unknown reset with an invented 1s.
+			ra = 0
+			code, msg = "mistral_backend_out_of_capacity", "upstream model backend is out of capacity, retry later"
+		}
+		writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", code, msg, ra)
 		return http.StatusTooManyRequests
 	case st == 402 || (res.accountScoped && st >= 400 && st < 500):
 		writeLocalError(w, proto, http.StatusServiceUnavailable, "api_error", "upstream_account_unavailable", "upstream account temporarily unavailable", 0)

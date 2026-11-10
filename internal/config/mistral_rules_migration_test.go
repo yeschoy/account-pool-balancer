@@ -3,15 +3,12 @@ package config
 import (
 	"reflect"
 	"testing"
-
-	"account-pool-balancer/internal/rules"
 )
 
 func TestMistralRulesUpgradeOnlyFactoryDefaults(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		c := Default()
-		c.MistralErrorRules = rules.DefaultMistralErrorRules()[1:]
-		c.MistralRetryRules = rules.DefaultMistralRetryRules()[1:]
+		c.MistralErrorRules, c.MistralRetryRules = shippedMistralPolicy(t, true)
 		if custom {
 			c.MistralErrorRules[0].Note = "operator customization"
 			c.MistralRetryRules[0].Note = "operator customization"

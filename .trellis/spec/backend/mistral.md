@@ -106,4 +106,35 @@ Wrong: overwrite a caller's prompt_cache_key, hash an explicit header despite th
 - Existing body cache keys and direct cache/session header hints follow section3; a session_header-generated upstream key is the valid header value, not the routing HMAC. Built-in cacheAudit HMACs and external RAM observation tags have independent random per-process/run keys and never become the upstream cache key. Cross-run tags/full-body changes cannot prove cache-key drift; a stable identity HMAC cannot prove the full prompt prefix is stable either.
 - Focused executable checks: `mistral_hmac_stability_test.go` covers 10000 sequential/concurrent computations, unrelated parameter/root order/escape/tail changes, deliberate scope/secret separation, saved fake-data Server reconstruction and the short-string/text-chunk/UTF-8 clipping boundaries. These are local calculations, not paid inference or production restarts.
 
+## 11. Precise tier/capacity defaults (2026-11-10; local verified, not deployed)
+
+### Scope / Trigger
+Mistral upstream HTTP403 with top-level code1910 is model-tier qualification, not an invalid key; HTTP429/code3505 is backend capacity, not an account quota measurement. Use existing rules and account×model state, no new scheduler or inference replay.
+
+### Signatures
+`rules.DefaultMistralErrorRules/DefaultMistralRetryRules()`, `Config.normalizeMistral()`, `Server.evaluate(...)` and `Server.writeFailure(...)` retain existing types/API. No new persistent fields, environment switches or UI controls.
+
+### Contracts
+Default `mistral-tier-not-allowed`: scope=model, cooldown24h, downstream503; account-wide health samples unchanged, no whole-key quarantine. Existing bounded account failover may override generic403 retry-stop, and operator Recover clears the model state. Default `mistral-backend-out-of-capacity`: scope=model, action=ignore plus retry-stop, no health sample/cooldown/rotation; return429 with local code `mistral_backend_out_of_capacity`, preserve upstream Retry-After exactly (seconds or HTTP-date). Missing hint stays missing, not ceilSeconds(0)=1s; there is no global cross-request model pause. The request-local `attemptResult.mistralCapacity` marker is set only by an actual Mistral model-scope ignore decision, not a rule ID alone: other pools may legally save the same ID and must retain their old response behavior. Other429 retains account cooldown/Retry-After/failover. Never treat every403 as1910 or every429 as3505.
+
+Only nil or exact, unmodified factory arrays from before/after the existing3800 addition may gain these defaults. Any custom ordering/note/disabled/condition/reset/status/empty list wins. Error/retry lists migrate independently, and a configured account cooldown/quarantine still overrides a retry-stop. A deployment with existing custom403/429 policies does NOT automatically gain new defaults; obtain approval before altering those settings, never reset the whole list or recover quarantines silently.
+
+### Validation / Error Matrix
+| Upstream | Default result |
+|---|---|
+| 403 + code1910 string/number | affected account×model24h; other models usable; bounded failover, final503 |
+| 429 + code3505 string/number | one attempt, zero health penalty;429 and original Retry-After |
+| code only in message/nested object/substring or wrong HTTP status | existing rules; no guessed classification |
+| 429 + code1300 | existing account cooldown and bounded failover |
+| Custom403 quarantine / custom429 cooldown | preserved, including save/reload and retry precedence |
+
+### Good / Base / Bad Cases
+Good: exclude one unentitled model and continue another permitted model on the same key. Base: normal429 preserves existing account limit handling. Bad: quarantine a key globally for1910 or sweep the pool for3505; claim local fixes increase official capacity/cache hits.
+
+### Tests Required
+`internal/rules/mistral_test.go`: exact status+code, numeric/string, nested/message/substrings/wrong-status negative controls. `mistral_policy_migration_test.go`: freeze actual shipped JSON, both old versions/nil/current, independent error/retry customization and serialization idempotence, other pools unchanged. `mistral_tier_capacity_test.go`: real mock HTTP bounded failover, same-model exclusion/other-model reuse/Recover/no account samples, final503, capacity one attempt/no penalty/seconds-date-missing Retry-After/next request eligibility, code1300 unchanged, saved custom403/429 still effective. Existing3800/configured-rule tests remain green.
+
+### Wrong vs Correct
+Wrong: build the old migration fixture by slicing new defaults, silently alter customized production policies, or present a code commit as deployment. Correct: frozen prior payloads, exact-only migrations and explicit local/committed/deployed/config-applied evidence.
+
 Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching ; https://docs.mistral.ai/api/endpoint/chat ; https://docs.mistral.ai/api/endpoint/responses ; https://docs.mistral.ai/inference/conversations/reasoning .
