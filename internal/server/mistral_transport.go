@@ -28,10 +28,11 @@ func (s *Server) pruneMistralTransports(old, next *config.Config) {
 	}
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
-	for key, tr := range s.transports {
-		if strings.HasPrefix(key, mistralTransportPrefix) {
-			tr.CloseIdleConnections()
-			delete(s.transports, key)
+	s.transports.Range(func(key, value any) bool {
+		if strings.HasPrefix(key.(string), mistralTransportPrefix) {
+			value.(*http.Transport).CloseIdleConnections()
+			s.transports.Delete(key)
 		}
-	}
+		return true
+	})
 }

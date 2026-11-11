@@ -402,10 +402,9 @@ func (c *Client) Balance(ctx context.Context, apiRoot, key, seed string) (Ollama
 	if err != nil {
 		return OllamaBalance{}, err
 	}
-	egressid.Apply(req.Header, egressid.For(seed))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := egressid.OllamaClient(c.HTTP).Do(req)
 	if err != nil {
 		return OllamaBalance{}, fmt.Errorf("network error")
 	}
