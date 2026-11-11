@@ -38,9 +38,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral号池端有界布局恢复（2026-11-11 17:03 UTC，46a9b8f）
+## 当前部署：Mistral3051思考流片段合并修复（2026-11-11 17:36 UTC，50222f6）
 
-> **业务验收失败，待用户确认止损（UTC17:10:12–17:20:12完整观察）**：Mistral110最终请求为69成功、37失败400、4客户端取消，0新422。**25个restored>0请求全部上游400、零成功**；另8图片超限400及4零attempt本地拒绝。故先前healthy/入口/持久化通过仅为部署验收，不代表恢复业务正确。已立即如实反馈并建议回退本次布局恢复、保留旧422补丁；本轮用户只要求观察，尚未授权回退/新发布，线上仍46a9b8f。回退须先备份最新data、仅移除派生metadata.mistralLayouts以兼容旧strict reader，绝不覆盖新业务data。详任务research/layout-observation-20261111.md。
+- 用户明确授权「继续修复，如果不行再回滚」。已精确匹配上游`3051 / Expected at most one leading ThinkChunk, got N`（N为168/14/90/5/22），确认46a9b8f错误把多次closed=true流片段当作独立逻辑块，而非账号/额度问题。修复capture连续thinking续片、render兼容旧checkpoint相邻thinking合并，不跨真实正文、不删思考；旧unavailable缺失描述明确unrecovered沿原兼容，不伪称恢复，不再以派生缓存缺口阻断业务。真实歧义/过期仍明确拒绝。
+- 主线`234d6ff9ee0c33e17a8ec2c2c4c0c7e179993dec`和从实际线上46a9b8f隔离的release/mistral-layout-3051-20261111分支`50222f6b6e8aa5fb3db42080c1c020ddad0fdfcb`均已推送。业务4Go文件与相关normal1.620秒/race2.386秒/vet/build通过源码逐字节相同；新600帧closed=true与旧168块checkpoint精确红绿通过，未重复无关测试/发生产推理。639文件SHA256集合验证，未带入ModelStudio或注册/指纹/Dockerfile脏改动。
+- 单次预检旧版healthy0/双入口/兼容别名/Healthcheck/注册空闲/241.57GiB余量；复用发布引擎构建7.06秒，checkpoint格式未改，复用17:02已验证的同UID断网迁移预检及正常重启回归，不重复复制敏感数据。干净退出旧实例后完整一致data备份/gzip/SHA256验证，沿线上Compose仅image覆盖、诊断继续空。
+- **191账号、186TH核心注册、routingSecret、config.json完整字节、Mistral注册库、布局记录、原13个硬隔离及全部运行参数保持**。17:36:50.335 NewAPI到account-pool-balancer及opendesign-balancer两个healthz通过、Docker healthy0/四本机资源SHA256通过后立即告知上线。17:38:25.649真实未登录公网登录页/healthz/四资源200，保留`?v=9d44d5ff6c`与SHA256匹配，回执入正式deploy.json，专用浏览器关闭。
+- **已取得真实业务恢复成功，不是只看restored计数**：17:37:37首轮自然验收5个restored请求全单attempt200，恢复7条历史；17:38:51新启动后约152秒累计9个restored请求全200，恢复16条历史，0恢复失败/3051/422/本地布局拒绝。全Mistral16成功、3图片总数超限上游400、1客户端取消；captureUnavailable0、unrecovered5明确旧缺失描述未恢复，旧记录签名/字段白名单通过。未主动推理/重放、未额外等待完整10分钟，不把短样本外推永久保序或缓存收益。因业务门禁通过保留50222f6、未触发用户授权的失败回滚；最新完整备份与00ba86a安全回退镜像均保留。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 17:36:06.743–17:36:13.808（7.06秒） |
+| 停止请求 / 旧退出 | 17:36:13.904 / 17:36:14.024 |
+| 完整一致备份 | 17:36:14.388–17:36:19.624 |
+| 切换请求 / 新启动 | 17:36:19.624 / 17:36:19.851 |
+| 首HTTP / Docker healthy | 17:36:20.949 / 17:36:50.184 |
+| 双内网入口 / 本机资源 | 17:36:50.335 / 17:36:50.425 |
+| 首业务门禁 / 公网验收 / 最终复核 | 17:37:37.261 / 17:38:25.649 / 17:38:51.561 |
+
+旧退出至首HTTP观测约6.93秒，非精确停机；构建/健康等待不是停机。当前镜像`account-pool-balancer:release-50222f6-20261111T173549Z`（ID`sha256:bba7378d1ca7ea6b0947cde70983f728f23243c7087eab043ee05773d1bcb76f`），正式release`/home/ubuntu/project/account-pool-balancer-releases/20261111T173549Z-50222f6`；完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261111T173549Z-layout-3051-50222f6`、data SHA256`d313d0575e917907feb71fcfbc1d455265bee709ee768393b930adead94786cb`、旧46镜像`account-pool-balancer:rollback-20261111T173549Z`保留。若退到00ba86a，先备份最新data、仅移除派生metadata.mistralLayouts兼容strict旧reader，不覆盖新写入。Trellis/正式备份保留，临时产物登记_tmp_artifacts.md，经同意清理；补记录不重启。
+
+## 历史部署：Mistral号池端有界布局恢复（2026-11-11 17:03 UTC，46a9b8f）
+
+> **此版本业务验收失败，已由上方50222f6最小修复替代；以下为当时记录（UTC17:10:12–17:20:12完整观察）**：Mistral110最终请求为69成功、37失败400、4客户端取消，0新422。**25个restored>0请求全部上游400、零成功**；另8图片超限400及4零attempt本地拒绝。故先前healthy/入口/持久化通过仅为部署验收，不代表恢复业务正确。已立即如实反馈并建议回退本次布局恢复、保留旧422补丁；本轮用户只要求观察，尚未授权回退/新发布，线上仍46a9b8f。回退须先备份最新data、仅移除派生metadata.mistralLayouts以兼容旧strict reader，绝不覆盖新业务data。详任务research/layout-observation-20261111.md。
 
 - 用户明确要求只改号池、禁止客户端配合，完成本地实现后授权部署。业务提交`6894f95`已推送master；从实际线上00ba86a通过独立Git index仅合入本轮16文件，生成并推送`release/mistral-layout-20261111`的`46a9b8f1f27c40e237d4701e0685c8fb3838cc5d`。6个Go文件逐字节匹配已通过的干净00ba86a隔离验证（定向14.196秒/race4.794秒/vet/build），未重复测试，未带入ModelStudio及其他窗口注册/指纹/Dockerfile/README修改。
 - 只对三个精确推理模型Chat新增有界type/length/closed/HMAC元数据，匹配后恢复逻辑交错顺序；不存正文/思考原文、不改客户端/NewAPI、HMAC/粘性/缓存键和重试。旧/缺失/改字历史仍明确legacyUnknown，已知过期/超限/同文异序本地拒绝；不保证原JSON/网络分帧或缓存提升。

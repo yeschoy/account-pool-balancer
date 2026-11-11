@@ -1,5 +1,11 @@
 # 验证与交付状态
 
+## 当前：3051根因修复50222f6已上线且自然恢复成功（2026-11-11 UTC17:38）
+
+用户授权继续修复、不行回滚。精确查明3051/Expected at most one leading ThinkChunk，closed=true流片段误拆最多248个thinking，非额度问题；600帧/旧168块checkpoint精确红后，跨帧续片与旧相邻thinking合并（不跨真实正文）、unavailable明确unrecovered不阻断，相关normal1.620秒/race2.386秒/vet/build通过。234d6ff主线与50222f6独立发布分支已推送并上线，业务4Go匹配测试源码/639文件SHA256/构建7.06秒/一致完整备份/双内网及公网资源验收，191账号186注册config/secret/13隔离保持。
+
+UTC17:38:51新启动后约152秒自然Mistral16成功、3图片超限400、1取消；9个restored请求全200/恢复16历史，0新3051/422/本地布局拒绝，captureUnavailable0/unrecovered5，checkpoint签名与字段白名单通过。因此保留修复版未触发回滚；无主动推理/重放/新10分钟等待。旧46版25/25失败记录仍保留，不抹掉验证缺口，短窗口不代表所有模型/永久恢复或缓存保证。详research/layout-3051-repair-20261111.md及当前部署记录，文档提交不重启。
+
 ## 最新结论：46a9b8f布局恢复业务验收失败（2026-11-11 UTC17:20）
 
 用户要求完整观察10min。固定UTC17:10:12–17:20:12/600秒，43次同版本healthy0/无OOM、配置hash不变，观察器exit0/stderr0/进程已退出，无生产变更/推理。Mistral110最终为69成功200、37失败400（25恢复请求上游400+8图片超限+4零attempt本地拒绝）、4取消，0新422。**同窗口交叉核对25个restored>0全1attempt上游400/0成功，故日志匹配计数不代表业务恢复成功，新功能明确未验收。** 安全错误骨架Expected at most one [unknown] [unknown], got [number]，具体schema/分段根因尚未确定，不伪称已修。已立即建议回退本次布局功能到保留422修复的00ba86a；用户目前仅授权观察，尚未回退或再部署，线上仍46a9b8f。回退需备份最新data并仅移除派生mistralLayouts字段兼容旧strict reader，不能覆盖新写入。完整记录research/layout-observation-20261111.md。
