@@ -125,6 +125,8 @@ type requestLog struct {
 	ClientSessionHeaderStatus     map[string]string   `json:"clientSessionHeaderStatus,omitempty"`
 	ClientRequestHeadersTruncated bool                `json:"clientRequestHeadersTruncated,omitempty"`
 
+	MistralLayout      *mistralLayoutLog     `json:"mistralLayout,omitempty"`
+	mistralLayoutScope string                // private, never serialized or sent upstream
 	CacheAudit         *mistralCacheAuditLog `json:"cacheAudit,omitempty"`
 	cacheAudit         *mistralAuditRequest  // private ephemeral per-request fingerprint state
 	mistralCacheKey    *string               // final decoded hint; avoids scanning full history per attempt
@@ -237,6 +239,7 @@ type attemptResult struct {
 	privateIdentities []string // request-local only; never serialized
 	wrapped           bool
 	mistralCapacity   bool // matched Mistral service-capacity policy, not just a user-chosen rule ID
+	mistralLayout     *mistralLayoutCapture
 	accountScoped     bool
 	evaluated         bool
 	retryAfter        time.Duration
@@ -735,11 +738,25 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec.SessionSource, rec.AffinityKeyType, rec.AffinityConfidence = ident.Source, ident.KeyType, ident.Confidence
 	if rec.Provider == config.ProviderMistral {
 		cacheKey, cacheSource := mistralRequestCacheKey(cfg, r.Header, ident)
+		originalMistralBody := body
+		rec.mistralLayoutScope = s.mistralLayouts.scope(cfg, ck, ident, rec.Model, r.URL.Path)
+		if rec.mistralLayoutScope != "" {
+			rec.MistralLayout = &mistralLayoutLog{}
+		}
 		var generatedCacheKey string
 		body, generatedCacheKey, err = prepareMistralRequest(body, r.URL.Path, cacheKey)
+		if err == nil && rec.mistralLayoutScope != "" {
+			body, err = s.mistralLayouts.restore(originalMistralBody, body, rec.mistralLayoutScope, rec.MistralLayout)
+			w.Header().Set("X-Mistral-Layout", rec.MistralLayout.header())
+		}
 		if err != nil {
 			rec.ErrorCategory = "request"
-			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", err.Error(), 0)
+			code := "invalid_mistral_request"
+			if errors.Is(err, errMistralLayout) {
+				code = "mistral_layout_unavailable"
+				w.Header().Set("X-Mistral-Layout", "error=unavailable")
+			}
+			writeLocalError(w, proto, 400, "invalid_request_error", code, err.Error(), 0)
 			finish(400, "failed")
 			return
 		}
@@ -1393,7 +1410,7 @@ func isProxyError(err error, proxyURL string) bool {
 
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, body []byte, proto string, rec *requestLog, attemptNo int, start time.Time, group string, ident Identity, privateIdentities []string) *attemptResult {
 	acct := lease.Account
-	res := &attemptResult{goRecord: rec}
+	res := &attemptResult{goRecord: rec, mistralLayout: s.mistralLayouts.capture(rec.mistralLayoutScope, rec.MistralLayout)}
 	t0 := time.Now()
 	defer func() { res.ms = time.Since(t0).Milliseconds() }()
 
@@ -1679,10 +1696,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		}
 	}
 	if acct.Provider == config.ProviderMistral && r.URL.Path == "/v1/chat/completions" {
+		native := b
 		b, err = mistralChatResponse(b, false)
 		if err != nil {
 			return mistralResponseFailure(res)
 		}
+		res.mistralLayout.observe(native, false)
 	}
 	h := w.Header()
 	h.Set("Content-Type", ct)
@@ -2040,6 +2059,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		if err != nil {
 			return mistralResponseFailure(res)
 		}
+		res.mistralLayout.observe(firstData, true)
 	}
 
 	h := w.Header()
@@ -2161,6 +2181,9 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 						res.result, res.terminal, res.category = "failed", "compatibility", "compatibility"
 						res.evaluated = true // incompatible output is not a bad account
 						return res           // already committed: never replay or fabricate [DONE]
+					}
+					if isErr, _, _ := sseError(event, data); !isErr && res.result != "failed" {
+						res.mistralLayout.observe(data, true)
 					}
 				}
 				if isErr, _, _ := sseError(event, data); isErr {

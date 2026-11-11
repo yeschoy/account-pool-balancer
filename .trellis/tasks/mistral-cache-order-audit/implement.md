@@ -1,12 +1,46 @@
 # 执行计划
 
+## 只改号池布局恢复（2026-11-11，当前执行）
+
+- [x] 干净00ba86a源码三模型×JSON/SSE完整HTTP红回归复现交错序丢失，server1.776秒，无客户端新增字段；初fixture解码校准日志不当成真实红证据。
+- [x] 增量HMAC+逻辑块描述、精确scope、有界LRU/字节/TTL、已知歧义/超限/未知显式处理；只恢复匹配的扁平历史。
+- [x] 接入原identity之后的prepare及JSON/SSE原生响应观察，逐帧flush、工具/usage、重试/账号健康、其他池原行为保持。
+- [x] metadata有签名派生checkpoint/分钟合并/正常退出强刷/恢复校验；无正文/私有身份入新增状态/日志。
+- [x] 定向Mistral/metadata/绑定/identity回归14.196秒、相关race4.794秒，server vet/cmd build通过；真实本地HTTP JSON+SSE/工具/重启/隐私/隔离/界限覆盖，不跑无关全仓或付费推理。
+- [x] spec/mistral-layout.md及相关spec/文档/验证记录更新；只提交本轮代码/任务资料，明确有限状态和未知旧历史边界。
+- [ ] 新增派生持久化字段的OVH发布/短重启与迁移预检未执行，生产推理0；代码完成不冒称部署。核心GLM缓存任务不结案。
+
+## US三模型请求与Flash250K复测（2026-11-10 UTC21:12–21:22）
+
+- [x] US目录200/21模型仅Flash，GLM5.3/DS精确模型GET均404 invalid_model/code1500，只读告知不可用，不做无效长会话/别名探测/global-EU回退，未冒称US三模型完成。
+- [x] 复用EU控制器及92cc0d7同镜像临时US Balancer，新Session/Key/容器、同原账号代理，2次计数后首轮实际258027→末280043、20/20成功/单attempt，无换号重试。计数可能预热披露、正式Base/诊断/业务Key/启动不改。
+- [x] 真实US Host/20次Reader=prepare=client、19组旧前缀、cache/X-Affinity/来源目标稳定、单HTTP2/ALPN h2。零轮1/2/**8**，第7→8→9轮98.38%→0→98.85%，第8轮14旧消息和1513563字节Reader完整，官方usage/预算均按零扣额，固定US仍不能杜绝。
+- [x] 实扣USD0.293422404=Flash标准价×US1.1逐笔吻合，全程加权84.2444%/中位6.81s。旧US200K好样本不保证长期，非同时随机AB不直接认定EU更稳。
+- [x] 21:19:42实例停exit0/tmpfs释放/账号全部字段和全配置除revision恢复/logout，run0/stderr0、进程不存在；21:22独立核验正式healthy0重启/无OOM/13隔离/双内网入口。UI误发忽略、不改UI、不重跑原进程，详research/us-250k-20261110.md，核心不结案。
+
+## EU三模型≥250K各20轮（2026-11-10 UTC20:47–21:03）
+
+- [x] EU目录复核三精确模型可见，复用92cc0d7同镜像、原账号/代理的临时隔离Balancer；每模型新Key/Session/容器，正式Base/诊断/实例不改、不部署重启。
+- [x] 只读input_tokens每模型2/2/1次校准，首轮实际GLM两者258027、DS260258，完整20轮分别增长279113/279976/278392。计数可能预热明确披露，首轮不冒称严格冷启动。
+- [x] 60/60全200/自然stop/单attempt/同号、每模型Reader=prepare=client/19组旧前缀完整/实际EU Host与cache/affinity稳定/单HTTP2连接。GLM5.3零轮1，Flash零轮1/2，DS零轮1/17；第17轮同号/32旧消息完整/真实Reader未变仍0，下一轮99.29%，固定EU未根治。
+- [x] 官方EU价×1.1与60笔选定Vibe预算逐笔/总额一致，GLM1.240822396+Flash0.257396524+DS0.2304273356=USD1.7286462556。分模型计价不混用，跨模型窗口外0.0000105未归因不算生成费用。
+- [x] 全部临时容器exit0/tmpfs释放、账号全部字段/正式全配置除revision恢复/logout，UTC21:03:40正式healthy0重启/原13隔离/双入口正常；run进程均不存在，suite已结束。Flash核验曾误报zombie已只读修正、只续未开始DS，无请求重放。详research/eu-three-model-250k-20261110.md；停止容器待同意清理、核心不结案。
+
+## 固定US区域20轮实验（2026-11-10 UTC20时）
+
+- [x] US/EU目录均200且Flash可见；US不列GLM5.3/DS，EU三者均有。只选择US做生成，不自动追加EU或切全池。
+- [x] 复用正式92cc0d7同镜像临时隔离Balancer/loopback18790/单账号及新临时Key、认证仅stdin→tmpfs，无生产data挂载/别名/重启，正式账号暂换空组排空；原代理及路由策略保留，临时后台轮询关闭。
+- [x] US Host真实观测20/20，input224081→245555，每轮≥200K/high/1536/自然stop/单attempt/完整历史思考，实际Reader=prepare=client/19组前缀保留，cache/affinity稳定、同HTTP2。首两轮0，第3–20轮96.10%–99.02%，全程89.18%/第2–20轮93.66%，未中途掉零。
+- [x] 官方标准价等效USD0.20517668×1.1=区域价/实扣USD0.225694348，20笔至9位一致；预算窗口正式账号业务请求0、临时实例仅20条。不是同时段/同实例全球A/B，不能定根因或保证长期更稳。
+- [x] 20:30:42临时实例正常退出0/tmpfs释放、账号全部字段和正式配置除revision外恢复，管理员logout；20:31独立核验41消息/全部思考答案/usage，正式healthy0重启/双入口/全球Base与诊断关闭保留，controller/observer均退出stderr0。详research/us-region-20turn-20261110.md，停止容器待同意清理，核心任务不归档。
+
 ## 最小诊断发布与6次HTTP取证（2026-11-10，用户明确授权）
 
 - [x] 复用cacheAudit单Key/30min/128保护，追加无正文脱敏HTTP头/协议/ALPN/有界完整usage，保留trace组合、真实Reader及SSE原样；不改区域/Priority/缓存策略。
 - [x] 隔离干净源码验证全部Mistral normal11.671s、相关race8.143s、server vet/cmd构建通过；其他窗口注册/指纹/Dockerfile不带入。
 - [x] admin新建临时专用Key ck_058a943b722e55f52cf86276/空独立组，其他配置保留、logout、推理0。
-- [ ] 提交推送最小补丁，复用OVH一次预检→构建→完整备份/Compose覆盖→健康/双内网入口/公网资源验收。
-- [ ] 隔离一个可用账号、排空后最多6次200K完整合成历史串行请求，验证实际Reader/写入/头/usage；停止后禁用专用Key/恢复账号group/进程和健康核验，保留证据边界。
+- [x] 92cc0d7已提交推送上线，复用OVH单次预检→构建7.35s→完整备份/Compose仅image+精确诊断变量→healthy/双内网入口/公网资源SHA256验收，191账号/186注册/配置/13硬隔离保留。
+- [x] 新专组账号排空/预算稳定后6次200K连续请求全成功，实际Reader=prepared=client、5组旧前缀完整、实际X-Affinity稳定、单写入/attempt、同HTTP2连接；缓存0/0/0/0/98.82%/97.82%，实扣USD0.15117091=usage。原始头只__cf_bm Cookie/无路由返回参数，service_tier未返回；未知重试头HMAC相同不猜值。14:46:07禁用专用Key/恢复账号group/logout，独立核验进程退出/healthy0重启/双入口。详research/http-wire-six-turn-20261110.md，未追加调用或关闭核心任务。
 
 ## 用户授权Flash ≥200K连续20轮及官方扣费（2026-11-10 UTC13时）
 

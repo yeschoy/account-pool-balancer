@@ -1,6 +1,46 @@
 # 验证与交付状态
 
-## 最小单Key HTTP/usage诊断本地验证（2026-11-10，待发布）
+## 最新：只改Mistral号池的逻辑布局恢复（2026-11-11，本地完成，未部署）
+
+用户明确禁止客户端配合并要求继续。只在三精确推理模型Chat新增有界类型/长度/固定闭合枚举/私有HMAC状态，不留正文/思考/工具或原始会话；scope隔离与完整两字符串匹配恢复逻辑交错顺序，HMAC/粘性/缓存键不改。JSON/SSE均保持普通双scalar兼容返回、首帧即时flush；正常重启派生签名checkpoint恢复。已知歧义/过期/超限本地400零attempt；旧/缺失/改字/淘汰记录明确legacyUnknown，不能凭空补回或承诺永久、原网络分帧/JSON字节级无损及缓存提升。
+
+干净线上00ba86a+本轮6Go文件隔离验证：三模型×JSON/SSE真实HTTP红1.776秒后绿；最终Mistral/metadata/绑定/identity等定向14.196秒、相关race4.794秒，server vet/cmd build/gofmt/diff通过。新增真实HTTP客户端仅两个scalar回传、增长前缀/HMAC、Server重建后HTTP恢复、签名隐私/作用域/TTL/LRU/字节/节点/多并发、已知同文异序、失败流及万帧有界测试。未跑无关全仓/付费生成、未部署或修改生产配置；新持久化字段上线需要备份/断网迁移预检，回退不覆盖新写入。实现与边界详research/server-layout-20261111.md，核心缓存仍不结案。
+
+## 最新：US三模型请求与Flash≥250K×20轮（2026-11-10 UTC21:12–21:22）
+
+US目录200/21模型仅Flash，GLM5.3/DS单模型GET404 invalid_model/1500，未做其US长会话、不把EU/global替代或宣称三者成功。仅Flash使用92cc0d7同镜像新隔离US实例/Session/Key，2次只读计数可能预热已披露，首轮实际258027→280043，20/20成功/自然stop/单attempt，同号/代理/亲和与全部旧消息保留，每轮实际US Host、Reader=prepare=client、同HTTP2/ALPN h2；41消息思考答案哈希/末轮历史/完整usage核验通过。
+
+零轮1/2/**8**，7→8→9轮98.38%→0→98.85%，第8轮保留14旧消息/1513563字节Reader完整、cache/X-Affinity/source/target/同账号同连接不变，官方套餐按零缓存USD0.044028655扣额；trace01a1c752-4dab-7777-91fb-333e242f7d0f。总input5372714/cached4526208/output7971，加权84.2444%/中位6.81s/最大23.87s，20笔实扣USD0.293422404=官方精确Flash价×US1.1，不冒充现金。旧US200K无掉零不代表长期保证、此次EU优样本也非严格AB。
+
+21:19:42临时容器停/PID0/exit0/tmpfs释放，账号全部字段及正式全配置除revision恢复/logout、run0/stderr0/进程不存在；21:22独立核验正式92cc0d7启动未变/healthy0重启/无OOM/global Base不变/诊断空、NewAPI双入口，最终只读确认原13隔离一致。没有构建部署/业务源码修改或无关全仓验证，用户误发UI图随后要求忽略、未改UI或重跑测试。脱敏回执/完整20行对账及报告research/us-250k-20261110.md；停止容器待同意清理，生成已停，核心in_progress。
+
+## 最新：EU三模型≥250K各20轮（2026-11-10 UTC20:47–21:03）
+
+用户要求提升250K测试GLM5.3/Flash/DS1017，统一EU目录复核可见，复用正式92cc0d7同镜像临时隔离Balancer/原账号代理，三独立新会话20轮共60成功生成，另只读计数2/2/1次（可能预热明确披露）。首轮GLM两者258027/DS260258，末轮279113/279976/278392，每轮≥250000；全部200/SSE DONE/自然stop/单attempt/同号，无换号/重试/重放。Reader=prepare=client/19组旧前缀完整、实际Host全EU/源目标/cache/X-Affinity稳定，各段单HTTP2/ALPN h2，41消息×3全部思考/答案哈希与末轮历史/usage核验。
+
+GLM5.3零轮1、热轮99.66%–99.70%；GLM Flash零轮1/2、余98.72%–99.13%；DS零轮1/17、余99.29%–99.66%，第16→17→18轮99.66%→0→99.29%。第17轮真实1535955字节Reader完整、32旧消息保留、亲和/同连接/账号不变、官方预算按零缓存净扣，固定EU不能杜绝离散掉零。三模型第2–20轮加权99.6802%/93.8434%/94.2463%；高缓存仍有GLM45秒/Flash39秒长尾，不把快慢当cache证据。
+
+三生成窗口官方Vibe净减分别USD1.240822396/0.257396524/0.2304273356，逐笔/总额符合各精确模型标准价×EU1.1，合计USD1.7286462556。模型间窗口外0.0000105变化未归因、未混入生成费用，不冒充现金扣款。每窗口正式账号业务请求0，各临时实例仅20生成+2/2/1计数。正式Base/业务Key/诊断变量/实例启动均未改，不部署重启或开Priority/PAYG。
+
+UTC21:03:40最终合并只读核验三个临时容器stopped/PID0/exit0/无OOM/tmpfs释放，账号全部字段及正式全配置除revision恢复/logout，生产healthy0重启/无OOM、原13隔离及双内网入口成功；run进程均不存在，各stderr0、最终suite0。Flash后流程核验误报已退出zombie导致暂停，只修复核验/wait并重新只读验证、只启动未开始DS，无重跑。完整报告research/eu-three-model-250k-20261110.md；脚本语法/SHA256/60轮独立核验/文档对账通过，无业务代码修改/无关全仓，清理须同意，核心任务in_progress。
+
+## 最新区域实验：US固定端点20轮（2026-11-10 UTC20:26–20:31）
+
+用户要求试US或EU后，先只读两区/models均200，Flash均可见；US未列GLM5.3和DS、EU三者都有。仅US追加20轮生成，不改正式池Base，使用92cc0d7同生产镜像的隔离临时Balancer实例/loopback18790/单账号新临时Key、配置认证仅stdin→/data tmpfs，无生产data挂载/网络别名/正式重启；目标账号暂移独立空组排空，其他业务Key不动。
+
+20/20实际Host api.us.mistral.ai/200/自然stop/单attempt，input224081→245555，每轮≥200000/high/1536，实际Reader=prepared=client且完整，19组旧前缀保留、稳定cache/X-Affinity/source/target、同HTTP2/ALPN h2。首两轮0，第3–20轮96.10%–99.02%，全程加权89.1787%/第2–20轮93.6568%/第3–20轮98.6327%，中位5.56秒。总input4686606/cached4179456/output7441，官方标准价等效USD0.20517668，1.1倍区域价/官方Vibe净扣USD0.225694348逐笔吻合，正式账号预算窗口业务请求0，临时实例只有20条。非同时段/同实例A/B，不能据此认定区域根因或US永不掉零；EU未生成。
+
+20:30:42.569临时容器退出0/tmpfs凭据释放，20:30:42.588正式账号全部字段/全配置除revision外恢复并logout；20:31:06独立核验20段思考/答案哈希、41消息及末轮历史、实际usage/日志，正式实例ID/启动时间/全球Base未变、诊断空、healthy0重启/双内网入口成功，无OOM。controller和只读observer进程均不存在/stderr0；停止容器待用户同意清理，无额外生成/正文或凭据下载。仅实验控制器语法/SHA256和真实核验，不跑无关全仓；完整报告research/us-region-20turn-20261110.md，核心任务仍in_progress。
+
+## 最新已部署/真实HTTP取证（2026-11-10 UTC14:40–14:48）
+
+92cc0d7已推送并上线，旧f1024e9→新版本构建7.35秒，629文件哈希核验、完整一致备份、Compose仅image+精确诊断Key变量，191账号/186注册/完整配置与13硬隔离/运行资源和双别名保留，Docker healthy0重启/无OOM、NewAPI双入口、公网页面/healthz/四资源200与提交SHA256通过。
+
+独立临时Key六轮Flash/high/1536合成长聊，input224081→229637，每轮≥200K/200/自然stop/单attempt，实际Reader完整HMAC=prepared=client、5组旧前缀保留/无并发重叠、同账号代理/稳定cache/真实X-Affinity、同一HTTP2连接ALPN h2。缓存0/0/0/0/98.82%/97.82%；原生完整usage与下游及日志usage匹配。响应头20个无截断、仅__cf_bm Cookie且不保存值，无节点/区域/亲和回显；CF DYNAMIC是CDN非KV状态，未知X-Max-Retry-Attempts-Reached只HMAC且6轮相同，不猜值/重试次数，usage没有service_tier。实扣Vibe USD0.15117091与官方价逐笔/总额吻合。
+
+UTC14:46:07专用Key已禁用/账号group恢复/logout，14:48:23独立验证exit0/stderr0/进程退出/healthy0重启/双入口；该Key采样6条、其他Key0。原控制器target_key_fields_restored=false仅因有意禁用新Key，最终对比部署前完整备份配置仅enabled/revision改变、13硬隔离一致。收尾发现启动校验要求Key启用，仅禁用Key却留变量会导致下次启动失败，已告知用户并用同镜像/不构建做必要关闭切换，完整一致备份后Compose仅清变量。14:57:25 healthy/双入口，14:58:01最终变量空/专用Key禁用/组恢复/13隔离不变、配置仅enabled/revision变化，公网healthz200，无追加推理。后续部署继续保持变量空，禁止无授权续采。无正文/凭据/Cookie值输出或全池detail/区域/Priority/PAYG变化。正式research/http-wire-six-turn-20261110.md；本次已实证不是请求prepare/Reader/连接漂移，但上游内部路由/缓存仍未知，核心任务不归档。
+
+## 最小单Key HTTP/usage诊断本地验证（2026-11-10，发布前记录）
 
 用户明确授权发布短重启和最多6次200K合成连续请求。扩展既有cacheAudit，仅受单Key/30min/128保护的attempt添加脱敏请求/响应头、协议/ALPN和有界完整usage，实际正文HMAC/流式/重试/统计不变。隔离HEAD干净副本+本轮四源码/测试文件验证，其他窗口注册/指纹/Dockerfile未带入：全部Mistral定向normal11.671秒、相关cacheAudit/Wire/前缀race8.143秒、server vet及cmd构建通过。覆盖JSON/SSE/full usage未知数值/大数、header trace与旧详情组合、Cookie/认证/未知值掩码、边界/晚回调快照与关闭零分配；初轮两条失败是关闭测试fixture分配及mock Host原文泄漏，已修正并全相关重验。
 
