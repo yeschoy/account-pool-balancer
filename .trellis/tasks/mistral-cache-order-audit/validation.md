@@ -1,5 +1,9 @@
 # 验证与交付状态
 
+## 最新结论：46a9b8f布局恢复业务验收失败（2026-11-11 UTC17:20）
+
+用户要求完整观察10min。固定UTC17:10:12–17:20:12/600秒，43次同版本healthy0/无OOM、配置hash不变，观察器exit0/stderr0/进程已退出，无生产变更/推理。Mistral110最终为69成功200、37失败400（25恢复请求上游400+8图片超限+4零attempt本地拒绝）、4取消，0新422。**同窗口交叉核对25个restored>0全1attempt上游400/0成功，故日志匹配计数不代表业务恢复成功，新功能明确未验收。** 安全错误骨架Expected at most one [unknown] [unknown], got [number]，具体schema/分段根因尚未确定，不伪称已修。已立即建议回退本次布局功能到保留422修复的00ba86a；用户目前仅授权观察，尚未回退或再部署，线上仍46a9b8f。回退需备份最新data并仅移除派生mistralLayouts字段兼容旧strict reader，不能覆盖新写入。完整记录research/layout-observation-20261111.md。
+
 ## 最新发布：只改号池布局恢复（2026-11-11 UTC17:03，46a9b8f已上线）
 
 用户明确授权部署。6894f95主线与46a9b8f独立干净发布分支已推送；从线上00ba86a只合本轮16文件，6Go逐字节匹配下述已通过源码，不重复测试。637文件SHA256、单次预检/构建7.58秒后，实际原UID1000:1000+network none+tmpfs隔离启动签名合成checkpoint、health/config/secret/退出0往返预检0.70秒通过，容器停止且tmpfs释放。完整一致备份/Compose仅image切换、healthy0/双内网入口/公网资源SHA256通过，191账号/186注册/完整config字节/routingSecret/Mistral库/13隔离及运行参数保留，诊断空，未发生产推理。上线后首批自然流量23成功/2图片超限400/无新422，captured17、签名checkpoint20条（17可恢复/3unknown）；restored0，真实生产匹配恢复及缓存收益仍未验。详research/server-layout-20261111.md及docs/ovh-deployment.md；补记录不重新部署，核心任务不归档。
