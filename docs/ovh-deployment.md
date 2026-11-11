@@ -38,7 +38,30 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek空注解422修复（2026-11-11 13:05 UTC，00ba86a）
+## 当前部署：Mistral号池端有界布局恢复（2026-11-11 17:03 UTC，46a9b8f）
+
+- 用户明确要求只改号池、禁止客户端配合，完成本地实现后授权部署。业务提交`6894f95`已推送master；从实际线上00ba86a通过独立Git index仅合入本轮16文件，生成并推送`release/mistral-layout-20261111`的`46a9b8f1f27c40e237d4701e0685c8fb3838cc5d`。6个Go文件逐字节匹配已通过的干净00ba86a隔离验证（定向14.196秒/race4.794秒/vet/build），未重复测试，未带入ModelStudio及其他窗口注册/指纹/Dockerfile/README修改。
+- 只对三个精确推理模型Chat新增有界type/length/closed/HMAC元数据，匹配后恢复逻辑交错顺序；不存正文/思考原文、不改客户端/NewAPI、HMAC/粘性/缓存键和重试。旧/缺失/改字历史仍明确legacyUnknown，已知过期/超限/同文异序本地拒绝；不保证原JSON/网络分帧或缓存提升。
+- 一次预检旧00ba86a healthy/0重启/无OOM、双内网入口/Healthcheck与兼容别名正常、注册空闲、241.85GiB余量；旧工作树干净但不是构建源。637干净源码文件SHA256集合验证，复用既有发布引擎，构建7.58秒。
+- **新增metadata派生字段的必要断网预检已实际执行**：新镜像以线上Config.User1000:1000、network none、/data容器tmpfs启动，仅远端RAM/stdin注入当前必要配置与状态副本及签名合成布局记录；health200、config/routingSecret不变、布局checkpoint保存往返一致、正常退出0。预检约0.70秒；容器`apb-layout-preflight-20261111t170102z`已stopped/PID0/exit0、tmpfs凭据释放，未主动推理或复制原文到宿主文件。停止容器经同意再清理。
+- 镜像与预检就绪后干净停止旧进程，完整一致data备份/gzip/SHA256核验，沿线上Compose仅覆盖image且诊断变量继续空。**191账号、186TH核心注册、routingSecret、完整config.json字节、Mistral注册库、原13硬隔离及全部运行用户/环境/挂载/端口/网络/资源/Healthcheck保留。**17:03:07.732 NewAPI分别请求account-pool-balancer及opendesign-balancer两个healthz通过，本机四资源SHA256通过，Docker healthy/restarts0后立即反馈上线。
+- UTC17:03:49.070真实未登录公网浏览器登录页/healthz/四资源均200，保留`?v=9d44d5ff6c`并逐项SHA256匹配，回执入正式deploy.json；专用浏览器已关闭。
+- UTC17:05:06一次只读自然流量验收（新启动后约149秒，非主动测试或完整10分钟观察）：23成功200、2图片超限上游400、无新422/布局不可用错误。25条请求均有布局摘要，captured17/unavailable0，checkpoint20条（17可恢复、3unknown）签名和严格字段白名单通过。**restored=0：当前尚无新历史精确匹配的生产恢复样本；只能证明采集/持久化生效，不能宣称生产往返恢复或缓存改善已验收。**部署前旧历史legacyUnknown计数属于预期，不伪称已补回。实例同版本healthy/0重启/无OOM/诊断关闭，无追加推理/重放/规则或配置修改。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 17:02:19.570–17:02:27.154（7.58秒） |
+| 断网兼容预检 | 17:02:27.888–17:02:28.592（0.70秒） |
+| 停止请求 / 旧退出 | 17:02:28.688 / 17:02:31.269 |
+| 完整一致备份 | 17:02:31.623–17:02:36.871 |
+| 切换请求 / 新启动 | 17:02:36.871 / 17:02:37.213 |
+| 首HTTP / Docker healthy | 17:02:38.358 / 17:03:07.590 |
+| 双内网入口 / 本机资源 | 17:03:07.731 / 17:03:07.819 |
+| 公网验收 / 自然流量复核 | 17:03:49.070 / 17:05:06.042 |
+
+旧退出至首HTTP观测约7.09秒，非精确停机；构建、预检和健康等待不算停机。镜像`account-pool-balancer:release-46a9b8f-20261111T170102Z`（ID`sha256:5c583a6e0a158a119a1a33b381a8d416dba0108e662f81ff835d6f3ce6bc29fe`）；正式release`/home/ubuntu/project/account-pool-balancer-releases/20261111T170102Z-46a9b8f`，完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261111T170102Z-layout-replay-46a9b8f`，data SHA256`01443a1e6d3d16a2fc38aacdd87bf01181771c0aef4fff01f746394259e36286`；旧镜像`account-pool-balancer:rollback-20261111T170102Z`保留。**降级旧strict reader前先备份最新data，仅移除派生metadata.mistralLayouts字段，不恢复发布前data覆盖新业务写入**；现有responseBindings/mistralBindings/账号/额度不可一并删除。正式deploy/offline-preflight/public/post-release回执保留，临时产物登记_tmp_artifacts.md，经同意再清理，Trellis保留；补记录不再部署。
+
+## 历史部署：Mistral DeepSeek空注解422修复（2026-11-11 13:05 UTC，00ba86a）
 
 - 用户明确要求解决422、避免无用测试并部署OVH。主线修复`71c1f60`已推送；因主线含未上线ModelStudio，从实际线上92cc0d7用独立Git index仅合入本轮6文件，生成并推送`release/mistral-empty-annotations-20261111`的`00ba86a7ccbd427b6973d69de56373a540692567`。业务差异仅文本空annotations兼容、固定安全loc与回归3个Go文件；与已完成全仓normal/race/vet/build的隔离源码逐字节相等，**未重复测试、未发生产推理或重放私密请求，未带入其他窗口注册/指纹/Dockerfile或ModelStudio改动**。
 - 真实上游422拒绝DeepSeek历史assistant文本块`annotations:[]`。修复仅消费该精确Chat范围的空数组/null，真实非空引用、正文、思考、工具、图片、缓存键保持；未知类型保留上游验证，重复字段本地拒绝。不是账号额度或缓存命中根因修复。

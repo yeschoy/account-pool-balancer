@@ -8,7 +8,8 @@
 - [x] metadata有签名派生checkpoint/分钟合并/正常退出强刷/恢复校验；无正文/私有身份入新增状态/日志。
 - [x] 定向Mistral/metadata/绑定/identity回归14.196秒、相关race4.794秒，server vet/cmd build通过；真实本地HTTP JSON+SSE/工具/重启/隐私/隔离/界限覆盖，不跑无关全仓或付费推理。
 - [x] spec/mistral-layout.md及相关spec/文档/验证记录更新；只提交本轮代码/任务资料，明确有限状态和未知旧历史边界。
-- [ ] 新增派生持久化字段的OVH发布/短重启与迁移预检未执行，生产推理0；代码完成不冒称部署。核心GLM缓存任务不结案。
+- [x] 用户授权部署后，46a9b8f独立干净发布分支已推送/上线OVH；实际同UID1000:1000、network none、tmpfs副本带签名合成checkpoint启动/往返/exit0预检通过，凭据tmpfs释放。完整一致备份后Compose仅image切换，healthy0/双内网/公网资源SHA256验收，191账号/186TH注册/配置/13硬隔离保持，生产推理0。
+- [ ] 线上已见17条可恢复捕获/签名checkpoint生效，首批restored=0，生产实际恢复与缓存收益尚未验证；未追加主动推理或等待。核心GLM缓存任务不结案。
 
 ## US三模型请求与Flash250K复测（2026-11-10 UTC21:12–21:22）
 

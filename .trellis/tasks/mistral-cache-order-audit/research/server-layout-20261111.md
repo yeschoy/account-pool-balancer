@@ -2,7 +2,7 @@
 
 ## 授权与交付口径
 
-用户在确认原生text→thinking→text经两个scalar字段往返会丢布局后，明确要求修复，并明确「不允许客户端配合，只要求改号池」，随后要求继续。沿已有in_progress任务，不新建任务/客户端carrier，不改NewAPI或用户客户端。本轮本地实现/验证，不包含生产推理、真实正文采集/重放、线上配置修改、重启或部署；生产空注解422修复仍为此前00ba86a发布，不把新功能写成已上线。
+用户在确认原生text→thinking→text经两个scalar字段往返会丢布局后，明确要求修复，并明确「不允许客户端配合，只要求改号池」，随后要求继续。沿已有in_progress任务，不新建任务/客户端carrier，不改NewAPI或用户客户端。开发阶段只本地实现/验证，不包含生产推理、真实正文采集/重放、线上配置修改或部署；用户随后明确「部署」，已按文末追记上线46a9b8f，不能沿用原未部署状态。
 
 ## 核心实现
 
@@ -29,6 +29,14 @@
 - `go vet ./internal/server`、`go build -o /dev/null ./cmd/odb` exit0；gofmt/diff check通过。不重复无关全仓、Node/UI或生产推理。
 
 新回归覆盖：三个模型JSON/SSE→客户端只回传两个scalar→正式本地HTTP；text/thinking交错/空白/UTF-8/part/closed/null signature，工具/schema顺序/大数保持，增长历史旧恢复字节一致、显式及fallback HMAC/X-Affinity不变；真实Server重建后的HTTP恢复/secret保持/不含原文checkpoint、异密钥/篡改拒绝；24h续期/已知过期、LRU/字节/节点上限、万帧纯文本有界、同文不同布局本地400零attempt、native权威与legacyUnknown、非空引用/未知字段/转义重复不被消费、失败流不建checkpoint/首帧即时flush、12并发capture/get/export。
+
+## 用户授权OVH发布追记（UTC17:03，46a9b8f）
+
+- 主线6894f95已推送；独立Git index从实际线上00ba86a仅合入本轮16文件，6个Go文件逐字节等于前述干净隔离测试源码，release/mistral-layout-20261111的46a9b8f1f27c40e237d4701e0685c8fb3838cc5d已推送上线。没有重复测试/带入ModelStudio或其他窗口脏修改。
+- 637文件SHA256集合验证，单次预检healthy0/双入口/Healthcheck别名/241.85GiB/注册空闲，构建UTC17:02:19.570–27.154（7.58秒）。新持久化实际断网预检17:02:27.888–28.592，沿线上UID1000:1000/network none、RAM/stdin→tmpfs配置副本和签名合成记录；health200/config与routingSecret保持/checkpoint签名往返/正常退出0。预检容器apb-layout-preflight-20261111t170102z已stopped/PID0/exit0，tmpfs释放，无推理或宿主凭据文件。
+- 旧退出17:02:31.269，完整一致备份17:02:31.623–36.871，新启动37.213、首HTTP38.358、healthy17:03:07.590，NewAPI到两个内网healthz07.731通过，立即反馈。191账号/186TH注册/routingSecret/config字节/Mistral注册库/原13硬隔离与运行参数保持，Compose仅image覆盖且诊断保持空。
+- UTC17:03:49.070真实未登录公网登录页/healthz/四资源200和SHA256匹配；专用浏览器已关闭。17:05:06一次自然流量复核23成功、2图片超限400、无新422/布局不可用错误；17可恢复捕获、checkpoint20条（17可恢复/3unknown）签名及字段白名单通过。**restored0，生产真实匹配恢复尚未出现**，不把采集/持久化生效冒充实际生产往返或缓存收益验证。未追加付费推理/等待采样或新配置/重启。
+- 正式release、镜像、完整一致备份、SHA256与分阶段时间见docs/ovh-deployment.md当前记录。旧strict reader降级先备份最新data，仅移除metadata.mistralLayouts派生字段，不能覆盖新业务写入。Trellis与正式回退资料保留，临时产物经同意再清理；补记录不再次部署。
 
 ## Bug analysis / 防复发
 
