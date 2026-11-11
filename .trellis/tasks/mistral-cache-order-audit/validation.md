@@ -1,5 +1,9 @@
 # 验证与交付状态
 
+## 最新完整10分钟：50222f6下67成功零错误，恢复样本0（UTC21:39:31–21:49:31）
+
+用户再次要求观察，已完成固定600秒（北京时间2026-11-12 05:39:31–05:49:31），42次两服务同版本healthy0/无OOM/config hash不变。Mistral原失败Key的DeepSeek67全部单attempt200，0失败/取消/3051/422/其他错误事件；NewAPI18非流式+49流式ok/done/completed，共67消费和input/cached逐项对齐。**restored0，本窗口无新增恢复匹配样本**，不能把67成功当恢复链路验证；captured44/unavailable0/unrecovered0。Go145、OpenDesign66均成功。观察器21:49:33 exit0/stderr0、21:49:57独立固定窗口和进程不存在核验通过，未主动推理/正文采集/修改配置/重启或部署。已立即反馈；详research/layout-3051-repair-20261111.md追加观察，补记录不重启。
+
 ## 当前：3051根因修复50222f6已上线且自然恢复成功（2026-11-11 UTC17:38）
 
 用户授权继续修复、不行回滚。精确查明3051/Expected at most one leading ThinkChunk，closed=true流片段误拆最多248个thinking，非额度问题；600帧/旧168块checkpoint精确红后，跨帧续片与旧相邻thinking合并（不跨真实正文）、unavailable明确unrecovered不阻断，相关normal1.620秒/race2.386秒/vet/build通过。234d6ff主线与50222f6独立发布分支已推送并上线，业务4Go匹配测试源码/639文件SHA256/构建7.06秒/一致完整备份/双内网及公网资源验收，191账号186注册config/secret/13隔离保持。

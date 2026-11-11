@@ -56,6 +56,8 @@
 | 双内网入口 / 本机资源 | 17:36:50.335 / 17:36:50.425 |
 | 首业务门禁 / 公网验收 / 最终复核 | 17:37:37.261 / 17:38:25.649 / 17:38:51.561 |
 
+**用户再次要求的完整10分钟观察**：UTC2026-11-11 21:39:31–21:49:31（北京时间11月12日05:39:31–05:49:31），固定600秒。42次采样两服务同版healthy/0重启/无OOM，config hash始终不变。Mistral原失败Key的DeepSeek **67/67 success200、全部单attempt，0失败/取消/3051/422/布局不可用及其他错误事件**；NewAPI180/182对应18非流式+49流式ok/done/completed，用量逐项一致。OpenCode Go145成功、OpenDesign66成功，窗口内无其最终失败。**本窗口restored=0，无新的布局匹配恢复样本**，不能用67成功冒充新增恢复链路验证；captured44/captureUnavailable0/unrecovered0，legacyUnknown4473为历史消息出现计数，不是4473独立会话。21:49:33.143观察器exit0/stderr0，21:49:57独立确认进程退出、固定窗口67条逐项复核及实例仍同50222f6 healthy0/无OOM。只读自然流量/SQL，无测试推理、正文采集、配置变更、发布或重启；已立即反馈，补记录不再次部署。详任务research/layout-3051-repair-20261111.md追加观察。
+
 旧退出至首HTTP观测约6.93秒，非精确停机；构建/健康等待不是停机。当前镜像`account-pool-balancer:release-50222f6-20261111T173549Z`（ID`sha256:bba7378d1ca7ea6b0947cde70983f728f23243c7087eab043ee05773d1bcb76f`），正式release`/home/ubuntu/project/account-pool-balancer-releases/20261111T173549Z-50222f6`；完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261111T173549Z-layout-3051-50222f6`、data SHA256`d313d0575e917907feb71fcfbc1d455265bee709ee768393b930adead94786cb`、旧46镜像`account-pool-balancer:rollback-20261111T173549Z`保留。若退到00ba86a，先备份最新data、仅移除派生metadata.mistralLayouts兼容strict旧reader，不覆盖新写入。Trellis/正式备份保留，临时产物登记_tmp_artifacts.md，经同意清理；补记录不重启。
 
 ## 历史部署：Mistral号池端有界布局恢复（2026-11-11 17:03 UTC，46a9b8f）
