@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral专用Key原始HTTP/usage诊断（2026-11-10 14:40 UTC，92cc0d7）
+## 当前部署：Mistral DeepSeek空注解422修复（2026-11-11 13:05 UTC，00ba86a）
+
+- 用户明确要求解决422、避免无用测试并部署OVH。主线修复`71c1f60`已推送；因主线含未上线ModelStudio，从实际线上92cc0d7用独立Git index仅合入本轮6文件，生成并推送`release/mistral-empty-annotations-20261111`的`00ba86a7ccbd427b6973d69de56373a540692567`。业务差异仅文本空annotations兼容、固定安全loc与回归3个Go文件；与已完成全仓normal/race/vet/build的隔离源码逐字节相等，**未重复测试、未发生产推理或重放私密请求，未带入其他窗口注册/指纹/Dockerfile或ModelStudio改动**。
+- 真实上游422拒绝DeepSeek历史assistant文本块`annotations:[]`。修复仅消费该精确Chat范围的空数组/null，真实非空引用、正文、思考、工具、图片、缓存键保持；未知类型保留上游验证，重复字段本地拒绝。不是账号额度或缓存命中根因修复。
+- 一次预检92cc0d7 healthy/0重启/无OOM、双内网入口/Healthcheck/兼容别名存在、注册空闲、242.83GiB余量；旧工作树干净但不作为构建源。631干净源码文件SHA256集合匹配，复用既有发布引擎，构建12.64秒。镜像就绪后干净退出旧进程，完整一致data备份/gzip/SHA256核验，沿线上Compose仅覆盖image并明确保持诊断变量空。
+- **191账号、186TH核心注册、routingSecret、完整config.json字节、Mistral注册库、原13个硬隔离及用户/环境/挂载/端口/网络/资源/Healthcheck保留**。新实例Docker healthy/0重启，ai-internal新旧兼容别名保留，NewAPI分别请求account-pool-balancer与opendesign-balancer两个healthz通过；本机四资源SHA256通过后立即反馈上线。无账号恢复、规则/功能开关修改。
+- UTC13:10:31.169真实未登录公网浏览器登录页可见，healthz及四资源全200，保留`?v=9d44d5ff6c`且SHA256匹配正式源码，回执补入正式deploy.json，专用浏览器已关闭。
+- UTC13:11:21对新实例启动后自然流量一次只读汇总（约391秒，不是额外等待的10分钟实验）：**Mistral230成功200、1上游400、0新增422**；原失败Key228成功200及该1上游400。400为单attempt/upstreamStatus400、invalid_request_error，不隐去或声称全池零错误，现有脱敏证据未进一步定性。未证明每个旧失败私密payload都已重过，也未主动生成/重放。实例仍同版本healthy/0重启/无OOM，诊断关闭。记录`post-release-natural.json`留正式备份；后续补记录不重新部署。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 13:04:31.052–13:04:43.688（12.64秒） |
+| 停止请求 / 旧退出 | 13:04:43.786 / 13:04:43.935 |
+| 完整一致备份 | 13:04:44.310–13:04:49.768 |
+| 切换请求 / 新启动 | 13:04:49.768 / 13:04:49.988 |
+| 首HTTP / Docker healthy | 13:04:51.095 / 13:05:20.328 |
+| 双内网入口 / 本机资源 | 13:05:20.470 / 13:05:20.565 |
+| 公网验收 / 自然流量复核 | 13:10:31.169 / 13:11:21.151 |
+
+旧退出至首HTTP观测约7.16秒，非精确停机；构建/健康等待不算停机。当前镜像`account-pool-balancer:release-00ba86a-20261111T130400Z`（ID`sha256:33bfbe10d1a9c31521e86b418a18e615bbae76bd78d03f3cadb284732c2c2b22`）；正式release`/home/ubuntu/project/account-pool-balancer-releases/20261111T130400Z-00ba86a`，完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261111T130400Z-empty-annotations-00ba86a`，data SHA256`af52d384298a16bcaeeacae0997779579ff82c6d6f3a23c765a0ca7201ab3b7f`，旧镜像`account-pool-balancer:rollback-20261111T130400Z`全部保留。回退先确认上线后新写入，不自动覆盖data；临时产物登记_tmp_artifacts.md，经同意再清理，Trellis/正式回退资料保留。
+
+## 历史部署：Mistral专用Key原始HTTP/usage诊断（2026-11-10 14:40 UTC，92cc0d7）
 
 - 用户明确批准最小诊断发布/短重启与最多6次合成取证，`92cc0d7024c49c6da80c55a1a7b6a1e148b93e39`已推送master并上线。只包含cacheAudit HTTP/usage扩展与文档，不混入其他窗口注册/指纹/Dockerfile修改。相关Mistralnormal11.671秒/race8.143秒、server vet/cmd构建通过，不重复无关测试。
 - 正常admin API新建专用临时Key `ck_058a943b722e55f52cf86276`，独立空组，无业务Key移动。发布前一次预检确认f1024e9 healthy/0重启、双内网入口正常/Healthcheck与兼容别名存在、注册空闲、244.44GiB余量。629干净源码文件SHA256集合核验，复用既有发布引擎，构建7.35秒；干净退出旧实例后完整一致备份/gzip/SHA256核验，沿线上Compose仅覆盖image与明确授权诊断变量。
