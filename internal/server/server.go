@@ -30,22 +30,24 @@ import (
 )
 
 type metadata struct {
-	Version       int                        `json:"version"`
-	RoutingSecret string                     `json:"routingSecret"`
-	Pool          pool.Export                `json:"pool"`
-	Quota         map[string]*quota.Snapshot `json:"quota"`
-	Stats         stats.Export               `json:"stats"`
+	Version        int                        `json:"version"`
+	RoutingSecret  string                     `json:"routingSecret"`
+	Pool           pool.Export                `json:"pool"`
+	Quota          map[string]*quota.Snapshot `json:"quota"`
+	Stats          stats.Export               `json:"stats"`
+	MistralLayouts []mistralLayoutRecord      `json:"mistralLayouts,omitempty"`
 }
 
 type Server struct {
-	dataDir      string
-	cfg          *config.Store
-	pool         *pool.Pool
-	quota        *quota.Poller
-	logs         *logstore.Store
-	stats        *stats.Stats
-	secret       []byte
-	mistralAudit *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect
+	dataDir        string
+	cfg            *config.Store
+	pool           *pool.Pool
+	quota          *quota.Poller
+	logs           *logstore.Store
+	stats          *stats.Stats
+	secret         []byte
+	mistralAudit   *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect
+	mistralLayouts *mistralLayouts    // bounded type/length/digest replay metadata, no text
 
 	requestMu      sync.Mutex
 	draining       bool
@@ -201,6 +203,10 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if s.secret, err = hex.DecodeString(md.RoutingSecret); err != nil || len(s.secret) < 16 {
 		return nil, errors.New("metadata.json: invalid routingSecret")
 	}
+	s.mistralLayouts = newMistralLayouts(s.secret)
+	if err := s.mistralLayouts.importRecords(md.MistralLayouts); err != nil {
+		return nil, err
+	}
 	s.pool.ImportState(md.Pool, valid)
 	s.pool.ImportMistralBindings(md.Pool.MistralBindings, store.Get())
 	quotas := map[string]*quota.Snapshot{}
@@ -355,14 +361,14 @@ func (s *Server) saveMetadata(force bool) error {
 	s.metaMu.Lock()
 	defer s.metaMu.Unlock()
 	states, samples := s.pool.Dirty()
-	samples = samples || s.statsDirty.Load()
+	samples = samples || s.statsDirty.Load() || s.mistralLayouts.dirty()
 	if !force && !states && !s.metaDirty.Load() && !(samples && time.Since(s.metaSavedAt) >= sampleSaveEvery) {
 		return nil
 	}
 	s.metaDirty.Store(false)
 	s.statsDirty.Store(false)
 	exp, _ := s.pool.ExportState()
-	md := metadata{Version: 1, RoutingSecret: hex.EncodeToString(s.secret), Pool: exp, Quota: s.quota.All(), Stats: s.stats.Export()}
+	md := metadata{Version: 1, RoutingSecret: hex.EncodeToString(s.secret), Pool: exp, Quota: s.quota.All(), Stats: s.stats.Export(), MistralLayouts: s.mistralLayouts.export()}
 	if err := fsutil.WriteJSONCompactAtomic(filepath.Join(s.dataDir, "metadata.json"), md); err != nil {
 		s.metaDirty.Store(true)
 		return err

@@ -1,5 +1,15 @@
 # 执行计划
 
+## 只改号池布局恢复（2026-11-11，当前执行）
+
+- [x] 干净00ba86a源码三模型×JSON/SSE完整HTTP红回归复现交错序丢失，server1.776秒，无客户端新增字段；初fixture解码校准日志不当成真实红证据。
+- [x] 增量HMAC+逻辑块描述、精确scope、有界LRU/字节/TTL、已知歧义/超限/未知显式处理；只恢复匹配的扁平历史。
+- [x] 接入原identity之后的prepare及JSON/SSE原生响应观察，逐帧flush、工具/usage、重试/账号健康、其他池原行为保持。
+- [x] metadata有签名派生checkpoint/分钟合并/正常退出强刷/恢复校验；无正文/私有身份入新增状态/日志。
+- [x] 定向Mistral/metadata/绑定/identity回归14.196秒、相关race4.794秒，server vet/cmd build通过；真实本地HTTP JSON+SSE/工具/重启/隐私/隔离/界限覆盖，不跑无关全仓或付费推理。
+- [x] spec/mistral-layout.md及相关spec/文档/验证记录更新；只提交本轮代码/任务资料，明确有限状态和未知旧历史边界。
+- [ ] 新增派生持久化字段的OVH发布/短重启与迁移预检未执行，生产推理0；代码完成不冒称部署。核心GLM缓存任务不结案。
+
 ## US三模型请求与Flash250K复测（2026-11-10 UTC21:12–21:22）
 
 - [x] US目录200/21模型仅Flash，GLM5.3/DS精确模型GET均404 invalid_model/code1500，只读告知不可用，不做无效长会话/别名探测/global-EU回退，未冒称US三模型完成。

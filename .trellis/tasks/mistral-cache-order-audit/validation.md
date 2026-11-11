@@ -1,5 +1,11 @@
 # 验证与交付状态
 
+## 最新：只改Mistral号池的逻辑布局恢复（2026-11-11，本地完成，未部署）
+
+用户明确禁止客户端配合并要求继续。只在三精确推理模型Chat新增有界类型/长度/固定闭合枚举/私有HMAC状态，不留正文/思考/工具或原始会话；scope隔离与完整两字符串匹配恢复逻辑交错顺序，HMAC/粘性/缓存键不改。JSON/SSE均保持普通双scalar兼容返回、首帧即时flush；正常重启派生签名checkpoint恢复。已知歧义/过期/超限本地400零attempt；旧/缺失/改字/淘汰记录明确legacyUnknown，不能凭空补回或承诺永久、原网络分帧/JSON字节级无损及缓存提升。
+
+干净线上00ba86a+本轮6Go文件隔离验证：三模型×JSON/SSE真实HTTP红1.776秒后绿；最终Mistral/metadata/绑定/identity等定向14.196秒、相关race4.794秒，server vet/cmd build/gofmt/diff通过。新增真实HTTP客户端仅两个scalar回传、增长前缀/HMAC、Server重建后HTTP恢复、签名隐私/作用域/TTL/LRU/字节/节点/多并发、已知同文异序、失败流及万帧有界测试。未跑无关全仓/付费生成、未部署或修改生产配置；新持久化字段上线需要备份/断网迁移预检，回退不覆盖新写入。实现与边界详research/server-layout-20261111.md，核心缓存仍不结案。
+
 ## 最新：US三模型请求与Flash≥250K×20轮（2026-11-10 UTC21:12–21:22）
 
 US目录200/21模型仅Flash，GLM5.3/DS单模型GET404 invalid_model/1500，未做其US长会话、不把EU/global替代或宣称三者成功。仅Flash使用92cc0d7同镜像新隔离US实例/Session/Key，2次只读计数可能预热已披露，首轮实际258027→280043，20/20成功/自然stop/单attempt，同号/代理/亲和与全部旧消息保留，每轮实际US Host、Reader=prepare=client、同HTTP2/ALPN h2；41消息思考答案哈希/末轮历史/完整usage核验通过。

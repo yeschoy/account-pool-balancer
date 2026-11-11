@@ -1,5 +1,16 @@
 # 设计
 
+## 只改Mistral号池的布局恢复（2026-11-11，用户已定范围）
+
+- 复用现有请求identity→prepare→attempt→逐事件响应链路，不新增调度器，不改真实路由HMAC。仅三个精确推理模型的Chat路径；其他模型/协议/池原字节保持。
+- 独立domain-separated HMAC由现有持久化secret派生。作用域含下游Key ID/凭据hash、group、原identity fingerprint、模型与Mistral base；布局匹配键含完整answer/reasoning分别增量HMAC。无原始身份/文本入记录。
+- 每个响应choice捕获有界块描述：text字节数、thinking嵌套text分段字节数、closed与空signature枚举。SSE相邻跨帧同类型续片合成逻辑块，closed后不得合并；同帧显式分段保留。逐帧即时转发、不缓冲整流，捕获只hash/计长度。非流保留原生块分段；不声称重建原JSON转义/空白或网络分帧。
+- 成功JSON或SSE原生finish_reason/DONE完成后，将布局存入mutex保护LRU：8192条、16MiB、单记录32KiB、512块/分段、最长24h（命中续期）。超限只留私有不可恢复标记，不保存截断布局；并发同键同布局幂等，不同布局变ambiguous，拒绝重建。
+- prepare后用原请求识别扁平assistant（原生thinking历史保持）；从prepared严格plain chunks取得完整两字符串，命中后按UTF-8边界无损分片重建，仅替换content，不动message/tools/其他根字段。真实注解/未知内容保持原验证，不能被布局重建消掉。known expired/unavailable/ambiguous本地400、零上游/零健康处罚。
+- 缺失/外部历史/被LRU回收或原生上游自身只有两个scalar时，保留原兼容策略但显式legacy_unknown，响应X-Mistral-Layout技术头和requestLog.mistralLayout报告计数，绝不宣称这些历史已恢复。旧丢失信息无法逆推；状态有限，不承诺永久保序/缓存命中。
+- metadata.json新增可选mistralLayouts派生checkpoint，签名绑定记录内容、校验长度/枚举/容量/版本，深拷贝快照，复用现有一分钟合并写入与正常退出强刷。失败写入沿现有metaDirty重试，崩溃可能损失末次未刷记录；正常重启恢复，签名错误不接受。旧版严格reader降级需备份并只移除此派生字段，不覆盖用户data。
+- 不保存原生响应正文、提示/思考、工具、Cookie/Key/会话值；只短暂使用原有当前事件/请求内存。HMAC/tag和checkpoint不得进入业务日志/技术头，日志仅bounded枚举/计数。
+
 ## 最新授权最小HTTP诊断（2026-11-10）
 
 复用既有cacheAudit，不新开日志服务/UI/持久化设置。只在目标Key受预算保护的attempt中添加脱敏requestHTTP/responseHTTP、实际header trace观测标记、HTTP协议/TLS ALPN与最后原生usage。WroteHeaderField与旧wire detail钩子组合不覆盖；现有Reader/GetBody HMAC/写入/连接/trace保持。正文不落盘，未知头/会话/亲和值仅随机HMAC，凭据/Cookie值掩码，有限Cookie名可见；普通技术头白名单且强制已知敏感值替换。完整usage计数/未知数值/大数保留，任意字符串和不安全字段名脱敏，8KiB/256节点/8层/64条目等边界明确truncated/sanitized；不改实际SSE/JSON或费用统计。
