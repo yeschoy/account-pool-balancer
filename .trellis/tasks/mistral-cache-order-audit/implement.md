@@ -1,5 +1,12 @@
 # 执行计划
 
+## 3051最小修复或回退（2026-11-11 UTC17:30）
+
+- [x] 用户授权继续修复、不行回滚；既有错误完整模板精确确认为code3051/Expected at most one leading ThinkChunk，capture将closed=true的连续流token错误拆成5–248块。
+- [x] 本地600帧closed=true及旧168块checkpoint红回归；修复跨帧续片/旧checkpoint相邻thinking合并、不跨真实text；缺失描述只标unrecovered不伪恢复或阻断。
+- [x] 相关normal1.620秒/race2.386秒、vet/build通过，无无关全仓/生产推理。
+- [ ] 按当前46a9b8f干净补丁发布/完整备份/双入口与公网验收，自然流量观察须出现恢复请求成功且无3051；失败或无法及时验证就回滚00ba86a，保留最新data和旧422修复。
+
 ## 只改号池布局恢复（2026-11-11，当前执行）
 
 - [x] 干净00ba86a源码三模型×JSON/SSE完整HTTP红回归复现交错序丢失，server1.776秒，无客户端新增字段；初fixture解码校准日志不当成真实红证据。

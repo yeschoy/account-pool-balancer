@@ -15,9 +15,9 @@
 ## 3. 能保证和不能保证
 
 - 已捕获、同scope、完整文字及空白完全匹配、记录有效且无已知歧义时，恢复text/thinking逻辑交错顺序、分段长度、closed及空signature元数据；所有UTF-8切片必须完整消费两个字符串。不得trim或模糊匹配，不能从记录恢复被客户端删除的思考。
-- JSON保存观察到的原生块/嵌套text分段。SSE将相邻同类型跨帧续片合为逻辑块（thinking遇closed=true后不再合并），同帧显式分段保留；这是逻辑内容重建，**不恢复原网络分帧、原JSON属性次序/转义/排版，也无法知道供应商未公开的内部块边界**。不把该功能说成字节级原样重放或token前缀/缓存保证。
+- JSON保存观察到的原生块/嵌套text分段。SSE将相邻同类型跨帧续片合为逻辑块（closed=true是响应片段元数据，不阻止后续连续思考续片；3051证据要求请求至多一个leading ThinkChunk），同帧显式分段保留；这是逻辑内容重建；render还必须把旧checkpoint相邻thinking连续文本合并，不能把流帧当多个request块。此规则只在相邻思考内合并，不跨真实正文、不重排。**不恢复原网络分帧、原JSON属性次序/转义/排版，也无法知道供应商未公开的内部块边界**。不把该功能说成字节级原样重放或token前缀/缓存保证。
 - 旧会话、外部历史、客户端改字/删思考、无可靠identity、未捕获/被LRU回收的布局无法逆推出。保留既有兼容并显式`legacyUnknown`，不冒称这些记录已恢复。上游自身只有两个scalar也记unknown；不得自行断言其原来一定thinking在前。没有客户端响应标识，scope+完整文字匹配也不是不可伪造的原响应归属证明：未观察到的同文不同布局无法检测，不能宣称覆盖任意导入历史或绝对无歧义。
-- 同scope相同两个字符串但原生布局不同，无客户端标识就不可区分：保留ambiguous标记，本地400 `mistral_layout_unavailable`，零上游尝试、零健康处罚、不靠后到记录覆盖。已知记录过期或捕获超限同样明确拒绝；原生权威历史不受阻。
+- 同scope相同两个字符串但原生布局不同，无客户端标识就不可区分：保留ambiguous标记，本地400 `mistral_layout_unavailable`，零上游尝试、零健康处罚、不靠后到记录覆盖。已知过期仍明确拒绝；capture超限只留unavailable标记时，明确legacyUnknown+unrecovered并沿旧兼容（不标restored），不能让没有描述的派生缓存阻断原可用请求；新完整capture可替换unavailable。原生权威历史不受阻。
 - 真实非空引用/未知内容不得因重建被删除；非plain内容沿原验证并记unknown。只支持原有可表达的plain text/thinking与固定元数据，供应商真实非空签名仍沿原兼容错误，不伪造。
 
 ## 4. 状态、持久化与隐私
@@ -36,5 +36,6 @@
 ## 6. 必要验证
 
 - `mistral_layout_test.go`：三模型×JSON/SSE真实本地HTTP→原客户端两个scalar→下一轮HTTP，无carrier；text→thinking→text、空白/UTF-8、nested parts/closed/null signature、tools/顺序/图片外历史/大数保持；增长历史中的旧恢复字节稳定、X-Affinity与原HMAC稳定。
+- `mistral_layout_3051_test.go`：真实HTTP上游按3051验证至多一个leading ThinkChunk；600帧closed=true只保留一个逻辑块，旧168片段checkpoint不清空即可恢复/新capture等价，无思考文本丢失。
 - `mistral_layout_state_test.go`：Key凭据/ID/group/session/model/协议隔离，未识别identity无全局scope；正常Server重建经真实HTTP恢复、checkpoint不含原文/身份、签名/篡改拒绝、深拷贝；TTL/续期、LRU/字节/节点超限、同文不同布局明确400零attempt、native权威不误拒、旧历史明确unknown；流首帧及时flush、失败/未完成流无可用checkpoint、万帧续片有界、并发capture/get/export race。
 - 保留Mistral422空注解、legacy/native去重、图片/推理档位、SSE错误/usage/flush、原HMAC/绑定/隐私与metadata回归。不为此追加生产推理或重放用户私密历史。

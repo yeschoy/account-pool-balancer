@@ -129,8 +129,8 @@ func TestMistralLayoutLimitsTTLAndAmbiguity(t *testing.T) {
 	if log.CaptureUnavailable != 1 {
 		t.Fatal("layout node budget not enforced")
 	}
-	if _, _, err := s.get(s.textKey("oversized", strings.Repeat("x", mistralLayoutParts+1), "")); !errors.Is(err, errMistralLayout) {
-		t.Fatal("oversized layout was truncated and reused")
+	if r, hit, err := s.get(s.textKey("oversized", strings.Repeat("x", mistralLayoutParts+1), "")); err != nil || hit || r.State != "unavailable" {
+		t.Fatal("missing descriptor was guessed/restored or blocked existing compatibility")
 	}
 	// Ten thousand transport fragments are one logical text run, not an
 	// unbounded descriptor per SSE frame. No body accumulation in capture.
