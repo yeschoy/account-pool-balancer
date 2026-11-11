@@ -356,6 +356,14 @@ func poolPathOK(provider, path string) bool {
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/responses/input_tokens" || path == "/v1/fim/completions" || path == "/v1/embeddings"
 	case config.ProviderTokenHarbor:
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
+	case config.ProviderModelStudio:
+		// Measured 2026-11-11: the Token Plan hosts serve Chat Completions
+		// (/compatible-mode/v1) and Anthropic Messages (/apps/anthropic).
+		// Responses is explicitly unsupported upstream (Coding Plan FAQ:
+		// "不支持 OpenAI Responses API"), so it is refused here rather than
+		// translated into a protocol the upstream does not speak. The model
+		// listing is a real catalogue endpoint and is served too.
+		return path == "/v1/chat/completions" || path == "/v1/messages" || path == "/v1/models"
 	case config.ProviderPerch:
 		return perchPath(path)
 	case config.ProviderRiver:
@@ -1462,7 +1470,16 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if ocTo != "" {
 		targetPath = opencode.Path(ocTo)
 	}
-	target := cfg.InferenceBase(acct, string(ocTo)) + targetPath
+	// The protocol base is about the protocol the caller used. OpenCode's
+	// protocol override re-points the request at a different endpoint of the
+	// same family, but the pool's host only depends on what the client asked
+	// for: a Model Studio Messages call must go to its Anthropic host, not to
+	// the OpenAI-compatible one.
+	protoForBase := proto
+	if ocTo != "" {
+		protoForBase = string(ocTo)
+	}
+	target := cfg.InferenceBase(acct, protoForBase) + targetPath
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
@@ -1515,6 +1532,18 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// Ollama's /v1/messages explicitly refuses x-api-key on its own, and
 		// Modal authenticates a proxy token in Authorization only: neither
 		// wants the Anthropic header, so never send it
+	case config.ProviderModelStudio:
+		// The Anthropic-compatible endpoint authenticates with x-api-key
+		// (measured 2026-11-11: Bearer is not honoured there). A client that
+		// sent its own Authorization would otherwise hand the upstream a
+		// second, foreign credential, so it is dropped with the swap.
+		if proto == "anthropic" {
+			req.Header.Del("Authorization")
+			req.Header.Set("X-Api-Key", acct.RuntimeKey)
+			if req.Header.Get("Anthropic-Version") == "" {
+				req.Header.Set("Anthropic-Version", "2023-06-01")
+			}
+		}
 	default:
 		if proto == "anthropic" {
 			req.Header.Set("X-Api-Key", acct.RuntimeKey)

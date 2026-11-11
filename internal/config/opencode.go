@@ -176,6 +176,11 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 			return base
 		}
 	}
+	// Model Studio serves Chat Completions and Anthropic Messages on
+	// different roots of the same plan host (see ModelStudioEndpoint).
+	if a.Provider == ProviderModelStudio {
+		return c.ModelStudioInferenceBase(a, protocol)
+	}
 	return c.RuntimeBase(a)
 }
 
@@ -191,6 +196,19 @@ func (c *Config) ForProvider(provider string) *Config {
 		}
 		if c.Mistral.Quota != nil {
 			out.Quota = *c.Mistral.Quota
+		}
+		return &out
+	case ProviderModelStudio:
+		// Model Studio has its own routing and quota blocks. Until the
+		// administrator saves them this pool inherits the global values,
+		// which (unlike Token Harbor) is the plain legacy behaviour: nothing
+		// here overrides sticky/busy policy.
+		out := *c
+		if c.ModelStudio.Routing != nil {
+			out.Routing = *c.ModelStudio.Routing
+		}
+		if c.ModelStudio.Quota != nil {
+			out.Quota = *c.ModelStudio.Quota
 		}
 		return &out
 	case ProviderOpenCodeZen:

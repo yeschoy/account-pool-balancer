@@ -60,6 +60,7 @@
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
       <button class="pool-tab" data-pool="mistral" role="tab">Mistral 号池</button>
       <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
+      <button class="pool-tab" data-pool="modelstudio" role="tab">百炼 Model Studio</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
@@ -653,6 +654,25 @@
           <label for="mistral-binding-capacity">本池会话绑定容量</label><input id="mistral-binding-capacity" type="number" min="0" max="1000000" step="1"><span></span><span class="hint">0沿用旧的全池共享4096条；1–1000000为Mistral独立LRU容量，与其他号池互不淘汰。不是每账号会话数或请求并发。缩容只淘汰未来路由偏好，不中断在途；大容量会增加内存和快照开销。</span>
           <label for="mistral-detail-log">Mistral 详情日志</label><label class="check"><input type="checkbox" id="mistral-detail-log">开启</label><span></span><span class="hint">仅控制本池请求/响应头体，凭据和会话脱敏，单体最多64KB；首次保存前继承原共享开关。日志保留/容量参数仍为全局共享，修改会影响其他池。</span></div>
         <h3>Mistral 本地资源保护</h3><p class="muted small">输入、适配后正文、非流式响应与排队SSE事件共用字节预算；实际预算还受Go软内存的1/3约束，不是进程硬内存上限，也不保证上游TPM。其他池原设置保持。采样只影响新正文详情，不关闭请求/错误摘要或删除历史。</p><div class="form" id="form-mistral-performance"></div>
+      </div>
+      <div class="panel hidden" id="modelstudio-settings">
+        <h2>百炼 Model Studio 独立设置</h2>
+        <p class="muted small">接入阿里云百炼（DashScope）。原生支持 OpenAI Chat Completions 与 Anthropic Messages；官方明确不支持 OpenAI Responses，本池本地拒绝而不做协议转换。Key 前缀决定套餐：<code>sk-sp-</code> 为 Token Plan（月度 Credits），<code>sk-</code> 为按量付费；两者域名不同，配错会 401。区域决定接入域名，Key 与区域不可混用。限流按阿里云主账号合并计算，同账号多个 Key 共享同一限额，不按 Key 累加。套餐额度只在官网控制台可见，本池额度显示为「未知（未接入控制台）」，不伪造余额。</p>
+        <div class="form">
+          <label for="ms-region">区域</label>
+          <select id="ms-region">
+            <option value="ap-southeast-1">新加坡（ap-southeast-1）</option>
+            <option value="cn-beijing">华北2（北京）</option>
+            <option value="us-east-1">美国（弗吉尼亚）</option>
+            <option value="eu-central-1">德国（法兰克福）</option>
+          </select>
+          <label for="ms-sync">目录刷新间隔（秒）</label><input id="ms-sync" type="number" min="0" max="86400">
+          <label for="ms-detail-log">本池详情日志</label><label class="check"><input type="checkbox" id="ms-detail-log">开启</label>
+          <span></span><span class="hint">目录刷新默认600秒；0关闭周期更新，首次校验与手动刷新仍读取 <code>/models</code>。目录读取同时是一次免费的 Key 校验。区域来自官方的各地域接入信息，不同区域的域名、Key 与模型列表相互独立。</span>
+        </div>
+        <h3>额度读取（未接入）</h3>
+        <p class="muted small" id="ms-console-state"></p>
+        <div class="form"><label for="ms-console-endpoint">控制台网关</label><input id="ms-console-endpoint" readonly><span></span><span class="hint">百炼 Token Plan 的 Credits 只在控制台「我的订阅」页面可见，没有公开的余额接口。控制台私有网关需要阿里云登录会话，且 API Key 无法反查所属账号，因此本池把额度标为未知而非 0。接入控制台会话前该字段只读。</span></div>
       </div>
       <div class="panel hidden" id="tokenharbor-settings">
         <h2>Token Harbor 独立设置</h2>

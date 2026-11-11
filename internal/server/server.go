@@ -267,7 +267,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
 	s.rebindPerch(next)
-	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -319,6 +319,16 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 		}
 		if a.Provider == config.ProviderTokenHarbor {
 			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.TokenHarbor.AccountInterval() != next.TokenHarbor.AccountInterval() {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderModelStudio {
+			// A key, route, plan or region change moves the catalogue host,
+			// so the old catalogue (and the auth verdict read with it) must
+			// not survive.
+			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL ||
+				old.ModelStudioPlan(o) != next.ModelStudioPlan(a) || old.RuntimeBase(o) != next.RuntimeBase(a) {
+				s.quota.Forget(a.ID)
 				s.quota.RefreshSession(a.ID)
 			}
 		}

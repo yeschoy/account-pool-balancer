@@ -877,6 +877,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 	if a.Provider == config.ProviderMistral {
 		return p.fetchMistral(ctx, p.Cfg(), a, true)
 	}
+	if a.Provider == config.ProviderModelStudio {
+		return p.fetchModelStudio(ctx, p.Cfg(), a, true)
+	}
 	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
 		// only the catalogue (and, for Ollama, the balance) can be read
 		p.mu.Lock()
@@ -974,6 +977,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchCatalogOnly(ctx, cfg, a)
 	case config.ProviderMistral:
 		return p.fetchMistral(ctx, cfg, a, false)
+	case config.ProviderModelStudio:
+		return p.fetchModelStudio(ctx, cfg, a, false)
 	case config.ProviderPerch:
 		return p.fetchPerch(ctx, cfg, a)
 	}

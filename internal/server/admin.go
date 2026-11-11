@@ -285,6 +285,12 @@ type accountView struct {
 	PerchRefreshFailed bool      `json:"perchRefreshFailed,omitempty"`
 	PerchLastError     string    `json:"perchLastError,omitempty"`
 	PerchLastErrorAt   time.Time `json:"perchLastErrorAt,omitzero"`
+	// ModelStudio accounts report their plan and an explicit Credits state:
+	// the upstream has no balance API for an inference key, so the console
+	// must show "unknown / not connected" rather than a fabricated number.
+	ModelStudioPlan       string `json:"modelStudioPlan,omitempty"`
+	ModelStudioQuotaState string `json:"modelStudioQuotaState,omitempty"`
+	ModelStudioQuotaNote  string `json:"modelStudioQuotaNote,omitempty"`
 }
 
 var proxyAuthRe = regexp.MustCompile(`//[^/@]*@`)
@@ -325,6 +331,13 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		if a.Provider == config.ProviderOpenCodeGo {
 			eg := s.goEgressView(cfg, a)
 			v.EgressIP, v.Egress = a.EgressIP, &eg
+		}
+		if a.Provider == config.ProviderModelStudio {
+			v.ModelStudioPlan = cfg.ModelStudioPlan(a)
+			// Credits are unknowable from an inference key (see
+			// quota.ModelStudioQuotaReason). Say so instead of showing 0.
+			v.ModelStudioQuotaState = quota.ModelStudioQuotaNotConnected
+			v.ModelStudioQuotaNote = quota.ModelStudioQuotaReason
 		}
 		if a.Provider == config.ProviderPerch {
 			v.PerchUserID, v.PerchRefreshFailed = a.PerchUserID, a.PerchRefreshFailed
@@ -369,6 +382,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 					q.Mistral = nil
 				}
 				v.QuotaFresh = q.FreshMistral(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
+			case config.ProviderModelStudio:
+				// only the catalogue is read; Credits stay unknown
+				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 			case config.ProviderModal:
 				// no quota endpoint: the Endpoint catalogue is all that is read
 				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
@@ -497,6 +513,12 @@ func (s *Server) apiCreateAccount(w http.ResponseWriter, r *http.Request) {
 	in.apply(&a)
 	// an Ollama key has no prefix to read the provider from: take it as given
 	a.Provider = config.ResolveProvider(a.Provider, a.RuntimeKey)
+	// "sk-" is shared by OpenDesign and Model Studio; settle it against the
+	// pool this deployment already runs before the account is created, so a
+	// dashscope key never silently lands in the OpenDesign pool
+	if p, ok := s.cfg.Get().ModelStudioKeyOwnership(a.Provider, a.RuntimeKey); ok {
+		a.Provider = p
+	}
 	if a.Group == "" {
 		a.Group = config.GroupForProvider(a.Provider)
 	}
@@ -607,6 +629,11 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		a.Provider = config.ResolveProvider(provider, a.RuntimeKey)
+		// provider:modelstudio on the line already settled it; otherwise the
+		// shared "sk-" prefix is settled against the pools in use
+		if p, ok := s.cfg.Get().ModelStudioKeyOwnership(a.Provider, a.RuntimeKey); ok {
+			a.Provider = p
+		}
 		if !config.ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
 			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行缺少运行密钥（OpenCode 请明确 provider 并粘贴完整 API Key；其他池保留原有格式）")
 			continue
@@ -823,6 +850,16 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 				model = "gpt-oss:20b"
 			case config.ProviderMistral:
 				model = "deepseek-v4-1-flash-1017"
+			case config.ProviderModelStudio:
+				// The plan decides which models exist (a Token Plan key gets
+				// "Model not exist." for anything outside its catalogue), so
+				// the account's own listing decides. Measured 2026-11-11:
+				// qwen3.8-flash is in the Token Plan catalogue and answers on
+				// both Chat Completions and Messages.
+				model = s.firstCatalogModel(a)
+				if model == "" {
+					model = "qwen3.8-flash"
+				}
 			case config.ProviderModal, config.ProviderTokenHarbor:
 				// Use the account catalog, never guess a model for these pools.
 				// a Modal model is an Endpoint hostname that differs per
@@ -1214,7 +1251,33 @@ type settingsDoc struct {
 	OpenCode    *config.OpenCode     `json:"opencode,omitempty"`
 	TokenHarbor *tokenHarborSettings `json:"tokenHarbor,omitempty"`
 	Mistral     *config.Mistral      `json:"mistral,omitempty"`
+	ModelStudio *modelStudioSettings `json:"modelStudio,omitempty"`
 }
+
+// modelStudioSettings is the projection of the Model Studio pool's own
+// settings. It carries no credential: the console reader (if it is ever
+// wired) never accepts a session through this endpoint.
+type modelStudioSettings struct {
+	Region        string            `json:"region"`
+	ModelSyncSec  int               `json:"modelSyncSec"`
+	DetailLog     bool              `json:"detailLog"`
+	PlanOverrides map[string]string `json:"planOverrides,omitempty"`
+	// Console reports the Credits reader's state; it is read-only here
+	// because the reader is not implemented (see quota.ModelStudioQuotaReason).
+	Console modelStudioConsoleView `json:"console"`
+}
+
+type modelStudioConsoleView struct {
+	Enabled          bool   `json:"enabled"`
+	Endpoint         string `json:"endpoint"`
+	State            string `json:"state"`
+	Reason           string `json:"reason"`
+	SubscriptionPath string `json:"subscriptionPath"`
+}
+
+// modelStudioSubscriptionPath is the private console gateway action that
+// would serve Credits once a session is bound (measured 2026-11-11).
+const modelStudioSubscriptionPath = "/data/api.json?action=zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription&product=bailian"
 
 func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg.Get()
@@ -1222,7 +1285,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults(), "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
@@ -1238,10 +1301,10 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
 		c.Upstream, c.Logs = in.Upstream, in.Logs
-		if prov != config.ProviderMistral {
+		if prov != config.ProviderMistral && prov != config.ProviderModelStudio {
 			c.Quota = in.Quota
 		}
-		if !config.StrictResponses(prov) && prov != config.ProviderMistral {
+		if !config.StrictResponses(prov) && prov != config.ProviderMistral && prov != config.ProviderModelStudio {
 			c.Routing = in.Routing
 		}
 		c.Pricing = in.Pricing
@@ -1283,6 +1346,27 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		case config.ProviderTokenHarbor:
 			c.TokenHarbor.Routing = &in.Routing
 			c.TokenHarborErrorRules, c.TokenHarborRetryRules = in.ErrorRules, in.RetryRules
+		case config.ProviderModelStudio:
+			if in.ModelStudio != nil {
+				// Reject an unknown region instead of silently falling back:
+				// a typo here changes which hosts (and keys) a pool talks to.
+				if err := config.ValidateModelStudioRegion(in.ModelStudio.Region); err != nil {
+					return err
+				}
+				c.ModelStudio.Region = strings.ToLower(strings.TrimSpace(in.ModelStudio.Region))
+				c.ModelStudio.ModelSyncSec = in.ModelStudio.ModelSyncSec
+				c.ModelStudio.DetailLog = in.ModelStudio.DetailLog
+				if in.ModelStudio.PlanOverrides != nil {
+					c.ModelStudio.PlanOverrides = in.ModelStudio.PlanOverrides
+				} else {
+					c.ModelStudio.PlanOverrides = map[string]string{}
+				}
+			}
+			// This pool's routing/quota are its own: writing them here must
+			// never touch another pool's block.
+			c.ModelStudio.Quota = &in.Quota
+			c.ModelStudio.Routing = &in.Routing
+			c.ModelStudioErrorRules, c.ModelStudioRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderOpenCodeZen:
 			c.OpenCode.ZenRouting = &in.Routing
 			c.OpenCode.ZenErrorRules, c.OpenCode.ZenRetryRules = in.ErrorRules, in.RetryRules

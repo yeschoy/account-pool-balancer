@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio:
 		return provider
 	}
 	return DefaultGroup
@@ -136,7 +136,7 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
@@ -153,6 +153,10 @@ func ProviderForKey(key string) string {
 		return ProviderModal
 	case strings.HasPrefix(key, TokenHarborKeyPrefix):
 		return ProviderTokenHarbor
+	case strings.HasPrefix(key, ModelStudioTokenPlanKeyPrefix):
+		// A Token Plan / Coding Plan key. It is never an OpenDesign key, and
+		// testing it first keeps "sk-sp-" from falling into the "sk-" case.
+		return ProviderModelStudio
 	case strings.HasPrefix(key, "sk-"):
 		return ProviderOpenDesign
 	}
@@ -199,6 +203,10 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 		return strings.HasPrefix(key, PerchKeyMarker) && len(key) > len(PerchKeyMarker)
 	case ProviderTokenHarbor:
 		return strings.HasPrefix(key, TokenHarborKeyPrefix) && len(key) > len(TokenHarborKeyPrefix) && openCodeTokenRe.MatchString(key)
+	case ProviderModelStudio:
+		// "sk-" metered or "sk-sp-" subscription; the rest is opaque, so only
+		// the shape Model Studio documents is enforced.
+		return (strings.HasPrefix(key, ModelStudioKeyPrefix) || strings.HasPrefix(key, ModelStudioTokenPlanKeyPrefix)) && len(key) > len(ModelStudioKeyPrefix) && openCodeTokenRe.MatchString(key)
 	default:
 		return strings.HasPrefix(key, "sk-")
 	}
@@ -227,13 +235,74 @@ func ResolveProvider(declared, key string) string {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
-	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral:
+	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral, ProviderModelStudio:
 		return inferred
 	}
 	if declared == "" {
 		return ProviderOpenDesign
 	}
 	return declared
+}
+
+// ModelStudioKeyOwnership decides whether a bare Model Studio key ("sk-…",
+// not OpenDesign's own "sk-amr-…") belongs to the ModelStudio pool.
+//
+// Both pools issue "sk-" keys, so a prefix alone cannot tell them apart.
+// The rule is explicit and never silently re-homes an account:
+//
+//   - declared provider wins for every key, so an administrator who names
+//     modelstudio gets modelstudio;
+//   - a "sk-sp-" key is Model Studio only — Token Plan/Coding Plan issue
+//     nothing else under that prefix, and OpenDesign never does;
+//   - a bare "sk-" key is only inferred as Model Studio when the config
+//     already holds a ModelStudio group or account of the same name, i.e. the
+//     operator has opted this deployment into the pool.
+//
+// It returns the settled provider and whether it is Model Studio.
+func (c *Config) ModelStudioKeyOwnership(declared, key string) (string, bool) {
+	if declared == ProviderModelStudio {
+		return ProviderModelStudio, true
+	}
+	if strings.HasPrefix(key, "sk-amr-") {
+		return declared, false
+	}
+	if !ModelStudioBareSKKey(key) {
+		return declared, false
+	}
+	optedIn := false
+	if declared != "" && declared != ProviderOpenDesign {
+		// Another pool declared explicitly (river, ollama, …): its own
+		// validation decides whether that key is acceptable.
+		return declared, false
+	}
+	if c != nil {
+		optedIn = c.hasModelStudioPool()
+	}
+	if strings.HasPrefix(key, ModelStudioTokenPlanKeyPrefix) || optedIn {
+		return ProviderModelStudio, true
+	}
+	return declared, false
+}
+
+// hasModelStudioPool reports whether any account or group already belongs to
+// the Model Studio pool.
+func (c *Config) hasModelStudioPool() bool {
+	for _, a := range c.Accounts {
+		if a.Provider == ProviderModelStudio || a.Group == ModelStudioGroup {
+			return true
+		}
+	}
+	for _, k := range c.ClientKeys {
+		if k.Provider == ProviderModelStudio {
+			return true
+		}
+	}
+	for _, k := range c.ImportKeys {
+		if k.Provider == ProviderModelStudio {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeKeyError is the hint for a key its declared provider can't accept.
@@ -253,6 +322,8 @@ func runtimeKeyError(provider string) string {
 		return "a Perch account has no API key; import its session JSON instead"
 	case ProviderTokenHarbor:
 		return "runtime key must be a Token Harbor key thk_live_…"
+	case ProviderModelStudio:
+		return "runtime key must be a Model Studio key sk-… (按量付费) or sk-sp-… (Token Plan)"
 	default:
 		return "runtime key must start with sk-amr- (or rv_ for River, oll- for Ollama, wk- for Modal)"
 	}
@@ -277,6 +348,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.PerchErrorRules, c.PerchRetryRules
 	case ProviderTokenHarbor:
 		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
+	case ProviderModelStudio:
+		return c.ModelStudioErrorRules, c.ModelStudioRetryRules
 	}
 	return c.ErrorRules, c.RetryRules
 }
@@ -304,6 +377,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultPerchErrorRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborErrorRules()
+	case ProviderModelStudio:
+		return rules.DefaultModelStudioErrorRules()
 	}
 	return rules.DefaultErrorRules()
 }
@@ -330,6 +405,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultPerchRetryRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborRetryRules()
+	case ProviderModelStudio:
+		return rules.DefaultModelStudioRetryRules()
 	}
 	return rules.DefaultRetryRules()
 }
@@ -435,6 +512,11 @@ func (c *Config) RuntimeBase(a Account) string {
 			return strings.TrimRight(strings.TrimSpace(c.TokenHarbor.BaseURL), "/")
 		}
 		return "https://tokenharbor.ai/v1"
+	case ProviderModelStudio:
+		// Plan and region decide the host; see ModelStudioInferenceBase for
+		// the per-protocol (Anthropic) variant.
+		openAI, _ := c.ModelStudio.EndpointsFor(c.ModelStudioPlan(a))
+		return openAI
 	}
 	return c.Upstream.RuntimeBase
 }
@@ -959,6 +1041,11 @@ type Config struct {
 	Mistral               Mistral           `json:"mistral"`
 	MistralErrorRules     []rules.ErrorRule `json:"mistralErrorRules"`
 	MistralRetryRules     []rules.RetryRule `json:"mistralRetryRules"`
+	// ModelStudio* are the Alibaba Cloud Model Studio pool's own settings and
+	// rules, isolated from every other pool.
+	ModelStudio           ModelStudio       `json:"modelstudio"`
+	ModelStudioErrorRules []rules.ErrorRule `json:"modelStudioErrorRules"`
+	ModelStudioRetryRules []rules.RetryRule `json:"modelStudioRetryRules"`
 	Logs                  Logs              `json:"logs"`
 	Pricing               pricing.Config    `json:"pricing"`
 }
@@ -1008,6 +1095,9 @@ func Default() *Config {
 		Mistral:               DefaultMistral(),
 		MistralErrorRules:     rules.DefaultMistralErrorRules(),
 		MistralRetryRules:     rules.DefaultMistralRetryRules(),
+		ModelStudio:           DefaultModelStudio(),
+		ModelStudioErrorRules: rules.DefaultModelStudioErrorRules(),
+		ModelStudioRetryRules: rules.DefaultModelStudioRetryRules(),
 		Pricing:               pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
 		Logs:                  Logs{RetentionDays: 7, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
@@ -1398,6 +1488,9 @@ func (c *Config) Normalize() error {
 	if err := c.normalizeTokenHarbor(); err != nil {
 		return err
 	}
+	if err := c.normalizeModelStudio(); err != nil {
+		return err
+	}
 	if err := c.OpenCode.normalize(); err != nil {
 		return err
 	}
@@ -1728,13 +1821,13 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
-		nested.TokenHarbor.Routing, nested.Mistral.Routing = nil, nil
+		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing = nil, nil, nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)
@@ -1916,7 +2009,7 @@ func Mask(key string) string {
 		return ""
 	}
 	prefix := ""
-	for _, p := range []string{"vela_ctrl_", "sk-amr-", "sk-", RiverKeyPrefix, OllamaKeyPrefix, ModalKeyPrefix, MistralKeyPrefix} {
+	for _, p := range []string{"vela_ctrl_", "sk-amr-", "sk-sp-", "sk-", RiverKeyPrefix, OllamaKeyPrefix, ModalKeyPrefix, MistralKeyPrefix} {
 		if strings.HasPrefix(key, p) {
 			prefix = p
 			break

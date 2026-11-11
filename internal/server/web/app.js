@@ -10,11 +10,11 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'perch', 'opencode-zen', 'opencode-go'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'perch', 'opencode-zen', 'opencode-go'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
@@ -23,10 +23,11 @@ const isOpenDesign = () => pool === 'opendesign';
 const isOpenCode = () => pool === 'opencode-zen' || pool === 'opencode-go';
 const isTokenHarbor = () => pool === 'tokenharbor';
 const isMistral = () => pool === 'mistral';
-const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral();
+const isModelStudio = () => pool === 'modelstudio';
+const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio();
 const keyNeedsProvider = () => isOllama() || managedKeyPool();
 const RT_HINT = { opendesign: 'sk-amr-…', river: 'rv_…', ollama: 'ollama.com/settings/keys 签发的 key 原样粘贴',
-  mistral: 'Mistral API Key（原样粘贴，支持 mstrl_…）', tokenharbor: 'thk_live_…（Token Harbor API Key）', modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
+  mistral: 'Mistral API Key（原样粘贴，支持 mstrl_…）', tokenharbor: 'thk_live_…（Token Harbor API Key）', modelstudio: 'sk-sp-…（Token Plan）或 sk-…（按量付费），完整粘贴', modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
 const withPool = (path) => path + (path.includes('?') ? '&' : '?') + 'provider=' + pool;
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -310,11 +311,12 @@ function renderPoolTabs() {
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
   $('#oc-batch [data-oc-batch="keys"]').classList.toggle('hidden', !isTokenHarbor());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
-    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', modelstudio: '套餐与额度', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
     mistral: '还没有 Mistral 账号。点「批量导入」粘贴 API Key，每行一个；或「手动添加」。',
+    modelstudio: '还没有百炼 Model Studio 账号。点「批量导入」粘贴 API Key（sk-sp-… 为 Token Plan，sk-… 为按量付费），每行一个；或「手动添加」。',
     river: '还没有 River 账号。点「批量导入」粘贴 rv_ 开头的 key，每行一个。',
     ollama: '还没有 Ollama 账号。点「批量导入」一行一个 key（ollama.com/settings/keys 签发，本池的 key 不要求前缀），或「手动添加」。',
     modal: '还没有 Modal 账号。点「批量导入」一行一个 Proxy Token（wk-<id>.ws-<secret>，modal.com/settings/proxy-auth-tokens 创建），或「手动添加」。',
@@ -592,8 +594,25 @@ function mistralQuotaHTML(a) {
   return text + '<div class="acc-sub">按百分比估算，非钱包余额；同组织同类预算共享，不按 Key 重复累加</div>';
 }
 
+function modelStudioQuotaHTML(a) {
+  // The upstream has no balance endpoint for an inference key: Credits live
+  // only on the console page behind a login session. The backend reports that
+  // state explicitly, so this shows "unknown / not connected" and never 0.
+  const plan = a.modelStudioPlan === 'tokenplan' ? 'Token Plan（月度 Credits）' : '按量付费（按 token 计费）';
+  const state = a.modelStudioQuotaState || 'not-connected';
+  const connected = state !== 'not-connected';
+  const cat = a.quota?.catalog ? Object.keys(a.quota.catalog).length : null;
+  let text = `<span class="badge ${connected ? 'ok' : 'warn'}">${esc(plan)}</span>`;
+  text += `<div class="acc-sub">余额：<b>${connected ? '已接入' : '未知（未接入控制台）'}</b></div>`;
+  if (!connected) text += `<div class="acc-sub">${esc(a.modelStudioQuotaNote || '百炼 Credits 只能在控制台「我的订阅」查看，API Key 无法反查所属账号。')}</div>`;
+  if (cat !== null) text += `<div class="acc-sub">模型目录 ${num(cat)} 个${a.quotaFresh ? '' : '（上次读取）'}</div>`;
+  if (a.quota?.catalogError) text += `<div class="acc-sub warn">目录读取失败：${esc(a.quota.catalogError)}</div>`;
+  return text;
+}
+
 function windowsHTML(a) {
   if (a.provider === 'opendesign') return openDesignQuotaHTML(a);
+  if (a.provider === 'modelstudio') return modelStudioQuotaHTML(a);
   if (a.provider === 'mistral') return mistralQuotaHTML(a);
   if (a.provider === 'tokenharbor') return tokenHarborQuotaHTML(a);
   if (a.provider === 'opencode-zen' || a.provider === 'opencode-go') return openCodeQuotaHTML(a);
@@ -936,7 +955,7 @@ $('#btn-import').addEventListener('click', async () => {
       ? `<p class="muted small">每行一个账号：<code>运行密钥[,名称[,代理URL]]</code>。Ollama 的 key 没有固定前缀，导入时整行按本池默认的 <code>provider=ollama</code> 处理；也可以在行首写 <code>provider:ollama</code> 明确指定。逗号、空格或制表符分隔，<code>#</code> 开头为注释。</p>`
       : `<p class="muted small">每行一个账号：<code>运行密钥[,控制密钥[,名称[,代理URL]]]</code>（<code>rv_</code> 开头的自动识别为 River 账号、<code>wk-</code> 开头的是 Modal 账号，都没有控制密钥），逗号、空格或制表符分隔，<code>#</code> 开头为注释。行首可写 <code>provider:ollama</code> / <code>provider:modal</code> 指定号池。</p>`;
   const ph = { opendesign: 'sk-amr-xxx,vela_ctrl_xxx,账号A\nrv_xxx,River-1\nwk-xxx.ws-yyy,Modal-1', river: 'rv_xxx,River-1',
-    mistral: 'mstrl_example_key,Mistral-1', tokenharbor: 'thk_live_example,TokenHarbor-1', ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1', 'opencode-zen': 'ZEN_API_KEY,zen-1', 'opencode-go': 'GO_API_KEY,go-1' }[pool];
+    mistral: 'mstrl_example_key,Mistral-1', tokenharbor: 'thk_live_example,TokenHarbor-1', modelstudio: 'sk-sp-example_key,百炼-1', ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1', 'opencode-zen': 'ZEN_API_KEY,zen-1', 'opencode-go': 'GO_API_KEY,go-1' }[pool];
   await modal({ title: '批量导入', wide: true,
     body: `${help}
       <textarea id="imp-text" class="code" rows="10" placeholder="${esc(ph)}"></textarea>
@@ -1360,6 +1379,13 @@ async function loadSettings() {
   settingsCache = await api('GET', withPool('/api/settings'));
   const s = settingsCache.settings;
   $('#mistral-settings').classList.toggle('hidden', !isMistral());
+  $('#modelstudio-settings').classList.toggle('hidden', !isModelStudio());
+  const ms = s.modelStudio || {};
+  $('#ms-region').value = ms.region || 'ap-southeast-1';
+  $('#ms-sync').value = ms.modelSyncSec ?? 600;
+  $('#ms-detail-log').checked = !!ms.detailLog;
+  $('#ms-console-endpoint').value = ms.console?.endpoint || '';
+  $('#ms-console-state').textContent = (ms.console?.state === 'not-connected' ? '状态：未接入控制台。' : '状态：' + (ms.console?.state || '未知') + '。') + (ms.console?.reason || '') + (ms.console?.subscriptionPath ? ' 预留接口：' + ms.console.subscriptionPath : '');
   $('#mistral-base').value = s.mistral?.baseUrl || 'https://api.mistral.ai/v1';
   $('#mistral-sync').value = s.mistral?.modelSyncSec ?? 600;
   $('#mistral-detail-log').checked = s.mistral?.detailLog ?? s.logs.detail;
@@ -1394,6 +1420,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  if (isModelStudio()) body.modelStudio = { region: $('#ms-region').value, modelSyncSec: Number($('#ms-sync').value), detailLog: $('#ms-detail-log').checked, planOverrides: (s.modelStudio && s.modelStudio.planOverrides) || {} };
   if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), detailLog: $('#mistral-detail-log').checked,
     bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance) };
   if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };

@@ -12,6 +12,9 @@ Read [Explicit saved API-key reads](tokenharbor-keys.md) before changing
 TokenHarbor Key reveal/copy or its admin credential boundary.
 Read [Registration profiles and workers](tokenharbor-registration-identity.md)
 for saved browser identities, completion order, task chronology and1–5 workers.
+Read [Model Studio contracts](modelstudio.md) before changing the 阿里云百炼 pool's
+plan×region host resolution, protocol allowlist, unknown-Credits projection or
+its independent error/retry rules.
 Read [Mistral quota and settings](mistral-quota.md) before changing Mistral budget reads, refresh/status projections, polling, routing or settings isolation.
 Read [Mistral capacity and resource admission](mistral-capacity.md) for independent session LRU, immutable indexes, hot-owner checks, byte/wait/deadline/Transport protections and sparse stats/log budgets. `docs/mistral-capacity.md` preserves pre-change research and separately reports implemented/local-tested changes; no deployment or real300M TPM certification is implied. Do not equate mock usage, larger binding limits or HTTP2 connection counts with verified production TPM.
 Read [Mistral adaptation](mistral.md) before changing Mistral cache hints,
