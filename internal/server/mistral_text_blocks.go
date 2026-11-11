@@ -4,7 +4,9 @@ import "bytes"
 
 // Only exact DeepSeek Chat calls this compatibility boundary. A standard
 // Anthropic performance hint is not a Mistral TTL promise; unknown hints stay
-// native. Complete a known empty assistant slot without deleting any block.
+// native. Empty assistant text annotations carry no citations and may be
+// omitted; meaningful/unknown annotations stay native. Complete a known empty
+// assistant slot without deleting any block.
 func mistralDeepSeekTextChunks(message *mistralWireObject, assistant bool) error {
 	content := message.get("content")
 	if len(content) == 0 || content[0] != '[' {
@@ -38,6 +40,18 @@ func mistralDeepSeekTextChunks(message *mistralWireObject, assistant bool) error
 			fields := len(chunk.fields)
 			if removedHint {
 				fields--
+			}
+			if assistant {
+				if err := chunk.unique("annotations"); err != nil {
+					return err
+				}
+				annotations := chunk.get("annotations")
+				if bytes.Equal(annotations, []byte("null")) || (len(annotations) >= 2 && annotations[0] == '[' && skipSpace(annotations, 1) == len(annotations)-1) {
+					// Exact-model evidence: even annotations:[] is forbidden on a
+					// native text chunk. Never discard real citations or metadata.
+					chunk.set("annotations", nil)
+					fields--
+				}
 			}
 			if assistant && fields == 1 && chunk.get("text") == nil {
 				chunk.set("text", []byte(`""`))
