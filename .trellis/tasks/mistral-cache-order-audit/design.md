@@ -1,5 +1,9 @@
 # 设计
 
+## 生产3051回归修复（2026-11-11 UTC17:30，用户授权修复否则回退）
+
+已精确匹配上游3051/Expected at most one leading ThinkChunk，现有checkpoint多达248个thinking；closed=true是流片段元数据，不能当作下一token必定新逻辑块。修复仅合并相邻thinking的连续文本（不跨非空text），capture跨帧不再以closed=true阻断；render对旧checkpoint相邻thinking也合并，保留文字/part顺序及最后closed/signature空枚举，真实text→thinking→text不移位。已因旧片段膨胀只留unavailable的记录无原文可重建，明确降为unrecovered计数、沿原兼容，不把它假标恢复，不再让这批派生缓存缺口阻断原本可用业务；expired/ambiguous仍fail closed。首轮用带168个closed=true片段的本地HTTP上游3051约束红绿及相关回归验证，随后最小发布按自然流量有界验收；出现恢复请求同类失败或无足够证据立即按授权回滚到00ba86a，备份最新data/仅移除派生字段，不自动重放生产请求。
+
 ## 只改Mistral号池的布局恢复（2026-11-11，用户已定范围）
 
 - 复用现有请求identity→prepare→attempt→逐事件响应链路，不新增调度器，不改真实路由HMAC。仅三个精确推理模型的Chat路径；其他模型/协议/池原字节保持。

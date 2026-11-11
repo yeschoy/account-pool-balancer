@@ -152,7 +152,7 @@ func (b *mistralLayoutBuilder) add(block mistralLayoutBlock, texts []string, con
 	}
 	if continuation && len(b.blocks) > 0 {
 		last := &b.blocks[len(b.blocks)-1]
-		if last.Kind == block.Kind && (last.Kind == "text" || last.Closed != 2) {
+		if last.Kind == block.Kind {
 			if block.Kind == "text" {
 				last.Bytes += block.Bytes
 			} else {

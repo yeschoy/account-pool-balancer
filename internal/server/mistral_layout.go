@@ -52,10 +52,11 @@ type mistralLayoutLog struct {
 	Native             int `json:"native"`
 	Captured           int `json:"captured"`
 	CaptureUnavailable int `json:"captureUnavailable"`
+	Unrecovered        int `json:"unrecovered,omitempty"` // known missing descriptor, old compatibility used
 }
 
 func (l *mistralLayoutLog) header() string {
-	return fmt.Sprintf("restored=%d; legacy_unknown=%d; native=%d", l.Restored, l.Unknown, l.Native)
+	return fmt.Sprintf("restored=%d; legacy_unknown=%d; native=%d; unrecovered=%d", l.Restored, l.Unknown, l.Native, l.Unrecovered)
 }
 
 type mistralLayouts struct {
@@ -127,7 +128,7 @@ func (s *mistralLayouts) put(r mistralLayoutRecord) {
 		old := el.Value.(mistralLayoutRecord)
 		// Identical visible strings do not identify a layout when two native
 		// layouts differ. Never select whichever response happened last.
-		if old.State == "ambiguous" || !sameMistralLayout(old, r) {
+		if old.State == "ambiguous" || old.State != "unavailable" && !sameMistralLayout(old, r) || old.State == "unavailable" && r.State != "" && r.State != "unavailable" {
 			r.State, r.Blocks = "ambiguous", nil
 		}
 		s.bytes -= mistralLayoutCost(old)
@@ -154,6 +155,7 @@ func (s *mistralLayouts) put(r mistralLayoutRecord) {
 func sameMistralLayout(a, b mistralLayoutRecord) bool {
 	a.Key, a.Expires, a.MAC = "", time.Time{}, ""
 	b.Key, b.Expires, b.MAC = "", time.Time{}, ""
+	a.Blocks, b.Blocks = mistralReplayBlocks(a.Blocks), mistralReplayBlocks(b.Blocks)
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return bytes.Equal(x, y)
@@ -167,10 +169,10 @@ func (s *mistralLayouts) get(key string) (mistralLayoutRecord, bool, error) {
 		return mistralLayoutRecord{}, false, nil
 	}
 	r := el.Value.(mistralLayoutRecord)
-	if r.State == "unknown" {
-		return r, false, nil
+	if r.State == "unknown" || r.State == "unavailable" {
+		return r, false, nil // no descriptor: explicitly use the old compatibility path
 	}
-	if !s.now().Before(r.Expires) || r.State == "unavailable" || r.State == "ambiguous" {
+	if !s.now().Before(r.Expires) || r.State == "ambiguous" {
 		return mistralLayoutRecord{}, true, errMistralLayout
 	}
 	// Old turns in an actively reused full history stay alive. This expiry is
@@ -301,6 +303,9 @@ func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *m
 				}
 				if !found {
 					log.Unknown++
+					if r.State == "unavailable" {
+						log.Unrecovered++
+					}
 				} else {
 					content, err := r.render(answer, thought)
 					if err != nil {
@@ -399,6 +404,35 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 	return a.String(), r.String(), true
 }
 
+// Response transport fragments (even closed=true) are not distinct request
+// ThinkChunks. Collapse adjacent thought runs without crossing real text or
+// changing any thought bytes; also repairs checkpoints from the first release.
+func mistralReplayBlocks(blocks []mistralLayoutBlock) []mistralLayoutBlock {
+	out := make([]mistralLayoutBlock, 0, len(blocks))
+	for _, b := range blocks {
+		b.Parts = append([]int(nil), b.Parts...)
+		if b.Kind == "thinking" && len(out) > 0 && out[len(out)-1].Kind == "thinking" {
+			last := &out[len(out)-1]
+			for i, n := range b.Parts {
+				if i == 0 && len(last.Parts) > 0 {
+					last.Parts[len(last.Parts)-1] += n
+				} else {
+					last.Parts = append(last.Parts, n)
+				}
+			}
+			if b.Closed != 0 {
+				last.Closed = b.Closed
+			}
+			if b.Signature != 0 {
+				last.Signature = b.Signature
+			}
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 func (r mistralLayoutRecord) render(answer, thought string) ([]byte, error) {
 	take := func(text *string, n int) (string, error) {
 		if n < 0 || n > len(*text) || !utf8.ValidString((*text)[:n]) {
@@ -408,8 +442,9 @@ func (r mistralLayoutRecord) render(answer, thought string) ([]byte, error) {
 		*text = (*text)[n:]
 		return part, nil
 	}
-	chunks := make([]json.RawMessage, 0, len(r.Blocks))
-	for _, b := range r.Blocks {
+	blocks := mistralReplayBlocks(r.Blocks)
+	chunks := make([]json.RawMessage, 0, len(blocks))
+	for _, b := range blocks {
 		var raw []byte
 		if b.Kind == "text" {
 			text, err := take(&answer, b.Bytes)
