@@ -260,7 +260,7 @@ const PERCH_PAGES = ['perch', 'paccounts', 'prequests', 'pregister', 'pautosignu
 // Token Harbor is a plain key pool with a registration machine of its own;
 // its pages live in tokenharbor.js.
 const TH_PAGES = ['thoverview', 'thregister', 'thsettings'];
-// Mistral 注册机（独立池，仅注册机页面）
+// Mistral registration belongs only to the Mistral pool.
 const MR_PAGES = ['mregister'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
@@ -269,6 +269,7 @@ const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, 
   mregister: () => loadMistralRegistrations() };
 function go(page) {
   if (!pages[page]) page = 'overview';
+  if (MR_PAGES.includes(page) && !isMistral()) page = pool === 'perch' ? 'perch' : 'overview';
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
   if (currentPage === 'mregister' && page !== currentPage) stopMistralPolling();
@@ -291,8 +292,8 @@ function renderPoolTabs() {
   // actually toggles visibility.
   $$('#nav a[data-page]').forEach((a) => {
     const page = a.dataset.page;
-    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page);
-    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page));
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page);
+    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page));
     a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
   });
@@ -302,6 +303,10 @@ function renderPoolTabs() {
   });
   $$('#nav [data-pool-nav="perch"]').forEach((el) => {
     el.classList.toggle('hidden', !isPerch);
+    el.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="mistral"]').forEach((el) => {
+    el.classList.toggle('hidden', !isMistral());
     el.removeAttribute('hidden');
   });
   document.title = POOL_LABEL[pool] + ' 账号池';
@@ -336,7 +341,7 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   $('#acc-group-filter').value = '';
   renderPoolTabs();
   // switching pools lands on that pool's first page
-  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : PROXY_PAGES;
+  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : PROXY_PAGES;
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });
@@ -1651,9 +1656,11 @@ function mistralKeySummary(keys) {
 }
 
 async function loadMistralRegistrations() {
+  if (!isMistral() || currentPage !== 'mregister') return;
   await loadMistralStatus();
   await loadMistralSettings();
   await loadMistralCandidates();
+  if (!isMistral() || currentPage !== 'mregister') return;
   stopMistralPolling();
   mistralPollTimer = setInterval(() => {
     loadMistralCandidates().catch(() => {});
