@@ -117,5 +117,5 @@ func (m Mistral) ModelInterval() int {
 // marker. It no longer governs administrator display, which the user explicitly
 // enabled; Mistral Responses remains stateless and has no server-side bindings.
 func WriteOnlyCredentials(provider string) bool {
-	return StrictResponses(provider) || provider == ProviderMistral
+	return StrictResponses(provider) || provider == ProviderMistral || provider == ProviderDeploy
 }

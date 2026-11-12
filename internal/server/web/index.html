@@ -60,6 +60,7 @@
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
       <button class="pool-tab" data-pool="mistral" role="tab">Mistral 号池</button>
       <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
+      <button class="pool-tab" data-pool="deploy" role="tab">Deploy 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
@@ -625,7 +626,7 @@
         <h2>开放导入接口（自动上号）</h2>
         <ol class="howto">
           <li><code>POST <span id="import-url"></span></code>，请求头 <code>Authorization: Bearer sk-odbimp-…</code>（或 <code>X-Import-Key</code>）。导入密钥只能导入账号，不能调用模型；下游密钥也不能导入。</li>
-          <li>请求体：<code>{"runtimeKey":"sk-amr-…","controlKey":"vela_ctrl_…","name":"账号名","group":"可选","note":"可选"}</code>；批量用 <code>{"accounts":[…]}</code>，每次最多 200 个。不填 <code>group</code> 时用导入密钥的默认分组。</li>
+          <li>请求体：<code id="import-example">{"runtimeKey":"sk-amr-…","controlKey":"vela_ctrl_…","name":"账号名","group":"可选","note":"可选"}</code>；批量用 <code>{"accounts":[…]}</code>，每次最多 200 个。不填 <code>group</code> 时用导入密钥的默认分组。</li>
           <li>没有重复的账号立即入池并启用，备注自动写入导入时间与所用密钥；运行密钥、控制密钥或名称与现有账号相同时进入「账号」页的暂存区（HTTP 202），由管理员确认覆盖、作为新账号添加或丢弃。完全相同的账号重复提交返回 <code>unchanged</code>。</li>
           <li>响应 <code>{"added","staged","unchanged","failed","results":[{"index","status","accountId","stageId","conflicts","error"}]}</code>；全部失败时 400，鉴权失败 401，同一 IP 鉴权连续失败 5 次后 60 秒内 429。</li>
         </ol>
@@ -634,7 +635,7 @@
       <div class="panel">
         <h2>在 new-api 中接入</h2>
         <ol class="howto">
-          <li>渠道类型选 <b>OpenAI</b>（Claude Code 走 <code>/v1/messages</code> 时可选 <b>Anthropic Claude</b>）。</li>
+          <li id="channel-protocol-guide">渠道类型选 <b>OpenAI</b>（Claude Code 走 <code>/v1/messages</code> 时可选 <b>Anthropic Claude</b>）。</li>
           <li>Base URL 填 <code id="base-url"></code>，密钥填这里新建的 <code>sk-odb-…</code>。</li>
           <li>模型列表可点 new-api 的「获取模型列表」，本服务会转发上游 <code>/v1/models</code>。</li>
           <li>打开渠道的「透传请求头」，让 <code>X-Claude-Code-Session-Id</code>、<code>Session_id</code> 等会话头到达本服务，实现会话粘性。没有会话头时按首条 system/user 消息做弱粘性。</li>
@@ -653,6 +654,19 @@
           <label for="mistral-binding-capacity">本池会话绑定容量</label><input id="mistral-binding-capacity" type="number" min="0" max="1000000" step="1"><span></span><span class="hint">0沿用旧的全池共享4096条；1–1000000为Mistral独立LRU容量，与其他号池互不淘汰。不是每账号会话数或请求并发。缩容只淘汰未来路由偏好，不中断在途；大容量会增加内存和快照开销。</span>
           <label for="mistral-detail-log">Mistral 详情日志</label><label class="check"><input type="checkbox" id="mistral-detail-log">开启</label><span></span><span class="hint">仅控制本池请求/响应头体，凭据和会话脱敏，单体最多64KB；首次保存前继承原共享开关。日志保留/容量参数仍为全局共享，修改会影响其他池。</span></div>
         <h3>Mistral 本地资源保护</h3><p class="muted small">输入、适配后正文、非流式响应与排队SSE事件共用字节预算；实际预算还受Go软内存的1/3约束，不是进程硬内存上限，也不保证上游TPM。其他池原设置保持。采样只影响新正文详情，不关闭请求/错误摘要或删除历史。</p><div class="form" id="form-mistral-performance"></div>
+      </div>
+      <div class="panel hidden" id="deploy-settings">
+        <h2>Deploy 独立设置</h2>
+        <p class="muted small">deploy.com 原生 Chat Completions（流式/非流式）；API 根必须包含 <code>/api/v1</code>，使用 Secret Key 而非 access_key。不转换 Responses / Messages，不自动注册、创建 Key、绑卡、充值或开启额外消费。目录成功不代表 Key 已 active 或有推理授权。</p>
+        <div class="form">
+          <label for="deploy-base">API Base（含 /api/v1）</label><input id="deploy-base" placeholder="https://api.deploy.com/api/v1" autocomplete="off">
+          <label for="deploy-sync">目录刷新间隔（秒）</label><input id="deploy-sync" type="number" min="0" max="86400">
+          <span></span><span class="hint">默认600秒；0关闭周期目录读取，首次及手动刷新仍可用；启用时60–86400秒。可按官方文档手动选定 SF/VA/CDN 根，不自动切换区域或账号代理。</span>
+          <label for="deploy-detail-log">本池详情日志</label><label class="check"><input id="deploy-detail-log" type="checkbox">开启</label>
+          <span></span><span class="hint">默认关闭，独立于其他池；采集请求/响应头体时沿用凭据/会话脱敏及大小限制，普通请求与错误摘要始终保留。日志保留/容量为全局共享，本池只读，保存不会修改其他池。</span>
+        </div>
+        <p id="deploy-quota-note" class="muted small" role="status"></p>
+        <p class="muted small">路由、目录轮询、模型缓存、连接上限、详细日志、价格表与错误/重试规则均独立保存。余额未知，因此不展示 OpenDesign 的钱包/套餐阈值；默认按在途最少选号，权重/优先级和账号并发/RPM 在账号页修改。默认429停止轮换且遵守 Retry-After；405组织暂停需人工检查余额或条款，不直接判零余额。</p>
       </div>
       <div class="panel hidden" id="tokenharbor-settings">
         <h2>Token Harbor 独立设置</h2>
@@ -676,10 +690,11 @@
           <div class="form" id="form-routing"></div>
         </div>
         <div class="panel">
-          <h2>额度轮询</h2>
+          <h2 id="quota-settings-title">额度轮询</h2>
           <div class="form" id="form-quota"></div>
           <h2 class="mt">日志</h2>
           <div class="form" id="form-logs"></div>
+          <p id="shared-log-note" class="hint hidden">以上是全局共享日志保留/容量，只读展示；Deploy 保存不更改它们。仅上方「本池详情日志」独立控制本池采集。</p>
           <p class="hint">业务日志默认保留7天，可配置1–365天；请求、错误、详细及各号池事件日志统一自动过期，磁盘最迟每10分钟清理一次。已有明确保留天数不会被升级覆盖。注册账号/会话、支付记录和备份不属于日志，不会删除。</p>
           <h2 class="mt">选号预览</h2>
           <div class="row">
@@ -703,7 +718,7 @@
           <div class="actions"><button class="btn ghost small" id="btn-default-rules">恢复默认规则</button><button class="btn small" id="btn-add-error-rule">添加规则</button></div></div>
         <div class="table-wrap"><table class="table rules-table" id="rules-error"><thead><tr><th>#</th><th>规则</th><th>命中条件</th><th>处理</th><th></th></tr></thead><tbody></tbody></table></div>
         <p id="rules-error-empty" class="empty hidden">没有错误规则：任何失败都只记降级样本。</p>
-        <div class="head-row mt"><h2>重试规则 <span class="muted small">命中后停止换号；账号冷却/隔离规则优先，已发送或流式输出的安全门不允许重放。错误/重试规则每池独立，上方标签切换</span></h2>
+        <div class="head-row mt"><h2>重试规则 <span class="muted small" id="rules-retry-note">命中后停止换号；账号冷却/隔离规则优先，已发送或流式输出的安全门不允许重放。错误/重试规则每池独立，上方标签切换</span></h2>
           <div class="actions"><button class="btn small" id="btn-add-retry-rule">添加规则</button></div></div>
         <div class="table-wrap"><table class="table rules-table" id="rules-retry"><thead><tr><th>#</th><th>规则</th><th>命中条件</th><th></th></tr></thead><tbody></tbody></table></div>
         <p id="rules-retry-empty" class="empty hidden">没有重试规则：失败后会一直换号直到用完重试次数。</p>

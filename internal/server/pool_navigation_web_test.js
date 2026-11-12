@@ -117,5 +117,7 @@ context.loadMistralCandidates = async () => {};
   context.loadMistralStatus = async () => { calls++; };
   await context.loadMistralRegistrations();
   assert.equal(calls, 0, 'other pools cannot directly load Mistral registration');
-  console.log('pool navigation web tests passed (10 pools, deep links, switching, polling)');
+  assert.ok(vm.runInContext('POOLS.includes("deploy")', context));
+  assert.match(html, /data-pool="deploy" role="tab">Deploy 号池/);
+  console.log(`pool navigation web tests passed (${vm.runInContext('POOLS.length', context)} pools, deep links, switching, polling)`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -14,6 +14,8 @@
 
 新增 **Mistral 号池**：复用 OpenDesign 调度策略与 Codex / Claude / pi 等会话头粘性，支持账号管理、批量导入、独立密钥/路由/错误规则，以及原生 Chat / 无状态 Responses / FIM / Embeddings。模型目录独立同步，已接入 Studio / Vibe 套餐额度与组织订阅刷新；额度为百分比推算的约值，不是钱包余额，失败/过期保留历史并标未知。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high；不跨协议转换。客户端实测边界见 [Mistral 接入](docs/mistral.md)。
 
+新增 **Deploy 号池**（deploy.com）：账号管理/批量导入、独立路由与错误/重试规则、模型目录同步、概览和日志；原生 Chat Completions（流式/非流式），保留工具与 reasoning，其他协议本地拒绝。组织余额需要独立控制台会话，当前未接入并明确显示未知。接入方法、真实测试与未部署边界见 [Deploy Balancer](docs/deploy-balancer.md)。
+
 单个 Go 二进制，无外部依赖，无数据库。
 
 ## 快速开始

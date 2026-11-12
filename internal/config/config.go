@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderDeploy:
 		return provider
 	}
 	return DefaultGroup
@@ -136,7 +136,7 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderDeploy}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
@@ -183,6 +183,8 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 	switch provider {
 	case ProviderRiver:
 		return strings.HasPrefix(key, RiverKeyPrefix)
+	case ProviderDeploy:
+		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
 	case ProviderMistral:
 		// Mistral also issues opaque keys; mstrl_ is only an inference hint.
 		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
@@ -223,7 +225,7 @@ func KnownProvider(p string) bool {
 func ResolveProvider(declared, key string) string {
 	// OpenCode credentials are opaque and can overlap sk-/other prefixes.
 	// Only an explicit declaration selects a tier; never infer it from a key.
-	if IsOpenCode(declared) || declared == ProviderMistral {
+	if IsOpenCode(declared) || declared == ProviderMistral || declared == ProviderDeploy {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
@@ -241,6 +243,8 @@ func runtimeKeyError(provider string) string {
 	switch provider {
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
 		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
+	case ProviderDeploy:
+		return "Deploy runtime key must be the 8..512 character secret (not access_key), without whitespace"
 	case ProviderMistral:
 		return "Mistral runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderRiver:
@@ -277,6 +281,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.PerchErrorRules, c.PerchRetryRules
 	case ProviderTokenHarbor:
 		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
+	case ProviderDeploy:
+		return c.DeployErrorRules, c.DeployRetryRules
 	}
 	return c.ErrorRules, c.RetryRules
 }
@@ -304,6 +310,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultPerchErrorRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborErrorRules()
+	case ProviderDeploy:
+		return rules.DefaultDeployErrorRules()
 	}
 	return rules.DefaultErrorRules()
 }
@@ -330,6 +338,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultPerchRetryRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborRetryRules()
+	case ProviderDeploy:
+		return rules.DefaultDeployRetryRules()
 	}
 	return rules.DefaultRetryRules()
 }
@@ -435,6 +445,11 @@ func (c *Config) RuntimeBase(a Account) string {
 			return strings.TrimRight(strings.TrimSpace(c.TokenHarbor.BaseURL), "/")
 		}
 		return "https://tokenharbor.ai/v1"
+	case ProviderDeploy:
+		if c.Deploy.BaseURL != "" {
+			return c.Deploy.BaseURL
+		}
+		return DeployDefaultBase
 	}
 	return c.Upstream.RuntimeBase
 }
@@ -959,6 +974,9 @@ type Config struct {
 	Mistral               Mistral           `json:"mistral"`
 	MistralErrorRules     []rules.ErrorRule `json:"mistralErrorRules"`
 	MistralRetryRules     []rules.RetryRule `json:"mistralRetryRules"`
+	Deploy                Deploy            `json:"deploy"`
+	DeployErrorRules      []rules.ErrorRule `json:"deployErrorRules"`
+	DeployRetryRules      []rules.RetryRule `json:"deployRetryRules"`
 	Logs                  Logs              `json:"logs"`
 	Pricing               pricing.Config    `json:"pricing"`
 }
@@ -1008,6 +1026,9 @@ func Default() *Config {
 		Mistral:               DefaultMistral(),
 		MistralErrorRules:     rules.DefaultMistralErrorRules(),
 		MistralRetryRules:     rules.DefaultMistralRetryRules(),
+		Deploy:                DefaultDeploy(),
+		DeployErrorRules:      rules.DefaultDeployErrorRules(),
+		DeployRetryRules:      rules.DefaultDeployRetryRules(),
 		Pricing:               pricing.Config{Models: pricing.Defaults(), Holidays: []string{}},
 		Logs:                  Logs{RetentionDays: 7, MaxRequests: 50000, MaxErrors: 10000, MaxTotalMB: 100, MaxDetails: 500, DetailBodyKB: 6144},
 	}
@@ -1398,6 +1419,9 @@ func (c *Config) Normalize() error {
 	if err := c.normalizeTokenHarbor(); err != nil {
 		return err
 	}
+	if err := c.normalizeDeploy(); err != nil {
+		return err
+	}
 	if err := c.OpenCode.normalize(); err != nil {
 		return err
 	}
@@ -1530,7 +1554,7 @@ func (c *Config) Normalize() error {
 		if !groupRe.MatchString(a.Group) {
 			return fmt.Errorf("accounts[%s]: invalid group", a.ID)
 		}
-		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup {
+		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup || a.Provider == ProviderDeploy || a.Group == ProviderDeploy {
 			for _, p := range Providers {
 				if p != a.Provider && GroupForProvider(p) == a.Group {
 					return fmt.Errorf("accounts[%s]: provider requires its own group", a.ID)
@@ -1728,13 +1752,13 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.Deploy.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
-		nested.TokenHarbor.Routing, nested.Mistral.Routing = nil, nil
+		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.Deploy.Routing = nil, nil, nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)

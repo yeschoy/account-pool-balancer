@@ -184,6 +184,11 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 func (c *Config) ForProvider(provider string) *Config {
 	var r *Routing
 	switch provider {
+	case ProviderDeploy:
+		out := *c
+		out.Routing, out.Quota = c.Deploy.EffectiveRouting(), c.Deploy.EffectiveQuota()
+		out.Pricing = c.Deploy.EffectivePricing()
+		return &out
 	case ProviderMistral:
 		out := *c
 		if c.Mistral.Routing != nil {
