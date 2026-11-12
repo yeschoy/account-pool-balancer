@@ -33,6 +33,7 @@ Mistral 使用现有 OpenDesign 调度器，不引入第二套选号或协议转
 - **已于2026-11-08 20:26 UTC随be14987部署验收**：Chat / Responses 生成请求缺少顶层 `prompt_cache_key` 时，按 `X-Prompt-Cache-Key` → `Prompt-Cache-Key` → 管理员额外会话头 → 父会话头 → 内置会话头的顺序，取第一个有效值直接填入，不做HMAC、不加前缀。空白、超过512字节或含控制字符的头跳过。客户端已有字段（包括显式null/空串）原样保留；没有有效头时才沿用 `apb-mistral-<现有身份HMAC>` 兜底，没有身份不随机生成。账号粘性和持久化绑定仍按分组与下游密钥做HMAC隔离，但直接发出的原值不做这种隔离；正文、上游详情及错误日志继续脱敏，来源字段只记录缓存头、会话头或HMAC兜底；管理员「客户端头」按最新授权展示收到的会话/缓存头原值。
 - `X-Affinity` 是独立HTTP头，不是额外会话机制：下游已传非空值时保留，否则复制最终非空 `prompt_cache_key`。它不反向覆盖正文缓存键，也不默认作为会话头。共享前缀与同一账号有利于缓存命中，但两个提示都不保证命中或锁定同一推理节点；缓存块64 tokens，官方缓存输入按普通输入价10%计费。
 - Chat 历史中的 assistant 顶层 `reasoning_content` 进行兼容：非空字符串转为 `content` 内原生 `thinking` 块（`thinking:[{type:"text",text:...}]`），原回答、已有内容块、工具调用/ID保留，再移除不支持的顶层字段；null/空串仅移除空字段。下表三种推理模型的 assistant 字符串 `reasoning` 也作为同义字段处理，同值合并、冲突/重复/不可表示的类型本地400，不丢弃思考或换号重试。Responses历史和其他池不做此转换。NewAPI的“思考转内容”是响应侧`<think>`文本转换，不等价。
+- **GLM developer 角色兼容（2026-11-12，本地已验证，未部署）**：现有DeepSeek的 `developer`→`system` 角色兼容扩展至精确 `zai-glm-5-3` / `zai-glm-5-3-flash` 的Chat，处理完整历史内的首条/后续消息及转义写法；仅换role值，不合并/移动/删除消息，不改指令内容、工具、数字或缓存键。真实Flash两次422已在既有NewAPI容器日志确认 `messages[0]` / `union_tag_invalid` / tag=developer；官方Chat只有system/user/assistant/tool。GLM5.3仅本地HTTP mock验证，不冒称真实推理验收。其他模型/协议/池不变，未知角色仍交上游明确拒绝，重复role本地拒绝。GLM不因此继承DeepSeek专属图片/文本块/seed/store等清理；上线仍需部署，未主动推理或重放原请求。
 - 对下表三种推理模型的 Chat，根 `reasoning:{"effort":...}` 兼容为 `reasoning_effort`，只接受含一个 effort 字段的对象；多余字段、重复字段、非法结构本地400，不丢弃 summary 等请求意图。`thinking:{"type":"enabled|disabled"}` / 布尔 `enable_thinking` 仅校验结构后移除，不压低有效档位或产生不支持的 none；未知预算/额外字段仍本地拒绝。
 - 按用户2026-11-09最新要求，三种模型的 Chat / Responses 均支持 `low` / `high` / `max`；**未传默认 high，显式 max 保留**，替代旧版DeepSeek max→high策略。null、空值、其他档位（none/medium/xhigh/minimal）或非法档位值类型沿用归一high策略。Chat使用 `reasoning_effort`，Responses使用原生 `reasoning.effort`；兼容两种写法，归一后同值合并、冲突拒绝。Responses的原生reasoning其他字段及完整input历史不丢弃，支持性仍由上游验证；不套用Chat专属思考开关清理。高档位可能增加思考用量和耗时，不自动增大输出预算。其他模型、FIM、input_tokens、其他池不套用该规则。
 - 同一精确 DeepSeek Chat 的 user 图片块中，先清除 NewAPI 泄漏的空内部 `MimeType:""/null`（已实测被上游以 `extra_forbidden` 拒绝），再将仅含 `url` 的 `image_url:{"url":"..."}` 对象转成原生字符串 `image_url:"..."`，支持 data URL，保留图片和原有文本/顺序；带 detail 等额外选项的对象保留这些选项，不丢弃语义，非空 MimeType 不擅自删除。其他模型/协议/号池不套用此转换。
@@ -150,7 +151,7 @@ Responses SSE识别`event:`和根`data.type`中的终态，首帧即`response.co
 | GLM 5.3 Flash | `zai-glm-5-3-flash` | low / high / max，缺省high |
 | Mistral Large 4 | `mistral-large-4-0` | 原生透传，不套用上述默认/归一策略；官方档位low / medium / high |
 
-NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道映射到实际上游ID；本轮不新增模型别名配置，不将Modal的`glm-5-3`短名冒充Mistral原生ID。DeepSeek专属的developer/store/图片/seed等适配不因公共思考控制而扩散到GLM/Large。
+NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道映射到实际上游ID；本轮不新增模型别名配置，不将Modal的`glm-5-3`短名冒充Mistral原生ID。DeepSeek专属的store/图片/seed等适配不因公共思考控制或developer角色兼容而扩散到GLM/Large；developer角色兼容的精确范围和本地/部署状态见上文。
 
 模型目录可见、协议Mock通过和真实客户端可用是不同验收层级；不能仅凭目录宣称四模型全部获得推理授权。
 

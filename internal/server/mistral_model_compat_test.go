@@ -145,7 +145,10 @@ func TestMistralGLMDoesNotInheritDeepSeekParameters(t *testing.T) {
 	for _, model := range []string{"zai-glm-5-3", "zai-glm-5-3-flash"} {
 		body := []byte(fmt.Sprintf(` {"model":%q,"reasoning_effort":"high","store":false,"seed":42,"verbosity":"high","logit_bias":{"1":1},"user":"native-label","messages":[{"role":"developer","content":"native"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png","MimeType":""}}]}]} `, model))
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
-		if err != nil || !bytes.Equal(out, body) {
+		// The instruction-role alias is shared, not DeepSeek's seed/store,
+		// image metadata, verbosity, logit-bias or user-label adaptation.
+		want := bytes.Replace(body, []byte(`"role":"developer"`), []byte(`"role":"system"`), 1)
+		if err != nil || !bytes.Equal(out, want) {
 			t.Fatalf("DeepSeek-only cleanup escaped scope: %s %s %v", model, out, err)
 		}
 	}
