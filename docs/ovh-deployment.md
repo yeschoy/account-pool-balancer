@@ -38,7 +38,18 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：GLM developer角色422兼容（2026-11-12 11:24 UTC，d94da97）
+## 当前部署：Mistral 注册机导航隔离（2026-11-12 19:43 UTC，b786d7c）
+
+- 用户授权「提交推送，然后清理，之后部署，不要做无用的测试」。业务提交 `db19d24` 已推送 master；从实际线上 `d94da97` 仅合入本轮 3 文件，发布分支 `release/mistral-nav-20261112` / **`b786d7c9c4ffc34d90d802d853f5a60ff3ee444d`** 已推送并部署，未带入主线未上线 ModelStudio 或其他窗口注册/指纹/Dockerfile/README/Essevin 修改。
+- Mistral 注册机入口及分隔标题仅在 Mistral 号池显示；其他池直接访问注册页回到本池概览；切走停止轮询，异步加载晚完成也不重启轮询。复用此前全部 10 池本地真实浏览器和导航回归结果，本轮不重跑测试、不发生产推理。
+- 一次预检旧版本 healthy/0 重启、Healthcheck/兼容别名/双内网入口正常、240.32 GiB 余量，旧工作树未构建或重置。从干净发布提交归档构建；新镜像就绪后干净停止旧进程，完整一致 data 备份经 gzip/SHA256 校验；沿线上 Compose 仅覆盖 image，保留用户、挂载、端口、网络、Healthcheck、资源及功能配置。
+- 初次验收因按数组顺序比较 Env 中止；只读续验确认环境变量映射完全相等，没有重建/重启。备份与线上配置比较仅数字 revision **5765→5766**，其余字段完全相等；**192 账号、routingSecret、Mistral 注册库及既有设置/凭据均保留**，不声称 config 字节完全未变。
+- **19:43:07 UTC** 最终验收 healthy/0 重启、NewAPI 到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均成功、四静态资源 SHA256 匹配发布源码后立即反馈上线。**19:43:55 UTC** 真实未登录公网登录页可见，healthz/四资源全部 200，保留 `?v=2984131f84` 且 SHA256 一致，正式 deploy.json 保存回执；专用浏览器已关闭。
+- 构建 **19:40:01.601–19:40:10.977 UTC（9.38 秒）**；完整备份归档最后写入 **19:40:15.342 UTC**；新容器启动 **19:40:16.010 UTC**。旧退出、首 HTTP、初次 healthy 的精确采样未持久化，不反推或报告精确停机；最终验收耗时不是停机时长。
+- 正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261112T193713Z-b786d7c`；镜像 `account-pool-balancer:release-b786d7c-20261112T193713Z`（ID `sha256:31cabebcc4afc22b20296de5b2665409e45852f11e9c54dd54f50a787dcf7fb1`）。完整受限备份 `/home/ubuntu/backups/account-pool-balancer/20261112T193713Z-mistral-nav-b786d7c`，data SHA256 `e3c9faf868ae401732341b610af7c899f2062c0f89c9d7097612350d95ddca81`；旧镜像 `account-pool-balancer:rollback-20261112T193713Z` 保留。回退先确认新写入，不自动恢复旧 data。
+- 本轮本地验收及发布临时文件按用户授权清理，其他窗口产物、Trellis、远端正式 release/备份/镜像保留；登记 `_tmp_artifacts.md`。后续补记录不重新部署。
+
+## 历史部署：GLM developer角色422兼容（2026-11-12 11:24 UTC，d94da97）
 
 - 用户明确授权将GLM422最小补丁部署OVH。业务提交`4d56af5b71b9d4395a08fa2c583e24ebc17e8a8f`已推送master；从实际线上`edc4c32`以独立Git index仅合入本轮6文件，生成并推送`release/mistral-glm-role-20261112` / **`d94da97a73fa380fcfadba9fee5fe32bc707824c`**。业务变化仅3个Go实现/测试文件，未带入主线未上线ModelStudio、注册/指纹/Dockerfile/README或其他窗口暂存文件。
 - 两条真实GLM Flash422已从既有NewAPI容器日志确认`messages[0]` / `union_tag_invalid` / tag=developer。精确GLM5.3/Flash Chat现沿DeepSeek原有逻辑将developer→system，只替换role值，完整历史/指令内容/工具/思考/数字/缓存键保留；GLM不继承DeepSeek其他参数/图片/文本清理，其他池/模型/协议及未知角色保持原行为。GLM5.3仅本地HTTP mock覆盖，不称已真实推理验收。
