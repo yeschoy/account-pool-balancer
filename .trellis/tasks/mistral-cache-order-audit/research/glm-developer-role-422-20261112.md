@@ -45,6 +45,16 @@
 
 ## 交付状态与下一步
 
-本地实现/相关质量门禁已通过；代码/spec/文档和本记录一起提交，未推送、未部署。线上仍是`edc4c32`，不会因为本地修复就自动生效。后续获授权部署时应只合入本轮最小补丁，从实际线上基线隔离发布，沿既有预检→构建→一致完整备份/Compose镜像覆盖→双内网别名/健康/必要资源验收流程；不夹带未上线ModelStudio或其他窗口脏修改，不开启诊断续采、不追加未经授权生成。
+本地阶段：实现/相关质量门禁通过后，代码/spec/文档和本记录一起提交为`4d56af5`，当时未推送/未部署、线上仍`edc4c32`。随后用户明确回复「要」，授权最小补丁部署，结果如下，不再沿用先前“未部署”为当前状态。
+
+### 用户授权部署结果（2026-11-12 11:24 UTC）
+
+- `4d56af5b71b9d4395a08fa2c583e24ebc17e8a8f`已推送master；以实际线上`edc4c32`的独立Git index仅合入6文件，发布分支`release/mistral-glm-role-20261112` / `d94da97a73fa380fcfadba9fee5fe32bc707824c`已推送并部署。未带入ModelStudio或其他窗口注册/指纹/Dockerfile/README/Essevin暂存修改。
+- Mistral Go基线无漂移、3Go与已通过门禁的本地源码逐字节相同，不重复测试；647文件SHA256核对，复用既有发布引擎，无存储迁移不额外复制敏感数据。单次预检旧实例healthy0/无OOM、Healthcheck/兼容别名/双内网正常、240.53GiB余量且注册空闲。
+- 构建UTC11:23:16.055–11:23:23.244（7.19秒），旧退出11:23:23.514，一致完整备份11:23:23.912–11:23:30.530，切换11:23:30.530、新启动11:23:30.762、首HTTP11:23:31.873、Docker healthy11:24:01.108。旧退出至首HTTP观测8.36秒，非精确停机，构建/健康等待不当停机。
+- UTC11:24:01.390：新revision、healthy0、NewAPI到新旧两个healthz、四本机资源SHA256通过，191账号/186TH核心注册/config完整字节/routingSecret/Mistral注册库/原13硬隔离及运行边界保持，诊断变量空；随即反馈上线。沿线上Compose只覆盖image，不改配置/恢复账号。
+- UTC11:25:02.118：真实未登录公网登录页可见、healthz/四静态资源全200，URL查询串保留且SHA256匹配；正式deploy.json保存回执、专用浏览器已关闭，立即反馈公网验收完成。
+- 正式release`/home/ubuntu/project/account-pool-balancer-releases/20261112T112255Z-d94da97`，镜像`account-pool-balancer:release-d94da97-20261112T112255Z`；完整备份`/home/ubuntu/backups/account-pool-balancer/20261112T112255Z-glm-role-d94da97`，data SHA256`524181610ef59d80fcca582323cf7ad02ad02ad8c205d26578bee05f9ef5bcff`，旧edc4c32镜像`account-pool-balancer:rollback-20261112T112255Z`保留。回退先核对最新data，不自动覆盖上线后新写入。
+- **以上仅部署/入口/数据验收，尚未用部署后新的GLM自然恢复样本完成角色路径生产业务复测**；没有主动推理、私密payload重放、开启正文/缓存诊断或额外10分钟观察。不把mock/healthy当原请求已线上成功，不宣称GLM缓存已改善。补记录不重新部署。
 
 本修复只解决已确定的角色422原因，不承诺所有GLM参数/模型授权/长会话缓存已修。原核心缓存任务不结案。临时脚本/回执/干净快照均登记`_tmp_artifacts.md`，须用户同意清理，Trellis与正式回退资料保留。

@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Ollama并发与出站隐私加固（2026-11-12 05:23 UTC，edc4c32）
+## 当前部署：GLM developer角色422兼容（2026-11-12 11:24 UTC，d94da97）
+
+- 用户明确授权将GLM422最小补丁部署OVH。业务提交`4d56af5b71b9d4395a08fa2c583e24ebc17e8a8f`已推送master；从实际线上`edc4c32`以独立Git index仅合入本轮6文件，生成并推送`release/mistral-glm-role-20261112` / **`d94da97a73fa380fcfadba9fee5fe32bc707824c`**。业务变化仅3个Go实现/测试文件，未带入主线未上线ModelStudio、注册/指纹/Dockerfile/README或其他窗口暂存文件。
+- 两条真实GLM Flash422已从既有NewAPI容器日志确认`messages[0]` / `union_tag_invalid` / tag=developer。精确GLM5.3/Flash Chat现沿DeepSeek原有逻辑将developer→system，只替换role值，完整历史/指令内容/工具/思考/数字/缓存键保留；GLM不继承DeepSeek其他参数/图片/文本清理，其他池/模型/协议及未知角色保持原行为。GLM5.3仅本地HTTP mock覆盖，不称已真实推理验收。
+- 实际线上基线与已测主线的Mistral Go文件无漂移，本次3Go文件逐字节等于通过旧代码精确红（server0.887秒）/相关normal2.331秒/race4.584秒/vet/build的源码；复用结果不重复测试或发生产推理。647个提交源码文件SHA256集合核对，复用既有发布引擎；无存储/配置迁移，复用已验证兼容性和正常重启，不额外复制敏感数据做离线预检。
+- 单次预检旧edc4c32 healthy/0重启/无OOM、Healthcheck/兼容别名/双内网入口正常，240.53GiB余量、注册空闲。构建7.19秒后才干净停止旧进程，完整一致data备份/gzip/SHA256通过，沿线上Compose仅image覆盖、到期诊断变量继续为空。**191账号、186TH核心注册、完整config.json、routingSecret、Mistral注册库、原13硬隔离及用户/环境/挂载/端口/网络/资源/Healthcheck均保留**，未覆盖线上设置或新写入。
+- **11:24:01.390 UTC** Docker healthy/0重启、NewAPI分别到`account-pool-balancer:8790/healthz`与`opendesign-balancer:8790/healthz`、四个本机资源SHA256验收通过后立即反馈上线。**11:25:02.118 UTC**真实未登录公网登录页可见，healthz/四资源全200，保留`?v=9d44d5ff6c`且SHA256匹配，回执已写正式deploy.json，专用浏览器`ovh-glm-role-d94da97`已关闭；随即反馈公网验收完成。
+- 这是部署/入口/数据保留验收，未主动推理、重放原私密请求、开启详情/缓存诊断或追加10分钟观察；**尚未用部署后新的GLM自然失败/恢复样本完成该角色路径的生产业务复测**，不能把healthy或本地mock冒充原请求已线上成功，也不承诺GLM缓存改善。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 11:23:16.055–11:23:23.244（7.19秒） |
+| 停止请求 / 旧退出 | 11:23:23.363 / 11:23:23.514 |
+| 完整一致备份 | 11:23:23.912–11:23:30.530 |
+| 切换请求 / 新启动 | 11:23:30.530 / 11:23:30.762 |
+| 首HTTP / Docker healthy | 11:23:31.873 / 11:24:01.108 |
+| 双内网入口 / 本机资源 | 11:24:01.279 / 11:24:01.390 |
+| 公网验收 | 11:25:02.118 |
+
+旧退出至首HTTP观测约8.36秒，非精确停机；构建与健康检查等待不并入该停机观测。镜像`account-pool-balancer:release-d94da97-20261112T112255Z`（ID`sha256:841cf738c30fef9232d07414d59d837ce6c3366cadf2119a7884536c891ee5d8`）；正式release`/home/ubuntu/project/account-pool-balancer-releases/20261112T112255Z-d94da97`；完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261112T112255Z-glm-role-d94da97`、data SHA256`524181610ef59d80fcca582323cf7ad02ad02ad8c205d26578bee05f9ef5bcff`；旧edc4c32镜像`account-pool-balancer:rollback-20261112T112255Z`保留。回退先确认最新data，不自动恢复旧快照覆盖新业务写入。临时产物登记`_tmp_artifacts.md`，经同意再清理，Trellis/正式release/回退备份保留；后续只补记录不再次部署。
+
+## 历史部署：Ollama并发与出站隐私加固（2026-11-12 05:23 UTC，edc4c32）
 
 - 用户明确授权「提交合并，然后部署到ovh」。业务分支`perf/ollama-concurrency-privacy`的`d0a875d`已合并至master的`adaf40c`并推送；为避免夹带主线尚未上线的ModelStudio，从实际线上`50222f6`独立合入本次12文件，生成并推送`release/ollama-hardening-20261112` / **`edc4c321721f44954141db61b1960c6c47abc93c`**。两个冲突仅去除不属于线上版本的ModelStudio上下文，保留完整Ollama改动；未触碰原工作区注册/指纹/Dockerfile/README脏修改。
 - 共享Transport缓存使用sync.Map减少并发查找锁竞争；Ollama刷新合并/30秒间隔、去除无关模型预检、来源绑定和旧请求晚写/重启保护；推理/目录/余额/诊断统一请求头白名单与诚实网关UA，禁止重定向及代理失败直连回退。请求正文/查询参数和原生SSE不改，现有连接/账号并发/RPM参数不擅调。详`docs/ollama-hardening.md`；不声称完全匿名或已认证真实上游吞吐。
