@@ -766,7 +766,9 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.httpClient(a.ProxyURL)
-	if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
+	if a.Provider == config.ProviderOllama {
+		client = egressid.OllamaClient(client)
+	} else if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
 	out := map[string]any{}

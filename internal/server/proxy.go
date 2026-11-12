@@ -699,7 +699,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.Stream, _ = obj["stream"].(bool)
-	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral {
+	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && rec.Provider != config.ProviderOllama {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
 	identityScope := ck.Group
@@ -1507,7 +1507,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// which is a stronger signal than an honest library name. Only a browser
 	// User-Agent is completed this way: Codex, Claude Code and OpenCode send
 	// their own product strings and must keep them untouched.
-	completeBrowserHints(req.Header)
+	if acct.Provider != config.ProviderOllama {
+		completeBrowserHints(req.Header)
+	}
 	if acct.Provider == config.ProviderTokenHarbor {
 		req.Header.Set("User-Agent", gatewayUserAgent(req.Header.Get("User-Agent"), "account-pool-balancer/tokenharbor-gateway"))
 	}
@@ -1590,7 +1592,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	} else {
 		client = s.httpClient(acct.ProxyURL)
 	}
-	if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
+	if acct.Provider == config.ProviderOllama {
+		client = egressid.OllamaClient(client)
+	} else if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral {
 		client = opencode.NoRedirect(client)
 	}
 	res.upstreamStarted = time.Now()
@@ -2449,7 +2453,9 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 		req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
 		req.Header.Set("Accept", "application/json")
 		client := s.httpClient(a.ProxyURL)
-		if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
+		if a.Provider == config.ProviderOllama {
+			client = egressid.OllamaClient(client)
+		} else if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
 			client = opencode.NoRedirect(client)
 		}
 		resp, err := client.Do(req)

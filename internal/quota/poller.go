@@ -2,12 +2,14 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/egressid"
 	"account-pool-balancer/internal/opencode"
 )
 
@@ -589,6 +591,13 @@ func (s *Snapshot) Pace(now time.Time) float64 {
 	return left / hours
 }
 
+// ollamaRead shares the exact outcome with concurrent admin refresh callers.
+// err is published by closing the corresponding running channel.
+type ollamaRead struct {
+	source string
+	err    error
+}
+
 type Poller struct {
 	Cfg              func() *config.Config
 	HTTPFor          func(proxyURL string) *http.Client
@@ -606,20 +615,21 @@ type Poller struct {
 	// pool-wide /v1/models has nothing to publish.
 	PerchModels func(ctx context.Context, a config.Account) (*Catalog, error)
 
-	discovery opencode.Discovery
-	workers   sync.WaitGroup
-	mu        sync.Mutex
-	snaps     map[string]*Snapshot
-	running   map[string]chan struct{}
-	pending   map[string]bool
-	urgent    map[string]bool
-	models    map[string]time.Time // models requested lately → last seen
-	wake      chan struct{}
+	discovery   opencode.Discovery
+	workers     sync.WaitGroup
+	mu          sync.Mutex
+	snaps       map[string]*Snapshot
+	running     map[string]chan struct{}
+	ollamaReads map[string]*ollamaRead
+	pending     map[string]bool
+	urgent      map[string]bool
+	models      map[string]time.Time // models requested lately → last seen
+	wake        chan struct{}
 }
 
 func NewPoller(cfg func() *config.Config, httpFor func(string) *http.Client) *Poller {
 	return &Poller{Cfg: cfg, HTTPFor: httpFor, snaps: map[string]*Snapshot{}, running: map[string]chan struct{}{}, pending: map[string]bool{}, urgent: map[string]bool{},
-		models: map[string]time.Time{}, wake: make(chan struct{}, 1)}
+		models: map[string]time.Time{}, wake: make(chan struct{}, 1), ollamaReads: map[string]*ollamaRead{}}
 }
 
 // NoteModel records a requested model so each account's coverage of it is
@@ -628,6 +638,7 @@ func (p *Poller) NoteModel(model string) {
 	if model == "" || len(model) > 100 {
 		return
 	}
+	cfg := p.Cfg()
 	p.mu.Lock()
 	_, seen := p.models[model]
 	p.models[model] = time.Now()
@@ -642,6 +653,9 @@ func (p *Poller) NoteModel(model string) {
 	}
 	if !seen {
 		for id, s := range p.snaps {
+			if a, ok := cfg.Account(id); ok && a.Provider == config.ProviderOllama {
+				continue // Ollama has no model-specific billing preflight.
+			}
 			if s.ModelClass(model) == "unknown" {
 				p.rescheduleLocked(id, s)
 			}
@@ -834,13 +848,21 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 		inFlight++
 		p.running[a.ID] = make(chan struct{})
+		var read *ollamaRead
+		if a.Provider == config.ProviderOllama {
+			read = &ollamaRead{source: ResponseBindingSource(cfg, a)}
+			p.ollamaReads[a.ID] = read
+		}
 		delete(p.urgent, a.ID)
 		p.workers.Add(1)
 		go func(a config.Account) {
 			defer p.workers.Done()
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
-			_ = p.fetch(c, cfg, a)
+			err := p.fetch(c, cfg, a)
+			if read != nil {
+				read.err = err
+			}
 			p.finish(a.ID)
 		}(a)
 	}
@@ -848,23 +870,51 @@ func (p *Poller) dispatch(ctx context.Context) {
 }
 
 // RefreshNow reads one account synchronously (admin button).
-func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
+func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
+	var read *ollamaRead
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if a.Provider == config.ProviderOllama {
+			cfg := p.Cfg()
+			next, ok := cfg.Account(a.ID)
+			if !ok || next.Provider != a.Provider || ResponseBindingSource(cfg, next) != ResponseBindingSource(cfg, a) {
+				return errors.New("Ollama account changed; refresh again")
+			}
+		}
 		p.mu.Lock()
 		if done := p.running[a.ID]; done != nil {
+			shared := p.ollamaReads[a.ID]
 			p.mu.Unlock()
 			select {
 			case <-done:
+				if a.Provider == config.ProviderOllama && shared != nil {
+					cfg := p.Cfg()
+					next, ok := cfg.Account(a.ID)
+					if ok && next.Provider == a.Provider && shared.source == ResponseBindingSource(cfg, next) && shared.source == ResponseBindingSource(cfg, a) {
+						return shared.err
+					}
+				}
 				continue
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
 		p.running[a.ID] = make(chan struct{})
+		if a.Provider == config.ProviderOllama {
+			read = &ollamaRead{source: ResponseBindingSource(p.Cfg(), a)}
+			p.ollamaReads[a.ID] = read
+		}
 		p.mu.Unlock()
 		break
 	}
-	defer p.finish(a.ID)
+	defer func() {
+		if read != nil {
+			read.err = err
+		}
+		p.finish(a.ID)
+	}()
 	if a.Provider == config.ProviderOpenDesign {
 		return p.fetchOpenDesign(ctx, p.Cfg(), a, true)
 	}
@@ -877,7 +927,7 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) error {
 	if a.Provider == config.ProviderMistral {
 		return p.fetchMistral(ctx, p.Cfg(), a, true)
 	}
-	if a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch {
+	if a.Provider != config.ProviderOllama && (a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch) {
 		// only the catalogue (and, for Ollama, the balance) can be read
 		p.mu.Lock()
 		if s := p.snaps[a.ID]; s != nil {
@@ -902,6 +952,7 @@ func (p *Poller) finish(id string) {
 	}
 	close(p.running[id])
 	delete(p.running, id)
+	delete(p.ollamaReads, id)
 	p.mu.Unlock()
 	select {
 	case p.wake <- struct{}{}:
@@ -1132,24 +1183,40 @@ func (p *Poller) fetchPerch(ctx context.Context, cfg *config.Config, a config.Ac
 
 // ollamaBalanceEvery is the shortest gap between two balance reads of the
 // same Ollama account: /api/balance allows 10 requests a minute per user,
-// shared by every key that user has, so the reads stay well under that even
-// with several accounts and a short quota interval.
+// shared by every key that user has. This per-account gap also applies to
+// manual refreshes; separate keys of one user still share the upstream limit.
 const ollamaBalanceEvery = 30 * time.Second
 
 // fetchOllama reads an Ollama account's balance (and, less often, its model
 // list). The API key is both the inference key and the balance key, so there
 // is no control key and a refused balance means the key itself is dead.
 func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.Account) error {
-	client := &Client{Base: cfg.ControlBase(a), HTTP: p.HTTPFor(a.ProxyURL)}
-	p.mu.Lock()
-	prev := p.snaps[a.ID].clone()
-	p.mu.Unlock()
-	s := prev
-	if s == nil {
-		s = &Snapshot{}
+	httpClient := egressid.OllamaClient(p.HTTPFor(a.ProxyURL))
+	client := &Client{Base: cfg.ControlBase(a), HTTP: httpClient}
+	s := p.View(a.ID) // immutable; cached refreshes must not clone large catalogues
+	source := ResponseBindingSource(cfg, a)
+	if s == nil || s.CatalogSource != source {
+		s = &Snapshot{CatalogSource: source}
 	}
 	now := time.Now()
+	last := s.BalanceAt
+	if s.LastErrorAt.After(last) {
+		last = s.LastErrorAt
+	}
+	if now.Before(last.Add(ollamaBalanceEvery)) {
+		if s.NextAt.Before(last.Add(ollamaBalanceEvery)) {
+			next := *s
+			next.NextAt = last.Add(ollamaBalanceEvery)
+			p.store(a.ID, &next)
+		}
+		if s.LastError != "" {
+			return errors.New(s.LastError)
+		}
+		return nil
+	}
+	s = s.clone() // copy only for a real read, outside the quota admission lock
 	fail := func(err error) error {
+		now := time.Now()
 		s.LastError, s.LastErrorAt = err.Error(), now
 		s.AuthFailed = IsAuth(err)
 		s.Failures++
@@ -1159,7 +1226,7 @@ func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.A
 	}
 
 	if catalogDue(s, now, a.RuntimeKey != "", false) {
-		if cat, err := FetchCatalogFull(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID); err == nil {
+		if cat, err := FetchCatalogFull(ctx, httpClient, cfg.RuntimeBase(a), a.RuntimeKey, a.ID); err == nil {
 			applyCatalog(s, cat, now)
 		} else {
 			s.CatalogError = err.Error() // the last good catalogue stays
@@ -1170,6 +1237,7 @@ func (p *Poller) fetchOllama(ctx context.Context, cfg *config.Config, a config.A
 	if err != nil {
 		return fail(err)
 	}
+	now = time.Now()
 	s.Ollama, s.BalanceAt = &b, now
 	s.AuthFailed = false
 	s.LastOKAt, s.Failures, s.LastError = now, 0, ""
