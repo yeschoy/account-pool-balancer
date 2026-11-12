@@ -64,7 +64,7 @@ assert.match(html, /id="mistral-base"/);
 assert.match(source, /body\.mistral = \{ baseUrl:/);
 for (const field of ['mistral-sync','mistral-detail-log','form-quota','rules-error','rules-retry','btn-save-settings']) assert.ok(html.includes('id="'+field+'"'));
 assert.match(source, /modelSyncSec: Number\(\$\('#mistral-sync'\)\.value\)/);
-assert.match(source, /a\.provider === 'opendesign' \|\| a\.provider === 'mistral'\) toast\(result\.message/);
+assert.match(source, /a\.provider === 'opendesign' \|\| a\.provider === 'mistral' \|\| a\.provider === 'deploy'\) toast\(result\.message/);
 context.num = (v) => String(v);
 context.fmtTime = (v) => v || '—';
 vm.runInContext(source.slice(source.indexOf('function mistralQuotaHTML('), source.indexOf('function windowsHTML(')), context);

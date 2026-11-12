@@ -15,8 +15,8 @@ const settings = { revision: 3, upstream: {}, routing: { strategy: 'smart', sess
 const calls = [];
 const rendered = {};
 const c = {
-  $: node, pool: 'mistral', settingsCache: null, errRules: [], retRules: [], priceRows: [], POOL_LABEL: { mistral: 'Mistral' },
-  isMistral() { return c.pool === 'mistral'; }, isTokenHarbor() { return false; }, isOpenCode() { return false; },
+  $: node, $$: () => [], pool: 'mistral', settingsCache: null, errRules: [], retRules: [], priceRows: [], POOL_LABEL: { mistral: 'Mistral' },
+  isMistral() { return c.pool === 'mistral'; }, isDeploy() { return false; }, isModelStudio() { return false; }, isTokenHarbor() { return false; }, isOpenCode() { return false; },
   withPool(p) { return p + '?provider=' + c.pool; }, clone: structuredClone, esc: String, renderRules() {}, renderPrices() {}, readPricing() { return { models: [] }; }, toast() {},
   api: async (method, url, body) => {
     calls.push({ method, url, body: body && structuredClone(body) });

@@ -288,9 +288,10 @@ type accountView struct {
 	// ModelStudio accounts report their plan and an explicit Credits state:
 	// the upstream has no balance API for an inference key, so the console
 	// must show "unknown / not connected" rather than a fabricated number.
-	ModelStudioPlan       string `json:"modelStudioPlan,omitempty"`
-	ModelStudioQuotaState string `json:"modelStudioQuotaState,omitempty"`
-	ModelStudioQuotaNote  string `json:"modelStudioQuotaNote,omitempty"`
+	ModelStudioPlan       string                 `json:"modelStudioPlan,omitempty"`
+	ModelStudioQuotaState string                 `json:"modelStudioQuotaState,omitempty"`
+	ModelStudioQuotaNote  string                 `json:"modelStudioQuotaNote,omitempty"`
+	Deploy                *quota.DeployDiagnosis `json:"deploy,omitempty"`
 }
 
 var proxyAuthRe = regexp.MustCompile(`//[^/@]*@`)
@@ -303,6 +304,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 	usage := s.stats.Summary().Accounts
 	now := time.Now()
 	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderDeploy && snaps[a.ID] != nil && snaps[a.ID].CatalogSource != quota.ResponseBindingSource(cfg, a) {
+			delete(snaps, a.ID)
+		}
 		if q := snaps[a.ID]; a.Provider == config.ProviderOpenDesign && q != nil && q.OpenDesign != nil && q.OpenDesign.Source != quota.OpenDesignSource(cfg, a) {
 			delete(snaps, a.ID)
 		}
@@ -331,6 +335,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		if a.Provider == config.ProviderOpenCodeGo {
 			eg := s.goEgressView(cfg, a)
 			v.EgressIP, v.Egress = a.EgressIP, &eg
+		}
+		if a.Provider == config.ProviderDeploy {
+			v.Deploy = snaps[a.ID].DeployDiagnosis(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 		}
 		if a.Provider == config.ProviderModelStudio {
 			v.ModelStudioPlan = cfg.ModelStudioPlan(a)
@@ -382,6 +389,8 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 					q.Mistral = nil
 				}
 				v.QuotaFresh = q.FreshMistral(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
+			case config.ProviderDeploy:
+				v.QuotaFresh = false // A fresh catalog is not a measured balance.
 			case config.ProviderModelStudio:
 				// only the catalogue is read; Credits stay unknown
 				v.QuotaFresh = q.FreshCatalog(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
@@ -608,13 +617,18 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		f := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == '\t' || r == ' ' })
 		a := config.Account{ID: config.NewID("acc_"), Enabled: true, Group: strings.TrimSpace(in.Group)}
 		provider := declared
+		lineProviderRejected := false
 		for _, field := range f {
 			if p, ok := strings.CutPrefix(field, "provider:"); ok && config.KnownProvider(p) {
+				if declared == config.ProviderDeploy && p != declared {
+					lineProviderRejected = true
+					continue
+				}
 				provider = p // this line's own pool wins over the import's
 				continue
 			}
 			switch {
-			case (provider == config.ProviderOllama || provider == config.ProviderMistral || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
+			case (provider == config.ProviderOllama || provider == config.ProviderMistral || provider == config.ProviderDeploy || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
 				// an Ollama key has no prefix the pool can check, so the
 				// first free token of such a line is the key
 				a.RuntimeKey = field
@@ -627,6 +641,10 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 			case a.Name == "":
 				a.Name = field
 			}
+		}
+		if lineProviderRejected {
+			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行不能从 Deploy 批量导入跨到其他号池")
+			continue
 		}
 		a.Provider = config.ResolveProvider(provider, a.RuntimeKey)
 		// provider:modelstudio on the line already settled it; otherwise the
@@ -701,6 +719,26 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		started := time.Now()
 		err := s.quota.RefreshNow(ctx, a)
+		if a.Provider == config.ProviderDeploy {
+			current := s.cfg.Get()
+			next, exists := current.Account(id)
+			q := s.quota.Get(id)
+			if !exists || quota.ResponseBindingSource(cfg, a) != quota.ResponseBindingSource(current, next) || q == nil || q.CatalogSource != quota.ResponseBindingSource(current, next) {
+				apiError(w, http.StatusConflict, errors.New("Deploy 账号来源已变化，请重新检测"))
+				return
+			}
+			if err != nil {
+				apiError(w, http.StatusBadGateway, errors.New("Deploy 目录检测失败："+err.Error()))
+				return
+			}
+			if q.CatalogAt.Before(started) {
+				apiError(w, http.StatusConflict, errors.New("本次目录检测未完成，旧目录不代表本次成功"))
+				return
+			}
+			s.metaDirty.Store(true)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "quotaRefreshed": false, "catalogRefreshed": true, "message": "模型目录已刷新；余额仍未知，目录成功不证明 Key 已激活或推理授权", "diagnosis": q.DeployDiagnosis(time.Now(), time.Duration(current.ForProvider(a.Provider).Quota.StaleSec)*time.Second)})
+			return
+		}
 		if a.Provider == config.ProviderMistral {
 			current := s.cfg.Get()
 			next, exists := current.Account(id)
@@ -793,6 +831,9 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.httpClient(a.ProxyURL)
+	if a.Provider == config.ProviderDeploy {
+		client = s.deployHTTPClient(cfg, a.ProxyURL)
+	}
 	if a.Provider == config.ProviderOllama {
 		client = egressid.OllamaClient(client)
 	} else if a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral {
@@ -822,6 +863,10 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&body)
 		resp.Body.Close()
 		out["runtime"] = map[string]any{"ok": resp.StatusCode == 200, "status": resp.StatusCode, "models": len(body.Data), "ms": time.Since(t0).Milliseconds()}
+		if a.Provider == config.ProviderDeploy {
+			out["runtime"] = map[string]any{"ok": resp.StatusCode == 200 && len(body.Data) > 0, "status": resp.StatusCode, "models": len(body.Data), "ms": time.Since(t0).Milliseconds(), "note": "目录仅是模型发现，不校验 Key 激活状态或推理授权；需单独勾选真实推理测试"}
+			out["quota"] = map[string]any{"state": "not-connected", "reason": quota.DeployQuotaReason}
+		}
 	}
 	if a.ControlKey != "" {
 		qc := &quota.Client{Base: cfg.Upstream.ControlBase, HTTP: client}
@@ -846,6 +891,8 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		model := in.Model
 		if model == "" {
 			switch a.Provider {
+			case config.ProviderDeploy:
+				model = config.DeployDefaultModel
 			case config.ProviderRiver:
 				model = "deepseek-ai/DeepSeek-V4.1-Flash"
 			case config.ProviderOllama:
@@ -880,7 +927,11 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 				model = "deepseek-v4.1-flash"
 			}
 		}
-		payload, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 1, "messages": []map[string]string{{"role": "user", "content": "ping"}}})
+		maxTokens := 1
+		if a.Provider == config.ProviderDeploy {
+			maxTokens = 256
+		} // reasoning models may return null content at tiny budgets.
+		payload, _ := json.Marshal(map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]string{{"role": "user", "content": "ping"}}})
 		t1 := time.Now()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.RuntimeBase(a)+"/chat/completions", bytes.NewReader(payload))
 		egressid.Apply(req.Header, egressid.For(a.ID))
@@ -892,6 +943,15 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 			resp.Body.Close()
 			res := map[string]any{"ok": resp.StatusCode == 200, "status": resp.StatusCode, "ms": time.Since(t1).Milliseconds(), "model": model}
+			if a.Provider == config.ProviderDeploy && resp.StatusCode == 200 {
+				var completion struct {
+					Choices []json.RawMessage `json:"choices"`
+				}
+				if json.Unmarshal(b, &completion) != nil || len(completion.Choices) == 0 {
+					res["ok"] = false
+					res["error"] = "上游 200 但缺少有效 Chat choices，不能视为推理成功"
+				}
+			}
 			if resp.StatusCode != 200 {
 				res["error"], _ = errorReason(cfg, b, resp.Header.Get("Content-Type"))
 			}
@@ -1254,6 +1314,15 @@ type settingsDoc struct {
 	TokenHarbor *tokenHarborSettings `json:"tokenHarbor,omitempty"`
 	Mistral     *config.Mistral      `json:"mistral,omitempty"`
 	ModelStudio *modelStudioSettings `json:"modelStudio,omitempty"`
+	Deploy      *deploySettings      `json:"deploy,omitempty"`
+}
+
+type deploySettings struct {
+	BaseURL      string `json:"baseUrl"`
+	ModelSyncSec int    `json:"modelSyncSec"`
+	DetailLog    *bool  `json:"detailLog,omitempty"`
+	QuotaState   string `json:"quotaState,omitempty"`
+	QuotaReason  string `json:"quotaReason,omitempty"`
 }
 
 // modelStudioSettings is the projection of the Model Studio pool's own
@@ -1286,11 +1355,15 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	prov := providerOf(providerParam(r)) // the pool whose rules are shown
 	errRules, retRules := c.RulesFor(prov)
 	defErr := config.DefaultErrorRulesFor(prov)
+	defaultPrices := pricing.Defaults()
+	if prov == config.ProviderDeploy {
+		defaultPrices = config.DefaultDeployPricing().Models
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.Pricing, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
-		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": pricing.Defaults(), "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
+		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
 	})
 }
 
@@ -1302,15 +1375,17 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
-		c.Upstream, c.Logs = in.Upstream, in.Logs
-		if prov != config.ProviderMistral && prov != config.ProviderModelStudio {
+		if prov != config.ProviderDeploy {
+			c.Upstream, c.Logs = in.Upstream, in.Logs
+			c.Pricing = in.Pricing
+		}
+		if prov != config.ProviderMistral && prov != config.ProviderModelStudio && prov != config.ProviderDeploy {
 			c.Quota = in.Quota
 		}
-		if !config.StrictResponses(prov) && prov != config.ProviderMistral && prov != config.ProviderModelStudio {
+		if !config.StrictResponses(prov) && prov != config.ProviderMistral && prov != config.ProviderModelStudio && prov != config.ProviderDeploy {
 			c.Routing = in.Routing
 		}
-		c.Pricing = in.Pricing
-		if in.OpenCode != nil {
+		if in.OpenCode != nil && prov != config.ProviderDeploy {
 			c.OpenCode = *in.OpenCode
 		}
 		if in.TokenHarbor != nil && prov == config.ProviderTokenHarbor {
@@ -1324,6 +1399,15 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch prov {
+		case config.ProviderDeploy:
+			if in.Deploy != nil {
+				c.Deploy.BaseURL, c.Deploy.ModelSyncSec = in.Deploy.BaseURL, in.Deploy.ModelSyncSec
+				if in.Deploy.DetailLog != nil {
+					c.Deploy.DetailLog = *in.Deploy.DetailLog
+				}
+			}
+			c.Deploy.Routing, c.Deploy.Quota, c.Deploy.Pricing = &in.Routing, &in.Quota, &in.Pricing
+			c.DeployErrorRules, c.DeployRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderMistral:
 			if in.Mistral != nil {
 				c.Mistral.BaseURL = in.Mistral.BaseURL
@@ -1697,6 +1781,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	bindingLimit, bindingIndependent := s.pool.BindingCapacityFor(want)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"go":                      goView,
+		"deploy":                  deployOverviewFor(views),
 		"accounts":                len(views),
 		"status":                  statusCount,
 		"groups":                  groupList,
@@ -1735,7 +1820,7 @@ func (s *Server) apiResetCacheRate(w http.ResponseWriter, r *http.Request) {
 	switch provider {
 	case config.ProviderOpenDesign, config.ProviderRiver, config.ProviderOllama,
 		config.ProviderModal, config.ProviderMistral, config.ProviderTokenHarbor,
-		config.ProviderOpenCodeZen, config.ProviderOpenCodeGo:
+		config.ProviderOpenCodeZen, config.ProviderOpenCodeGo, config.ProviderDeploy:
 	default:
 		apiError(w, http.StatusBadRequest, errors.New("请指定有效的号池"))
 		return
