@@ -55,8 +55,8 @@ type Server struct {
 	requestContext context.Context
 	cancelRequests context.CancelFunc
 
-	tmu         sync.Mutex
-	transports  map[string]*http.Transport
+	tmu         sync.Mutex // cold creation / config invalidation only
+	transports  sync.Map   // string -> *http.Transport; hits do not serialize requests
 	proxyHealth struct {
 		sync.Mutex
 		states map[string]proxyHealthView
@@ -166,7 +166,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if soft := debug.SetMemoryLimit(-1); soft > 0 && soft/3 < bufferLimit {
 		bufferLimit = max(1<<20, soft/3)
 	}
-	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), transports: map[string]*http.Transport{}, started: time.Now(), thBufferLimit: bufferLimit, mistralAudit: audit}
+	s := &Server{dataDir: dataDir, cfg: store, stats: stats.New(), started: time.Now(), thBufferLimit: bufferLimit, mistralAudit: audit}
 	s.requestContext, s.cancelRequests = context.WithCancel(context.Background())
 	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
@@ -212,7 +212,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
-			if a, ok := store.Get().Account(id); ok && a.Provider == config.ProviderTokenHarbor && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
+			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
 				continue
 			}
 			quotas[id] = q
@@ -273,20 +273,21 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
 	s.rebindPerch(next)
-	if !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
 		s.tmu.Lock()
-		for _, t := range s.transports {
-			t.CloseIdleConnections()
-		}
-		s.transports = map[string]*http.Transport{}
+		s.transports.Range(func(_, value any) bool {
+			value.(*http.Transport).CloseIdleConnections()
+			return true
+		})
+		s.transports.Clear()
 		s.tmu.Unlock()
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
-		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}
@@ -320,6 +321,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	for _, a := range next.Accounts {
 		if config.IsOpenCode(a.Provider) && next.OpenCode.Enabled {
 			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.RuntimeBase(o) != next.RuntimeBase(a) {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderOllama && next.Quota.Enabled {
+			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) {
 				s.quota.RefreshSession(a.ID)
 			}
 		}
@@ -433,10 +439,13 @@ func (s *Server) transport(proxyURL string) *http.Transport {
 }
 
 func (s *Server) transportFor(proxyURL string, cfg config.Routing, key string) *http.Transport {
+	if t, ok := s.transports.Load(key); ok {
+		return t.(*http.Transport)
+	}
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
-	if t := s.transports[key]; t != nil {
-		return t
+	if t, ok := s.transports.Load(key); ok {
+		return t.(*http.Transport)
 	}
 	t := &http.Transport{
 		ForceAttemptHTTP2:     true,
@@ -458,7 +467,7 @@ func (s *Server) transportFor(proxyURL string, cfg config.Routing, key string) *
 		}
 		t.MaxIdleConnsPerHost, t.MaxConnsPerHost = cfg.ProxyMaxConns, cfg.ProxyMaxConns
 	}
-	s.transports[key] = t
+	s.transports.Store(key, t)
 	return t
 }
 
