@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,10 +19,64 @@ import (
 	"account-pool-balancer/internal/rules"
 )
 
-// Reuse the existing generic recording HTTP fixture, not another scheduler.
-func newDeployEnv(t *testing.T) *msEnv {
-	e := newMSEEnv(t)
-	_, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+// Keep the Deploy fixture independent of providers not yet released online.
+// Requests still run through the real shared scheduler and HTTP handlers.
+type deployTestCall struct {
+	path, auth, apiKey, body string
+	header                   http.Header
+}
+type deployTestEnv struct {
+	s         *Server
+	front, up *httptest.Server
+	mu        sync.Mutex
+	calls     []deployTestCall
+	handler   http.HandlerFunc
+}
+
+func (e *deployTestEnv) snapshot() []deployTestCall {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]deployTestCall(nil), e.calls...)
+}
+func (e *deployTestEnv) do(t *testing.T, path, body string, headers map[string]string) (*http.Response, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, e.front.URL+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer downstream-ms")
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
+}
+func newDeployEnv(t *testing.T) *deployTestEnv {
+	t.Helper()
+	e := &deployTestEnv{}
+	e.up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		e.mu.Lock()
+		e.calls = append(e.calls, deployTestCall{path: r.URL.Path, auth: r.Header.Get("Authorization"), apiKey: r.Header.Get("X-Api-Key"), body: string(b), header: r.Header.Clone()})
+		h := e.handler
+		e.mu.Unlock()
+		if h != nil {
+			h(w, r)
+			return
+		}
+		w.WriteHeader(503)
+	}))
+	t.Cleanup(e.up.Close)
+	var err error
+	e.s, err = New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.s.stopPerch(); e.s.logs.Close() })
+	_, err = e.s.cfg.Update(-1, func(c *config.Config) error {
 		c.Deploy.BaseURL = e.up.URL + "/api/v1"
 		r := c.Deploy.EffectiveRouting()
 		r.Strategy = "ordered"
@@ -49,9 +105,14 @@ func newDeployEnv(t *testing.T) *msEnv {
 		fmt.Fprint(w, `{"id":"mock-completion","choices":[{"message":{"content":null,"reasoning_content":"thinking"},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2}}}`)
 	}
 	e.mu.Unlock()
+	e.front = httptest.NewServer(e.s.Handler())
+	t.Cleanup(e.front.Close)
+	for !e.s.logs.Ready() {
+		time.Sleep(time.Millisecond)
+	}
 	return e
 }
-func deployAdmin(t *testing.T, e *msEnv, method, path string, body any) *httptest.ResponseRecorder {
+func deployAdmin(t *testing.T, e *deployTestEnv, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	r := httptest.NewRequest(method, path, bytes.NewReader(b))
@@ -66,7 +127,7 @@ func deployAdmin(t *testing.T, e *msEnv, method, path string, body any) *httptes
 	e.s.Handler().ServeHTTP(w, r)
 	return w
 }
-func deploySettingsDoc(t *testing.T, e *msEnv) settingsDoc {
+func deploySettingsDoc(t *testing.T, e *deployTestEnv) settingsDoc {
 	t.Helper()
 	w := deployAdmin(t, e, "GET", "/api/settings?provider=deploy", nil)
 	var out struct {
