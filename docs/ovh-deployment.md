@@ -38,7 +38,17 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 注册机导航隔离（2026-11-12 19:43 UTC，b786d7c）
+## 当前部署：Deploy独立号池（2026-11-12 21:36 UTC，c6ae4b2）
+
+- 用户追加明确授权推送、部署OVH并完整观察10分钟，发现本次问题继续修复。功能分支`feat/deploy-balancer`的`3c6a87f`及测试隔离`4c50007`已推送；从实际线上`b786d7c`隔离的`release/deploy-pool-20261113` / **`c6ae4b2b50fa3a8295715a9c144c3dfb90a2907d`**已推送并上线，未夹带主线未上线ModelStudio或其他窗口脏代码，未合并master。
+- 复用既有流程，668个Git文件SHA256核验；构建UTC21:35:41.819–21:35:49.055（7.24秒）。按线上UID1000:1000作network-none/tmpfs旧数据启动及签名布局往返预检，退出0且凭据tmpfs释放。旧退出21:35:50.843，完整一致备份21:35:51.213–21:35:55.635，新启动21:35:55.872，首HTTP21:35:56.976、healthy21:36:26.211；旧退出至首HTTP观测约6.13秒，非精确停机，构建/健康等待不算停机。
+- 沿线上Compose仅覆盖镜像，原诊断为空；**192账号、186TH核心注册、18个原有硬隔离、config完整字节、routingSecret、Mistral注册库、用户/环境/卷/端口/网络别名/Healthcheck/资源参数保留**。首次旧检查误把1条超过1小时的仅保存queued候选算作忙碌，在停服前中止；确认Add不会自动启动、worker上限15min且只有odb进程后收窄检查，候选原样保留、不取消/删除，复用同一源码/备份目录。
+- 21:36:26.379 NewAPI到`account-pool-balancer:8790/healthz`与`opendesign-balancer:8790/healthz`均成功，21:36:26.486本机四资源通过后立即反馈上线。21:38:33.092真实未登录公网登录页、healthz/四资源200、Deploy标签存在；`?v=1d8bfed439`及四资源SHA256匹配，回执已写正式deploy.json，专属浏览器关闭。
+- **完整600秒观察UTC21:37:47–21:47:47（北京时间11月13日05:37:47–05:47:47）**：43次采样均同版healthy/零重启/无OOM，配置hash不变；OpenCode Go35成功+1客户端取消499、River7成功、Modal2成功，合计**44成功、0最终失败、0错误事件、1客户端取消**。其他池无自然流量，不冒称业务验收。NewAPI另13条type5错误经只读路由核对：215直连Deploy4条400、158/162外部渠道7条429、217外部渠道2条504，均不经Balancer；167经Balancer的是该1条客户端取消，不重复算失败。
+- 21:47:49观察器正常退出0/stderr0，21:48:49独立确认同版健康、双入口及原配置/数据/隔离仍保留；已立即反馈，无可归因回归，不触发修复/回退。未主动生产推理、导入测试Key/Deploy账号、改线上设置或启用详情采样；余额会话仍未接入，不称完整新池门禁通过。详见[部署与观察证据](../.trellis/tasks/11-13-deploy-balancer/deployment.md)，后续只补记录不再重启。
+- 正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261112T213203Z-c6ae4b2`；镜像`account-pool-balancer:release-c6ae4b2-20261112T213203Z`（ID`sha256:676dc320a09c0de9b52f91bed5b83fedf15c34e8ee556926a88b16409254cc7a`）。一致完整备份`/home/ubuntu/backups/account-pool-balancer/20261112T213203Z-deploy-pool-c6ae4b2`，data SHA256`58e150cb2cae5dee4d631962f88829a9a9748226f210e85a196efcba6b27fe80`；回退镜像`account-pool-balancer:rollback-20261112T213203Z`保留。回退先保护上线后新写入，不自动恢复旧data。临时产物登记`_tmp_artifacts.md`，需同意才清理，Trellis/正式回退资料保留。
+
+## 历史部署：Mistral 注册机导航隔离（2026-11-12 19:43 UTC，b786d7c）
 
 - 用户授权「提交推送，然后清理，之后部署，不要做无用的测试」。业务提交 `db19d24` 已推送 master；从实际线上 `d94da97` 仅合入本轮 3 文件，发布分支 `release/mistral-nav-20261112` / **`b786d7c9c4ffc34d90d802d853f5a60ff3ee444d`** 已推送并部署，未带入主线未上线 ModelStudio 或其他窗口注册/指纹/Dockerfile/README/Essevin 修改。
 - Mistral 注册机入口及分隔标题仅在 Mistral 号池显示；其他池直接访问注册页回到本池概览；切走停止轮询，异步加载晚完成也不重启轮询。复用此前全部 10 池本地真实浏览器和导航回归结果，本轮不重跑测试、不发生产推理。
