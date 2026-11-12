@@ -52,5 +52,6 @@ Apple M4、Go 1.26.8 的 `BenchmarkOllamaTransportCache`（3 次，8 路并行�
 
 - 本地实现与回归；`go test ./...`、`go test -race ./...`、`go vet ./...`、`go build -o /dev/null ./cmd/odb` 全部通过；新增定向并发/race 回归重复 10 次通过。
 - 没有使用真实生产凭据或发起上游推理。
-- 未部署、未进行真实上游压力测试；线上吞吐和额度限制待用户授权后的独立验证。
+- 用户授权后已合并推送至master `adaf40c`，OVH于2026-11-12 05:23 UTC部署隔离发布提交 `edc4c32`（基于实际线上50222f6，仅含本次改动，不带入尚未上线的ModelStudio）；数据/配置保留、Docker健康、NewAPI双内网入口和公网资源均验收通过。详`docs/ovh-deployment.md`。
+- 未进行真实上游压力测试或主动推理；线上吞吐和额度限制待单独验证，不把部署验收当成生产性能认证。
 - 测试日志在忽略目录 `.analysis/ollama-hardening/`，已登记 `_tmp_artifacts.md`，经用户同意后清理。

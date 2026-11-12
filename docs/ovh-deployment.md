@@ -38,7 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral3051思考流片段合并修复（2026-11-11 17:36 UTC，50222f6）
+## 当前部署：Ollama并发与出站隐私加固（2026-11-12 05:23 UTC，edc4c32）
+
+- 用户明确授权「提交合并，然后部署到ovh」。业务分支`perf/ollama-concurrency-privacy`的`d0a875d`已合并至master的`adaf40c`并推送；为避免夹带主线尚未上线的ModelStudio，从实际线上`50222f6`独立合入本次12文件，生成并推送`release/ollama-hardening-20261112` / **`edc4c321721f44954141db61b1960c6c47abc93c`**。两个冲突仅去除不属于线上版本的ModelStudio上下文，保留完整Ollama改动；未触碰原工作区注册/指纹/Dockerfile/README脏修改。
+- 共享Transport缓存使用sync.Map减少并发查找锁竞争；Ollama刷新合并/30秒间隔、去除无关模型预检、来源绑定和旧请求晚写/重启保护；推理/目录/余额/诊断统一请求头白名单与诚实网关UA，禁止重定向及代理失败直连回退。请求正文/查询参数和原生SSE不改，现有连接/账号并发/RPM参数不擅调。详`docs/ollama-hardening.md`；不声称完全匿名或已认证真实上游吞吐。
+- 业务分支全仓normal/race/vet/build已通过；因发布基线不同，干净发布源码追加相关normal（server1.077秒）/race（2.606秒）/vet/build均通过，不重复全仓测试。645个Git源码文件SHA256集合验证，复用既有发布流程；存储格式不变，复用兼容性验证与本轮正常重启回归，不另复制敏感数据做离线预检。
+- 预检旧版healthy/0重启、Healthcheck/兼容别名/双内网入口正常，241.05GiB余量、注册空闲。镜像构建7.13秒后才干净停止旧服务，完整一致data备份/gzip/SHA256核验，沿线上Compose只覆盖image、过期诊断变量继续为空。**191账号、186TH核心注册、完整config.json、routingSecret、Mistral注册库、原13硬隔离和用户/环境/卷/端口/网络/资源/Healthcheck保留**，未覆盖线上配置或新写入。
+- **05:23:04.764 UTC** Docker healthy/0重启、四本机资源SHA256通过；NewAPI分别请求`account-pool-balancer:8790/healthz`和`opendesign-balancer:8790/healthz`成功后立即反馈上线。**05:24:08.393 UTC**真实未登录公网登录页可见，healthz/四资源HTTP200，保留`?v=9d44d5ff6c`且SHA256匹配；回执写正式deploy.json，专用浏览器已关闭。
+- 本轮仅部署/数据保留/入口/资源验收，未发生产推理、未采正文、未新开详情/诊断或高并发压测。Ollama无来源标记的旧额度缓存会按设计失效并由正常轮询重读，不把它当余额0；设备信息过滤只覆盖HTTP头，正文/查询参数中的显式身份和服务端出口/TLS特征仍可见。
+
+| 阶段 | UTC时间 |
+|---|---|
+| 构建 | 05:22:20.148–05:22:27.275（7.13秒） |
+| 停止请求 / 旧退出 | 05:22:27.393 / 05:22:27.547 |
+| 完整一致备份 | 05:22:27.938–05:22:33.881 |
+| 切换请求 / 新启动 | 05:22:33.881 / 05:22:34.149 |
+| 首HTTP / Docker healthy | 05:22:35.260 / 05:23:04.490 |
+| 双内网入口 / 本机资源 | 05:23:04.651 / 05:23:04.764 |
+| 公网验收 | 05:24:08.393 |
+
+旧退出至首HTTP观测约7.71秒，非精确停机；构建与健康等待不是停机。镜像`account-pool-balancer:release-edc4c32-20261112T052152Z`（ID`sha256:b757f7e9a1d577fdd7e15132fa272858c56e7e5220856a298870f06efc1f4a6b`）；正式release`/home/ubuntu/project/account-pool-balancer-releases/20261112T052152Z-edc4c32`；完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261112T052152Z-ollama-hardening-edc4c32`，data SHA256`d9e6e40ac66eba656498b91f0ffe60d5d93ca2405cc3a54b7a8aeac49c281a46`；旧50222f6镜像`account-pool-balancer:rollback-20261112T052152Z`保留。回退需先检查最新data，不自动恢复旧快照覆盖新写入。临时源码/回执登记`_tmp_artifacts.md`，经用户同意清理，业务分支/正式回退资料/Trellis保留；后续只补记录不重启。
+
+## 历史部署：Mistral3051思考流片段合并修复（2026-11-11 17:36 UTC，50222f6）
 
 - 用户明确授权「继续修复，如果不行再回滚」。已精确匹配上游`3051 / Expected at most one leading ThinkChunk, got N`（N为168/14/90/5/22），确认46a9b8f错误把多次closed=true流片段当作独立逻辑块，而非账号/额度问题。修复capture连续thinking续片、render兼容旧checkpoint相邻thinking合并，不跨真实正文、不删思考；旧unavailable缺失描述明确unrecovered沿原兼容，不伪称恢复，不再以派生缓存缺口阻断业务。真实歧义/过期仍明确拒绝。
 - 主线`234d6ff9ee0c33e17a8ec2c2c4c0c7e179993dec`和从实际线上46a9b8f隔离的release/mistral-layout-3051-20261111分支`50222f6b6e8aa5fb3db42080c1c020ddad0fdfcb`均已推送。业务4Go文件与相关normal1.620秒/race2.386秒/vet/build通过源码逐字节相同；新600帧closed=true与旧168块checkpoint精确红绿通过，未重复无关测试/发生产推理。639文件SHA256集合验证，未带入ModelStudio或注册/指纹/Dockerfile脏改动。
