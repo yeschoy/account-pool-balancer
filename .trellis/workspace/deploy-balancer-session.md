@@ -18,4 +18,9 @@
 ## 剩余/交付状态
 组织余额/账单需要独立portal会话，尚未绑定，明确not-connected/未知且不伪造零；既有注册机没有搬入本分支。完整provider-onboarding未全部满足，不称新号池完整交付。未推送、未合并master、未部署或验收NewAPI生产渠道。
 
+## 追加授权部署与观察
+用户随后要求推送、部署OVH并完整观察10分钟，发现本次代码问题可修复。业务3c6a87f、独立测试fixture4c50007已推送；从实际线上b786d7c隔离release/deploy-pool-20261113的c6ae4b2并推送/部署，未夹带未上线ModelStudio。既有queued候选已证实仅保存/无worker，未更改其状态；复用发布流程做断网tmpfs预检、一致完整备份及Compose镜像覆盖。192账号/186TH核心注册/18硬隔离/原config/routingSecret/Mistral库和运行参数保留，双别名/NewAPI入口、公网登录页/资源SHA256通过，健康后立即反馈。
+
+UTC21:37:47–21:47:47固定600秒，43次采样均同版healthy0/无OOM/config不变；OpenCode Go35成功+1客户端取消，River7成功，Modal2成功，总44成功/0最终失败/0错误事件；其他池无流量明确未验收。NewAPI直接渠道另有4条Deploy400、7条外部429及2条外部504，不经Balancer，未擅改其渠道/重放。观察器正常退出0、stderr0，独立最终双入口/数据保留复核通过。无可归因本次变更的回归，无新修复/回退；详细时间/口径/回退资料见任务deployment.md。只补文档不再次部署。
+
 临时产物登记本worktree的_tmp_artifacts.md，测试data/config.json含真实测试Key（0600）且被忽略。提交前扫描候选源码/文档和业务日志，未发现真实测试/下游Key泄漏。只停止本次启动的临时服务与Mock，文件未经用户同意不删除，Trellis永久保留。

@@ -38,7 +38,14 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral1910模型资格与3505容量精确策略（2026-11-10 09:42 UTC，f1024e9）
+## 当前部署：Deploy独立号池（2026-11-12 21:36 UTC，c6ae4b2）
+
+- 用户明确授权推送、OVH部署及完整10分钟观察。功能分支`feat/deploy-balancer`的3c6a87f/4c50007已推送；本发布从实际线上b786d7c隔离，仅部署Deploy改动，未夹带未上线ModelStudio、未合并master，当前运行`c6ae4b2b50fa3a8295715a9c144c3dfb90a2907d`。
+- 构建7.24秒、旧配置/metadata在UID1000:1000及network-none/tmpfs启动预检通过；完整一致data备份核验后沿线上Compose仅覆盖镜像。192账号、186TH核心注册、18硬隔离、原config/routingSecret/Mistral注册库及运行参数保留。UTC21:36:26.379 NewAPI到新旧双别名healthz均通过，四资源/Healthcheck/healthy0通过后立即反馈；真实公网登录页/healthz/四资源200，?v=1d8bfed439及SHA256匹配。旧退出至首HTTP观测6.13秒，不把构建或健康等待算停机。
+- **UTC21:37:47–21:47:47完整600秒观察**：43次同版healthy0/无OOM、配置不变，OpenCode Go35成功+1客户端取消499、River7成功、Modal2成功，总44成功/0最终失败/0错误事件；其他池无流量明确未验收。NewAPI直接外部渠道另有4条Deploy400、7条外部429及2条外部504，不经本Balancer。观察器exit0/stderr0并已退出；最终双入口/数据保留独立核对通过，未发现可归因回归，无修复/回退；不主动生产推理、不导入测试Key、不改设置或启采样。
+- 正式source`/home/ubuntu/project/account-pool-balancer-releases/20261112T213203Z-c6ae4b2`，镜像`account-pool-balancer:release-c6ae4b2-20261112T213203Z`；完整备份`/home/ubuntu/backups/account-pool-balancer/20261112T213203Z-deploy-pool-c6ae4b2`，data SHA256`58e150cb2cae5dee4d631962f88829a9a9748226f210e85a196efcba6b27fe80`；回退镜像`account-pool-balancer:rollback-20261112T213203Z`保留。回退先保护新写入，不自动还原旧data。详细时间/证据/边界见[本轮记录](../.trellis/tasks/11-13-deploy-balancer/deployment.md)，只补记录不再次部署。
+
+## 历史部署：Mistral1910模型资格与3505容量精确策略（2026-11-10 09:42 UTC，f1024e9）
 
 - 用户明确要求提交推送、部署OVH，避免无用操作。`f1024e948b31bb3a51dbe7ae28d4ec8706966e62`已推送master并上线；复用已通过的相关normal/race/vet/build，不重复测试、不发生产推理。未提交/打包其他窗口注册、指纹或Dockerfile未提交修改。
 - 一次预检确认旧37332be healthy/零重启、双内网入口正常、245.02GiB余量，旧工作树干净但不是构建源。620个干净提交文件SHA256集合核验；复用既有发布控制器，仅内存替换版本/备份名，无新增部署系统。新镜像就绪后干净停止旧进程，完整一致data备份/gzip/SHA256核验，沿线上Compose仅覆盖image，已到期诊断变量继续为空。

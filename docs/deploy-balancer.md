@@ -54,4 +54,4 @@ DEPLOY_SECRET_EXAMPLE,账号名,http://127.0.0.1:8080
 - 已真实验证：用户授权Key的目录、默认DeepSeek推理；经Balancer转发的GLM非流式与DeepSeek流式均200、单账号尝试，后者收到DONE并保留reasoning。
 - 未接入：组织余额/账单控制台会话、自动注册与上游Key管理、支付；不宣称新号池完整交付门禁全部通过。
 - 不支持：未经验证的Responses/Messages/Embeddings，不放无效开关。
-- 未推送、未部署、未做线上/NewAPI生产渠道验收。原工作区、线上配置与数据均未修改。
+- 已推送功能分支，并从实际线上b786d7c隔离发布Deploy改动至OVH，运行c6ae4b2；主线未上线ModelStudio未夹带。Docker健康、双内网别名、公网资源和数据保留已验收，完整10分钟自然观察记录见[部署证据](../.trellis/tasks/11-13-deploy-balancer/deployment.md)。没有自动导入生产Deploy账号/测试Key，尚不等于生产Deploy推理渠道验收。原工作区未修改，线上原配置完整保留。

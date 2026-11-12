@@ -15,12 +15,12 @@
   "branch": "feat/deploy-balancer",
   "base_branch": "master",
   "worktree_path": "/Users/lyh_god/GolandProjects/account-pool-balancer-deploy",
-  "commit": null,
+  "commit": "4c50007",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "管理/路由/规则/概览/原生Chat已实现并通过本地与授权真实推理验证。组织余额/账单会话未绑定，完整provider-onboarding门禁未全部通过，故保留in_progress不归档。未推送、未部署、未合并master；详见validation.md。",
+  "notes": "管理/路由/规则/概览/原生Chat已实现并通过本地与授权真实推理验证。组织余额/账单会话未绑定，完整provider-onboarding门禁未全部通过，故保留in_progress不归档。功能分支已推送；独立实际线上基线release/deploy-pool-20261113的c6ae4b2已部署OVH，数据/双入口/公网通过；完整600秒43次采样健康，Balancer44成功/1客户端取消/0最终失败，其他池无流量者明确未验收，未发现可归因回归；外部直接渠道错误另列。未合并master、未向生产导入测试Key；详见validation.md和deployment.md。",
   "meta": {}
 }
