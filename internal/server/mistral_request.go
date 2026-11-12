@@ -402,7 +402,7 @@ func mistralSeed(raw []byte) (*big.Int, bool) {
 	return new(big.Int).SetString(string(raw), 10)
 }
 
-func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bool, error) {
+func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, bool, error) {
 	if len(raw) == 0 || raw[0] != '[' {
 		return raw, false, nil // native validation owns unrelated malformed messages
 	}
@@ -413,20 +413,22 @@ func mistralChatMessages(raw []byte, developer, reasoningAlias bool) ([]byte, bo
 		message := scanMistralObject(raw[i:end])
 		if message != nil {
 			role := mistralString(message.get("role"))
-			if developer || reasoningAlias || message.get("reasoning_content") != nil {
+			if deepSeek || reasoningAlias || message.get("reasoning_content") != nil {
 				if err := message.unique("role"); err != nil {
 					return nil, false, err
 				}
 			}
-			if developer && role == "developer" {
+			// GLM also rejects the developer role. Share only this instruction
+			// alias; its other native parameters/content stay outside DeepSeek cleanup.
+			if (deepSeek || reasoningAlias) && role == "developer" {
 				message.set("role", []byte(`"system"`))
 			}
-			if developer && role == "user" {
+			if deepSeek && role == "user" {
 				if err := mistralUserImages(message); err != nil {
 					return nil, false, err
 				}
 			}
-			if developer && (role == "user" || role == "assistant") {
+			if deepSeek && (role == "user" || role == "assistant") {
 				if err := mistralDeepSeekTextChunks(message, role == "assistant"); err != nil {
 					return nil, false, err
 				}
