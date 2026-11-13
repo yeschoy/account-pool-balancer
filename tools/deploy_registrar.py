@@ -34,6 +34,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -273,9 +274,43 @@ class MailboxReader:
     def ids(self) -> set:
         return {e.get("id") for e in self.fetch("all")}
 
-    def wait_for_link(self, after_ids: set, timeout: float = 240.0, poll: float = 5.0) -> tuple[str, dict] | None:
-        """等待新邮件里的 deploy verify token，返回 (token, email_obj)。"""
+    @staticmethod
+    def _received_ts(e: dict) -> float | None:
+        """把邮件的 receivedAt（mida 的 ISO-8601 UTC）转成 epoch 秒。
+
+        取信必须以**到达时间**为准，不能用邮件 id 增量：mida 的 id 在同一
+        别名里单调递增，但一次重发可能让多条注册共用同一个基准集合；而
+        上一轮轮询已经取到的邮件会被 after_ids 跳过，导致"信就在箱子里却
+        被判为旧信"。receivedAt 是唯一可靠的时序依据。
+        """
+        raw = e.get("receivedAt") or e.get("createdAt")
+        if not raw:
+            return None
+        try:
+            s = str(raw).replace("Z", "+00:00")
+            # 截断到微秒：Go/Python 都能解析，防止多余精度报错
+            s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+            return datetime.fromisoformat(s).timestamp()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def wait_for_link(
+        self,
+        after_ids: set,
+        timeout: float = 240.0,
+        poll: float = 5.0,
+        since_ts: float | None = None,
+    ) -> tuple[str, dict] | None:
+        """等待 deploy 发来的验证链接，返回 (token, email_obj)。
+
+        since_ts: 只认到达时间不早于它的邮件（重发验证邮件时用注册时刻）。
+        兼容旧行为：不传 since_ts 时仍按 after_ids 增量判断，但额外接受
+        "receivedAt 晚于本次调用开始时刻"的邮件，避免漏掉入库但 id 未变的信。
+        """
+        started = time.time()
+        baseline = started if since_ts is None else since_ts
         deadline = time.time() + timeout
+        scanned = 0
         while time.time() < deadline:
             try:
                 mails = self.fetch("all")
@@ -283,19 +318,37 @@ class MailboxReader:
                 emit("log", message=f"取信失败，重试: {e}")
                 time.sleep(poll)
                 continue
+            scanned = len(mails)
+            # 收集本轮所有合格的验证信，取**最新**那封：
+            # 重新认证接码会扫全箱，旧的验证 token 可能已失效或对应旧注册，
+            # 最新的才是这次该用的。
+            best: tuple[float, str, dict] | None = None
             for e in mails:
-                if e.get("id") in after_ids:
+                ts = self._received_ts(e)
+                # 有到达时间就以时间为准；没有才退回 id 增量
+                if ts is not None:
+                    if ts < baseline:
+                        continue
+                elif e.get("id") in after_ids:
                     continue
                 blob = (e.get("textContent") or "") + " " + (e.get("htmlContent") or "")
                 if "deploy.com" not in blob and "deploy" not in (e.get("fromAddress") or "").lower():
                     continue
                 m = re.search(r"https://deploy\.com/verify-email\?token=([A-Za-z0-9_\-]+)", blob)
                 if m:
-                    return m.group(1), e
+                    rank = ts if ts is not None else 0.0
+                    if best is None or rank >= best[0]:
+                        best = (rank, m.group(1), e)
+            if best is not None:
+                return best[1], best[2]
             remain = int(deadline - time.time())
-            emit("log", message=f"等待验证邮件… 剩余 {remain}s")
+            emit("log", message=f"等待验证邮件… 剩余 {remain}s（收件箱 {scanned} 封）")
             time.sleep(poll)
+        # 超时也说明白：是完全没有信，还是有信但时间对不上
+        emit("log", message=f"等待 {timeout:.0f}s 超时，收件箱共 {scanned} 封，"
+                            f"没有到达时间晚于 {baseline:.0f} 的 deploy 验证信")
         return None
+
 
 
 # --------------------------------------------------------------------------
@@ -653,9 +706,23 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     email = item["email"].strip()
     mailbox_url = item.get("mailbox_url", "").strip()
     password = item.get("password") or gen_password()
+    # 重新认证接码：**不重新注册**，只从接码箱取一封已到达的验证信并验证。
+    # deploy.com 没有可用的"重发验证"API（2026-11-13 实测 ajax-portal 下各种
+    # 候选路径均 404，deploy.com/api/* 是 SPA 兜底），所以"重发"的正确做法
+    # 是重新读已到达的信，而不是再提交一次注册。注册接口虽会对重复邮箱静默
+    # 重发验证信，但那会覆盖账号状态、可能换掉临时密码，风险更大。
+    resend_only = bool(item.get("resend_only"))
+    resend_since = None
+    if resend_only and item.get("resend_since"):
+        try:
+            resend_since = datetime.fromisoformat(
+                re.sub(r"(\.\d{6})\d+", r"\1", str(item["resend_since"]).replace("Z", "+00:00"))
+            ).timestamp()
+        except Exception:  # noqa: BLE001
+            resend_since = None
 
     # --- 0. 会话复用：已有有效会话就直接返回，不重复注册 ---
-    if item.get("session_cookie") and not settings.get("force_register"):
+    if item.get("session_cookie") and not resend_only and not settings.get("force_register"):
         resumed = resume_session(item, settings)
         if resumed:
             return {"email": email, "password": password, **resumed}
@@ -707,24 +774,35 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
             return result
 
     # --- 1. 注册 ---
-    payload = build_payload(email, password, item.get("name"), item.get("company"), item.get("phone", ""))
-    log(f"提交注册 {email}")
-    resp = reg.register(payload)
-    j = resp.json or {}
-    if resp.status != 201:
-        result["error"] = f"注册失败 HTTP {resp.status}: {j.get('message') or resp.body[:160]}"
-        emit("log", message=result["error"])
-        return result
-    result["status"] = "registered"
-    log("注册成功 201")
-    emit_result({**result})  # 中间态，先落库
+    if resend_only:
+        result["status"] = "registered"
+        if resend_since is None:
+            resend_since = 0.0  # 没给基准就扫全箱，认领已到达的信
+        log("重新认证接码：不重新注册，从接码箱取验证信" if not resend_since
+            else f"重新认证接码：不重新注册，取 {resend_since:.0f} 之后到达的验证信")
+        emit_result({**result})
+    else:
+        payload = build_payload(email, password, item.get("name"), item.get("company"), item.get("phone", ""))
+        log(f"提交注册 {email}")
+        resp = reg.register(payload)
+        j = resp.json or {}
+        if resp.status != 201:
+            result["error"] = f"注册失败 HTTP {resp.status}: {j.get('message') or resp.body[:160]}"
+            emit("log", message=result["error"])
+            return result
+        result["status"] = "registered"
+        log("注册成功 201")
+        emit_result({**result})  # 中间态，先落库
+        # Deploy 的验证信可能晚一小时以上才到。以**收到 201 的时刻**为基准，
+        # 之后到达的验证信才算这次注册的（旧信不会误抓）。
+        resend_since = time.time()
 
     # --- 2. 取验证链接 ---
     if not (auto_verify and reader):
         result["detail"] = "未启用自动验证"
         return result
 
-    got = reader.wait_for_link(before_ids, timeout=verify_timeout)
+    got = reader.wait_for_link(before_ids, timeout=verify_timeout, since_ts=resend_since)
     if not got:
         result["error"] = f"{verify_timeout:.0f}s 内未收到验证邮件"
         emit("log", message=result["error"])

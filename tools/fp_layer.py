@@ -53,10 +53,17 @@ IMPERSONATE_BASE = {
     "firefox": "firefox133",
 }
 
-# Safari 按大版本号细分底座（实测可用：safari15_5 / safari17_0 / safari18_0 / safari26_0）
+# Safari 按大版本号细分底座（实测可用：safari15_5 / safari17_0 / safari18_0 / safari260）
 # 不同 Safari 大版本 TLS 扩展哈希不同，细分后 UA 与指纹版本才自洽。
+#
+# ⚠️ 命名规则不统一，写错就是请求直接失败（impersonate 无效 → ImpersonateError，
+#    注册机连不上 deploy.com，整批账号被判失败）：
+#      safari15_5 / safari17_0 / safari18_0   带下划线
+#      safari260                              **不带**下划线（2026-11-13 在
+#                                             curl_cffi 0.17.0 上实测确认）
+#    历史上这里写成 "safari26_0"，导致 Safari 26 的 UA 全部无法出网。
 SAFARI_BASES = [
-    (26, "safari26_0"),
+    (26, "safari260"),
     (18, "safari18_0"),
     (17, "safari17_0"),
     (0,  "safari15_5"),

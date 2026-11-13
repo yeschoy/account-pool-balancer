@@ -45,6 +45,9 @@ vm.runInContext(source.slice(source.indexOf('async function accountAction('), so
   context.api = async () => { throw new Error('目录检测失败'); };
   await context.accountAction({ id: 'd', provider: 'deploy' }, 'refresh');
   assert.deepEqual(toasts.at(-1), ['目录检测失败', 'error']);
+  // 重发验证：只有"已注册、未验证、无会话、不在跑"的行才出现按钮
+  assert.match(registrationSource, /data-dr-resend=\"/);
+  assert.match(registrationSource, /resend-verification/);
   assert.match(source, /if \(isDeploy\(\)\) body\.deploy =/);
   assert.match(source, /el\.disabled = isDeploy\(\)/);
   console.log('Deploy web tests passed');

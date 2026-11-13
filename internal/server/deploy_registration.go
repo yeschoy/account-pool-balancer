@@ -50,6 +50,7 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/candidates/bulk-register", s.apiDeployBulkRegister)
 	a("POST /api/deploy/candidates/{id}/cancel", s.apiDeployCandidateCancel)
 	a("POST /api/deploy/candidates/{id}/resume", s.apiDeployCandidateResume)
+	a("POST /api/deploy/candidates/{id}/resend-verification", s.apiDeployResendVerification)
 	a("POST /api/deploy/candidates/{id}/import", s.apiDeployCandidateImport)
 	a("POST /api/deploy/candidates/import-all", s.apiDeployImportAll)
 	a("PATCH /api/deploy/candidates/{id}", s.apiDeployCandidateUpdate)
@@ -285,7 +286,174 @@ func (s *Server) apiDeployCandidateCancel(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// apiDeployCandidateResume 用已保存的会话校验账号是否仍然可用，不重新注册。
+// apiDeployCandidateResendVerification 重新认证接码：重新读取接码箱里的
+// 验证信并完成验证，**不会重新提交注册**。
+//
+// 为什么需要它：Deploy 的验证信经 Mandrill 投递，实测从注册到到达可以
+// 超过 1 小时（09:37:31Z 注册 → 10:43:44Z 到信），而注册机只等
+// verify_timeout（默认 240s）。超时后账号停在 registered，但**账号在
+// deploy.com 那边已经建好了，验证信也往往已经躺在接码箱里**。
+//
+// 为什么不是"让上游重发"：deploy.com 没有可用的重发验证 API
+// （2026-11-13 实测 ajax-portal 下多种候选路径全部 404；deploy.com/api/*
+// 只返回 SPA 兜底 HTML）。重复提交注册虽会静默触发验证信，但会覆盖账号
+// 状态、可能换掉临时密码，副作用远大于"重新读一次信"。
+//
+// 安全边界：
+//   - 只有 pending（registered 且无会话）的候选可以操作，已验证/有会话的
+//     不动，避免把已激活账号的链接换掉；
+//   - 用 seq 信号量跟注册批次互斥，避免和正在跑的注册撞车；
+//   - **扫全箱取最新一封验证信**，不按注册时刻设下限：verify_timeout 固定
+//     240s，按时间下限筛选会在信没到时干等满超时；扫全箱能立即认领已到达
+//     的信。本次不改写 RegisterAttemptAt（没有提交注册）。
+func (s *Server) apiDeployResendVerification(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	c, err := m.store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if c.Status == deploysignupstore.Running {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "注册进行中，等它跑完再重发"})
+		return
+	}
+	if c.IsVerified || c.SessionCookie != "" || c.Status == deploysignupstore.Verified {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "该账号已有会话或已验证，不需要重发验证邮件"})
+		return
+	}
+	if c.MailboxURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "该候选没有接码地址，无法验证"})
+		return
+	}
+
+	// 与注册批次互斥；拿到之后再重新读一次，避免排队期间状态变了
+	select {
+	case m.seq <- struct{}{}:
+		defer func() { <-m.seq }()
+	case <-r.Context().Done():
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "当前有注册任务在跑，稍后重发"})
+		return
+	}
+	c, err = m.store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if c.IsVerified || c.Status == deploysignupstore.Running {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "账号状态已变化，请刷新后重试"})
+		return
+	}
+
+	st := m.store.Settings()
+	scriptPath, pyBin, serr := m.scriptPaths(st)
+	if serr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": serr.Error()})
+		return
+	}
+
+	// 重新认证接码 = **不重新注册**，只从接码箱取已到达的验证信并验证。
+	//
+	// 为什么不再提交一次注册：
+	//   - deploy.com 没有可用的"重发验证"API（2026-11-13 实测 ajax-portal
+	//     下多种候选路径全部 404；deploy.com/api/* 只是 SPA 兜底 HTML）；
+	//   - 重复注册虽会静默触发验证信，但会覆盖账号状态、可能换掉临时密码，
+	//     副作用比"重新读一次信"大得多。
+	// 账号在 deploy.com 那边已经建好了，验证信也常常已经到达，只是注册机
+	// 当时没等到——所以这里只需重新读信。
+	now := time.Now().UTC()
+	// 取信基准：扫全箱（取最新一封验证信）。
+	//
+	// 这里刻意不按 RegisterAttemptAt 设下限。原因：verify_timeout 固定 240s
+	// 不变，而验证信可能晚到 1 小时以上；如果只认"注册之后到达"的信，
+	// 在信还没到时按钮会干等满 240s 才失败，用户体验差且信息量低。
+	// 扫全箱取最新一封既能立即认领已到达的信（绝大多数情况），
+	// 又不会更慢——旧 token 已失效的情况由上游 authenticate 明确报错。
+	sinceStr := ""
+	job := map[string]any{
+		"settings": map[string]any{
+			"min_interval":   st.MinIntervalSec,
+			"max_retries":    st.MaxRetries,
+			"verify_timeout": st.VerifyTimeoutSec,
+			"transport":      st.Transport,
+			"auto_verify":    st.AutoVerify,
+			"sys_proxy":      st.SysProxy,
+			"bridge_port":    st.BridgePort,
+		},
+		"items": []map[string]any{{
+			"email":          c.Email,
+			"mailbox_url":    c.MailboxURL,
+			"password":       c.Password,
+			"proxy":          c.ProxyURL,
+			"resend_only":    true, // 不重新注册、不复用会话，只取信并验证
+			"resend_since":   sinceStr,
+			"session_cookie": "",
+			"ua":             c.UA,
+			"browser":        c.Browser,
+			"platform":       c.Platform,
+			"ja3":            c.JA3,
+		}},
+	}
+	raw, _ := json.Marshal(job)
+	jobPath := filepath.Join(os.TempDir(), fmt.Sprintf("deploy-resend-%d.json", now.UnixNano()))
+	if err := os.WriteFile(jobPath, raw, 0o600); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "写任务文件失败: " + err.Error()})
+		return
+	}
+	defer os.Remove(jobPath)
+	_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+		// 不动 RegisterAttemptAt：这次没有提交注册，它仍是上次注册的时刻。
+		x.LastResendAt = now
+		x.Error = ""
+		x.Detail = "正在重新读取接码箱并验证"
+		return nil
+	})
+	m.addLog("resend", c.Email, "重新认证接码：读取验证邮件并验证")
+
+	out, runErr := m.runPythonOnce(pyBin, scriptPath, jobPath)
+	if runErr != nil {
+		_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+			x.Error = "重新取信失败: " + runErr.Error()
+			x.Detail = ""
+			return nil
+		})
+		m.addLog("resend_failed", c.Email, runErr.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": runErr.Error()})
+		return
+	}
+	_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+		if out.Status == "verified" {
+			x.Status = deploysignupstore.Verified
+			x.IsVerified = true
+			x.SessionCookie = out.SessionCookie
+			x.AccountID = out.AccountID
+			x.OrgID = out.OrgID
+			x.Error = ""
+			x.Detail = "重新取信后验证成功"
+			return nil
+		}
+		x.Status = deploysignupstore.Registered
+		x.SessionCookie = out.SessionCookie
+		x.AccountID = out.AccountID
+		x.OrgID = out.OrgID
+		if out.Error != "" {
+			x.Error = out.Error
+			x.Detail = ""
+		} else {
+			x.Detail = out.Detail
+		}
+		return nil
+	})
+	m.addLog("resend_done", c.Email, "状态="+out.Status)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "status": out.Status, "error": out.Error, "detail": out.Detail,
+	})
+}
+
 func (s *Server) apiDeployCandidateResume(w http.ResponseWriter, r *http.Request) {
 	m, err := s.deployMgr()
 	if err != nil {
@@ -343,8 +511,8 @@ func (s *Server) apiDeploySaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   m.store.Settings(),
-		"card_count": len(validCards),
+		"settings":    m.store.Settings(),
+		"card_count":  len(validCards),
 		"card_errors": cardErrs,
 	})
 }
@@ -437,11 +605,11 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 			proxy = st.ProxyPool[i%len(st.ProxyPool)]
 		}
 		items = append(items, map[string]any{
-			"email":          c.Email,
-			"mailbox_url":    c.MailboxURL,
-			"password":       c.Password,
-			"proxy":          proxy,
-			"fp_seed":        time.Now().UnixNano() % 100000,
+			"email":       c.Email,
+			"mailbox_url": c.MailboxURL,
+			"password":    c.Password,
+			"proxy":       proxy,
+			"fp_seed":     time.Now().UnixNano() % 100000,
 			// 会话复用：把已保存的会话与指纹带上，python 优先复用它
 			"session_cookie": c.SessionCookie,
 			"ua":             c.UA,
@@ -456,6 +624,11 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 			// 记录本次实际使用的代理，后续复用会话必须走同一出口
 			if proxy != "" {
 				x.ProxyURL = proxy
+			}
+			// 记录本次注册时刻：Deploy 的验证信可能晚一小时以上才到，
+			// 取信以这个时间为基准，不用首次导入时间。
+			if !resumeOnly {
+				x.RegisterAttemptAt = time.Now().UTC()
 			}
 			return nil
 		})
@@ -541,6 +714,89 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 		})
 	}
 	m.addLog("done", "", "批次结束")
+}
+
+// resendOutcome 是重发验证邮件子命令读回的结果。
+type resendOutcome struct {
+	Status        string
+	Error         string
+	Detail        string
+	SessionCookie string
+	AccountID     string
+	OrgID         string
+}
+
+// runPythonOnce 跑一次注册机子命令并读回单个 item 的结果事件。
+//
+// 与 runBatch 的区别：不写 status=running、不持有 running 取消表，调用方
+// 已保证互斥。返回第一个 item_done 的事件；子命令未产出结果就退出时
+// 用 stderr 尾巴拼错误。
+func (m *deployManager) runPythonOnce(pyBin, scriptPath, jobPath string) (resendOutcome, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, pyBin, scriptPath, "--job-file", jobPath)
+	cmd.Dir = filepath.Dir(filepath.Dir(scriptPath))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return resendOutcome{}, err
+	}
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return resendOutcome{}, err
+	}
+
+	var out *resendOutcome
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 1<<20), 8<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		typ, _ := ev["type"].(string)
+		switch typ {
+		case "log":
+			if msg, _ := ev["message"].(string); msg != "" {
+				m.addLog("log", "", msg)
+			}
+		case "item_done", "item_update":
+			r := resendOutcome{}
+			r.Status, _ = ev["status"].(string)
+			r.Error, _ = ev["error"].(string)
+			r.Detail, _ = ev["detail"].(string)
+			r.SessionCookie, _ = ev["session_cookie"].(string)
+			if v, ok := ev["account_id"].(float64); ok {
+				r.AccountID = fmt.Sprintf("%.0f", v)
+			}
+			if v, ok := ev["org_id"].(float64); ok {
+				r.OrgID = fmt.Sprintf("%.0f", v)
+			}
+			// item_update 是中间态（如刚注册 201、还在等信）：
+			// item_done 一定会来，所以只有 done 才终止等待。
+			if typ == "item_done" {
+				cp := r
+				out = &cp
+			}
+		}
+	}
+	_ = cmd.Wait()
+	if out == nil {
+		tail := strings.TrimSpace(stderr.String())
+		if len(tail) > 400 {
+			tail = tail[len(tail)-400:]
+		}
+		if tail == "" {
+			tail = "注册机没有返回结果"
+		}
+		return resendOutcome{}, errors.New(tail)
+	}
+	return *out, nil
 }
 
 func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
@@ -659,7 +915,6 @@ func (m *deployManager) scriptPaths(st deploysignupstore.Settings) (script, py s
 	wd, _ := os.Getwd()
 	return "", "", fmt.Errorf("找不到 deploy_registrar.py（cwd=%s，已查 %d 个位置）", wd, len(candidates))
 }
-
 
 // ---------------------------------------------------------------- 入池
 
@@ -780,7 +1035,6 @@ func (s *Server) apiDeployImportAll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 // apiDeployCandidateUpdate 修改候选的可编辑字段。
 //
 // 目前只开放代理：运营经常要在注册失败后换出口重试，而代理是唯一
@@ -839,7 +1093,6 @@ func (s *Server) apiDeployCandidateUpdate(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy_url": newProxy})
 }
 
-
 // apiDeployAssignProxies 按顺序把代理池里的代理逐个写进候选记录。
 //
 // 与注册时的临时轮询不同，这会把分配结果**落盘**，因此：
@@ -855,7 +1108,7 @@ func (s *Server) apiDeployAssignProxies(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		Overwrite *bool  `json:"overwrite"`
+		Overwrite *bool    `json:"overwrite"`
 		OnlyIDs   []string `json:"only_ids"`
 	}
 	if r.ContentLength != 0 {
@@ -921,7 +1174,6 @@ func (s *Server) apiDeployAssignProxies(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-
 // validateDeployCards 逐行解析并校验卡列表。
 //
 // 复用 mistralcards 的解析（格式、位数、Luhn、有效期），返回有效行原文与
@@ -963,7 +1215,6 @@ func cardErrReason(err error) string {
 	}
 	return msg
 }
-
 
 // apiDeployProxyTest 逐个测试代理池里的代理能不能出网，返回出口 IP。
 //
@@ -1047,7 +1298,6 @@ func (s *Server) probeProxyEgress(upstream string, st deploysignupstore.Settings
 	return res.IP, nil
 }
 
-
 // ---------------------------------------------------------------- 绑卡
 
 // deployCardLine 把 Card 转成 python 需要的 "number|MM|YYYY|CVC" 形式。
@@ -1104,9 +1354,9 @@ func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	var body struct {
-		Live        *bool   `json:"live"`
-		Amount      float64 `json:"amount"`
-		CardLine    string  `json:"card"`   // 可选：手填一张，覆盖卡列表
+		Live     *bool   `json:"live"`
+		Amount   float64 `json:"amount"`
+		CardLine string  `json:"card"` // 可选：手填一张，覆盖卡列表
 	}
 	if r.ContentLength != 0 {
 		if err := readBody(r, &body); err != nil {
@@ -1181,9 +1431,9 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Live     *bool    `json:"live"`
-		Amount   float64  `json:"amount"`
-		OnlyIDs  []string `json:"only_ids"`
+		Live    *bool    `json:"live"`
+		Amount  float64  `json:"amount"`
+		OnlyIDs []string `json:"only_ids"`
 	}
 	if r.ContentLength != 0 {
 		if err := readBody(r, &body); err != nil {
@@ -1290,7 +1540,7 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 		"bound": bound, "failed": failed,
 		"total": len(targets), "attempted": len(items),
 		"cards_available": len(avail),
-		"live": live,
+		"live":            live,
 	})
 }
 
@@ -1313,7 +1563,6 @@ func cardFromLine(line string) deploysignupstore.Card {
 	}
 	return c
 }
-
 
 // bindItem 是传给 python 的单条绑卡请求。
 type bindItem struct {
@@ -1422,7 +1671,6 @@ func (s *Server) runBindCards(items []bindItem, live bool, amount float64) ([]bi
 	return out, nil
 }
 
-
 // apiDeploySetCard 给单个候选指定/清除要用的卡。
 //
 // 导入后随时可改；存的是完整卡（含 CVV），与「卡列表」分开——
@@ -1492,7 +1740,6 @@ func (s *Server) apiDeploySetCard(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-
 
 // cardFullLine 把候选上保存的卡还原成 python 需要的 "number|MM|YYYY|CVC"。
 //
