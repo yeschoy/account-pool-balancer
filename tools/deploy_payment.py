@@ -516,19 +516,82 @@ def bind_card_and_charge(
     return res
 
 
+def cmd_bind_job(path: str) -> int:
+    """
+    批处理入口，供后端调用。读 job.json：
+
+        {"live": true, "amount": 5,
+         "items": [{"id":"c1","email":"a@b.com","session_cookie":"...","org_id":"123",
+                    "card":"4480602749951616|05|2031|858","zip":"94607","country":"US",
+                    "proxy":"socks5://..."}]}
+
+    逐条绑卡，每条输出一行 JSON（行缓冲），便于后端流式解析。
+    """
+    raw = json.load(open(path, encoding="utf-8"))
+    live = bool(raw.get("live"))
+    amount = float(raw.get("amount") or 5.0)
+    items = raw.get("items") or []
+    okc = 0
+    for it in items:
+        cid = it.get("id") or ""
+        email = it.get("email") or ""
+        parts = (it.get("card") or "").split("|")
+        base = {"id": cid, "email": email}
+        if len(parts) < 4:
+            print(json.dumps({**base, "ok": False, "step": "card", "error": "卡格式错误"},
+                             ensure_ascii=False), flush=True)
+            continue
+        try:
+            card = Card(
+                number=parts[0], exp_mon=int(parts[1]), exp_year=int(parts[2]), cvc=parts[3],
+                zip=it.get("zip") or "94607", country=it.get("country") or "US",
+            )
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({**base, "ok": False, "step": "card", "error": f"卡解析失败: {e}"},
+                             ensure_ascii=False), flush=True)
+            continue
+        if not it.get("session_cookie") or not it.get("org_id"):
+            print(json.dumps({**base, "ok": False, "step": "session",
+                              "error": "缺少会话或组织 ID（需先注册成功）"},
+                             ensure_ascii=False), flush=True)
+            continue
+        try:
+            r = bind_card_and_charge(
+                session_cookie=it["session_cookie"], org_id=it["org_id"], card=card,
+                amount=amount, proxy=it.get("proxy"), dry_run=not live,
+            )
+            if r.ok:
+                okc += 1
+            print(json.dumps({**base, "ok": r.ok, "step": r.step,
+                              "source_id": r.source_id, "error": r.error},
+                             ensure_ascii=False), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({**base, "ok": False, "step": "exception",
+                              "error": f"{type(e).__name__}: {e}"[:200]},
+                             ensure_ascii=False), flush=True)
+    print(json.dumps({"done": True, "ok": okc, "total": len(items)}, ensure_ascii=False), flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
     ap = argparse.ArgumentParser(description="deploy 绑卡+充值（默认 dry-run）")
-    ap.add_argument("--email", required=True)
+    ap.add_argument("--bind-job", help="批处理 job.json（后端调用）")
+    ap.add_argument("--email", required=False)
     ap.add_argument("--password", default="")
     ap.add_argument("--session-cookie", default="", help="hive-portal-production 的值")
     ap.add_argument("--org-id", default="")
-    ap.add_argument("--card", required=True, help="number|MM|YYYY|CVC|ZIP|COUNTRY")
+    ap.add_argument("--card", required=False, help="number|MM|YYYY|CVC|ZIP|COUNTRY")
     ap.add_argument("--amount", type=float, default=5.0)
     ap.add_argument("--proxy", default=None)
     ap.add_argument("--live", action="store_true", help="真正发请求（默认只 dry-run）")
     args = ap.parse_args(argv)
+
+    if args.bind_job:
+        return cmd_bind_job(args.bind_job)
+    if not args.email or not args.card:
+        ap.error("需要 --email 与 --card（或使用 --bind-job）")
 
     parts = args.card.split("|")
     if len(parts) < 4:

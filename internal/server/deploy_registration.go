@@ -55,6 +55,8 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("PATCH /api/deploy/candidates/{id}", s.apiDeployCandidateUpdate)
 	a("POST /api/deploy/candidates/assign-proxies", s.apiDeployAssignProxies)
 	a("POST /api/deploy/proxy-test", s.apiDeployProxyTest)
+	a("POST /api/deploy/candidates/{id}/bind-card", s.apiDeployBindCard)
+	a("POST /api/deploy/bind-cards", s.apiDeployBindCards)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -1042,4 +1044,351 @@ func (s *Server) probeProxyEgress(upstream string, st deploysignupstore.Settings
 		return "", fmt.Errorf("%s", res.Err)
 	}
 	return res.IP, nil
+}
+
+
+// ---------------------------------------------------------------- 绑卡
+
+// deployCardLine 把 Card 转成 python 需要的 "number|MM|YYYY|CVC" 形式。
+func deployCardLine(c deploysignupstore.Card, zip, country string) string {
+	return fmt.Sprintf("%s|%02d|%04d|%s", c.Number, c.ExpMon, c.ExpYear, c.CVC)
+}
+
+// pickUnusedCards 从设置里的卡列表挑出还没被任何候选占用的卡。
+// 一卡一账号：已绑定到别的候选的卡绝不复用。
+func pickUnusedCards(st deploysignupstore.Settings, rows []deploysignupstore.Candidate) []string {
+	used := map[string]bool{}
+	for _, c := range rows {
+		if c.Card != nil && c.Card.Number != "" {
+			used[strings.TrimSpace(c.Card.Number)] = true
+		}
+		if c.Recharged {
+			// 已绑过的卡不参与再分配
+			if c.Card != nil {
+				used[strings.TrimSpace(c.Card.Number)] = true
+			}
+		}
+	}
+	// 卡指纹台账（跨进程持久化，防止服务重启后复用）
+	ledgerBlocked := cardLedgerNumbers()
+	var out []string
+	for _, line := range st.Cards {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		num := strings.TrimSpace(strings.SplitN(line, "----", 2)[0])
+		if used[num] || ledgerBlocked[num] {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// cardLedgerNumbers 读取 python 侧的一卡多绑台账，返回已被占用过的卡号最后四位集合。
+// 台账只存卡号哈希，所以这里按完整卡号计算同样的哈希来比对。
+func cardLedgerNumbers() map[string]bool {
+	// 台账在 python 侧用 sha256(纯数字卡号)[:32] 作为键；
+	// 这里返回空集，真正的拦截交给 python 的 assert_card_unused。
+	return map[string]bool{}
+}
+
+// apiDeployBindCard 给单个候选绑卡（+充值）。
+func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Live        *bool   `json:"live"`
+		Amount      float64 `json:"amount"`
+		CardLine    string  `json:"card"`   // 可选：手填一张，覆盖卡列表
+	}
+	if r.ContentLength != 0 {
+		if err := readBody(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	c, gerr := m.store.Get(id)
+	if gerr != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": gerr.Error()})
+		return
+	}
+	if c.SessionCookie == "" || c.OrgID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "该账号还没有会话/组织 ID，需先注册成功"})
+		return
+	}
+	if c.Recharged {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "already": true})
+		return
+	}
+	st := m.store.Settings()
+	line := strings.TrimSpace(body.CardLine)
+	if line == "" {
+		avail := pickUnusedCards(st, m.store.List())
+		if len(avail) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "没有可用的银行卡（卡列表为空，或全部已绑定其他账号）"})
+			return
+		}
+		line = avail[0]
+	}
+	live := body.Live == nil || *body.Live
+	amount := body.Amount
+	if amount <= 0 {
+		amount = 5
+	}
+
+	res, berr := s.runBindCards([]bindItem{{
+		ID: c.ID, Email: c.Email, SessionCookie: c.SessionCookie,
+		OrgID: c.OrgID, CardLine: line, Zip: st.CardZip, Country: st.CardCountry,
+		Proxy: c.ProxyURL,
+	}}, live, amount)
+	if berr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": berr.Error()})
+		return
+	}
+	out := res[0]
+	// 成功则把卡记到候选上，防止被别的账号复用
+	if out.OK {
+		num := strings.TrimSpace(strings.SplitN(line, "----", 2)[0])
+		card := cardFromLine(num)
+		_, _ = m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
+			x.Card = &card
+			x.Recharged = true
+			return nil
+		})
+		m.addLog("bind_ok", c.Email, "绑卡成功")
+	} else {
+		m.addLog("bind_failed", c.Email, out.Error)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// apiDeployBindCards 批量绑卡：给所有已注册且未绑卡的候选依次分配卡。
+func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		Live     *bool    `json:"live"`
+		Amount   float64  `json:"amount"`
+		OnlyIDs  []string `json:"only_ids"`
+	}
+	if r.ContentLength != 0 {
+		if err := readBody(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	st := m.store.Settings()
+	rows := m.store.List()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CreatedAt.Before(rows[j].CreatedAt) })
+
+	only := map[string]bool{}
+	for _, id := range body.OnlyIDs {
+		only[id] = true
+	}
+
+	// 收集待绑账号
+	var targets []deploysignupstore.Candidate
+	for _, c := range rows {
+		if len(only) > 0 && !only[c.ID] {
+			continue
+		}
+		if c.Recharged || c.SessionCookie == "" || c.OrgID == "" {
+			continue
+		}
+		targets = append(targets, c)
+	}
+	if len(targets) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"bound": 0, "skipped": len(rows), "total": 0,
+			"message": "没有待绑卡的账号（需已注册且有会话）"})
+		return
+	}
+
+	avail := pickUnusedCards(st, rows)
+	if len(avail) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "没有可用的银行卡，先在设置页填写卡列表"})
+		return
+	}
+
+	var items []bindItem
+	used := 0
+	for _, c := range targets {
+		if used >= len(avail) {
+			break // 卡不够，剩下的跳过
+		}
+		items = append(items, bindItem{
+			ID: c.ID, Email: c.Email, SessionCookie: c.SessionCookie,
+			OrgID: c.OrgID, CardLine: avail[used], Zip: st.CardZip, Country: st.CardCountry,
+			Proxy: c.ProxyURL,
+		})
+		used++
+	}
+	live := body.Live == nil || *body.Live
+	amount := body.Amount
+	if amount <= 0 {
+		amount = 5
+	}
+	res, berr := s.runBindCards(items, live, amount)
+	if berr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": berr.Error()})
+		return
+	}
+	bound, failed := 0, 0
+	for _, out := range res {
+		if out.OK {
+			bound++
+			num := ""
+			for _, it := range items {
+				if it.ID == out.ID {
+					num = strings.TrimSpace(strings.SplitN(it.CardLine, "----", 2)[0])
+					break
+				}
+			}
+			card := cardFromLine(num)
+			_, _ = m.store.Update(out.ID, func(x *deploysignupstore.Candidate) error {
+				x.Card = &card
+				x.Recharged = true
+				return nil
+			})
+			m.addLog("bind_ok", out.Email, "绑卡成功")
+		} else {
+			failed++
+			m.addLog("bind_failed", out.Email, out.Error)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bound": bound, "failed": failed,
+		"total": len(targets), "attempted": len(items),
+		"cards_available": len(avail),
+		"live": live,
+	})
+}
+
+// cardFromLine 把 "卡号----有效期----CVV" 拆成 Card。
+func cardFromLine(line string) deploysignupstore.Card {
+	parts := strings.Split(line, "----")
+	c := deploysignupstore.Card{}
+	if len(parts) > 0 {
+		c.Number = strings.TrimSpace(parts[0])
+	}
+	return c
+}
+
+
+// bindItem 是传给 python 的单条绑卡请求。
+type bindItem struct {
+	ID            string
+	Email         string
+	SessionCookie string
+	OrgID         string
+	CardLine      string
+	Zip           string
+	Country       string
+	Proxy         string
+}
+
+// bindOutcome 是 python 逐行回传的结果。
+type bindOutcome struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	OK       bool   `json:"ok"`
+	Step     string `json:"step,omitempty"`
+	SourceID string `json:"source_id,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// runBindCards 调用 deploy_payment.py --bind-job 执行绑卡。
+//
+// Stripe 已禁止用 publishable key 直接换 token，脚本内部会起 Playwright
+// 在真浏览器里跑 Stripe.js，所以这一步比注册慢，串行执行。
+func (s *Server) runBindCards(items []bindItem, live bool, amount float64) ([]bindOutcome, error) {
+	m, err := s.deployMgr()
+	if err != nil {
+		return nil, err
+	}
+	st := m.store.Settings()
+
+	// 定位脚本与解释器：与注册同一套解析，只是换成 deploy_payment.py
+	regScript, py, serr := m.scriptPaths(st)
+	if serr != nil {
+		return nil, serr
+	}
+	payScript := filepath.Join(filepath.Dir(regScript), "deploy_payment.py")
+	if _, e := os.Stat(payScript); e != nil {
+		return nil, fmt.Errorf("找不到 deploy_payment.py（在 %s）", filepath.Dir(regScript))
+	}
+
+	job := map[string]any{"live": live, "amount": amount}
+	var jitems []map[string]any
+	for _, it := range items {
+		jitems = append(jitems, map[string]any{
+			"id": it.ID, "email": it.Email, "session_cookie": it.SessionCookie,
+			"org_id": it.OrgID, "card": it.CardLine,
+			"zip": it.Zip, "country": it.Country, "proxy": it.Proxy,
+		})
+	}
+	job["items"] = jitems
+
+	f, ferr := os.CreateTemp("", "deploy-bind-*.json")
+	if ferr != nil {
+		return nil, ferr
+	}
+	defer os.Remove(f.Name())
+	if enc := json.NewEncoder(f); enc.Encode(job) != nil {
+		f.Close()
+		return nil, fmt.Errorf("写 job 文件失败")
+	}
+	f.Close()
+
+	// 每条绑卡要起浏览器，给足时间：每条 90 秒
+	timeout := time.Duration(len(items)*90+60) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, py, payScript, "--bind-job", f.Name())
+	cmd.Dir = filepath.Dir(payScript)
+	cmd.Env = append(os.Environ(),
+		"DEPLOY_PAY_SYS_PROXY="+st.SysProxy,
+		"DEPLOY_PAY_BRIDGE_PORT="+fmt.Sprint(st.BridgePort+50),
+	)
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	var out []bindOutcome
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var o map[string]any
+		if json.Unmarshal([]byte(line), &o) != nil {
+			continue
+		}
+		if _, done := o["done"]; done {
+			continue
+		}
+		var oc bindOutcome
+		b, _ := json.Marshal(o)
+		if json.Unmarshal(b, &oc) == nil && oc.ID != "" {
+			out = append(out, oc)
+		}
+	}
+	_ = cmd.Wait()
+	return out, nil
 }

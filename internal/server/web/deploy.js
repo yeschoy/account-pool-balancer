@@ -98,6 +98,7 @@ function renderDeployRows(rows) {
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
         ${c.session_cookie ? `<button type="button" class="btn small" data-dr-resume="${drEsc(c.id)}">校验会话</button>` : ''}
         ${(c.status === 'verified' && !c.imported_account_id) ? `<button type="button" class="btn small primary" data-dr-import="${drEsc(c.id)}">入池</button>` : ''}
+        ${(c.status === 'verified' && !c.recharged && c.session_cookie) ? `<button type="button" class="btn small" data-dr-bind="${drEsc(c.id)}">绑卡</button>` : ''}
         ${busy ? `<button type="button" class="btn small" data-dr-cancel="${drEsc(c.id)}">取消</button>` : ''}
         <button type="button" class="btn small ghost" data-dr-del="${drEsc(c.id)}">删除</button>
       </td>
@@ -312,6 +313,28 @@ function initDeployPage() {
     }
   });
 
+  // 批量绑卡
+  document.getElementById('dr-bulk-bind')?.addEventListener('click', async (ev) => {
+    const errEl = document.getElementById('dr-form-error');
+    const resEl = document.getElementById('dr-bulk-result');
+    errEl.textContent = '';
+    if (!window.confirm('给所有已注册且未绑卡的账号依次绑卡并充值 $5？\n\n会真实扣款。卡数量不足时只绑前 N 个。')) return;
+    ev.currentTarget.disabled = true;
+    try {
+      const r = await drApi('/bind-cards', { method: 'POST', body: JSON.stringify({ live: true }) });
+      if (r.message) {
+        resEl.textContent = r.message;
+      } else {
+        resEl.textContent = `绑卡成功 ${r.bound} 个，失败 ${r.failed || 0} 个（可用卡 ${r.cards_available} 张，待绑 ${r.total} 个）`;
+      }
+      await loadDeployRegistrations();
+    } catch (e) {
+      errEl.textContent = e.message;
+    } finally {
+      ev.currentTarget.disabled = false;
+    }
+  });
+
   // 行内操作（事件委托）
   document.getElementById('dr-rows')?.addEventListener('click', async (ev) => {
     const t = ev.target.closest('button');
@@ -322,12 +345,26 @@ function initDeployPage() {
     const resumeId = t.dataset.drResume;
     const importId = t.dataset.drImport;
     const proxyId = t.dataset.drProxy;
+    const bindId = t.dataset.drBind;
     try {
       if (runId) {
         await drApi(`/candidates/${encodeURIComponent(runId)}/register`, { method: 'POST', body: '{}' });
         startDeployPolling();
       } else if (cancelId) {
         await drApi(`/candidates/${encodeURIComponent(cancelId)}/cancel`, { method: 'POST', body: '{}' });
+      } else if (bindId) {
+        if (!window.confirm('给这个账号绑卡并充值 $5？\n\n会真实扣款。')) return;
+        try {
+          const r = await drApi(`/candidates/${encodeURIComponent(bindId)}/bind-card`, {
+            method: 'POST',
+            body: JSON.stringify({ live: true }),
+          });
+          toast(r.ok ? '绑卡成功' : `绑卡失败：${r.error || r.step}`);
+          await loadDeployRegistrations();
+        } catch (e) {
+          toast(e.message);
+        }
+        return;
       } else if (proxyId) {
         // 从当前单元格取现值（明文展示，直接可用）
         const cell = t.closest('td');
