@@ -612,9 +612,9 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 			"email":       c.Email,
 			"mailbox_url": c.MailboxURL,
 			// 已保存的密码：会话失效/账号已存在时用它走登录，不重复注册
-			"password":    c.Password,
-			"proxy":       proxy,
-			"fp_seed":     time.Now().UnixNano() % 100000,
+			"password": c.Password,
+			"proxy":    proxy,
+			"fp_seed":  time.Now().UnixNano() % 100000,
 			// 会话复用：把已保存的会话与指纹带上，python 优先复用它
 			"session_cookie": c.SessionCookie,
 			"ua":             c.UA,
@@ -821,6 +821,7 @@ func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
 		}
 		id := ids[idx]
 		detail, _ := ev["detail"].(string)
+		relogin, _ := ev["relogin"].(bool)
 		_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
 			if s, ok := ev["status"].(string); ok {
 				c.Status = deploysignupstore.Status(s)
@@ -828,8 +829,14 @@ func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
 			// 登录尝试的结论落到 detail：transport 表示出口不可用（账号状态
 			// 未知，可直接重试），其余是登录本身失败（密码/验证码/上游拒绝）。
 			// 两种都不再回落到注册，UI 需要能区分。
+			//
+			// 成功且不是"登录失败后的兜底状态"时要清空 detail/error：
+			// 否则上一次失败的 transport 会一直挂在页面上，看起来像这次也失败了。
 			if detail != "" {
 				c.Detail = detail
+			} else if typ == "item_done" && !relogin {
+				c.Detail = ""
+				c.Error = ""
 			}
 			if s, ok := ev["password"].(string); ok && s != "" {
 				c.Password = s
@@ -1420,16 +1427,38 @@ func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := res[0]
-	// 成功则把卡记到候选上，防止被别的账号复用
+	// 成功则把卡记到候选上，防止被别的账号复用，并落真实余额。
+	//
+	// 这里同时清掉 detail/error：它们原来是登录阶段留下的（如 transport），
+	// 成功时若不清，页面上会出现"状态成功但错误栏还挂着旧报错"的假象。
 	if out.OK {
 		card := cardFromLine(line)
+		bal := ""
+		if out.Balance != nil {
+			bal = fmt.Sprintf("，余额 $%.2f", *out.Balance)
+		}
+		amt := out.Charged
+		if amt <= 0 {
+			amt = amount
+		}
 		_, _ = m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
 			x.Card = &card
 			x.Recharged = true
+			if out.Balance != nil {
+				x.CreditBalance = fmt.Sprintf("%.2f", *out.Balance)
+			}
+			x.Error = ""
+			x.Detail = ""
 			return nil
 		})
-		m.addLog("bind_ok", c.Email, "绑卡成功")
+		m.addLog("bind_ok", c.Email,
+			fmt.Sprintf("绑卡成功 %s，充值 $%.2f%s", out.Last4, amt, bal))
 	} else {
+		_, _ = m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
+			x.Error = out.Error
+			x.Detail = out.Step
+			return nil
+		})
 		m.addLog("bind_failed", c.Email, out.Error)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1596,6 +1625,11 @@ type bindOutcome struct {
 	Step     string `json:"step,omitempty"`
 	SourceID string `json:"source_id,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// 充值金额与充值后的组织余额合计（脚本充值后立刻读一次 /credit）。
+	// Balance 为指针：读不到余额是 nil（未知），不能和"余额为 0"混为一谈。
+	Last4   string   `json:"last4,omitempty"`
+	Charged float64  `json:"charged,omitempty"`
+	Balance *float64 `json:"balance"`
 }
 
 // runBindCards 调用 deploy_payment.py --bind-job 执行绑卡。

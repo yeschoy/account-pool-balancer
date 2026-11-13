@@ -362,8 +362,36 @@ class PortalClient:
         return self._call("POST", f"/api/organization/{org_id}/credit/buy",
                           {"amount": amount, "stripe_source_id": source_id})
 
-    def balance(self, org_id: str | int) -> Resp:
+    def org_detail(self, org_id: str | int) -> Resp:
+        """组织详情。原来这里叫 balance，但它不返回余额，名字误导，改名。"""
         return self._call("GET", f"/api/organization/{org_id}")
+
+    def credit_ledger(self, org_id: str | int) -> Resp:
+        """真实余额流水：GET /api/organization/{org}/credit。
+
+        返回 data 数组，每条形如
+          {"charged_on":"...","amount":"5.00","reason":"bought", ...}
+        reason 取值实测有 initial / bought / purchase_promo。
+        余额 = 各条 amount 之和。
+        """
+        return self._call("GET", f"/api/organization/{org_id}/credit")
+
+
+def credit_total(client: "ApiClient", org_id: str | int) -> float | None:
+    """读组织余额合计；读不到返回 None（未知），绝不返回 0 糊弄。"""
+    r = client.credit_ledger(org_id)
+    if r.status != 200:
+        return None
+    rows = ((r.json or {}).get("data") or [])
+    if not isinstance(rows, list):
+        return None
+    total = 0.0
+    for it in rows:
+        try:
+            total += float(it.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 2)
 
 
 # --------------------------------------------------------------------------
@@ -378,6 +406,11 @@ class BindResult:
     step: str = ""
     error: str = ""
     raw: dict = field(default_factory=dict)
+    # 充值金额（美元）与充值后的组织余额合计。读不到余额时 balance 为 None。
+    charged: float | None = None
+    balance: float | None = None
+    # 本次用的卡尾号，供日志展示
+    last4: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -576,6 +609,11 @@ def bind_card_and_charge(
         res.raw = cj
         return res
 
+    # 充值已成功。读一次真实余额，让上层能显示"充了多少、现在有多少"，
+    # 而不是只留一个 ok=true。读不到就留 None，不编 0。
+    res.charged = float(amount)
+    res.balance = credit_total(cli, org_id)
+
     res.ok = True
     res.step = "done"
     res.raw = cj
@@ -629,7 +667,9 @@ def cmd_bind_job(path: str) -> int:
             if r.ok:
                 okc += 1
             print(json.dumps({**base, "ok": r.ok, "step": r.step,
-                              "source_id": r.source_id, "error": r.error},
+                              "source_id": r.source_id, "error": r.error,
+                              "last4": card.masked(), "charged": r.charged,
+                              "balance": r.balance},
                              ensure_ascii=False), flush=True)
         except Exception as e:  # noqa: BLE001
             print(json.dumps({**base, "ok": False, "step": "exception",

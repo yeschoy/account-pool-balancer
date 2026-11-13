@@ -314,3 +314,36 @@ print(d.resolve_sys_proxy({"sys_proxy": "192.168.1.5:7890"}))
 		t.Fatalf("loopback sys_proxy must be treated as absent: %q", out2)
 	}
 }
+
+// 充值后要能读到真实余额；读不到时必须是"未知"（None），不能变成 0。
+func TestDeployCreditTotalReadsLedger(t *testing.T) {
+	py := `import sys
+sys.path.insert(0, "tools")
+import deploy_payment as p
+
+class FakeClient:
+    def __init__(self, status, data):
+        self.status, self.data = status, data
+    def credit_ledger(self, org_id):
+        class R:
+            pass
+        r = R()
+        r.status = self.status
+        r.json = {"data": self.data}
+        return r
+
+rows = [
+    {"amount": "5.00", "reason": "bought"},
+    {"amount": "100.00", "reason": "purchase_promo"},
+    {"amount": "1.00", "reason": "initial"},
+]
+print(p.credit_total(FakeClient(200, rows), "1"))
+print(p.credit_total(FakeClient(200, []), "1"))
+print(p.credit_total(FakeClient(500, rows), "1") is None)
+print(p.credit_total(FakeClient(200, [{"amount": "bad"}, {"amount": "2.5"}]), "1"))
+`
+	out := runPython(t, py)
+	if out != "106.0\n0.0\nTrue\n2.5" {
+		t.Fatalf("unexpected credit total: %q", out)
+	}
+}

@@ -41,8 +41,12 @@ function drCardLabel(c) {
   const n = String(card.number).replace(/\D/g, '');
   const tail = n.slice(-4);
   const brand = card.brand || '卡';
+  // 余额读不到时显示"余额未知"而不是 0——没读到不等于没有。
+  const bal = c.credit_balance
+    ? ` <span class="badge ok">余额 $${drEsc(c.credit_balance)}</span>`
+    : '';
   const mark = c.recharged ? ' <span class="badge ok">已充</span>' : '';
-  return `${drEsc(brand)} ****${drEsc(tail)}${mark}`;
+  return `${drEsc(brand)} ****${drEsc(tail)}${mark}${bal}`;
 }
 
 // 代理明文展示：按用户要求显示完整 URL（含账号密码），方便核对与排错。
