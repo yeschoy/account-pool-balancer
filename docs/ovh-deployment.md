@@ -38,6 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：绑卡日志带金额与真实余额（2026-11-13 21:20 UTC，fc69aa6）
+
+- 用户看到 `04:52:25 bind_ok 绑卡成功` 一条日志，问"是不是绑卡和充值都成功、咋没有日志"。
+- **核对结论：两条都成功**。实读 `GET /api/organization/{org}/credit`：`bought 5.00`（20:52:23Z）+ `purchase_promo 100.00`（20:52:25Z）+ `initial 1.00` = **106.00**；`payment_methods` 为 `MasterCard ****7132 active=true`。时间戳与截图 `04:52:25` 同一次操作。
+- 但界面完全看不出：① `bind_ok` 是粗粒度标签，金额/卡尾号/余额都在 `out.Raw` 里没往上打；② `Recharged` 在绑卡成功时就置 true，语义偏"完成支付流程"；③ `CreditBalance` 字段存在但从未写入，前端也不渲染；④ **成功事件不带 detail 时旧 detail 不会被清**——线上实测 `status=verified / recharged=true / error 空 / detail=transport` 残留。
+- 修法（`b8d7226`）：`deploy_payment.py` 新增 `credit_ledger()`/`credit_total()`，充值成功后立刻读 `/credit` 求余额合计（读不到返回 None，不编 0）；`BindResult` 增加 `charged/balance/last4` 并输出到事件；名不副实的 `balance()` 改名 `org_detail()`（它不返回余额）。`bindOutcome` 增加 `Last4/Charged/Balance *float64`（指针区分"未知"与 0）；绑卡成功写 `CreditBalance`、清 `error/detail`，日志改为「绑卡成功 ****7132，充值 $5.00，余额 $106.00」；`handleEvent` 在 `item_done` 且 `!relogin` 时清空 `detail/error`；前端候选行显示「余额 $xx」徽标。
+- 部署：`release/deploy-balance-20261114` 从线上 `c52dedc` 起，cherry-pick 六个提交，发布差异 5 文件。构建后**隔离容器实测**新镜像读到 `credit_total=106.0` / `1.0`，与流水逐条一致；21:25:08 切换、21:25:39 healthy/0 重启，双内网入口 `{"ok":true}`，`deploy.js?v=1b4e086b4a`。
+- **存量回填**：历史行没有 `credit_balance` 且残留 `detail=transport`，用实测值回填（`106.00` / `1.00`）并清空 detail/error，改动前副本 `deploy-signup.json.before-balance-backfill`（sha256 `d7dfbd2f…6408f08`），21:26:5x 重启后核对两条均为 `verified` + 余额有值 + detail 空。回退镜像 `rollback-20261113T212000Z`（bde4a27）保留。
+
 ## 当前部署：卡台账改到持久数据目录（2026-11-13 20:44 UTC，bde4a27）
 
 - 用户 04:42:08 绑卡失败：`PermissionError: [Errno 13] Permission denied: '/usr/local/share/deploy-signup/data/card_ledger.json'`。上一轮的 `ERR_TUNNEL_CONNECTION_FAILED` 已消失，说明代理桥那层真的通了，这次卡在写台账。
