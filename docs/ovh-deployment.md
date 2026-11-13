@@ -38,7 +38,27 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Deploy独立号池（2026-11-12 21:36 UTC，c6ae4b2）
+## 当前部署：Deploy 详情正文独立5MiB（2026-11-13 09:30 UTC，cbafc8d）
+
+- 用户明确授权推送部署；`ed90ac6`及预检补充修正 **`cbafc8d33b37c9a897955e0021a4a106a901e02f`** 已推送master并上线。从实际运行f6b2781核对，业务差异仅3个Go实现和1个回归测试文件；未带入其他窗口注册机/指纹/Dockerfile/README等未提交修改。
+- 预检发现线上共享`logs.detailBodyKB=64`，原ed90ac6会被共享值压回64KiB；补充修正使Deploy独立固定5MiB，全局和其他池设置不改。相关精准红后normal5.036秒/race19.389秒/vet/build通过，复用已完成的全仓normal/race结果，不重复无关回归。**本次仅扩大采集能力，Deploy详情开关保持false，未继续正文采集/主动推理/业务重放，不宣称400根因已修复。**
+- 从干净提交归档，699个Git文件SHA256集合核验。沿线上Compose只覆盖image，保留UID1000:1000、环境、卷、端口、资源、Healthcheck和ai-internal新旧别名；只保留了一条超过13小时的原有queued候选，确认只有odb进程，不删除/取消候选。无持久化格式变化，不另复制敏感数据做离线预检。
+- 新镜像就绪后干净停止旧进程，完整一致data.tar.gz经gzip与SHA256校验。**205账号、186TH核心注册、18原有硬隔离、config.json完整字节、routingSecret、Deploy/Mistral注册文件及运行参数保留**。09:30:46.260 UTC healthy/0重启、NewAPI分别请求`account-pool-balancer:8790/healthz`和`opendesign-balancer:8790/healthz`成功、五静态资源hash匹配后立即告知上线。
+- 09:31:20.027 UTC真实未登录公网登录页、healthz及五资源均200，保留查询串并与提交源码SHA256逐项一致；09:31:50.371独立复核同revision healthy0/无OOM、detail=false、global=64KiB，回执已写正式deploy.json，专属浏览器关闭。未追加10分钟观察，不把入口验收冒充5MiB生产失败样本验证。
+
+| 阶段 | UTC 2026-11-13 |
+|---|---|
+| 构建 | 09:30:05.477–09:30:13.219（7.74秒） |
+| 停止请求 / 旧退出 | 09:30:13.326 / 09:30:13.467 |
+| 完整一致备份 | 09:30:13.846–09:30:15.475 |
+| 切换请求 / 新启动 | 09:30:15.475 / 09:30:15.692 |
+| 首HTTP / Docker healthy | 09:30:16.798 / 09:30:46.028 |
+| 双内网 / 本机资源 | 09:30:46.256 / 09:30:46.260 |
+| 公网浏览器 / 最终复核 | 09:31:20.027 / 09:31:50.371 |
+
+旧退出至首HTTP观测约3.33秒，非精确停机；构建/健康等待不计停机。正式源码`/home/ubuntu/project/account-pool-balancer-releases/20261113T092943Z-cbafc8d`；镜像`account-pool-balancer:release-cbafc8d-20261113T092943Z`（ID`sha256:5171b32e726db45c4d5210b8e8a1b6016505b5cb3f673fcf7e0861313c32944a`）。完整受限备份`/home/ubuntu/backups/account-pool-balancer/20261113T092943Z-deploy-detail-5m-cbafc8d`，data SHA256`5ec075fe95412690244bfa874a0825378430ba1d5a3b9ddfd6f7d4f45761c198`；回退镜像`account-pool-balancer:rollback-20261113T092943Z`保留，回退不自动恢复旧data覆盖新写入。临时产物登记`_tmp_artifacts.md`，清理需同意；Trellis/正式回退资料保留，后续只补记录不重启。
+
+## 历史部署：Deploy独立号池（2026-11-12 21:36 UTC，c6ae4b2）
 
 - 用户追加明确授权推送、部署OVH并完整观察10分钟，发现本次问题继续修复。功能分支`feat/deploy-balancer`的`3c6a87f`及测试隔离`4c50007`已推送；从实际线上`b786d7c`隔离的`release/deploy-pool-20261113` / **`c6ae4b2b50fa3a8295715a9c144c3dfb90a2907d`**已推送并上线，未夹带主线未上线ModelStudio或其他窗口脏代码，未合并master。
 - 复用既有流程，668个Git文件SHA256核验；构建UTC21:35:41.819–21:35:49.055（7.24秒）。按线上UID1000:1000作network-none/tmpfs旧数据启动及签名布局往返预检，退出0且凭据tmpfs释放。旧退出21:35:50.843，完整一致备份21:35:51.213–21:35:55.635，新启动21:35:55.872，首HTTP21:35:56.976、healthy21:36:26.211；旧退出至首HTTP观测约6.13秒，非精确停机，构建/健康等待不算停机。
