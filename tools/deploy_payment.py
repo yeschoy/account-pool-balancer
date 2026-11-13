@@ -174,6 +174,25 @@ def _http(method: str, url: str, headers: dict, data: bytes | None = None,
 # Stripe token
 # --------------------------------------------------------------------------
 
+def _playwright_proxy(url: str) -> dict:
+    """
+    把 socks5://user:pass@host:port 拆成 Playwright 要的结构。
+
+    Playwright 只认 {"server": "socks5://host:port", "username": ..., "password": ...}；
+    把凭据塞进 server 会让 Chromium 启动后所有导航失败于 ERR_NO_SUPPORTED_PROXIES。
+    """
+    u = urllib.parse.urlparse(url.strip())
+    scheme = (u.scheme or "http").lower()
+    host = u.hostname or ""
+    port = u.port or (1080 if scheme.startswith("socks") else 8080)
+    out: dict = {"server": f"{scheme}://{host}:{port}"}
+    if u.username:
+        out["username"] = urllib.parse.unquote(u.username)
+    if u.password:
+        out["password"] = urllib.parse.unquote(u.password)
+    return out
+
+
 def create_stripe_token(card: Card, proxy: str | None = None, headless: bool = True) -> tuple[str | None, str]:
     """
     用真实浏览器里的 Stripe.js 把卡换成一次性 token。
@@ -218,8 +237,11 @@ def create_stripe_token(card: Card, proxy: str | None = None, headless: bool = T
                 "args": ["--disable-blink-features=AutomationControlled"],
             }
             if proxy:
-                # playwright 的 proxy 是启动级参数，支持 http/socks5
-                launch_args["proxy"] = {"server": proxy}
+                # Playwright 的 proxy.server 只接受 scheme://host:port，
+                # 用户名密码必须拆到 username/password 两个字段。
+                # 直接塞完整 URL 会让 Chromium 报
+                # ERR_NO_SUPPORTED_PROXIES（net::ERR_NO_SUPPORTED_PROXIES）。
+                launch_args["proxy"] = _playwright_proxy(proxy)
             try:
                 browser = p.chromium.launch(channel="chrome", **launch_args)
             except Exception:  # noqa: BLE001
@@ -462,7 +484,30 @@ def bind_card_and_charge(
                    "amount": amount}
         return res
 
-    token, err = create_stripe_token(card, proxy=proxy)
+    # 上游代理不能直接交给 Chromium：本机/服务器都需要经系统代理隧道
+    # 才能与 zooproxy 握手，且 Playwright 不认 socks5 的用户名密码字段。
+    # 统一走本地桥：Chromium --HTTP CONNECT--> 桥 --> 系统代理 --> 上游。
+    bridge = None
+    browser_proxy = None
+    if proxy:
+        try:
+            import deploy_registrar as _dr
+            sys_proxy = os.environ.get("DEPLOY_PAY_SYS_PROXY", "").strip()
+            bport = int(os.environ.get("DEPLOY_PAY_BRIDGE_PORT", "17550") or "17550")
+            bridge = _dr.ProxyBridge(sys_proxy=sys_proxy, base_port=bport)
+            browser_proxy = bridge.endpoint_for(proxy)
+        except Exception as e:  # noqa: BLE001
+            res.error = f"启动代理桥失败: {e}"
+            res.step = "bridge"
+            return res
+    try:
+        token, err = create_stripe_token(card, proxy=browser_proxy)
+    finally:
+        if bridge is not None:
+            try:
+                bridge.close()
+            except Exception:  # noqa: BLE001
+                pass
     if not token:
         res.error = f"Stripe token 失败: {err}"
         return res
