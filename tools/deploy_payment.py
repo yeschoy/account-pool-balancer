@@ -387,7 +387,20 @@ class BindResult:
 # 卡指纹台账：记录某张卡已被哪些 org 使用过。
 # 同一张卡第二次绑定另一个账号 → 实测充值被拒（Purchase Declined），
 # 且会让卡本身进入风控名单。这里做前置拦截，绝不允许再次发生。
-_LEDGER_PATH = Path(__file__).resolve().parent / "data" / "card_ledger.json"
+#
+# 台账属于**运行期可变数据**，不能写进镜像里的程序目录
+# （/usr/local/share/deploy-signup/data 属 root:root 755，容器以
+# 1000:1000 运行 → PermissionError: [Errno 13]）。
+# 优先用 ODB_DATA_DIR（镜像里=/data，属主 1000:1000，且是持久卷），
+# 本地开发退回脚本同级 data/（可写时）。
+def _ledger_path() -> Path:
+    for cand in (os.environ.get("ODB_DATA_DIR", ""), "/data"):
+        if cand and Path(cand).is_dir() and os.access(cand, os.W_OK):
+            return Path(cand) / "card_ledger.json"
+    return Path(__file__).resolve().parent / "data" / "card_ledger.json"
+
+
+_LEDGER_PATH = _ledger_path()
 
 
 class CardReuseError(RuntimeError):
