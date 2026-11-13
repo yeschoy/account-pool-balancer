@@ -328,8 +328,15 @@ func TestDeployCatalogAndInferenceTestsAreSeparate(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	var result map[string]map[string]any
-	if json.Unmarshal(w.Body.Bytes(), &result) != nil || result["inference"]["ok"] != true || result["runtime"]["note"] == nil || result["quota"]["state"] != "not-connected" {
+	// The mock answers {"content":null,"reasoning_content":"thinking"} with
+	// finish_reason=length: a real 200, but no visible answer. The click-test
+	// must not call that "推理通过" — the catalog is fine, the inference verdict
+	// is explicitly not ok and says why.
+	if json.Unmarshal(w.Body.Bytes(), &result) != nil || result["runtime"]["note"] == nil || result["quota"]["state"] != "not-connected" {
 		t.Fatal("test conflated catalog and permission", w.Body.String())
+	}
+	if result["inference"]["ok"] != false || result["inference"]["status"] != float64(200) || result["inference"]["sawReasoning"] != true {
+		t.Fatal("200 with only truncated reasoning was reported as a passing inference", w.Body.String())
 	}
 	calls := e.snapshot()
 	if len(calls) != 2 {
@@ -447,5 +454,53 @@ func TestDeployDoesNotFollowInferenceRedirects(t *testing.T) {
 	e.do(t, "/v1/chat/completions", `{"model":"native","messages":[]}`, nil)
 	if hits.Load() != 0 {
 		t.Fatal("credential followed redirect")
+	}
+}
+
+// 只有拿到可见 content 才算这条真实请求通过；否则点击测试会把"思考被截断"
+// 当成 Key 可推理，进而把这个账号当正常号用。
+func TestDeployInferenceTestRequiresVisibleContent(t *testing.T) {
+	e := newDeployEnv(t)
+	e.mu.Lock()
+	e.handler = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			http.Error(w, "unexpected catalog call", http.StatusOK)
+			return
+		}
+		fmt.Fprint(w, `{"id":"mock","choices":[{"message":{"content":"pong","reasoning_content":"thinking"},"finish_reason":"stop"}]}`)
+	}
+	e.mu.Unlock()
+
+	w := deployAdmin(t, e, "POST", "/api/accounts/d1/test", map[string]any{"inference": true})
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var result map[string]map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["inference"]["ok"] != true || result["inference"]["reply"] != "pong" {
+		t.Fatal("visible content should pass", w.Body.String())
+	}
+}
+
+// 没有任何 choices 的 200 不能算通过。
+func TestDeployInferenceTestRejectsEmptyChoices(t *testing.T) {
+	e := newDeployEnv(t)
+	e.mu.Lock()
+	e.handler = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"mock","choices":[]}`)
+	}
+	e.mu.Unlock()
+
+	w := deployAdmin(t, e, "POST", "/api/accounts/d1/test", map[string]any{"inference": true})
+	var result map[string]map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["inference"]["ok"] != false || result["inference"]["error"] == nil {
+		t.Fatal("empty choices must not pass", w.Body.String())
 	}
 }

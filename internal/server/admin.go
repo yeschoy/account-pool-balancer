@@ -885,8 +885,17 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 		out["runtime"] = map[string]any{"ok": resp.StatusCode == 200, "status": resp.StatusCode, "models": len(body.Data), "ms": time.Since(t0).Milliseconds()}
 		if a.Provider == config.ProviderDeploy {
-			out["runtime"] = map[string]any{"ok": resp.StatusCode == 200 && len(body.Data) > 0, "status": resp.StatusCode, "models": len(body.Data), "ms": time.Since(t0).Milliseconds(), "note": "目录仅是模型发现，不校验 Key 激活状态或推理授权；需单独勾选真实推理测试"}
-			out["quota"] = map[string]any{"state": "not-connected", "reason": quota.DeployQuotaReason}
+			// "models" 单独一个字段：否则前端 `runtime.models` 在页面上被读成
+			// 空值，看起来像目录没读到；模型名也一并回传，省得去猜默认模型。
+			ids := make([]string, 0, len(body.Data))
+			for _, m := range body.Data {
+				if m.ID != "" {
+					ids = append(ids, m.ID)
+				}
+			}
+			out["runtime"] = map[string]any{"ok": resp.StatusCode == 200 && len(body.Data) > 0, "status": resp.StatusCode, "models": len(body.Data), "modelIds": ids, "ms": time.Since(t0).Milliseconds(), "note": "目录仅是模型发现，不校验 Key 激活状态或推理授权；需单独勾选真实推理测试"}
+			// 余额是"未接入"，不是"0"；reason 里写清楚怎么才能接入。
+			out["quota"] = map[string]any{"state": "not-connected", "reason": quota.DeployQuotaReason, "hint": quota.DeployQuotaHint}
 		}
 	}
 	if a.ControlKey != "" {
@@ -965,12 +974,34 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 			res := map[string]any{"ok": resp.StatusCode == 200, "status": resp.StatusCode, "ms": time.Since(t1).Milliseconds(), "model": model}
 			if a.Provider == config.ProviderDeploy && resp.StatusCode == 200 {
+				res["ok"] = false
 				var completion struct {
-					Choices []json.RawMessage `json:"choices"`
+					Choices []struct {
+						Message struct {
+							Content          string `json:"content"`
+							ReasoningContent string `json:"reasoning_content"`
+							Reasoning        string `json:"reasoning"`
+						} `json:"message"`
+					} `json:"choices"`
 				}
-				if json.Unmarshal(b, &completion) != nil || len(completion.Choices) == 0 {
-					res["ok"] = false
+				switch {
+				case json.Unmarshal(b, &completion) != nil || len(completion.Choices) == 0:
 					res["error"] = "上游 200 但缺少有效 Chat choices，不能视为推理成功"
+				case strings.TrimSpace(completion.Choices[0].Message.Content) != "":
+					// reasoning 模型在 max_tokens=256 时只出思考、content 为空；
+					// 只有真正拿到可见回答才算这条真实请求通过
+					res["ok"] = true
+					reply := []rune(strings.TrimSpace(completion.Choices[0].Message.Content))
+					if len(reply) > 80 {
+						reply = append(reply[:80], '…')
+					}
+					res["reply"] = string(reply)
+				default:
+					// 思考内容被 max_tokens 截断：上游确实在生成，但没给出回答。
+					// 不冒充 ok（否则会被当成"Key 已可推理"），给出可执行建议。
+					res["error"] = "上游返回 200 但没有可见 content：回复只有思考内容，被 max_tokens=256 截断或被上游过滤。这不是 Key 失效，重试或调大 max_tokens 再判定"
+					res["sawReasoning"] = strings.TrimSpace(completion.Choices[0].Message.ReasoningContent+
+						completion.Choices[0].Message.Reasoning) != ""
 				}
 			}
 			if resp.StatusCode != 200 {

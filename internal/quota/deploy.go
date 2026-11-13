@@ -14,6 +14,9 @@ import (
 // balance nor activation proof. Do not substitute the registration promotion.
 const DeployQuotaReason = "当前仅绑定 Deploy 推理 secret；官方推理文档未提供可用此 Key 读取组织余额的接口。组织 credit 控制面需要独立登录会话，尚未绑定；余额未知（不是 0），目录成功不代表 Key 已 active 或推理授权。"
 
+// DeployQuotaHint 说明想看到真实余额需要做什么，不拿注册赠送额度冒充推理授权。
+const DeployQuotaHint = "余额要读组织控制台才有数：普通账号用注册号池里的组织会话（hive-portal-production cookie）请求 GET /api/organization/{org_id}/credit；只有推理 secret 的账号只能显示未知，不能当 0。"
+
 type DeployDiagnosis struct {
 	QuotaState   string    `json:"quotaState"`
 	QuotaReason  string    `json:"quotaReason"`
