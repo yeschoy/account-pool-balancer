@@ -592,26 +592,57 @@ func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
 	}
 }
 
+// scriptPaths 解析注册脚本与解释器。
+//
+// 生产镜像里脚本装在 /usr/local/share/deploy-signup，解释器是自带
+// curl_cffi 的 venv（/opt/deploy-signup/bin/python）——系统 python3 没有
+// curl_cffi，用它跑会直接 ImportError。这两个位置由 Dockerfile 的
+// DEPLOY_REGISTRAR / DEPLOY_PYTHON 环境变量给出，与 Mistral worker 一致。
 func (m *deployManager) scriptPaths(st deploysignupstore.Settings) (script, py string, err error) {
-	// 仓库根 = server 包往上两级
-	root, err := filepath.Abs(filepath.Join("."))
-	if err != nil {
-		return "", "", err
+	var candidates []string
+	if v := strings.TrimSpace(os.Getenv("DEPLOY_REGISTRAR")); v != "" {
+		candidates = append(candidates, v)
 	}
-	candidates := []string{
-		filepath.Join(root, "tools", "deploy_registrar.py"),
-		filepath.Join(root, "..", "..", "tools", "deploy_registrar.py"),
+	// 容器内固定安装位置
+	candidates = append(candidates, "/usr/local/share/deploy-signup/deploy_registrar.py")
+	// 本地开发：cwd 与二进制所在目录分别往上找
+	if root, e := filepath.Abs("."); e == nil {
+		candidates = append(candidates,
+			filepath.Join(root, "tools", "deploy_registrar.py"),
+			filepath.Join(root, "..", "..", "tools", "deploy_registrar.py"),
+		)
 	}
+	if exe, e := os.Executable(); e == nil {
+		if d, e2 := filepath.Abs(filepath.Dir(exe)); e2 == nil {
+			candidates = append(candidates,
+				filepath.Join(d, "tools", "deploy_registrar.py"),
+				filepath.Join(d, "..", "..", "tools", "deploy_registrar.py"),
+			)
+		}
+	}
+
 	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			py = st.PythonBin
+		if _, statErr := os.Stat(p); statErr == nil {
+			py = strings.TrimSpace(st.PythonBin)
+			// 默认：镜像内用 venv，本地用系统 python3
+			if py == "" || py == "python3" {
+				if v := strings.TrimSpace(os.Getenv("DEPLOY_PYTHON")); v != "" {
+					if _, e := os.Stat(v); e == nil {
+						return p, v, nil
+					}
+				}
+				if _, e := os.Stat("/opt/deploy-signup/bin/python"); e == nil {
+					return p, "/opt/deploy-signup/bin/python", nil
+				}
+			}
 			if py == "" {
 				py = "python3"
 			}
 			return p, py, nil
 		}
 	}
-	return "", "", fmt.Errorf("找不到 tools/deploy_registrar.py（cwd=%s）", root)
+	wd, _ := os.Getwd()
+	return "", "", fmt.Errorf("找不到 deploy_registrar.py（cwd=%s，已查 %d 个位置）", wd, len(candidates))
 }
 
 
