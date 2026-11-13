@@ -2057,3 +2057,47 @@ AAD=`deploysignupstore/v1`）；settings 不含凭据仍明文。旧明文文件
 
 **说明**：`data/deploy-signup.json` 在首次写入前不存在属正常；
 本地实测同一版本写入结果为明文（rows/settings 直出卡号与代理密码）。
+
+## 绑卡链路修复：代理与 Chrome（2026-11-13 23:18 UTC，e6b958a）
+
+用户绑卡报错 `Page.goto: net::ERR_NO_SUPPORTED_PROXIES`。排查出三个叠加问题：
+
+**① Playwright 代理格式错误**（`5261d07`）
+`create_stripe_token` 把完整 `socks5://user:pass@host:port` 塞进 `proxy.server`。
+Playwright 只接受 `scheme://host:port`，凭据必须放 `username`/`password`，
+否则 Chromium 所有导航都失败于 `ERR_NO_SUPPORTED_PROXIES`。
+新增 `_playwright_proxy()` 拆分并做 URL 解码。
+
+**② 浏览器没走本地桥**（`5261d07`）
+上游代理不能直连交给 Chromium；`bind_card_and_charge` 现在先起 `ProxyBridge`，
+把桥的 HTTP 地址给浏览器（Chromium --CONNECT--> 桥 --> 上游）。
+
+**③ 容器内 Chrome 起不来**（`e6b958a`）
+```
+ERROR:chrome/app/chrome_main.cc:210
+Failed to create headless user data directory container.
+```
+容器以 uid 1000 运行，`$HOME=/home/odb` 不存在且 `/home` 属 root 不可写，
+Chrome 建不了用户数据目录。修复：`mkdir -p /home/odb && chown 1000:1000`，
+`ENV HOME=/home/odb`。
+
+**部署与实测**（服务器上直接执行）：
+
+| 检查 | 结果 |
+|---|---|
+| 容器 | `healthy`，revision `e6b958a` |
+| 双入口 | 200 / 200 |
+| 服务器直连出网 | 出口 `167.114.158.4` |
+| zooproxy 经桥 | 出口 `91.151.136.184` |
+| Chrome 经桥 | ✅ 出口 `91.151.136.184` |
+| Stripe token 经桥 | ✅ `tok_1UbMH1EKMtxh0tfHorDVpi4M` |
+
+**重要**：服务器**没有系统代理**（`127.0.0.1:10808` 只存在于本机），
+但 zooproxy 可从服务器直连，桥在 `sys_proxy=""` 时退化为直连上游，工作正常。
+因此线上 `sys_proxy` 应留空。
+
+**未做**：未执行真实绑卡扣款（`live: true`），需用户确认后单独测试。
+
+- 镜像：`account-pool-balancer:release-e6b958a-20261113T231500Z`
+- 上次镜像：`release-5261d07-20261113T224500Z`
+- 切换 15:18:16；healthy ≤3s
