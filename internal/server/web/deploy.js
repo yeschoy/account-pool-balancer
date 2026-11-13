@@ -166,6 +166,12 @@ async function loadDeploySettings() {
     if (av) av.checked = settings.auto_verify !== false;
     const ip = document.getElementById('ds-import-to-pool');
     if (ip) ip.checked = !!settings.import_to_pool;
+    const cd = document.getElementById('ds-cards');
+    if (cd && document.activeElement !== cd) {
+      cd.value = (settings.cards || []).join('\n');
+    }
+    const cz = document.getElementById('ds-card-zip');
+    if (cz && !cz.value) cz.value = settings.card_zip || '94607';
   } catch (e) {
     const err = document.getElementById('ds-error');
     if (err) err.textContent = e.message;
@@ -187,6 +193,9 @@ function collectDeploySettings() {
     auto_verify: document.getElementById('ds-auto-verify')?.checked !== false,
     import_to_pool: !!document.getElementById('ds-import-to-pool')?.checked,
     proxy_pool: px,
+    cards: (document.getElementById('ds-cards')?.value || '').split('\n').map((s) => s.trim()).filter(Boolean),
+    card_zip: (document.getElementById('ds-card-zip')?.value || '').trim(),
+    card_country: 'US',
   };
 }
 
@@ -364,12 +373,40 @@ function initDeployPage() {
   // 设置页保存
   document.getElementById('ds-save')?.addEventListener('click', async () => {
     const err = document.getElementById('ds-error');
+    const cardMsg = document.getElementById('ds-card-msg');
     err.textContent = '';
+    if (cardMsg) cardMsg.textContent = '';
     try {
-      await drApi('/settings', { method: 'PUT', body: JSON.stringify(collectDeploySettings()) });
+      const r = await drApi('/settings', { method: 'PUT', body: JSON.stringify(collectDeploySettings()) });
       toast('已保存');
+      if (cardMsg) {
+        const n = r.card_count || 0;
+        const bad = r.card_errors || [];
+        cardMsg.textContent = bad.length
+          ? `已识别 ${n} 张卡，以下行无效：\n` + bad.join('\n')
+          : (n ? `已识别 ${n} 张卡，全部通过校验` : '未填写银行卡');
+        cardMsg.style.whiteSpace = 'pre-wrap';
+        cardMsg.className = bad.length ? 'error small' : 'muted small';
+      }
     } catch (e) {
       err.textContent = e.message;
+    }
+  });
+
+  // 测试代理：用系统代理 + 第一个上游代理各发一次请求
+  document.getElementById('ds-proxy-test')?.addEventListener('click', async () => {
+    const out = document.getElementById('ds-proxy-result');
+    if (out) out.textContent = '测试中…';
+    try {
+      const r = await drApi('/proxy-test', { method: 'POST', body: '{}' });
+      const lines = (r.results || []).map((x) =>
+        `${x.ok ? '✅' : '❌'} ${x.target}${x.ip ? ' → ' + x.ip : ''}${x.error ? '  ' + x.error : ''}`);
+      if (out) {
+        out.style.whiteSpace = 'pre-wrap';
+        out.textContent = lines.join('\n') || '没有可测试的目标';
+      }
+    } catch (e) {
+      if (out) out.textContent = '测试失败：' + e.message;
     }
   });
 }

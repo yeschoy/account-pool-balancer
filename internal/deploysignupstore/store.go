@@ -134,6 +134,12 @@ type Settings struct {
 	BridgePort int `json:"bridge_port"`
 	// ImportToPool 注册成功后自动创建 API Key 并入池
 	ImportToPool bool `json:"import_to_pool"`
+	// Cards 银行卡列表，每行 "卡号----有效期----CVV"。
+	// 一卡一账号：绑卡后把卡标记为已用，避免同卡绑第二个 org 触发风控。
+	Cards []string `json:"cards,omitempty"`
+	// CardZip / CardCountry 绑卡时提交的账单地址（默认美国 94607）
+	CardZip     string `json:"card_zip,omitempty"`
+	CardCountry string `json:"card_country,omitempty"`
 	// PythonBin 注册机解释器路径
 	PythonBin string `json:"python_bin"`
 }
@@ -147,9 +153,11 @@ func DefaultSettings() Settings {
 		Transport:        "curl_cffi",
 		AutoVerify:       true,
 		// 留空：由 server 的 scriptPaths() 决定（镜像用 venv，本地用 python3）。
-		PythonBin:  "",
-		SysProxy:   "127.0.0.1:10808",
-		BridgePort: 17500,
+		PythonBin:   "",
+		SysProxy:    "127.0.0.1:10808",
+		BridgePort:  17500,
+		CardZip:     "94607",
+		CardCountry: "US",
 	}
 }
 

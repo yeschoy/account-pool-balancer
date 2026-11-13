@@ -899,6 +899,46 @@ def cmd_batch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_probe_proxy() -> int:
+    """
+    探测代理能否出网，输出 {"ip": ...} 或 {"error": ...}。
+
+    链路与注册完全一致：本地桥 → 系统代理 → 上游代理 → api.ip.sb，
+    这样"上游能连但出不去"也能被测出来。
+    """
+    upstream = os.environ.get("DEPLOY_PROBE_UPSTREAM", "").strip()
+    sys_proxy = os.environ.get("DEPLOY_PROBE_SYS", "").strip()
+    # 探测模式下日志走 stderr，stdout 只留最后那一行 JSON，供后端解析
+    globals()["emit"] = lambda kind, **kw: print(
+        f"[{kind}] {kw.get('message', '')}", file=sys.stderr)
+    bridge = None
+    try:
+        proxies = None
+        if upstream:
+            bridge = ProxyBridge(sys_proxy=sys_proxy, base_port=17600)
+            ep = bridge.endpoint_for(upstream)
+            proxies = {"https": ep, "http": ep}
+        elif sys_proxy:
+            proxies = {"https": f"http://{sys_proxy}", "http": f"http://{sys_proxy}"}
+        kwargs = dict(timeout=30, impersonate="chrome")
+        if proxies:
+            kwargs["proxies"] = proxies
+        from curl_cffi import requests as _cr
+        r = _cr.get("https://api.ip.sb/ip", **kwargs)
+        ip = (r.text or "").strip()
+        if not ip or len(ip) > 64:
+            print(json.dumps({"error": f"返回异常: {ip[:60]}"}, ensure_ascii=False))
+            return 1
+        print(json.dumps({"ip": ip}, ensure_ascii=False))
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"error": f"{type(e).__name__}: {e}"[:160]}, ensure_ascii=False))
+        return 1
+    finally:
+        if bridge is not None:
+            bridge.close()
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="deploy.com 注册机")
     ap.add_argument("--job-file", help="后端传入的 job.json")
@@ -915,7 +955,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--verify-timeout", type=float, default=240.0)
     ap.add_argument("--no-verify", action="store_true", help="只注册，不取信验证")
     ap.add_argument("--job", action="store_true", help="从 stdin 读 job.json")
+    ap.add_argument("--probe-proxy", action="store_true",
+                    help="只探测代理出口 IP（环境变量 DEPLOY_PROBE_UPSTREAM / DEPLOY_PROBE_SYS）")
     args = ap.parse_args(argv)
+
+    if args.probe_proxy:
+        return cmd_probe_proxy()
 
     if args.job_file:
         return cmd_job(args.job_file)

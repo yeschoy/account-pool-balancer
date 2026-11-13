@@ -397,7 +397,11 @@
 
     <section id="page-dsettings" class="page hidden">
       <header class="page-head"><h1>Deploy 注册设置</h1>
-        <div class="actions"><button type="button" class="btn primary" id="ds-save">保存</button></div>
+        <div class="actions">
+          <button type="button" class="btn" id="ds-proxy-test">测试代理</button>
+          <span id="ds-proxy-result" class="muted small"></span>
+          <button type="button" class="btn primary" id="ds-save">保存</button>
+        </div>
       </header>
       <section class="panel">
         <h2>注册参数</h2>
@@ -429,6 +433,16 @@
           <input id="ds-bridge-port" type="number" min="1024" max="65000" value="17500">
 
           <label class="check"><input type="checkbox" id="ds-auto-verify" checked> 注册后自动取信验证</label>
+
+          <label for="ds-cards">银行卡列表（每行一张）</label>
+          <textarea id="ds-cards" rows="4" spellcheck="false" autocomplete="off"
+            placeholder="4480602749951616----05/31----858"></textarea>
+          <span class="hint">一行一张，格式：卡号----有效期----CVV（有效期支持 05/28、5/2028、0528）。保存时自动校验卡号位数与 Luhn 校验位，无效行列在下方。<b>一卡一账号</b>，同卡绑第二个账号会导致充值被拒。</span>
+          <span id="ds-card-msg" class="muted small" role="status"></span>
+
+          <label for="ds-card-zip">账单地址邮编 / 国家</label>
+          <input id="ds-card-zip" value="94607" autocomplete="off">
+          <span class="hint">绑卡时提交给 Stripe 的账单地址（默认美国 94607）。</span>
 
           <label class="check"><input type="checkbox" id="ds-import-to-pool"> 注册后自动创建 API Key 并入池</label>
           <span class="hint">入池需要 Secret Key（Deploy 路由用它做 Authorization）。Secret Key 只在创建时返回一次，勾选后注册流程会顺手创建并存下。已注册的账号可在号池页点「入池」补齐。</span>

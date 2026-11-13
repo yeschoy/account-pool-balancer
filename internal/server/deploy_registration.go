@@ -17,6 +17,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/deploysignupstore"
+	"account-pool-balancer/internal/mistralcards"
 )
 
 // deployManager 串行执行注册任务（单 worker，避免并发触发 429 与一 IP 多号）。
@@ -53,6 +54,7 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/candidates/import-all", s.apiDeployImportAll)
 	a("PATCH /api/deploy/candidates/{id}", s.apiDeployCandidateUpdate)
 	a("POST /api/deploy/candidates/assign-proxies", s.apiDeployAssignProxies)
+	a("POST /api/deploy/proxy-test", s.apiDeployProxyTest)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -330,11 +332,18 @@ func (s *Server) apiDeploySaveSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
+	// 卡列表逐行校验：无效行整行丢弃并回报原因，不阻塞其余行。
+	validCards, cardErrs := validateDeployCards(in.Cards)
+	in.Cards = validCards
 	if err := m.store.SaveSettings(in); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": m.store.Settings()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings":   m.store.Settings(),
+		"card_count": len(validCards),
+		"card_errors": cardErrs,
+	})
 }
 
 func (s *Server) apiDeployStatus(w http.ResponseWriter, r *http.Request) {
@@ -907,4 +916,130 @@ func (s *Server) apiDeployAssignProxies(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"assigned": assigned, "kept": kept, "pool_size": len(pool),
 	})
+}
+
+
+// validateDeployCards 逐行解析并校验卡列表。
+//
+// 复用 mistralcards 的解析（格式、位数、Luhn、有效期），返回有效行原文与
+// 无效行原因。有效行保留用户原始写法（只 trim），方便回填输入框。
+func validateDeployCards(lines []string) ([]string, []string) {
+	var valid []string
+	var errs []string
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if _, err := mistralcards.ParseLine(line); err != nil {
+			// 错误里已含脱敏行号信息，不回显卡号
+			errs = append(errs, fmt.Sprintf("第 %d 行：%s", i+1, cardErrReason(err)))
+			continue
+		}
+		valid = append(valid, line)
+	}
+	return valid, errs
+}
+
+// cardErrReason 把 ParseError 压成一句人话。
+func cardErrReason(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "luhn"):
+		return "Luhn 校验失败，卡号可能有误"
+	case strings.Contains(msg, "length") || strings.Contains(msg, "digit"):
+		return "卡号位数不对（应为 13–19 位）"
+	case strings.Contains(msg, "expire") || strings.Contains(msg, "expired"):
+		return "有效期已过期或格式不对"
+	case strings.Contains(msg, "month"):
+		return "有效期月份不对"
+	case strings.Contains(msg, "cvv"):
+		return "CVV 格式不对"
+	case strings.Contains(msg, "3 fields"):
+		return "字段数不对，应为 卡号----有效期----CVV"
+	}
+	return msg
+}
+
+
+// apiDeployProxyTest 逐个测试代理池里的代理能不能出网，返回出口 IP。
+//
+// 走和注册完全相同的链路：本地桥 → 系统代理 → 上游代理 → 目标，
+// 避免"能连上游但实际出不去"这种误判。
+func (s *Server) apiDeployProxyTest(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	st := m.store.Settings()
+	var targets []string
+	if len(st.ProxyPool) > 0 {
+		targets = st.ProxyPool
+	} else {
+		targets = []string{""} // 空 = 只用系统代理/直连
+	}
+	// 最多测 10 个，避免一次卡太久
+	if len(targets) > 10 {
+		targets = targets[:10]
+	}
+
+	type result struct {
+		Target string `json:"target"`
+		OK     bool   `json:"ok"`
+		IP     string `json:"ip,omitempty"`
+		Error  string `json:"error,omitempty"`
+	}
+	results := make([]result, 0, len(targets))
+	for _, px := range targets {
+		label := px
+		if label == "" {
+			label = "系统代理 / 直连"
+		}
+		res := result{Target: label}
+		ip, perr := s.probeProxyEgress(px, st)
+		if perr != nil {
+			res.Error = perr.Error()
+		} else {
+			res.OK = true
+			res.IP = ip
+		}
+		results = append(results, res)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// probeProxyEgress 用和注册一致的链路取出口 IP。
+// 没有上游代理时直接测系统代理本身能否出网。
+func (s *Server) probeProxyEgress(upstream string, st deploysignupstore.Settings) (string, error) {
+	m, merr := s.deployMgr()
+	if merr != nil {
+		return "", merr
+	}
+	script, py, serr := m.scriptPaths(st)
+	if serr != nil {
+		return "", serr
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, py, script, "--probe-proxy")
+	cmd.Env = append(os.Environ(),
+		"DEPLOY_PROBE_UPSTREAM="+upstream,
+		"DEPLOY_PROBE_SYS="+st.SysProxy,
+	)
+	out, cerr := cmd.Output()
+	if cerr != nil {
+		return "", fmt.Errorf("探测失败: %v", cerr)
+	}
+	var res struct {
+		IP  string `json:"ip"`
+		Err string `json:"error"`
+	}
+	if json.Unmarshal(out, &res) != nil {
+		return "", fmt.Errorf("探测输出无法解析")
+	}
+	if res.Err != "" {
+		return "", fmt.Errorf("%s", res.Err)
+	}
+	return res.IP, nil
 }
