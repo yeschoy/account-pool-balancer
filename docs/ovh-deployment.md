@@ -38,6 +38,13 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Deploy 点击测试判定修正（2026-11-13 18:27 UTC，c52dedc）
+
+- 用户看图后质疑"Deploy 的测试是不是有点问题"。`fe5a04b` 已在 master，release 分支追加为 **`c52dedc`**，发布差异只有 `admin.go`、`deploy_test.go`、`web/app.js`、`quota/deploy.go` 四个文件，未带入 Mistral/注册机窗口改动。
+- 结论：截图里 `"ok": true / status 200` 是上游真实回的 200，不是编造；问题有三处：① 200 但 `choices[0].message.content` 为空（只有被 `max_tokens=256` 截断的 reasoning，`finish_reason=length`）时旧逻辑只要 choices 非空就判 ok，会把"还没生成回答"当成推理通过；② 弹窗不展示该账号目录里的模型名，用户只能猜默认 `deepseek-v4.1-flash-1017`（实测该账号直连返回 `content='pong 🏓'` + 24 reasoning tokens，目录为 deepseek-v4.1-flash-1017 与 glm-5.3-flash）；③ 额度 not-connected 文案没给"怎样才有数"。
+- 修法：Deploy 真实请求必须拿到可见 content 才算 ok，否则 `ok=false` + 说明（思考被截断，建议重试或调大 max_tokens）+ `sawReasoning`；新增 `runtime.modelIds` 与前端「用目录里的模型」按钮；`quota.hint` 说明余额要读组织控制台 `GET /api/organization/{org_id}/credit`（未绑定则未知，不是 0）。补三条测试：只有思考→失败、有 content→通过、空 choices→失败。
+- 部署：`TestDeploy*` 通过后归档 `c52dedc` 构建，完整备份 data（gzip+sha256 `2eef9314…429d0d1`），18:27:49.659Z 切换、18:28:20.543Z healthy/0 重启；**219 账号、2 条 Deploy 候选保留**；双内网入口均 `{"ok":true}`；公网带 `?v=94a7af731e` 的 `app.js`/`deploy.js` SHA256 与源码一致（不带 `?v=` 的 `/assets/deploy.js` 走 CDN 会拿到 2729 字节旧碎片，不能用来判版本）。回退镜像 `rollback-20261113T182721Z`（bf75d7f）保留，备份目录 `20261113T182721Z-deploy-clicktest-c52dedc`。
+
 ## 当前部署：Deploy 已存在账号改走登录（2026-11-13 18:06 UTC，bf75d7f）
 
 - 用户明确要求"都提交推送，然后部署"，并授权清理工作树。本地按窗口分三次提交并推送 master：`b74a501`（Mistral headed 浏览器/指纹/代理序号）、`012bbef`（本轮 Deploy 登录修复）、`64e9d41`（文档与 .gitignore）。从线上实际运行 `519531b` 建 `release/deploy-login-20261114`，**只 cherry-pick `012bbef`**（`bf75d7f`），发布差异 6 文件：注册机、resume 守卫、批次筛选、前端按钮、2 份文档 + 新增回归测试；未带入 Mistral/Essevin 窗口与 README 改动。
