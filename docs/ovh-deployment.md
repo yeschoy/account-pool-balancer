@@ -38,6 +38,14 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：绑卡链路补齐回环过滤（2026-11-13 20:15 UTC，e0671b4）
+
+- 用户 04:12:15 点绑卡失败：`Stripe token 失败: Page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://deploy.com/signup`。同时 04:11:42 的 `状态=verified` 说明登录那一路已经好了。
+- 根因：与注册链路同一个问题，但这条路径漏改。`deploy_payment.py` 直接拿 `DEPLOY_PAY_SYS_PROXY`（= `st.SysProxy` = `127.0.0.1:10808`）建桥，绕过了 `resolve_sys_proxy()` 的回环判定。容器内 10808 无人监听，桥每跳 `ConnectionRefused`，Chromium 拿到一个连不通的本地代理 → `Page.goto` 直接 `ERR_TUNNEL_CONNECTION_FAILED`。
+- 修法（`d16e8a3`）：绑卡链路同样调用 `deploy_registrar.resolve_sys_proxy()`，回环按直连上游处理，并在 stderr 打一行说明。
+- **隔离容器实测（新镜像，未碰线上 data）**：`DEPLOY_PAY_SYS_PROXY='127.0.0.1:10808'` → `resolve=''` → `代理桥 @127.0.0.1:17660 -> 51.222.52.200:1080` → `browser_proxy=http://127.0.0.1:17660` → Stripe 返回 `Your card was declined. Your request was in live mode, but used a known test card.`。即 Chromium 正常加载页面、注入 Stripe.js、填卡并提交，拿到的是**真实业务响应**而不是导航失败；用测试卡被拒是预期行为（live 模式拒已知测试卡），不代表链路有问题。
+- 部署：`release/deploy-pay-egress-20261114` 从线上 `c52dedc` 起，cherry-pick 四个提交（`7190791`/`d9ccdd6`/`162c734`/`e0671b4`），发布差异 4 文件。构建于 20:15 前后，备份 data（sha256 `fb1c0ee9…7a88a4`），20:17:50 切换、20:18:21 healthy/0 重启；双内网入口 `{"ok":true}`、别名含 `opendesign-balancer`、2 候选 + 12 设置保留，两条候选状态均为 `verified`。回退镜像 `rollback-20261113T201500Z`（c6a6c6d）保留。
+
 ## 当前部署：回环 sys_proxy 不再把桥打死（2026-11-13 19:32 UTC，c6a6c6d）
 
 - 用户第三次贴日志（03:24:58 / 03:25:15）：`代理桥已启用（系统代理 ('127.0.0.1', 10808)）` → `profile HTTP 0 … 502` → `校验会话时出口不可用` → `状态=registered`。**没有提交注册**（上一轮修复生效），但每批都停在 transport 失败。
