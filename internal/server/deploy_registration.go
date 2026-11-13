@@ -57,6 +57,7 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/proxy-test", s.apiDeployProxyTest)
 	a("POST /api/deploy/candidates/{id}/bind-card", s.apiDeployBindCard)
 	a("POST /api/deploy/bind-cards", s.apiDeployBindCards)
+	a("PATCH /api/deploy/candidates/{id}/card", s.apiDeploySetCard)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -1127,12 +1128,16 @@ func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := m.store.Settings()
+	// 优先级：请求里手填 > 候选自己指定的卡 > 卡池里第一张可用的
 	line := strings.TrimSpace(body.CardLine)
+	if line == "" && c.Card != nil && strings.TrimSpace(c.Card.Number) != "" {
+		line = cardFullLine(*c.Card, st)
+	}
 	if line == "" {
 		avail := pickUnusedCards(st, m.store.List())
 		if len(avail) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "没有可用的银行卡（卡列表为空，或全部已绑定其他账号）"})
+				"error": "没有可用的银行卡（卡池为空，或全部已绑定其他账号）。可在该账号行点「设卡」直接指定。"})
 			return
 		}
 		line = avail[0]
@@ -1155,8 +1160,7 @@ func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
 	out := res[0]
 	// 成功则把卡记到候选上，防止被别的账号复用
 	if out.OK {
-		num := strings.TrimSpace(strings.SplitN(line, "----", 2)[0])
-		card := cardFromLine(num)
+		card := cardFromLine(line)
 		_, _ = m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
 			x.Card = &card
 			x.Recharged = true
@@ -1215,24 +1219,39 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	avail := pickUnusedCards(st, rows)
-	if len(avail) == 0 {
+	// 卡池为空也可能没问题：账号可能都自己指定了卡，交给下面逐条判断
+	hasOwn := false
+	for _, c := range targets {
+		if c.Card != nil && strings.TrimSpace(c.Card.Number) != "" {
+			hasOwn = true
+			break
+		}
+	}
+	if len(avail) == 0 && !hasOwn {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "没有可用的银行卡，先在设置页填写卡列表"})
+			"error": "没有可用的银行卡，先在号池页填写卡列表，或给账号单独「设卡」"})
 		return
 	}
 
+	// 先收各自指定的卡，再补卡池
 	var items []bindItem
 	used := 0
 	for _, c := range targets {
-		if used >= len(avail) {
-			break // 卡不够，剩下的跳过
+		line := ""
+		if c.Card != nil && strings.TrimSpace(c.Card.Number) != "" {
+			line = cardFullLine(*c.Card, st)
+		} else {
+			if used >= len(avail) {
+				continue // 卡不够，剩下的跳过
+			}
+			line = avail[used]
+			used++
 		}
 		items = append(items, bindItem{
 			ID: c.ID, Email: c.Email, SessionCookie: c.SessionCookie,
-			OrgID: c.OrgID, CardLine: avail[used], Zip: st.CardZip, Country: st.CardCountry,
+			OrgID: c.OrgID, CardLine: line, Zip: st.CardZip, Country: st.CardCountry,
 			Proxy: c.ProxyURL,
 		})
-		used++
 	}
 	live := body.Live == nil || *body.Live
 	amount := body.Amount
@@ -1248,14 +1267,14 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 	for _, out := range res {
 		if out.OK {
 			bound++
-			num := ""
+			full := ""
 			for _, it := range items {
 				if it.ID == out.ID {
-					num = strings.TrimSpace(strings.SplitN(it.CardLine, "----", 2)[0])
+					full = it.CardLine
 					break
 				}
 			}
-			card := cardFromLine(num)
+			card := cardFromLine(full)
 			_, _ = m.store.Update(out.ID, func(x *deploysignupstore.Candidate) error {
 				x.Card = &card
 				x.Recharged = true
@@ -1276,7 +1295,17 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 }
 
 // cardFromLine 把 "卡号----有效期----CVV" 拆成 Card。
+// cardFromLine 把 "卡号----月/年----CVV" 完整解析成 Card（含有效期与 CVV）。
+// 解析失败时只回填卡号，避免调用方拿到半张卡。
 func cardFromLine(line string) deploysignupstore.Card {
+	if mc, err := mistralcards.ParseLine(line); err == nil {
+		return deploysignupstore.Card{
+			Number:  mc.Number,
+			ExpMon:  mc.ExpMonth,
+			ExpYear: mc.ExpYear,
+			CVC:     mc.CVV,
+		}
+	}
 	parts := strings.Split(line, "----")
 	c := deploysignupstore.Card{}
 	if len(parts) > 0 {
@@ -1391,4 +1420,86 @@ func (s *Server) runBindCards(items []bindItem, live bool, amount float64) ([]bi
 	}
 	_ = cmd.Wait()
 	return out, nil
+}
+
+
+// apiDeploySetCard 给单个候选指定/清除要用的卡。
+//
+// 导入后随时可改；存的是完整卡（含 CVV），与「卡列表」分开——
+// 卡列表是池，这里是这张账号确定要用的那一张。
+// 清空 = 取消该账号的卡绑定。
+func (s *Server) apiDeploySetCard(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Card string `json:"card"`
+	}
+	if err := readBody(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	line := strings.TrimSpace(body.Card)
+	if line == "" {
+		if _, uerr := m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+			x.Card = nil
+			return nil
+		}); uerr != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": uerr.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "card": nil})
+		return
+	}
+
+	// 先确认整行有效（位数/Luhn/有效期/连接符）
+	if _, perr := mistralcards.ParseLine(line); perr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "卡无效：" + cardErrReason(perr)})
+		return
+	}
+	num := strings.TrimSpace(strings.SplitN(line, "----", 2)[0])
+
+	// 一卡一账号：这张卡不能已经归属别的候选
+	for _, c := range m.store.List() {
+		if c.ID == id || c.Card == nil {
+			continue
+		}
+		if strings.TrimSpace(c.Card.Number) == num {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "这张卡已绑定到账号 " + c.Email + "，一卡一账号"})
+			return
+		}
+	}
+
+	card := cardFromLine(line)
+	upd, uerr := m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+		x.Card = &card
+		return nil
+	})
+	if uerr != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": uerr.Error()})
+		return
+	}
+	m.addLog("card_set", upd.Email, "已指定卡 ****"+num[len(num)-min(4, len(num)):])
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+		"card": map[string]any{
+			"number": num, "last4": num[max(0, len(num)-4):],
+		},
+	})
+}
+
+
+// cardFullLine 把候选上保存的卡还原成 python 需要的 "number|MM|YYYY|CVC"。
+//
+// 注意 Card 结构只存了卡号，有效期/CVV 来自导入那一行的原始文本。
+func cardFullLine(c deploysignupstore.Card, st deploysignupstore.Settings) string {
+	if c.ExpMon > 0 && c.ExpYear > 0 && c.CVC != "" {
+		return fmt.Sprintf("%s|%02d|%04d|%s", c.Number, c.ExpMon, c.ExpYear, c.CVC)
+	}
+	return c.Number
 }

@@ -356,6 +356,12 @@
               placeholder="socks5://user:pass@host:port"></textarea>
             <span class="hint">按候选顺序轮转，一号一出口。可在此粘贴代理后点「保存设置」。</span>
 
+            <label for="dr-cards">银行卡列表（每行一张，可选）</label>
+            <textarea id="dr-cards" rows="4" spellcheck="false" autocomplete="off"
+              placeholder="4480602749951616----05/31----858"></textarea>
+            <span class="hint">格式：<code>卡号----月/年----CVV</code>（有效期支持 <code>05/31</code>、<code>5/2031</code>、<code>0531</code>）。可选，留空则不绑卡。保存时自动校验位数与 Luhn，无效行列在下方。<b>一卡一账号。</b></span>
+            <span id="dr-card-msg" class="muted small" role="status"></span>
+
             <div class="row-actions">
               <button type="submit" class="btn primary" id="dr-submit">导入</button>
               <button type="button" class="btn" id="dr-save-settings">保存设置</button>
@@ -378,7 +384,7 @@
           </div>
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>邮箱</th><th>状态</th><th>账号 / 组织</th><th>指纹</th><th>代理</th><th>说明</th><th>操作</th></tr></thead>
+              <thead><tr><th>邮箱</th><th>状态</th><th>账号 / 组织</th><th>指纹</th><th>代理</th><th>卡</th><th>说明</th><th>操作</th></tr></thead>
               <tbody id="dr-rows"></tbody>
             </table>
           </div>
@@ -434,16 +440,6 @@
           <input id="ds-bridge-port" type="number" min="1024" max="65000" value="17500">
 
           <label class="check"><input type="checkbox" id="ds-auto-verify" checked> 注册后自动取信验证</label>
-
-          <label for="ds-cards">银行卡列表（每行一张）</label>
-          <textarea id="ds-cards" rows="4" spellcheck="false" autocomplete="off"
-            placeholder="4480602749951616----05/31----858"></textarea>
-          <span class="hint">一行一张，格式：卡号----有效期----CVV（有效期支持 05/28、5/2028、0528）。保存时自动校验卡号位数与 Luhn 校验位，无效行列在下方。<b>一卡一账号</b>，同卡绑第二个账号会导致充值被拒。</span>
-          <span id="ds-card-msg" class="muted small" role="status"></span>
-
-          <label for="ds-card-zip">账单地址邮编 / 国家</label>
-          <input id="ds-card-zip" value="94607" autocomplete="off">
-          <span class="hint">绑卡时提交给 Stripe 的账单地址（默认美国 94607）。</span>
 
           <label class="check"><input type="checkbox" id="ds-import-to-pool"> 注册后自动创建 API Key 并入池</label>
           <span class="hint">入池需要 Secret Key（Deploy 路由用它做 Authorization）。Secret Key 只在创建时返回一次，勾选后注册流程会顺手创建并存下。已注册的账号可在号池页点「入池」补齐。</span>

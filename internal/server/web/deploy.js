@@ -34,6 +34,17 @@ function drEsc(s) {
   ));
 }
 
+// 候选上的卡只显示品牌+后四位，绝不回显完整卡号。
+function drCardLabel(c) {
+  const card = c.card || null;
+  if (!card || !card.number) return '<span class="muted">未绑</span>';
+  const n = String(card.number).replace(/\D/g, '');
+  const tail = n.slice(-4);
+  const brand = card.brand || '卡';
+  const mark = c.recharged ? ' <span class="badge ok">已充</span>' : '';
+  return `${drEsc(brand)} ****${drEsc(tail)}${mark}`;
+}
+
 // 代理明文展示：按用户要求显示完整 URL（含账号密码），方便核对与排错。
 // 不截断、不脱敏；表格单元格允许换行，长代理不会撑破布局。
 function drProxyLabel(url) {
@@ -73,7 +84,7 @@ function renderDeployRows(rows) {
   if (cnt) cnt.textContent = String(rows.length);
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">还没有账号。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="muted">还没有账号。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。</td></tr>';
     return;
   }
   body.innerHTML = rows.map((c) => {
@@ -93,6 +104,7 @@ function renderDeployRows(rows) {
       <td>${acct}<br><span class="muted small">${org}</span></td>
       <td>${fp}</td>
       <td>${drProxyLabel(c.proxy_url)} <button type="button" class="btn small ghost" data-dr-proxy="${drEsc(c.id)}" title="编辑代理">改</button></td>
+      <td>${drCardLabel(c)} <button type="button" class="btn small ghost" data-dr-card="${drEsc(c.id)}" title="设置卡号">设卡</button></td>
       <td class="small">${note}</td>
       <td class="row-actions">
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
@@ -167,12 +179,11 @@ async function loadDeploySettings() {
     if (av) av.checked = settings.auto_verify !== false;
     const ip = document.getElementById('ds-import-to-pool');
     if (ip) ip.checked = !!settings.import_to_pool;
-    const cd = document.getElementById('ds-cards');
-    if (cd && document.activeElement !== cd) {
+    // 卡列表在号池页（注册机）而非设置页
+    const cd = document.getElementById('dr-cards');
+    if (cd && document.activeElement !== cd && !cd.dataset.dirty) {
       cd.value = (settings.cards || []).join('\n');
     }
-    const cz = document.getElementById('ds-card-zip');
-    if (cz && !cz.value) cz.value = settings.card_zip || '94607';
   } catch (e) {
     const err = document.getElementById('ds-error');
     if (err) err.textContent = e.message;
@@ -194,10 +205,30 @@ function collectDeploySettings() {
     auto_verify: document.getElementById('ds-auto-verify')?.checked !== false,
     import_to_pool: !!document.getElementById('ds-import-to-pool')?.checked,
     proxy_pool: px,
-    cards: (document.getElementById('ds-cards')?.value || '').split('\n').map((s) => s.trim()).filter(Boolean),
-    card_zip: (document.getElementById('ds-card-zip')?.value || '').trim(),
-    card_country: 'US',
   };
+}
+
+// readDeployCards 读出号池页的卡列表（只 trim/去空行，校验交给后端）
+function readDeployCards() {
+  const el = document.getElementById('dr-cards');
+  return el ? el.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+}
+
+// showCardResult 把后端校验结果显示在卡列表下方
+function showCardResult(count, errors) {
+  const el = document.getElementById('dr-card-msg');
+  if (!el) return;
+  el.style.whiteSpace = 'pre-wrap';
+  if (errors && errors.length) {
+    el.className = 'error small';
+    el.textContent = `已识别 ${count} 张卡，以下行无效：\n` + errors.join('\n');
+  } else if (count) {
+    el.className = 'muted small';
+    el.textContent = `已识别 ${count} 张卡，全部通过校验`;
+  } else {
+    el.className = 'muted small';
+    el.textContent = '未填写银行卡（不绑卡）';
+  }
 }
 
 // ---------------------------------------------------------------- 绑定事件
@@ -243,9 +274,13 @@ function initDeployPage() {
       const next = Object.assign({}, (cur && cur.settings) || {});
       const px = document.getElementById('dr-proxies');
       next.proxy_pool = px ? px.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
-      await drApi('/settings', { method: 'PUT', body: JSON.stringify(next) });
-      resEl.textContent = `已保存 ${next.proxy_pool.length} 个代理`;
+      next.cards = readDeployCards();
+      const r = await drApi('/settings', { method: 'PUT', body: JSON.stringify(next) });
+      resEl.textContent = `已保存 ${next.proxy_pool.length} 个代理、${r.card_count || 0} 张卡`;
+      showCardResult(r.card_count || 0, r.card_errors);
       if (px) delete px.dataset.dirty;
+      const cd = document.getElementById('dr-cards');
+      if (cd) delete cd.dataset.dirty;
     } catch (e) {
       errEl.textContent = e.message;
     }
@@ -275,6 +310,8 @@ function initDeployPage() {
 
   const pxEl = document.getElementById('dr-proxies');
   pxEl?.addEventListener('input', () => { pxEl.dataset.dirty = '1'; });
+  const cdEl = document.getElementById('dr-cards');
+  cdEl?.addEventListener('input', () => { cdEl.dataset.dirty = '1'; });
 
   // 刷新
   document.getElementById('dr-refresh')?.addEventListener('click', () => {
@@ -346,12 +383,27 @@ function initDeployPage() {
     const importId = t.dataset.drImport;
     const proxyId = t.dataset.drProxy;
     const bindId = t.dataset.drBind;
+    const cardId = t.dataset.drCard;
     try {
       if (runId) {
         await drApi(`/candidates/${encodeURIComponent(runId)}/register`, { method: 'POST', body: '{}' });
         startDeployPolling();
       } else if (cancelId) {
         await drApi(`/candidates/${encodeURIComponent(cancelId)}/cancel`, { method: 'POST', body: '{}' });
+      } else if (cardId) {
+        const next = window.prompt('该账号使用的卡：卡号----月/年----CVV\n留空 = 清除', '');
+        if (next === null) return;
+        try {
+          await drApi(`/candidates/${encodeURIComponent(cardId)}/card`, {
+            method: 'PATCH',
+            body: JSON.stringify({ card: next.trim() }),
+          });
+          toast(next.trim() ? '已设置卡号' : '已清除卡号');
+          await loadDeployRegistrations();
+        } catch (e) {
+          toast(e.message);
+        }
+        return;
       } else if (bindId) {
         if (!window.confirm('给这个账号绑卡并充值 $5？\n\n会真实扣款。')) return;
         try {
