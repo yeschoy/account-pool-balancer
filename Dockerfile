@@ -66,7 +66,13 @@ RUN /opt/mistral-signup/bin/playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* \
     && chmod -R a+rX /opt/ms-playwright
 
+# Chrome 需要一个可写的 HOME 存放用户数据目录，否则启动即失败：
+#   Failed to create headless user data directory container.
+# 容器以 uid 1000 运行，而 /home 属于 root 且不可写，$HOME=/home/odb 不存在。
+RUN mkdir -p /home/odb && chown 1000:1000 /home/odb
+
 USER 1000:1000
+ENV HOME=/home/odb
 COPY --from=build /odb /usr/local/bin/odb
 
 # 浏览器走 xvfb 里的 headed 真 Chrome：新 headless 的 WebGL 是 SwiftShader，
