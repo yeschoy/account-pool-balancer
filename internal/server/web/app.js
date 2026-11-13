@@ -262,23 +262,29 @@ const PERCH_PAGES = ['perch', 'paccounts', 'prequests', 'pregister', 'pautosignu
 const TH_PAGES = ['thoverview', 'thregister', 'thsettings'];
 // Mistral registration belongs only to the Mistral pool.
 const MR_PAGES = ['mregister'];
+// Deploy 号池：注册机与号池管理（deploy.js）
+const DR_PAGES = ['dreg', 'dsettings'];
+const isDeploy = () => pool === 'deploy';
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
   perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
   thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings(),
-  mregister: () => loadMistralRegistrations() };
+  mregister: () => loadMistralRegistrations(),
+  dreg: () => loadDeployRegistrations(), dsettings: () => loadDeploySettings() };
 function go(page) {
   if (!pages[page]) page = 'overview';
   if (MR_PAGES.includes(page) && !isMistral()) page = pool === 'perch' ? 'perch' : 'overview';
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
   if (currentPage === 'mregister' && page !== currentPage) stopMistralPolling();
+  if (currentPage === 'dreg' && page !== currentPage) stopDeployPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
   $$('.page').forEach((p) => p.classList.toggle('hidden', p.id !== 'page-' + page));
   clearInterval(refreshTimer);
   pages[page]().catch((e) => toast(e.message));
+  if (page === 'dreg') startDeployPolling();
   if (page === 'overview' || page === 'accounts' || page === 'thoverview') {
     refreshTimer = setInterval(() => { if (!document.hidden && !$('#modal').open) pages[currentPage]().catch(() => {}); }, 15000);
   }
@@ -292,8 +298,8 @@ function renderPoolTabs() {
   // actually toggles visibility.
   $$('#nav a[data-page]').forEach((a) => {
     const page = a.dataset.page;
-    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page);
-    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page));
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page);
+    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page));
     a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
   });
@@ -307,6 +313,10 @@ function renderPoolTabs() {
   });
   $$('#nav [data-pool-nav="mistral"]').forEach((el) => {
     el.classList.toggle('hidden', !isMistral());
+    el.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="deploy"]').forEach((el) => {
+    el.classList.toggle('hidden', !isDeploy());
     el.removeAttribute('hidden');
   });
   document.title = POOL_LABEL[pool] + ' 账号池';
@@ -340,8 +350,9 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   logState.requests = { cursor: '', items: [] }; logState.errors = { cursor: '', items: [] }; logState.details = { cursor: '', items: [] };
   $('#acc-group-filter').value = '';
   renderPoolTabs();
+  if (pool === 'deploy' && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   // switching pools lands on that pool's first page
-  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : PROXY_PAGES;
+  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : PROXY_PAGES;
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });

@@ -1,0 +1,1098 @@
+[
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.51 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.51 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.51 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.51 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.51 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8015.60 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8015.60 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8015.60 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8015.60 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8015.60 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7942.82 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7942.82 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7942.82 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7942.82 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7942.82 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.7872.70 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.7872.70 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.7872.70 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.7872.70 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.7872.70 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7800.65 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7800.65 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7800.65 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7800.65 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7800.65 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7728.55 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7728.55 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7728.55 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7728.55 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7728.55 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7656.50 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7656.50 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7656.50 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7656.50 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7656.50 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7583.45 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7583.45 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7583.45 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7583.45 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7583.45 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7510.40 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"148\", \"Chromium\";v=\"148\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7510.40 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"148\", \"Chromium\";v=\"148\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7510.40 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"148\", \"Chromium\";v=\"148\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7510.40 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"148\", \"Chromium\";v=\"148\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7510.40 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"148\", \"Chromium\";v=\"148\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7438.35 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"147\", \"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7438.35 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"147\", \"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7438.35 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"147\", \"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7438.35 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"147\", \"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7438.35 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"147\", \"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7365.30 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"146\", \"Chromium\";v=\"146\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7365.30 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"146\", \"Chromium\";v=\"146\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7365.30 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"146\", \"Chromium\";v=\"146\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7365.30 Safari/537.36",
+  "platform": "macOS",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"146\", \"Chromium\";v=\"146\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"macOS\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7365.30 Safari/537.36",
+  "platform": "Windows",
+  "browser": "chrome",
+  "mobile": false,
+  "sec_ch_ua": "\"Google Chrome\";v=\"146\", \"Chromium\";v=\"146\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_7) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.7 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_6_2) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.6 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5_1) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.5 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4_1) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.4 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_3_1) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.3 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.2 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_1_1) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.1 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0_1) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.0.1 Safari/625.1.5",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.6 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.5 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.4 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.3 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.2 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.1 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.0 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7_1) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.6 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.6 Safari/620.1.16",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_2) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.6 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4_1) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.5 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3_1) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.4 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.3 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1_2) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.2 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0_1) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.1 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7_6) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.6 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_6_1) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.6 Safari/619.2.55",
+  "platform": "macOS",
+  "browser": "safari",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_2 like Mac OS X) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.2 Mobile/23C55 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_1 like Mac OS X) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.1 Mobile/23B85 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0_1 like Mac OS X) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.0.1 Mobile/23A8464 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/625.1.5 (KHTML, like Gecko) Version/26.0 Mobile/23A341 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.6 Mobile/22G120 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.5.1 Mobile/22F82 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.5 Mobile/22F76 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.4.1 Mobile/22E261 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.4 Mobile/22E240 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.3.1 Mobile/22D72 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.3 Mobile/22D63 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.2.1 Mobile/22C161 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.2 Mobile/22C152 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.1.1 Mobile/22B91 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.1 Mobile/22B83 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0_1 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.0.1 Mobile/22A3370 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/620.1.16 (KHTML, like Gecko) Version/18.0 Mobile/22A3354 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7_1 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.7.1 Mobile/21H231 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.7 Mobile/21H216 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.6.1 Mobile/21G93 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.6 Mobile/21G80 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.5.1 Mobile/21F90 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.5 Mobile/21F79 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/619.2.55 (KHTML, like Gecko) Version/17.4.1 Mobile/21E236 Safari/604.1",
+  "platform": "iOS",
+  "browser": "safari",
+  "mobile": true,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.3405.84 Safari/537.36 Edg/157.0.3405.84",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"157\", \"Chromium\";v=\"157\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.3345.79 Safari/537.36 Edg/156.0.3345.79",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"156\", \"Chromium\";v=\"156\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.3277.65 Safari/537.36 Edg/155.0.3277.65",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"155\", \"Chromium\";v=\"155\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.3197.60 Safari/537.36 Edg/154.0.3197.60",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"154\", \"Chromium\";v=\"154\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.3128.55 Safari/537.36 Edg/153.0.3128.55",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"153\", \"Chromium\";v=\"153\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.3063.50 Safari/537.36 Edg/152.0.3063.50",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"152\", \"Chromium\";v=\"152\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.2987.45 Safari/537.36 Edg/151.0.2987.45",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"151\", \"Chromium\";v=\"151\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.2912.40 Safari/537.36 Edg/150.0.2912.40",
+  "platform": "Windows",
+  "browser": "edge",
+  "mobile": false,
+  "sec_ch_ua": "\"Microsoft Edge\";v=\"150\", \"Chromium\";v=\"150\", \"Not.A/Brand\";v=\"24\"",
+  "sec_ch_ua_platform": "\"Windows\""
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:148.0) Gecko/20100101 Firefox/148.0",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:147.0.3) Gecko/20100101 Firefox/147.0.3",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0.3) Gecko/20100101 Firefox/147.0.3",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:146.0.2) Gecko/20100101 Firefox/146.0.2",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0.2) Gecko/20100101 Firefox/146.0.2",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:145.0.1) Gecko/20100101 Firefox/145.0.1",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0.1) Gecko/20100101 Firefox/145.0.1",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:143.0.4) Gecko/20100101 Firefox/143.0.4",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:143.0.4) Gecko/20100101 Firefox/143.0.4",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0.1) Gecko/20100101 Firefox/142.0.1",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0.1) Gecko/20100101 Firefox/142.0.1",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:141.0) Gecko/20100101 Firefox/141.0",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0.2) Gecko/20100101 Firefox/140.0.2",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0.2) Gecko/20100101 Firefox/140.0.2",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:139.0) Gecko/20100101 Firefox/139.0",
+  "platform": "macOS",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ },
+ {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+  "platform": "Windows",
+  "browser": "firefox",
+  "mobile": false,
+  "sec_ch_ua": null,
+  "sec_ch_ua_platform": null
+ }
+]

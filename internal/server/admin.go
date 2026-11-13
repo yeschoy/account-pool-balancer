@@ -114,6 +114,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	s.registerPerch(mux, a)
 	s.registerTokenHarbor(mux, a)
 	s.registerMistral(mux, a)
+	s.registerDeploy(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {

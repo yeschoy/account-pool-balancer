@@ -22,6 +22,7 @@ import (
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/fsutil"
 	"account-pool-balancer/internal/logstore"
+	"account-pool-balancer/internal/deploysignupstore"
 	"account-pool-balancer/internal/mistralsignupstore"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
@@ -91,6 +92,9 @@ type Server struct {
 	mistralMu       sync.Mutex
 	mistralStoreRef *mistralsignupstore.Store
 	mistralMgrRef   *mistralManager
+	// Deploy 注册机：复用 mistralMu 保护懒初始化，存储与并发独立
+	deployStoreRef *deploysignupstore.Store
+	deployMgrRef   *deployManager
 	// Token Harbor: the registration machine's store and its concurrency
 	// budget (both created on first use).
 	thStoreMu sync.Mutex

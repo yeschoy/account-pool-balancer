@@ -53,3 +53,26 @@ pnpm-debug.log*
 /*.svg
 # 本地凭据账本（注册机验收产物），永不入库
 .private/
+# essevin 注册机：代码与文档入库（/tools/* 默认忽略，需显式放行）
+!/tools/essevin/
+# essevin 注册机研究产物：运行时输入含 iCloud 分享 token / 代理密码 / 明文 Key
+# 代码与文档入库，以下附件永不入库
+/tools/essevin/accounts.txt
+/tools/essevin/proxies.txt
+/tools/essevin/*.jsonl
+/tools/essevin/run/
+/tools/essevin/mitm-conf/
+/tools/essevin/chrome-profile/
+/tools/essevin/__pycache__/
+
+# Deploy 号池注册机：代码入库（/tools/* 默认忽略，需显式放行）
+!/tools/deploy_registrar.py
+!/tools/deploy_payment.py
+!/tools/fp_layer.py
+!/tools/proxy_bridge.py
+!/tools/gen_ua_pool.py
+!/tools/data/
+!/tools/data/ua_pool.json
+# 运行时产物：卡台账含卡指纹，永不入库
+/tools/data/card_ledger.json
+/tools/__pycache__/

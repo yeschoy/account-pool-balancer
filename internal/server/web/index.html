@@ -8,6 +8,7 @@
 <script src="/assets/app.js" defer></script>
 <script src="/assets/perch.js" defer></script>
 <script src="/assets/tokenharbor.js" defer></script>
+<script src="/assets/deploy.js" defer></script>
 </head>
 <body>
 <div id="auth" class="auth hidden">
@@ -42,6 +43,9 @@
       <a data-page="psettings" data-pool-nav="perch" hidden>Perch 设置</a>
       <div class="nav-sep hidden" data-pool-nav="mistral" hidden>Mistral</div>
       <a data-page="mregister" data-pool-nav="mistral" class="hidden" hidden>Mistral 注册机</a>
+      <div class="nav-sep hidden" data-pool-nav="deploy" hidden>Deploy</div>
+      <a data-page="dreg" data-pool-nav="deploy" class="hidden" hidden>Deploy 号池管理</a>
+      <a data-page="dsettings" data-pool-nav="deploy" class="hidden" hidden>Deploy 设置</a>
       <div class="nav-sep" data-pool-nav="tokenharbor" hidden>TokenHarbor</div>
       <a data-page="thoverview" data-pool-nav="tokenharbor" hidden>TokenHarbor 概览</a>
       <a data-page="thregister" data-pool-nav="tokenharbor" hidden>TokenHarbor 注册机</a>
@@ -59,6 +63,7 @@
       <button class="pool-tab" data-pool="ollama" role="tab">Ollama 号池</button>
       <button class="pool-tab" data-pool="modal" role="tab">Modal 号池</button>
       <button class="pool-tab" data-pool="mistral" role="tab">Mistral 号池</button>
+      <button class="pool-tab" data-pool="deploy" role="tab">Deploy 号池</button>
       <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
       <button class="pool-tab" data-pool="modelstudio" role="tab">百炼 Model Studio</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
@@ -322,6 +327,105 @@
             <button type="button" class="btn" id="mr-proxy-test">测试代理</button>
             <span id="mr-proxy-result" class="muted"></span>
           </div>
+        </form>
+      </section>
+    </section>
+
+    <section id="page-dreg" class="page hidden">
+      <header class="page-head">
+        <h1>Deploy 号池管理</h1>
+        <div class="actions">
+          <button type="button" class="btn" id="dr-refresh">刷新</button>
+          <button type="button" class="btn primary" id="dr-bulk-run">批量注册待处理</button>
+        </div>
+      </header>
+
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>导入账号</h2>
+          <form id="dr-form" autocomplete="off">
+            <label for="dr-accounts">iCloud 账号 + 接码地址（每行一个）</label>
+            <textarea id="dr-accounts" rows="8" spellcheck="false"
+              placeholder="user1@icloud.com----https://icloud.mida.vip/messages/user1%40icloud.com?token=xxx&#10;user2@icloud.com----https://icloud.mida.vip/messages/user2%40icloud.com?token=yyy"></textarea>
+            <span class="hint">格式：<code>邮箱----接码地址</code>。接码地址为 iCloud HME 分享链接，含 token。</span>
+
+            <label for="dr-proxies">代理池（每行一个，留空则直连）</label>
+            <textarea id="dr-proxies" rows="4" spellcheck="false"
+              placeholder="socks5://user:pass@host:port"></textarea>
+            <span class="hint">按候选顺序轮转，一号一出口。可在此粘贴代理后点「保存设置」。</span>
+
+            <div class="row-actions">
+              <button type="submit" class="btn primary" id="dr-submit">导入</button>
+              <button type="button" class="btn" id="dr-save-settings">保存设置</button>
+            </div>
+            <p id="dr-form-error" class="error" role="alert"></p>
+            <p id="dr-bulk-result" class="hint"></p>
+          </form>
+
+          <dl class="kv" id="dr-status"></dl>
+        </section>
+
+        <section class="panel pc-registration-tasks">
+          <div class="head-row">
+            <h2>号池（<span id="dr-count">0</span>）</h2>
+            <span id="dr-poll-error" class="error" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>邮箱</th><th>状态</th><th>账号 / 组织</th><th>指纹</th><th>代理</th><th>说明</th><th>操作</th></tr></thead>
+              <tbody id="dr-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel mt">
+        <div class="head-row"><h2>运行日志</h2><button type="button" class="btn small" id="dr-log-clear">清空</button></div>
+        <div class="table-wrap mt">
+          <table class="table" id="dr-log-table">
+            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-dsettings" class="page hidden">
+      <header class="page-head"><h1>Deploy 设置</h1>
+        <div class="actions"><button type="button" class="btn primary" id="ds-save">保存</button></div>
+      </header>
+      <section class="panel">
+        <h2>注册参数</h2>
+        <form id="ds-form" autocomplete="off">
+          <label for="ds-interval">最小间隔（秒）</label>
+          <input id="ds-interval" type="number" min="1" step="1" value="8">
+          <span class="hint">实测 429 冷却窗较长，建议 8–15 秒。</span>
+
+          <label for="ds-retries">429 重试次数</label>
+          <input id="ds-retries" type="number" min="0" max="20" step="1" value="6">
+
+          <label for="ds-verify-timeout">等待验证邮件（秒）</label>
+          <input id="ds-verify-timeout" type="number" min="30" step="10" value="240">
+
+          <label for="ds-transport">传输层</label>
+          <select id="ds-transport">
+            <option value="curl_cffi">curl_cffi（注入真 Chrome TLS 指纹）</option>
+            <option value="urllib">urllib（调试用，默认指纹易被识别）</option>
+          </select>
+
+          <label for="ds-python">Python 解释器</label>
+          <input id="ds-python" value="python3" autocomplete="off">
+
+          <label for="ds-sys-proxy">系统代理（上游代理经它出网）</label>
+          <input id="ds-sys-proxy" value="127.0.0.1:10808" autocomplete="off">
+          <span class="hint">本机 Clash / V2Ray 等系统代理地址；留空表示不用。上游代理会经它再出网。</span>
+
+          <label for="ds-bridge-port">代理桥起始端口</label>
+          <input id="ds-bridge-port" type="number" min="1024" max="65000" value="17500">
+
+          <label class="check"><input type="checkbox" id="ds-auto-verify" checked> 注册后自动取信验证</label>
+
+          <p id="ds-error" class="error" role="alert"></p>
         </form>
       </section>
     </section>

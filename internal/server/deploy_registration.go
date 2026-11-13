@@ -1,0 +1,603 @@
+package server
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"account-pool-balancer/internal/deploysignupstore"
+)
+
+// deployManager 串行执行注册任务（单 worker，避免并发触发 429 与一 IP 多号）。
+type deployManager struct {
+	srv   *Server
+	store *deploysignupstore.Store
+
+	mu      sync.Mutex
+	running map[string]context.CancelFunc
+	seq     chan struct{} // capacity 1
+	logs    []deployLogLine
+	logMu   sync.Mutex
+}
+
+type deployLogLine struct {
+	At      time.Time `json:"at"`
+	Type    string    `json:"type"`
+	Email   string    `json:"email,omitempty"`
+	Message string    `json:"message,omitempty"`
+}
+
+const maxDeployLogs = 500
+
+func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerFunc)) {
+	a("GET /api/deploy/candidates", s.apiDeployCandidates)
+	a("POST /api/deploy/candidates", s.apiDeployCandidateAdd)
+	a("POST /api/deploy/candidates/bulk", s.apiDeployCandidateBulk)
+	a("DELETE /api/deploy/candidates/{id}", s.apiDeployCandidateDelete)
+	a("POST /api/deploy/candidates/{id}/register", s.apiDeployCandidateRegister)
+	a("POST /api/deploy/candidates/bulk-register", s.apiDeployBulkRegister)
+	a("POST /api/deploy/candidates/{id}/cancel", s.apiDeployCandidateCancel)
+	a("POST /api/deploy/candidates/{id}/resume", s.apiDeployCandidateResume)
+	a("GET /api/deploy/logs", s.apiDeployLogs)
+	a("GET /api/deploy/settings", s.apiDeploySettings)
+	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
+	a("GET /api/deploy/status", s.apiDeployStatus)
+}
+
+func (s *Server) deployStore() (*deploysignupstore.Store, error) {
+	s.mistralMu.Lock()
+	defer s.mistralMu.Unlock()
+	if s.deployStoreRef != nil {
+		return s.deployStoreRef, nil
+	}
+	path := filepath.Join(s.dataDir, "deploy-signup.json")
+	st, err := deploysignupstore.Open(path, s.secret)
+	if err != nil {
+		return nil, err
+	}
+	s.deployStoreRef = st
+	return st, nil
+}
+
+func (s *Server) deployMgr() (*deployManager, error) {
+	st, err := s.deployStore()
+	if err != nil {
+		return nil, err
+	}
+	s.mistralMu.Lock()
+	defer s.mistralMu.Unlock()
+	if s.deployMgrRef != nil {
+		return s.deployMgrRef, nil
+	}
+	m := &deployManager{
+		srv:     s,
+		store:   st,
+		running: map[string]context.CancelFunc{},
+		seq:     make(chan struct{}, 1),
+	}
+	s.deployMgrRef = m
+	return m, nil
+}
+
+func (m *deployManager) addLog(typ, email, msg string) {
+	m.logMu.Lock()
+	defer m.logMu.Unlock()
+	m.logs = append(m.logs, deployLogLine{At: time.Now(), Type: typ, Email: email, Message: msg})
+	if len(m.logs) > maxDeployLogs {
+		m.logs = m.logs[len(m.logs)-maxDeployLogs:]
+	}
+}
+
+func (m *deployManager) Logs() []deployLogLine {
+	m.logMu.Lock()
+	defer m.logMu.Unlock()
+	out := make([]deployLogLine, len(m.logs))
+	copy(out, m.logs)
+	return out
+}
+
+// ---------------------------------------------------------------- handlers
+
+func (s *Server) apiDeployCandidates(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"candidates": m.store.List(),
+		"settings":   m.store.Settings(),
+	})
+}
+
+func (s *Server) apiDeployCandidateAdd(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email      string `json:"email"`
+		MailboxURL string `json:"mailbox_url"`
+		Password   string `json:"password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	body.Email = strings.TrimSpace(body.Email)
+	body.MailboxURL = strings.TrimSpace(body.MailboxURL)
+	if body.Email == "" || body.MailboxURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email 与 mailbox_url 必填"})
+		return
+	}
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c, err := m.store.Add(deploysignupstore.Candidate{
+		Email: body.Email, MailboxURL: body.MailboxURL, Password: body.Password,
+		Status: deploysignupstore.Queued,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"candidate": c})
+}
+
+// apiDeployCandidateBulk 接受多行 `email----mailbox_url`。
+func (s *Server) apiDeployCandidateBulk(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	added, skipped := 0, 0
+	var errs []string
+	for _, line := range strings.Split(body.Text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var email, url string
+		switch {
+		case strings.Contains(line, "----"):
+			p := strings.SplitN(line, "----", 2)
+			email, url = p[0], p[1]
+		case strings.Contains(line, "\t"):
+			p := strings.SplitN(line, "\t", 2)
+			email, url = p[0], p[1]
+		default:
+			skipped++
+			continue
+		}
+		email, url = strings.TrimSpace(email), strings.TrimSpace(url)
+		if email == "" || url == "" {
+			skipped++
+			continue
+		}
+		if _, err := m.store.Add(deploysignupstore.Candidate{
+			Email: email, MailboxURL: url, Status: deploysignupstore.Queued,
+		}); err != nil {
+			skipped++
+			errs = append(errs, email+": "+err.Error())
+			continue
+		}
+		added++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"added": added, "skipped": skipped, "errors": errs})
+}
+
+func (s *Server) apiDeployCandidateDelete(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	if err := m.store.Delete(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// apiDeployCandidateRegister 注册单个候选。
+func (s *Server) apiDeployCandidateRegister(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	if _, err := m.store.Get(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	go m.runBatch([]string{id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": 1})
+}
+
+// apiDeployBulkRegister 批量注册（只处理 queued/failed）。
+func (s *Server) apiDeployBulkRegister(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var ids []string
+	for _, c := range m.store.List() {
+		if c.Status == deploysignupstore.Queued || c.Status == deploysignupstore.Failed {
+			ids = append(ids, c.ID)
+		}
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": 0})
+		return
+	}
+	go m.runBatch(ids)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": len(ids)})
+}
+
+func (s *Server) apiDeployCandidateCancel(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	m.mu.Lock()
+	cancel, ok := m.running[id]
+	m.mu.Unlock()
+	if ok {
+		cancel()
+	}
+	_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
+		if c.Status == deploysignupstore.Running {
+			c.Status = deploysignupstore.Cancelled
+		}
+		return nil
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// apiDeployCandidateResume 用已保存的会话校验账号是否仍然可用，不重新注册。
+func (s *Server) apiDeployCandidateResume(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	c, err := m.store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if c.SessionCookie == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "该账号没有保存的会话"})
+		return
+	}
+	go m.runBatchMode([]string{id}, true)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "resuming": 1})
+}
+
+func (s *Server) apiDeployLogs(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"logs": m.Logs()})
+}
+
+func (s *Server) apiDeploySettings(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": m.store.Settings()})
+}
+
+func (s *Server) apiDeploySaveSettings(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var in deploysignupstore.Settings
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := m.store.SaveSettings(in); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": m.store.Settings()})
+}
+
+func (s *Server) apiDeployStatus(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	rows := m.store.List()
+	var queued, running, verified, failed int
+	for _, c := range rows {
+		switch c.Status {
+		case deploysignupstore.Queued:
+			queued++
+		case deploysignupstore.Running:
+			running++
+		case deploysignupstore.Verified:
+			verified++
+		case deploysignupstore.Failed:
+			failed++
+		}
+	}
+	m.mu.Lock()
+	busy := len(m.running) > 0
+	m.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total": len(rows), "queued": queued, "running": running,
+		"verified": verified, "failed": failed, "busy": busy,
+	})
+}
+
+// ---------------------------------------------------------------- worker
+
+// runBatch 串行执行一批候选。全程持有 seq 信号量，保证同一时间只有一个批次。
+func (m *deployManager) runBatch(ids []string) {
+	m.runBatchMode(ids, false)
+}
+
+// runBatchMode resumeOnly=true 表示只校验已保存会话，不重新注册。
+func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
+	if len(ids) == 0 {
+		return
+	}
+	m.seq <- struct{}{}
+	defer func() { <-m.seq }()
+
+	st := m.store.Settings()
+	scriptPath, pyBin, err := m.scriptPaths(st)
+	if err != nil {
+		m.addLog("error", "", err.Error())
+		for _, id := range ids {
+			_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
+				c.Status = deploysignupstore.Failed
+				c.Error = err.Error()
+				return nil
+			})
+		}
+		return
+	}
+
+	// 只取 queued/failed 的
+	var items []map[string]any
+	var validIDs []string
+	for i, id := range ids {
+		c, err := m.store.Get(id)
+		if err != nil {
+			continue
+		}
+		// 注意：不因 status==Running 就跳过 —— 进程异常退出会留下僵尸 running，
+		// 那样账号会永久卡住。真正的并发保护由 seq 信号量保证。
+		if resumeOnly {
+			// 只处理有会话的
+			if c.SessionCookie == "" {
+				continue
+			}
+		} else {
+			// 普通注册：已验证/已有会话的不重复注册
+			if c.Status == deploysignupstore.Verified {
+				continue
+			}
+			if c.SessionCookie != "" && c.Status == deploysignupstore.Registered {
+				continue
+			}
+		}
+		// 已记录过代理的账号沿用原出口；否则按轮询分配
+		proxy := c.ProxyURL
+		if proxy == "" && len(st.ProxyPool) > 0 {
+			proxy = st.ProxyPool[i%len(st.ProxyPool)]
+		}
+		items = append(items, map[string]any{
+			"email":          c.Email,
+			"mailbox_url":    c.MailboxURL,
+			"password":       c.Password,
+			"proxy":          proxy,
+			"fp_seed":        time.Now().UnixNano() % 100000,
+			// 会话复用：把已保存的会话与指纹带上，python 优先复用它
+			"session_cookie": c.SessionCookie,
+			"ua":             c.UA,
+			"browser":        c.Browser,
+			"platform":       c.Platform,
+			"ja3":            c.JA3,
+		})
+		validIDs = append(validIDs, id)
+		_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+			x.Status = deploysignupstore.Running
+			x.Error = ""
+			// 记录本次实际使用的代理，后续复用会话必须走同一出口
+			if proxy != "" {
+				x.ProxyURL = proxy
+			}
+			return nil
+		})
+	}
+	if len(items) == 0 {
+		return
+	}
+
+	job := map[string]any{
+		"settings": map[string]any{
+			"min_interval":   st.MinIntervalSec,
+			"max_retries":    st.MaxRetries,
+			"verify_timeout": st.VerifyTimeoutSec,
+			"transport":      st.Transport,
+			"auto_verify":    st.AutoVerify,
+			"sys_proxy":      st.SysProxy,
+			"bridge_port":    st.BridgePort,
+		},
+		"items": items,
+	}
+	raw, _ := json.Marshal(job)
+	jobPath := filepath.Join(os.TempDir(), fmt.Sprintf("deploy-job-%d.json", time.Now().UnixNano()))
+	if err := os.WriteFile(jobPath, raw, 0o600); err != nil {
+		m.addLog("error", "", "写 job 文件失败: "+err.Error())
+		return
+	}
+	defer os.Remove(jobPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, id := range validIDs {
+		id := id
+		m.mu.Lock()
+		m.running[id] = cancel
+		m.mu.Unlock()
+		defer func() {
+			m.mu.Lock()
+			delete(m.running, id)
+			m.mu.Unlock()
+		}()
+	}
+
+	cmd := exec.CommandContext(ctx, pyBin, scriptPath, "--job-file", jobPath)
+	cmd.Dir = filepath.Dir(filepath.Dir(scriptPath)) // 仓库根
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		m.addLog("error", "", err.Error())
+		return
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		m.addLog("error", "", "启动注册机失败: "+err.Error())
+		return
+	}
+	m.addLog("start", "", fmt.Sprintf("开始注册 %d 个", len(items)))
+
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 1<<20), 8<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		m.handleEvent(ev, validIDs)
+	}
+	_ = cmd.Wait()
+	// 兜底：仍处于 running 说明 python 异常中断，标记 failed 以便重跑
+	for _, id := range validIDs {
+		_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
+			if c.Status == deploysignupstore.Running {
+				c.Status = deploysignupstore.Failed
+				if c.Error == "" {
+					c.Error = "注册进程异常中断"
+				}
+			}
+			return nil
+		})
+	}
+	m.addLog("done", "", "批次结束")
+}
+
+func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
+	typ, _ := ev["type"].(string)
+	email, _ := ev["email"].(string)
+	switch typ {
+	case "log":
+		msg, _ := ev["message"].(string)
+		m.addLog("log", email, msg)
+	case "item_update", "item_done":
+		idx := -1
+		if v, ok := ev["index"].(float64); ok {
+			idx = int(v)
+		}
+		if idx < 0 || idx >= len(ids) {
+			return
+		}
+		id := ids[idx]
+		_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
+			if s, ok := ev["status"].(string); ok {
+				c.Status = deploysignupstore.Status(s)
+			}
+			if s, ok := ev["password"].(string); ok && s != "" {
+				c.Password = s
+			}
+			if s, ok := ev["session_cookie"].(string); ok {
+				c.SessionCookie = s
+			}
+			if s, ok := ev["ua"].(string); ok {
+				c.UA = s
+			}
+			if s, ok := ev["browser"].(string); ok {
+				c.Browser = s
+			}
+			if s, ok := ev["platform"].(string); ok {
+				c.Platform = s
+			}
+			if s, ok := ev["ja3"].(string); ok {
+				c.JA3 = s
+			}
+			if s, ok := ev["error"].(string); ok && s != "" {
+				c.Error = s
+			}
+			if b, ok := ev["is_verified"].(bool); ok {
+				c.IsVerified = b
+			}
+			if v, ok := ev["account_id"].(float64); ok {
+				c.AccountID = fmt.Sprintf("%.0f", v)
+			}
+			if v, ok := ev["org_id"].(float64); ok {
+				c.OrgID = fmt.Sprintf("%.0f", v)
+			}
+			return nil
+		})
+		if typ == "item_done" {
+			m.addLog("item_done", email, fmt.Sprintf("状态=%v", ev["status"]))
+		}
+	}
+}
+
+func (m *deployManager) scriptPaths(st deploysignupstore.Settings) (script, py string, err error) {
+	// 仓库根 = server 包往上两级
+	root, err := filepath.Abs(filepath.Join("."))
+	if err != nil {
+		return "", "", err
+	}
+	candidates := []string{
+		filepath.Join(root, "tools", "deploy_registrar.py"),
+		filepath.Join(root, "..", "..", "tools", "deploy_registrar.py"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			py = st.PythonBin
+			if py == "" {
+				py = "python3"
+			}
+			return p, py, nil
+		}
+	}
+	return "", "", fmt.Errorf("找不到 tools/deploy_registrar.py（cwd=%s）", root)
+}
