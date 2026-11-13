@@ -1848,3 +1848,45 @@ curl -fsS http://127.0.0.1:8790/healthz
 受限备份目录中的 `preflight-data` 敏感副本和 `preflight.log`。清理结果已记入
 远程 `deploy.json`；线上容器未重启且保持 healthy。运行数据、版本源码快照、
 回滚镜像、完整数据备份及构建/部署记录均保留，不随临时文件一起删除。
+
+## 当前部署：Deploy 号池合并上线（2026-11-13 16:12 UTC，885f84a）
+
+本次把「Deploy 注册机/绑卡」(`1f0734f`) 与已上线的「Deploy 号池+原生网关」(`c6ae4b2`/`fb82190`) 合并后的 master `885f84a` 部署到 OVH。
+
+**首次尝试失败并已回滚（记录教训）**：曾直接用 `1f0734f` 部署，因该提交基线早于 Deploy 号池功能、不认识
+线上 `config.json` 里的 `"deploy"` 字段，容器启动即崩：
+
+```
+startup: /data/config.json is corrupt: json: unknown field "deploy"
+```
+
+约 60 秒内回退到 `release-c6ae4b2-20261112T213203Z`，healthz 200、双别名验证通过。
+**教训：部署前必须核对远端分支，不能只看本地 master。`git branch -r` 里已有 `feat/deploy-balancer` 与
+`release/deploy-pool-20261113` 两个平行实现。**
+
+- 提交：`885f84ac779e65026ccdc37e53a67d4ca8f98db1`（Merge branch 'feat/deploy-balancer' into master）
+- 镜像：`account-pool-balancer:release-885f84a-20261113T161200Z`
+- 快照：`/home/ubuntu/project/account-pool-balancer-build-885f84a`（从 GitHub 克隆，锁定提交）
+- 备份：`/home/ubuntu/project/account-pool-balancer-releases/20261113T161200Z-885f84a/data-pre-885f84a.tar.gz`（65M，0600）
+- 上次镜像：`release-c6ae4b2-20261112T213203Z`（保留，可回退）
+
+**时间记录**：构建 08:11:16–08:11:23（7s，缓存命中）；切换 08:12:12；healthy ≤ 04s；验收 08:13。
+**停机时间**：约 5 秒。
+
+**验收**：
+
+| 项 | 结果 |
+|---|---|
+| 容器状态 | `running` / `healthy` |
+| revision label | `885f84a…` |
+| `/healthz` | 200 |
+| `ai-internal` 别名 | `account-pool-balancer` + `opendesign-balancer` 均在 |
+| new-api → `account-pool-balancer:8790/healthz` | 200 |
+| new-api → `opendesign-balancer:8790/healthz` | 200 |
+| Deploy 标签/页面 | `data-pool="deploy"`、`data-page="dreg"`、`data-page="dsettings"` 均存在 |
+| 静态资源 | `app.js` 200、`deploy.js` 200 |
+| `/api/deploy/status` | 401（未登录，鉴权正常）|
+| 公网 `https://ods.yeschoy.io/healthz` | 200 |
+| 配置完整性 | 201 个账号；`deploy` 与 `modelstudio` 字段均存在 |
+
+**未做**：未向生产导入测试 Key、未触发 Deploy 注册、未调用绑卡接口。Deploy 号池页面需登录后在浏览器验收。
