@@ -376,8 +376,19 @@ def resolve_sys_proxy(settings: dict) -> str:
     failed / response 502 —— 看起来像"出口挂了"，实际是这个假默认值。
 
     只有显式给了非空值才用它；否则返回 ""，桥会直连上游代理。
+
+    另一层：`127.0.0.1` / `localhost` 只在"这台机子自己就是出口"时才成立。
+    跑在容器里时，这个回环属于容器自己，几乎不可能有 Clash 在听——线上
+    data 里就存着 `127.0.0.1:10808`，于是每跳 ConnectionRefused。回环地址
+    一律视为"没有系统代理"，要真用本机代理就填宿主 IP 或走 host 网络。
     """
     v = str(settings.get("sys_proxy") or "").strip()
+    if not v:
+        return ""
+    host = v.rsplit(":", 1)[0].strip("[]").lower()
+    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        emit("log", message=f"系统代理 {v} 是回环地址，容器内不可达，按直连上游处理")
+        return ""
     return v
 
 
@@ -691,6 +702,7 @@ def build_client(item: dict, settings: dict, profile: Any = None) -> HttpClient:
         try:
             proxy_endpoint = bridge.endpoint_for(upstream)
         except Exception as e:  # noqa: BLE001
+            # 桥起不来就直连：宁可换出口，也不要让整批因为端口占用全灭。
             emit("log", message=f"代理桥不可用，改直连: {e}")
     elif upstream:
         proxy_endpoint = upstream

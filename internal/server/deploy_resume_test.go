@@ -294,8 +294,23 @@ print(d.resolve_sys_proxy({"sys_proxy": "   "}) == "")
 print(d.resolve_sys_proxy({"sys_proxy": "10.0.0.1:7890"}))
 print(d.resolve_sys_proxy({"sys_proxy": None}) == "")
 `
+	// 回环地址在容器里永远不可达（线上 data 就存着 127.0.0.1:10808），
+	// 一律按"没有系统代理"处理，否则桥每跳 ConnectionRefused → 报成 502。
+	py2 := `import sys
+sys.path.insert(0, "tools")
+import deploy_registrar as d
+d.emit = lambda kind, **kw: None
+print(d.resolve_sys_proxy({"sys_proxy": "127.0.0.1:10808"}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": "localhost:7890"}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": "127.0.0.1"}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": "192.168.1.5:7890"}))
+`
 	out := runPython(t, py)
 	if out != "True\nTrue\nTrue\n10.0.0.1:7890\nTrue" {
 		t.Fatalf("unexpected sys_proxy resolution: %q", out)
+	}
+	out2 := runPython(t, py2)
+	if out2 != "True\nTrue\nTrue\n192.168.1.5:7890" {
+		t.Fatalf("loopback sys_proxy must be treated as absent: %q", out2)
 	}
 }
