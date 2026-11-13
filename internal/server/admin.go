@@ -37,6 +37,21 @@ var webFS embed.FS
 
 const csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
+// assetRefs 按出现顺序返回 index.html 引用的静态资源文件名（不含 /assets/ 前缀）。
+// 支持 .js 与 .css，去重。
+func assetRefs(index []byte) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range regexp.MustCompile(`/assets/([A-Za-z0-9_.-]+\.(?:js|css))"`).FindAllSubmatch(index, -1) {
+		name := string(m[1])
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func (s *Server) registerAdmin(mux *http.ServeMux) {
 	sub, _ := fs.Sub(webFS, "web")
 	static := http.FileServer(http.FS(sub))
@@ -44,16 +59,21 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	// cached an older app.js/app.css (the page is served behind a CDN) can't
 	// pair it with a newer index.html.
 	index, _ := fs.ReadFile(sub, "index.html")
+	// 从 index.html 里发现所有 /assets/x.{js,css}，逐个补内容哈希版本号。
+	// 早先用的是写死的四个文件清单，deploy.js 加进来后没同步，
+	// 于是它永远不带 ?v=，浏览器/CDN 可能一直用旧版（表现为"部署了新版本但页面没变"）。
 	sum := sha256.New()
-	for _, f := range []string{"app.css", "app.js", "perch.js", "tokenharbor.js"} {
-		b, _ := fs.ReadFile(sub, f)
-		sum.Write(b)
+	assets := assetRefs(index)
+	for _, f := range assets {
+		if b, err := fs.ReadFile(sub, f); err == nil {
+			sum.Write(b)
+		}
 	}
 	ver := "?v=" + hex.EncodeToString(sum.Sum(nil))[:10]
-	index = bytes.ReplaceAll(index, []byte(`/assets/app.css"`), []byte(`/assets/app.css`+ver+`"`))
-	index = bytes.ReplaceAll(index, []byte(`/assets/app.js"`), []byte(`/assets/app.js`+ver+`"`))
-	index = bytes.ReplaceAll(index, []byte(`/assets/perch.js"`), []byte(`/assets/perch.js`+ver+`"`))
-	index = bytes.ReplaceAll(index, []byte(`/assets/tokenharbor.js"`), []byte(`/assets/tokenharbor.js`+ver+`"`))
+	for _, f := range assets {
+		plain := []byte(`/assets/` + f + `"`)
+		index = bytes.ReplaceAll(index, plain, []byte(`/assets/`+f+ver+`"`))
+	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", csp)
