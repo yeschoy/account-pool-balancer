@@ -505,6 +505,52 @@ class Registrar:
 
 
 # --------------------------------------------------------------------------
+# API Key（入池用）
+# --------------------------------------------------------------------------
+
+# portal 创建 API Key 的默认授权模板（取自前端默认 JSON）
+DEFAULT_STATEMENT = [{
+    "key": "models",
+    "action": ["hive:CallApi"],
+    "effect": "Allow",
+    "resource": ["hive:models:sf1:::v3/*", "hive:models:va1:::v3/*"],
+}]
+
+
+def create_api_key(http: "HttpClient", org_id: str | int) -> tuple[str, str, str]:
+    """
+    在 portal 里创建一把 API Key，返回 (access_key, secret_key, error)。
+
+    ⚠️ Secret Key **只在创建时返回一次**，之后 GET /tokens 只给 access_key，
+    所以拿到必须立刻落库，否则只能重开一把。
+
+    实测：Deploy 的路由用 Secret Key 做 Authorization（不是 access_key）；
+    access_key 只是门票 ID，用于编辑/删除。
+    """
+    # 先看有没有现成的（避免重复创建把门票堆满）
+    lst = http.request("GET", f"{BASE}/api/organization/{org_id}/tokens")
+    if lst.status == 200:
+        try:
+            rows = ((lst.json or {}).get("data") or [])
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            if isinstance(r, dict) and r.get("secret_key"):
+                return r.get("access_key", ""), r["secret_key"], ""
+
+    r = http.request("POST", f"{BASE}/api/organization/{org_id}/tokens",
+                     {"statement": DEFAULT_STATEMENT})
+    j = r.json or {}
+    data = (j.get("data") or {}) if isinstance(j, dict) else {}
+    ak = data.get("access_key") or ""
+    sk = data.get("secret_key") or ""
+    if r.status not in (200, 201) or not sk:
+        msg = j.get("message") if isinstance(j, dict) else ""
+        return "", "", f"创建 API Key 失败 HTTP {r.status}: {msg or r.body[:160]}"
+    return ak, sk, ""
+
+
+# --------------------------------------------------------------------------
 # 主流程
 # --------------------------------------------------------------------------
 
@@ -719,6 +765,18 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
             result["account_id"] = pj2.get("id") or result.get("account_id")
 
     result["session_cookie"] = http.cookies.get("hive-portal-production", "")
+
+    # --- 5. 需要入池时，顺手创建 API Key（Secret Key 只返回一次）---
+    if settings.get("import_to_pool") and result.get("org_id"):
+        ak, sk, kerr = create_api_key(http, result["org_id"])
+        if sk:
+            result["access_key"] = ak
+            result["secret_key"] = sk
+            log(f"API Key 已创建 access_key={ak}")
+        else:
+            result["api_key_error"] = kerr
+            log(f"API Key 创建失败（不影响账号可用）: {kerr}")
+
     if profile is not None:
         # 记录实际使用的浏览器底座，复用会话时据此还原 TLS
         result["browser"] = profile.browser

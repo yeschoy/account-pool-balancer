@@ -79,6 +79,13 @@ type Candidate struct {
 	// 会话：hive-portal-production 的值，用于后续调 portal API
 	SessionCookie string `json:"session_cookie,omitempty"`
 
+	// 以下三项来自 POST /api/organization/{org}/tokens，是入池（路由）用的凭据。
+	// Deploy 的路由使用 Secret Key（不是 access_key）。Secret Key 只在创建时返回一次，
+	// 创建后门票接口只回 access_key，所以必须在这里持久化。
+	AccessKey      string `json:"access_key,omitempty"`
+	SecretKey      string `json:"secret_key,omitempty"`
+	ImportedAcctID string `json:"imported_account_id,omitempty"`
+
 	// 指纹（注册时绑定，后续登录必须复用）
 	UA        string `json:"ua,omitempty"`
 	Browser   string `json:"browser,omitempty"`
@@ -121,6 +128,8 @@ type Settings struct {
 	SysProxy string `json:"sys_proxy"`
 	// BridgePort 本地代理桥起始端口
 	BridgePort int `json:"bridge_port"`
+	// ImportToPool 注册成功后自动创建 API Key 并入池
+	ImportToPool bool `json:"import_to_pool"`
 	// PythonBin 注册机解释器路径
 	PythonBin string `json:"python_bin"`
 }

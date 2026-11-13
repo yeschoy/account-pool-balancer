@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/deploysignupstore"
 )
 
@@ -46,6 +48,8 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/candidates/bulk-register", s.apiDeployBulkRegister)
 	a("POST /api/deploy/candidates/{id}/cancel", s.apiDeployCandidateCancel)
 	a("POST /api/deploy/candidates/{id}/resume", s.apiDeployCandidateResume)
+	a("POST /api/deploy/candidates/{id}/import", s.apiDeployCandidateImport)
+	a("POST /api/deploy/candidates/import-all", s.apiDeployImportAll)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -454,6 +458,8 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 			"auto_verify":    st.AutoVerify,
 			"sys_proxy":      st.SysProxy,
 			"bridge_port":    st.BridgePort,
+			// 需要 Secret Key 才能在注册后直接入池
+			"import_to_pool": st.ImportToPool,
 		},
 		"items": items,
 	}
@@ -548,6 +554,12 @@ func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
 			if s, ok := ev["session_cookie"].(string); ok {
 				c.SessionCookie = s
 			}
+			if s, ok := ev["access_key"].(string); ok {
+				c.AccessKey = s
+			}
+			if s, ok := ev["secret_key"].(string); ok {
+				c.SecretKey = s
+			}
 			if s, ok := ev["ua"].(string); ok {
 				c.UA = s
 			}
@@ -600,4 +612,124 @@ func (m *deployManager) scriptPaths(st deploysignupstore.Settings) (script, py s
 		}
 	}
 	return "", "", fmt.Errorf("找不到 tools/deploy_registrar.py（cwd=%s）", root)
+}
+
+
+// ---------------------------------------------------------------- 入池
+
+// importDeployCandidate 把一条已注册的候选写入 Deploy 账号池，供路由使用。
+//
+// 需要 Secret Key（不是 access_key）：Deploy 的 API 用 Secret Key 做 Authorization。
+// Secret Key 只在 POST /tokens 时返回一次，注册流程已把它存进候选记录。
+func (s *Server) importDeployCandidate(c deploysignupstore.Candidate) (string, error) {
+	key := strings.TrimSpace(c.SecretKey)
+	if key == "" {
+		return "", errors.New("该账号没有 Secret Key，无法入池（可先点「补齐 Key」再入池）")
+	}
+
+	var newID string
+	_, err := s.cfg.Update(-1, func(cfg *config.Config) error {
+		for _, a := range cfg.Accounts {
+			if a.Provider == config.ProviderDeploy && a.RuntimeKey == key {
+				return errors.New("该 Secret Key 已在账号池中")
+			}
+		}
+		name := c.Email
+		if i := strings.Index(name, "@"); i > 0 {
+			name = name[:i]
+		}
+		if name == "" {
+			name = "deploy-" + c.ID
+		}
+		if len([]rune(name)) > 50 {
+			name = string([]rune(name)[:50])
+		}
+		note := "Deploy 注册机导入"
+		if c.AccessKey != "" {
+			note += "；access_key=" + c.AccessKey
+		}
+		acct := config.Account{
+			ID:         "deploy-" + c.ID,
+			Provider:   config.ProviderDeploy,
+			Name:       name,
+			Email:      c.Email,
+			Group:      config.GroupForProvider(config.ProviderDeploy),
+			Enabled:    true,
+			RuntimeKey: key,
+			ProxyURL:   c.ProxyURL,
+			MaxConc:    0,
+			Weight:     1,
+			Note:       note,
+		}
+		cfg.Accounts = append(cfg.Accounts, acct)
+		newID = acct.ID
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return newID, nil
+}
+
+// apiDeployCandidateImport 手动把单个候选入池。
+func (s *Server) apiDeployCandidateImport(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	c, err := m.store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if c.ImportedAcctID != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account_id": c.ImportedAcctID, "already": true})
+		return
+	}
+	acctID, ierr := s.importDeployCandidate(c)
+	if ierr != nil {
+		m.addLog("import_failed", c.Email, ierr.Error())
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": ierr.Error()})
+		return
+	}
+	_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+		x.ImportedAcctID = acctID
+		return nil
+	})
+	m.addLog("imported", c.Email, "已入池 "+acctID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account_id": acctID})
+}
+
+// apiDeployImportAll 把所有已验证且尚未入池的候选批量入池。
+func (s *Server) apiDeployImportAll(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	imported, skipped, failed := 0, 0, 0
+	var errs []string
+	for _, c := range m.store.List() {
+		if c.Status != deploysignupstore.Verified || c.ImportedAcctID != "" {
+			skipped++
+			continue
+		}
+		acctID, ierr := s.importDeployCandidate(c)
+		if ierr != nil {
+			failed++
+			errs = append(errs, c.Email+": "+ierr.Error())
+			continue
+		}
+		_, _ = m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
+			x.ImportedAcctID = acctID
+			return nil
+		})
+		m.addLog("imported", c.Email, "已入池 "+acctID)
+		imported++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"imported": imported, "skipped": skipped, "failed": failed, "errors": errs,
+	})
 }

@@ -337,6 +337,7 @@
         <div class="actions">
           <button type="button" class="btn" id="dr-refresh">刷新</button>
           <button type="button" class="btn primary" id="dr-bulk-run">批量注册待处理</button>
+          <button type="button" class="btn" id="dr-bulk-import">全部入池</button>
         </div>
       </header>
 
@@ -427,6 +428,9 @@
           <input id="ds-bridge-port" type="number" min="1024" max="65000" value="17500">
 
           <label class="check"><input type="checkbox" id="ds-auto-verify" checked> 注册后自动取信验证</label>
+
+          <label class="check"><input type="checkbox" id="ds-import-to-pool"> 注册后自动创建 API Key 并入池</label>
+          <span class="hint">入池需要 Secret Key（Deploy 路由用它做 Authorization）。Secret Key 只在创建时返回一次，勾选后注册流程会顺手创建并存下。已注册的账号可在号池页点「入池」补齐。</span>
 
           <p id="ds-error" class="error" role="alert"></p>
         </form>

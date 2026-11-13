@@ -83,9 +83,11 @@ function renderDeployRows(rows) {
     const acct = c.account_id ? `#${drEsc(c.account_id)}` : '<span class="muted">—</span>';
     const org = c.org_id ? `org ${drEsc(c.org_id)}` : '';
     const fp = c.browser ? `${drEsc(c.browser)}/${drEsc(c.platform || '')}` : '<span class="muted">—</span>';
-    const note = c.error
-      ? `<span class="error">${drEsc(c.error)}</span>`
-      : (c.is_verified ? `已验证 · ${c.session_cookie ? '有会话' : '无会话'}` : (c.detail || ''));
+    let note;
+    if (c.error) note = `<span class="error">${drEsc(c.error)}</span>`;
+    else if (c.imported_account_id) note = `<span class="badge ok">已入池</span> <span class="muted small">${drEsc(c.imported_account_id)}</span>`;
+    else if (c.is_verified) note = `已验证 · ${c.session_cookie ? '有会话' : '无会话'}${c.secret_key ? ' · 有 Key' : ' · 无 Key'}`;
+    else note = (c.detail || '');
     const busy = c.status === 'running';
     const canRun = c.status === 'queued' || c.status === 'failed' || c.status === 'cancelled';
     return `<tr>
@@ -98,6 +100,7 @@ function renderDeployRows(rows) {
       <td class="row-actions">
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
         ${c.session_cookie ? `<button type="button" class="btn small" data-dr-resume="${drEsc(c.id)}">校验会话</button>` : ''}
+        ${(c.status === 'verified' && !c.imported_account_id) ? `<button type="button" class="btn small primary" data-dr-import="${drEsc(c.id)}">入池</button>` : ''}
         ${busy ? `<button type="button" class="btn small" data-dr-cancel="${drEsc(c.id)}">取消</button>` : ''}
         <button type="button" class="btn small ghost" data-dr-del="${drEsc(c.id)}">删除</button>
       </td>
@@ -164,6 +167,8 @@ async function loadDeploySettings() {
     set('ds-bridge-port', settings.bridge_port || 17500);
     const av = document.getElementById('ds-auto-verify');
     if (av) av.checked = settings.auto_verify !== false;
+    const ip = document.getElementById('ds-import-to-pool');
+    if (ip) ip.checked = !!settings.import_to_pool;
   } catch (e) {
     const err = document.getElementById('ds-error');
     if (err) err.textContent = e.message;
@@ -183,6 +188,7 @@ function collectDeploySettings() {
     sys_proxy: val('ds-sys-proxy').trim(),
     bridge_port: Number(val('ds-bridge-port')) || 17500,
     auto_verify: document.getElementById('ds-auto-verify')?.checked !== false,
+    import_to_pool: !!document.getElementById('ds-import-to-pool')?.checked,
     proxy_pool: px,
   };
 }
@@ -253,6 +259,22 @@ function initDeployPage() {
     }
   });
 
+  // 全部入池
+  document.getElementById('dr-bulk-import')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      const r = await drApi('/candidates/import-all', { method: 'POST', body: '{}' });
+      toast(`入池 ${r.imported} 个，跳过 ${r.skipped} 个` + (r.failed ? `，失败 ${r.failed} 个` : ''));
+      if (r.errors && r.errors.length) console.warn('入池失败:', r.errors);
+      await loadDeployRegistrations();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // 行内操作（事件委托）
   document.getElementById('dr-rows')?.addEventListener('click', async (ev) => {
     const t = ev.target.closest('button');
@@ -261,12 +283,18 @@ function initDeployPage() {
     const cancelId = t.dataset.drCancel;
     const delId = t.dataset.drDel;
     const resumeId = t.dataset.drResume;
+    const importId = t.dataset.drImport;
     try {
       if (runId) {
         await drApi(`/candidates/${encodeURIComponent(runId)}/register`, { method: 'POST', body: '{}' });
         startDeployPolling();
       } else if (cancelId) {
         await drApi(`/candidates/${encodeURIComponent(cancelId)}/cancel`, { method: 'POST', body: '{}' });
+      } else if (importId) {
+        const r = await drApi(`/candidates/${encodeURIComponent(importId)}/import`, { method: 'POST', body: '{}' });
+        toast(r.already ? '已在池中' : `已入池 ${r.account_id}`);
+        await loadDeployRegistrations();
+        return;
       } else if (resumeId) {
         await drApi(`/candidates/${encodeURIComponent(resumeId)}/resume`, { method: 'POST', body: '{}' });
         toast('开始校验会话');
