@@ -218,14 +218,23 @@ function initDeployPage() {
   });
 
   // 保存设置（号池页的代理池按钮）
+  //
+  // 号池页只有「代理池」一个输入框，其余 ds-* 控件都在「Deploy 注册设置」页里
+  // 且未必渲染过。以前这里直接提交 collectDeploySettings()，读不到的字段会落到
+  // 默认值再把整份设置覆盖回去——代理池因此被清空，python_bin 也会从镜像里的
+  // venv 被重置成 python3（容器内没有 curl_cffi，注册直接失败）。
+  // 现在只提交代理池，其余字段沿用服务端现值。
   document.getElementById('dr-save-settings')?.addEventListener('click', async () => {
     const errEl = document.getElementById('dr-form-error');
     const resEl = document.getElementById('dr-bulk-result');
     errEl.textContent = '';
     try {
-      await drApi('/settings', { method: 'PUT', body: JSON.stringify(collectDeploySettings()) });
-      resEl.textContent = '设置已保存';
+      const cur = await drApi('/settings');
+      const next = Object.assign({}, (cur && cur.settings) || {});
       const px = document.getElementById('dr-proxies');
+      next.proxy_pool = px ? px.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+      await drApi('/settings', { method: 'PUT', body: JSON.stringify(next) });
+      resEl.textContent = `已保存 ${next.proxy_pool.length} 个代理`;
       if (px) delete px.dataset.dirty;
     } catch (e) {
       errEl.textContent = e.message;

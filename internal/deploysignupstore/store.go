@@ -146,9 +146,10 @@ func DefaultSettings() Settings {
 		VerifyTimeoutSec: 240,
 		Transport:        "curl_cffi",
 		AutoVerify:       true,
-		PythonBin:        "python3",
-		SysProxy:         "127.0.0.1:10808",
-		BridgePort:       17500,
+		// 留空：由 server 的 scriptPaths() 决定（镜像用 venv，本地用 python3）。
+		PythonBin:  "",
+		SysProxy:   "127.0.0.1:10808",
+		BridgePort: 17500,
 	}
 }
 
@@ -368,7 +369,10 @@ func (s *Store) SaveSettings(in Settings) error {
 		in.Transport = "curl_cffi"
 	}
 	if in.PythonBin == "" {
-		in.PythonBin = "python3"
+		// 镜像里系统 python3 没有 curl_cffi，注册会直接 ImportError。
+		// 默认留空，由 server 的 scriptPaths() 按 DEPLOY_PYTHON / venv 兜底，
+		// 这里不再把 python3 写死进设置。
+		in.PythonBin = ""
 	}
 	s.settings = in
 	s.dirty = true
