@@ -355,6 +355,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 		if provider == config.ProviderPerch {
 			return fail("perch accounts take no API key: POST the account export to /open/v1/perch/import instead")
 		}
+		if provider == config.ProviderDeploy {
+			return fail("Deploy runtimeKey must be the opaque secret (8..512 ASCII characters without whitespace), not access_key")
+		}
 		if provider == config.ProviderMistral {
 			return fail("Mistral runtimeKey must be an 8..512 character ASCII API token without whitespace")
 		}
@@ -392,7 +395,7 @@ func (s *Server) importDecide(ik config.ImportKey, it importItem, now time.Time,
 	if len(conflicts) > 0 {
 		// The very same account again (same keys, same or no name): nothing to do.
 		if c := conflicts[0]; c.Reason == "runtimeKey" {
-			if a, ok := cfg.Account(c.AccountID); ok && a.Provider != provider && (config.IsOpenCode(a.Provider) || config.IsOpenCode(provider)) {
+			if a, ok := cfg.Account(c.AccountID); ok && a.Provider != provider && (config.WriteOnlyCredentials(a.Provider) || config.WriteOnlyCredentials(provider)) {
 				return fail("runtimeKey already belongs to another provider/tier"), false
 			}
 			if a, ok := cfg.Account(c.AccountID); ok && (controlKey == "" || a.ControlKey == controlKey) && (name == "" || strings.EqualFold(a.Name, name)) && len(conflicts) == 1 {

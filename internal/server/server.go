@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/deploysignupstore"
 	"account-pool-balancer/internal/fsutil"
 	"account-pool-balancer/internal/logstore"
-	"account-pool-balancer/internal/deploysignupstore"
 	"account-pool-balancer/internal/mistralsignupstore"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
@@ -175,12 +175,13 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.TokenHarborFetch = s.fetchTHObservation
+	s.quota.DeployHTTPFor = s.deployHTTPClient
 	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
 		return s.ensureGoEgress(ctx, cfg, a, false)
 	}
 	s.quota.OnUpdate = func(id string) {
 		s.metaDirty.Store(true)
-		if a, ok := s.cfg.Get().Account(id); ok && config.StrictResponses(a.Provider) {
+		if a, ok := s.cfg.Get().Account(id); ok && (config.StrictResponses(a.Provider) || a.Provider == config.ProviderDeploy) {
 			s.resetModels()
 		}
 	}
@@ -216,7 +217,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
-			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
+			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama || a.Provider == config.ProviderDeploy) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
 				continue
 			}
 			quotas[id] = q
@@ -276,8 +277,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 func (s *Server) onConfigChange(old, next *config.Config) {
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
+	s.pruneDeployTransports(old, next)
 	s.rebindPerch(next)
-	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Deploy.BaseURL != next.Deploy.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -291,7 +293,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
-		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama || a.Provider == config.ProviderDeploy) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}
@@ -335,6 +337,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 		}
 		if a.Provider == config.ProviderTokenHarbor {
 			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.TokenHarbor.AccountInterval() != next.TokenHarbor.AccountInterval() {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderDeploy && next.ForProvider(a.Provider).Quota.Enabled {
+			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) || old.Deploy.ModelSyncSec != next.Deploy.ModelSyncSec || old.ForProvider(a.Provider).Quota != next.ForProvider(a.Provider).Quota {
 				s.quota.RefreshSession(a.ID)
 			}
 		}

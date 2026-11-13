@@ -601,6 +601,7 @@ type ollamaRead struct {
 type Poller struct {
 	Cfg              func() *config.Config
 	HTTPFor          func(proxyURL string) *http.Client
+	DeployHTTPFor    func(*config.Config, string) *http.Client
 	OnUpdate         func(accountID string)
 	GoEgressCheck    func(context.Context, *config.Config, config.Account) error
 	TokenHarborFetch func(context.Context, *config.Config, config.Account) (*TokenHarborState, error)
@@ -809,6 +810,14 @@ func (p *Poller) dispatch(ctx context.Context) {
 	now := time.Now()
 	p.mu.Lock()
 	inFlight := len(p.running)
+	deployInFlight := 0
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderDeploy && p.running[a.ID] != nil {
+			deployInFlight++
+		}
+	}
+	inFlight -= deployInFlight // Deploy owns an independent worker budget.
+	deployLimit := cfg.ForProvider(config.ProviderDeploy).Quota.Concurrency
 	mistralInFlight := 0
 	for _, a := range cfg.Accounts {
 		if a.Provider == config.ProviderMistral && p.running[a.ID] != nil {
@@ -835,18 +844,25 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 	}
 	for _, a := range append(urgent, due...) {
-		if inFlight >= max(cfg.Quota.Concurrency, mistralLimit) {
-			break
-		}
-		if a.Provider == config.ProviderMistral {
-			if mistralInFlight >= mistralLimit {
+		if a.Provider == config.ProviderDeploy {
+			if deployInFlight >= deployLimit {
 				continue
 			}
-			mistralInFlight++
-		} else if inFlight >= cfg.Quota.Concurrency {
-			continue
+			deployInFlight++
+		} else {
+			if inFlight >= max(cfg.Quota.Concurrency, mistralLimit) {
+				continue
+			}
+			if a.Provider == config.ProviderMistral {
+				if mistralInFlight >= mistralLimit {
+					continue
+				}
+				mistralInFlight++
+			} else if inFlight >= cfg.Quota.Concurrency {
+				continue
+			}
+			inFlight++
 		}
-		inFlight++
 		p.running[a.ID] = make(chan struct{})
 		var read *ollamaRead
 		if a.Provider == config.ProviderOllama {
@@ -929,6 +945,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
 	}
 	if a.Provider == config.ProviderModelStudio {
 		return p.fetchModelStudio(ctx, p.Cfg(), a, true)
+	}
+	if a.Provider == config.ProviderDeploy {
+		return p.fetchDeploy(ctx, p.Cfg(), a, true)
 	}
 	if a.Provider != config.ProviderOllama && (a.ControlKey == "" || a.Provider == config.ProviderModal || a.Provider == config.ProviderPerch) {
 		// only the catalogue (and, for Ollama, the balance) can be read
@@ -1030,6 +1049,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchMistral(ctx, cfg, a, false)
 	case config.ProviderModelStudio:
 		return p.fetchModelStudio(ctx, cfg, a, false)
+	case config.ProviderDeploy:
+		return p.fetchDeploy(ctx, cfg, a, false)
 	case config.ProviderPerch:
 		return p.fetchPerch(ctx, cfg, a)
 	}

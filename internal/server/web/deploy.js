@@ -1,23 +1,14 @@
 // Deploy (deploy.com) 号池管理 + 注册机前端。
 // 由 app.js 在 Deploy 号池下加载；与 perch.js / tokenharbor.js 同构。
 
-const DR_PAGES = ['dreg', 'dsettings'];
-const isDeploy = () => typeof pool !== 'undefined' && pool === 'deploy';
-
+// Pool identity and owned pages are declared once in app.js.
 let drPollTimer = null;
 
 // ---------------------------------------------------------------- helpers
 
-async function drApi(path, opts) {
-  const r = await fetch('/api/deploy' + path, Object.assign({
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-  }, opts || {}));
-  const text = await r.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch (_) { data = { error: text }; }
-  if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
-  return data;
+async function drApi(path, opts = {}) {
+  const body = opts.body === undefined ? undefined : JSON.parse(opts.body);
+  return api(opts.method || 'GET', '/api/deploy' + path, body);
 }
 
 const DR_STATUS_LABEL = {
@@ -145,7 +136,7 @@ function startDeployPolling() {
   stopDeployPolling();
   drPollTimer = setInterval(() => {
     if (document.hidden) return;
-    if (currentPage !== 'dreg') { stopDeployPolling(); return; }
+    if (!isDeploy() || currentPage !== 'dreg') { stopDeployPolling(); return; }
     loadDeployRegistrations().catch(() => {});
   }, 4000);
 }

@@ -40,17 +40,20 @@ const context = {
   document: { title: '', body: { dataset: {} } },
   history: { replaceState(_state, _unused, hash) { context.hash = hash; } },
   localStorage: { getItem: () => 'opendesign', setItem() {} },
+  window: { POOL_DEPLOY: { init() { loaded.push('initDeployPage'); } } },
   currentPage: 'overview', accountsCache: [], ocSelected: new Set(), refreshTimer: null,
   logState: {},
   setInterval(fn) { const id = nextTimer++; timers.set(id, fn); return id; },
   clearInterval(id) { timers.delete(id); },
   stopPerchRegistrationPolling() {}, stopTHPolling() {}, stopMistralPolling() {},
+  startDeployPolling() {}, stopDeployPolling() {},
   toast(message) { throw new Error(message); },
 };
 for (const name of ['loadOverview', 'loadAccounts', 'loadKeys', 'loadSettings', 'loadLogs',
   'loadPerchOverview', 'loadPerchAccounts', 'loadPerchRequests', 'loadPerchRegistrations',
   'loadPerchAutosignup', 'loadPerchKeys', 'loadPerchSettings', 'loadTHOverview',
-  'loadTHRegistrations', 'loadTHSettings', 'loadMistralRegistrations']) {
+  'loadTHRegistrations', 'loadTHSettings', 'loadMistralRegistrations',
+  'loadDeployRegistrations', 'loadDeploySettings']) {
   context[name] = async () => { loaded.push(name); };
 }
 vm.createContext(context);
@@ -79,11 +82,23 @@ for (const provider of vm.runInContext('POOLS.filter(p => p !== "mistral")', con
   assert.equal(registration.classList.contains('hidden'), true);
   assert.equal(mistralSeparator.classList.contains('hidden'), true);
 }
+// Deploy registration remains alongside the shared management/routing pages.
+for (const provider of vm.runInContext('POOLS', context)) {
+  vm.runInContext(`pool = ${JSON.stringify(provider)}; renderPoolTabs();`, context);
+  for (const [page, loader] of [['dreg', 'loadDeployRegistrations'], ['dsettings', 'loadDeploySettings']]) {
+    assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'deploy');
+    const before = loaded.length;
+    context.go(page);
+    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : 'overview');
+    assert.equal(loaded.slice(before).includes(loader), provider === 'deploy', provider + ' Deploy deep-link isolation');
+    assert.equal(loaded.slice(before).includes('initDeployPage'), provider === 'deploy', 'Deploy deep links bind handlers');
+  }
+}
 // Existing provider-owned registration links retain their original scope.
-for (const provider of ['perch', 'tokenharbor', 'mistral']) {
+for (const provider of ['perch', 'tokenharbor', 'mistral', 'deploy']) {
   switchPool(provider);
-  for (const page of ['pregister', 'thregister', 'mregister']) {
-    const owner = { pregister: 'perch', thregister: 'tokenharbor', mregister: 'mistral' }[page];
+  for (const page of ['pregister', 'thregister', 'mregister', 'dreg', 'dsettings']) {
+    const owner = { pregister: 'perch', thregister: 'tokenharbor', mregister: 'mistral', dreg: 'deploy', dsettings: 'deploy' }[page];
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== owner);
   }
 }
@@ -117,5 +132,7 @@ context.loadMistralCandidates = async () => {};
   context.loadMistralStatus = async () => { calls++; };
   await context.loadMistralRegistrations();
   assert.equal(calls, 0, 'other pools cannot directly load Mistral registration');
-  console.log('pool navigation web tests passed (10 pools, deep links, switching, polling)');
+  assert.ok(vm.runInContext('POOLS.includes("deploy")', context));
+  assert.match(html, /data-pool="deploy" role="tab">Deploy 号池/);
+  console.log(`pool navigation web tests passed (${vm.runInContext('POOLS.length', context)} pools, deep links, switching, polling)`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
