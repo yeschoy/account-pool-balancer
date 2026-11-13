@@ -35,7 +35,9 @@ RUN chmod -R a+rX /usr/local/share/perch-register
 # Playwright Chromium 的 navigator.plugins 是空数组、window.chrome 是 undefined，
 # 任何指纹库都直接读到。这里装 Google 官方 Chrome stable。
 # 钉版本避免镜像重建时版本漂移；构建参数可覆盖。
-ARG CHROME_DEB_VERSION="142.0.7444.59-1"
+# Chrome 会从 apt 仓库下架旧版本：142.0.7444.59 已 404，构建直接 fail。
+# 157.0.8103.78 与注册机实测指纹基线一致（见 docs/deploy-signup-recon.md）。
+ARG CHROME_DEB_VERSION="157.0.8103.78-1"
 RUN wget -q -O /tmp/chrome.deb \
         "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_DEB_VERSION}_amd64.deb" \
     && apt-get update \
