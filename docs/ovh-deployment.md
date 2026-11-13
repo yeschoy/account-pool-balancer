@@ -1944,3 +1944,35 @@ startup: /data/config.json is corrupt: json: unknown field "deploy"
 | 残留 `class="kv"` | 0 |
 
 **本地渲染验证**：Playwright 登录后截图确认统计项以护栏形式横排、带分隔线，不再竖排堆叠。
+
+## Deploy 注册机入池功能（2026-11-13 17:38 UTC，1f445fa）
+
+注册成功的账号此前只留在注册机候选表，不能参与路由。本版把它们接入 Deploy 账号池。
+
+**关键发现**：Deploy 路由需要 **Secret Key**，不是 access_key。
+`POST /api/organization/{org}/tokens` 返回两者，但 **Secret Key 只在创建时返回一次**，
+之后 `GET /tokens` 仅回 access_key。所以注册流程必须顺手建 Key 并持久化。
+（实测 Secret Key 对 `https://api.deploy.com/api/v1/models` 返回 200。）
+
+**改动**：
+
+- Python `create_api_key()`：按 portal 默认 statement 模板创建，先查现有 token 避免重复
+- `import_to_pool=True` 时验证通过后自动建 Key，随事件回传 access_key/secret_key
+- 存储新增 `access_key` / `secret_key` / `imported_account_id`
+- 后端 `importDeployCandidate()`：RuntimeKey=SecretKey、Provider=deploy、
+  Group=deploy、ProxyURL 沿用注册出口；重复 Key 拒绝、已入池幂等
+- 接口 `POST /api/deploy/candidates/{id}/import` 与 `POST /api/deploy/candidates/import-all`
+- 前端：行内「入池」按钮、页头「全部入池」、说明列显示入池状态与 Key 有无
+
+- 提交：`1f445fa`
+- 镜像：`account-pool-balancer:release-1f445fa-20261113T173700Z`
+- 备份：`releases/20261113T173700Z-1f445fa/data-pre-1f445fa.tar.gz`
+- 上次镜像：`release-f6b2781-20261113T165100Z`
+
+**时间**：构建 09:37:55–09:38:02（7s）；切换 09:38:32；healthy ≤3s。停机约 8 秒。
+
+**验收**：healthy；revision=1f445fa；本地/公网 healthz 200；
+new-api → 两个别名 200/200；`POST /api/deploy/candidates/x/import` 未登录 401。
+
+**本地实测**：单条入池返回 `deploy-dep-test1`，账号以 provider=deploy、group=deploy、
+enabled 写入配置，Secret Key 作为 runtimeKey；批量入池统计正确。
