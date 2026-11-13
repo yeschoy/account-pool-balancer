@@ -466,8 +466,9 @@ func (s *Server) apiDeployCandidateResume(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	if c.SessionCookie == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "该账号没有保存的会话"})
+	// 有会话就校验会话；没有会话但存过密码就走登录。两者都没有才需要重新注册。
+	if c.SessionCookie == "" && c.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "该账号既没有保存的会话也没有保存的密码"})
 		return
 	}
 	go m.runBatchMode([]string{id}, true)
@@ -586,16 +587,19 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 		// 注意：不因 status==Running 就跳过 —— 进程异常退出会留下僵尸 running，
 		// 那样账号会永久卡住。真正的并发保护由 seq 信号量保证。
 		if resumeOnly {
-			// 只处理有会话的
-			if c.SessionCookie == "" {
+			// 只处理有会话或有密码的（会话校验失败会改走登录）
+			if c.SessionCookie == "" && c.Password == "" {
 				continue
 			}
 		} else {
-			// 普通注册：已验证/已有会话的不重复注册
+			// 普通注册：已验证的不重复注册
 			if c.Status == deploysignupstore.Verified {
 				continue
 			}
-			if c.SessionCookie != "" && c.Status == deploysignupstore.Registered {
+			// 已注册过（上游账号已存在）的候选一律走登录，不再提交注册：
+			// 重复注册只会让上游发一封"Sign Up Attempt for Existing Account"，
+			// 既不激活也不改密码，还容易把账号状态搅乱。
+			if c.SessionCookie != "" || c.Status == deploysignupstore.Registered {
 				continue
 			}
 		}
@@ -607,6 +611,7 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 		items = append(items, map[string]any{
 			"email":       c.Email,
 			"mailbox_url": c.MailboxURL,
+			// 已保存的密码：会话失效/账号已存在时用它走登录，不重复注册
 			"password":    c.Password,
 			"proxy":       proxy,
 			"fp_seed":     time.Now().UnixNano() % 100000,

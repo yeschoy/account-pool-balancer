@@ -155,14 +155,41 @@ headers["Cookie"] = f"hive-portal-production={quote(cookie)}"  # ❌ 401
 ### 3.5.3 复用流程
 
 ```
-已有 session_cookie ?
-   ├─ GET /api/profile → 200  ✅ 复用成功（并保存服务端轮换后的新 cookie）
-   └─ 非 200
-        ├─ 用保存的密码 POST /api/login?enforce_csrf=true
-        │     ├─ 200 → 拿新会话 ✅
-        │     └─ 失败 → 回落到重新注册
-        └─ 无密码 → 重新注册
+有 session_cookie 或 password ?
+   ├─ 有 cookie：GET /api/profile
+   │     ├─ 200  ✅ 复用成功（并保存服务端轮换后的新 cookie）
+   │     └─ 非 200 ↓
+   ├─ 走登录：GET https://deploy.com/login?source=home-header
+   │         → GET  /api/csrf 取 token
+   │         → POST /api/login?enforce_csrf=true {email,password,csrf}
+   │         → GET  /api/profile 取 account_id / org_id / 新 cookie
+   │     ├─ 200 ✅ 保存新会话，status=verified/registered
+   │     └─ 失败 → 不注册，报 already_exists/登录失败（见下）
+   └─ 没有 cookie 也没有密码 → 才提交注册
 ```
+
+### 3.5.5 已存在的账号一律走登录，不再重复注册（2026-11-14 修正）
+
+对已存在邮箱提交 `POST /api/register`，上游回 **201**，但不发验证信，
+而是发一封 **"Sign Up Attempt for Existing Deploy Account"**
+（正文：*"an account already exists. Please try logging in with that email,
+or reset your password"*）。这封信**不含验证链接**，等它做验证只会白等，
+而且重复注册不会改密码、也不会激活账号。
+
+现在的处理：
+
+1. 注册响应体里命中 `already exists / Please try logging in / Sign Up Attempt
+   for Existing` 或 HTTP 409/422 → 立刻放弃等信，用**注册时保存的密码**走登录；
+2. 登录成功即落库（account_id / org_id / 新 session_cookie），`status` 按
+   `is_verified` 落 `verified` 或 `registered`；
+3. 登录失败则保留 `status=registered`、`error=账号已存在于上游，但保存的密码未能登录`，
+   `detail=already_exists`，由人工判断（重置密码 / 重新认证读信）。
+
+因此**注册时保存密码**是硬要求：`Candidate.Password` 由后端落库，
+每次 job 的 item 都会带上它，脚本的 `resume_session()` 在 cookie 失效时直接用它登录。
+
+UI 上：有 cookie 或密码的行显示「校验会话/登录」；`registered` 且无会话
+且无验证信的行额外显示「去登录」（同一个 resume 接口）。
 
 HTML 里点「校验会话」按钮触发，API 是
 `POST /api/deploy/candidates/{id}/resume`。

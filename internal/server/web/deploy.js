@@ -110,7 +110,7 @@ function renderDeployRows(rows) {
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
         ${(!busy && c.status === 'registered' && !c.is_verified && !c.session_cookie)
           ? `<button type="button" class="btn small" data-dr-resend="${drEsc(c.id)}" title="重新读取接码箱里的验证信并完成验证。不会重发邮件，也不会重新注册。">重新认证</button>` : ''}
-        ${c.session_cookie ? `<button type="button" class="btn small" data-dr-resume="${drEsc(c.id)}">校验会话</button>` : ''}
+        ${(c.session_cookie || c.password) ? `<button type="button" class="btn small" data-dr-resume="${drEsc(c.id)}" title="先校验已保存的会话；会话失效则用保存的密码走 deploy.com/login 登录，不重复注册">${c.session_cookie ? '校验会话/登录' : '去登录'}</button>` : ''}
         ${(c.status === 'verified' && !c.imported_account_id) ? `<button type="button" class="btn small primary" data-dr-import="${drEsc(c.id)}">入池</button>` : ''}
         ${(c.status === 'verified' && !c.recharged && c.session_cookie) ? `<button type="button" class="btn small" data-dr-bind="${drEsc(c.id)}">绑卡</button>` : ''}
         ${busy ? `<button type="button" class="btn small" data-dr-cancel="${drEsc(c.id)}">取消</button>` : ''}
@@ -451,7 +451,7 @@ function initDeployPage() {
         return;
       } else if (resumeId) {
         await drApi(`/candidates/${encodeURIComponent(resumeId)}/resume`, { method: 'POST', body: '{}' });
-        toast('开始校验会话');
+        toast('开始校验会话，失效则用保存的密码登录');
         startDeployPolling();
       } else if (delId) {
         if (!confirm('确定删除这个账号？')) return;

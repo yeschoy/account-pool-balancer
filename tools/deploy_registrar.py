@@ -54,6 +54,9 @@ AUTHENTICATE_URL = f"{BASE}/api/authenticate"
 ORIGIN = "https://deploy.com"
 SIGNUP_REFERER = "https://deploy.com/signup?source=landing_login"
 REDIRECT_URI = "https://deploy.com/explore"
+# 登录入口（用户指定）：已有账号一律走这里，不重复注册
+LOGIN_PAGE = "https://deploy.com/login?source=home-header"
+LOGIN_REFERER = LOGIN_PAGE
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -554,7 +557,44 @@ class Registrar:
         if csrf:
             payload["csrf"] = csrf
         self._throttle()
-        return self.http.request("POST", f"{LOGIN_URL}?enforce_csrf=true", payload)
+        return self.http.request("POST", f"{LOGIN_URL}?enforce_csrf=true", payload,
+                                 extra_headers={"Referer": LOGIN_REFERER})
+
+    def login_page(self) -> Response:
+        """GET https://deploy.com/login?source=home-header，让上游侧看到真实登录入口。"""
+        return self.http.request("GET", LOGIN_PAGE)
+
+
+# 上游对重复注册的响应文案（201 但正文/邮件说"账号已存在"）
+ALREADY_EXISTS_RE = re.compile(
+    r"(already\s+(?:exists|registered|in\s+use))"
+    r"|(exists\.\s*please\s+try\s+logging\s+in)"
+    r"|(sign\s*up\s+attempt\s+for\s+existing)"
+    r"|(已被注册|已注册|账号已存在)",
+    re.IGNORECASE,
+)
+
+
+def email_already_exists(resp: Response) -> bool:
+    """
+    判断这次注册是不是"邮箱已存在"。
+
+    deploy.com 对已存在邮箱不返回 4xx：仍回 201，然后发一封
+    "Sign Up Attempt for Existing Deploy Account / 已有账号存在，请去登录" 的信。
+    我们看到的正是这封信。早先的注释"静默重发验证信或覆盖"是错的：
+    它既不激活也不换密码，只会把账号状态搅乱，而且没注册的用户以后
+    真的想登录时会拿不到可用会话。所以识别出来后必须**改走登录**。
+    """
+    if resp.status in (409, 422):
+        return True
+    body = resp.body or ""
+    if not body:
+        return False
+    j = resp.json
+    if isinstance(j, dict):
+        parts = [str(j.get("message") or ""), str(j.get("errors") or ""), str(j.get("data") or "")]
+        body = " ".join(parts) + " " + body
+    return bool(ALREADY_EXISTS_RE.search(body))
 
 
 # --------------------------------------------------------------------------
@@ -607,20 +647,110 @@ def create_api_key(http: "HttpClient", org_id: str | int) -> tuple[str, str, str
 # 主流程
 # --------------------------------------------------------------------------
 
+def build_client(item: dict, settings: dict, profile: Any = None) -> HttpClient:
+    """按账号档案建 HTTP 客户端：指纹沿用注册时的那一套，出口沿用原代理。"""
+    upstream = normalize_proxy(item.get("proxy") or "")
+    bridge = settings.get("_bridge")
+    proxy_endpoint = ""
+    if upstream and bridge is not None:
+        try:
+            proxy_endpoint = bridge.endpoint_for(upstream)
+        except Exception as e:  # noqa: BLE001
+            emit("log", message=f"代理桥不可用，改直连: {e}")
+    elif upstream:
+        proxy_endpoint = upstream
+    return HttpClient(
+        timeout=30,
+        transport=settings.get("transport", "curl_cffi"),
+        profile=profile,
+        proxy=proxy_endpoint or None,
+    )
+
+
+def find_hive_cookie(http: HttpClient) -> str:
+    """
+    取出会话 cookie。
+
+    deploy 会在所有这些名字下下发同一会话（实测 hive-portal-production），
+    逐个兜底，避免上游哪天换名导致"登录成功但 cookie 为空"。
+    """
+    for name in ("hive-portal-production", "hive-portal-production.sig",
+                 "hive_portal_production", "session", "sessionid"):
+        v = http.cookies.get(name, "")
+        if v and not name.endswith(".sig"):
+            return v
+    for k, v in http.cookies.items():
+        if "hive" in k.lower() and "portal" in k.lower() and not k.endswith(".sig"):
+            return v
+    return ""
+
+
+def profile_view(http: HttpClient) -> dict | None:
+    """GET /api/profile，成功返回归一化字段，失败返回 None。"""
+    r = http.request("GET", PROFILE_URL)
+    j = r.json or {}
+    data = j.get("data") or {}
+    if r.status != 200 or not isinstance(data, dict) or not data:
+        emit("log", message=f"profile HTTP {r.status}: {j.get('message') or (r.body or '')[:120]}")
+        return None
+    return {
+        "status": "verified" if data.get("is_verified") else "registered",
+        "account_id": data.get("id"),
+        "org_id": ((data.get("personal_organization") or {}).get("organization_id")),
+        "is_verified": bool(data.get("is_verified")),
+        "session_cookie": find_hive_cookie(http),
+    }
+
+
+def login_with_password(item: dict, settings: dict, profile: Any = None,
+                        http: HttpClient | None = None,
+                        password: str | None = None) -> dict | None:
+    """
+    走登录流程：GET /login?source=home-header → csrf → POST /api/login → profile。
+
+    注册时把密码存下来（后端 Candidate.Password），账号已存在或会话过期时
+    用同一个密码登回去，而不是再提交一次注册。
+    """
+    email = (item.get("email") or "").strip()
+    password = (password or item.get("password") or "").strip()
+    if not email or not password:
+        emit("log", message="没有已保存的密码，无法走登录")
+        return None
+    if http is None:
+        http = build_client(item, settings, profile)
+    reg = Registrar(http, min_interval=2, max_retries=2)
+    # 先打开真实登录页（用户指定入口），失败也不影响后续 API 登录
+    try:
+        lp = reg.login_page()
+        if lp.status not in (200, 301, 302):
+            emit("log", message=f"登录页 HTTP {lp.status}（继续 API 登录）")
+    except Exception as e:  # noqa: BLE001
+        emit("log", message=f"打开登录页失败（继续 API 登录）: {e}")
+    lr = reg.login(email, password)
+    j = lr.json or {}
+    if lr.status != 200:
+        emit("log", message=f"登录失败 HTTP {lr.status}: {j.get('message') or (lr.body or '')[:120]}")
+        return None
+    pv = profile_view(http)
+    if pv is None:
+        return None
+    emit("log", message=f"密码登录成功 acct={pv['account_id']} verified={pv['is_verified']}")
+    return {**pv, "reused": True, "relogin": True}
+
+
 def resume_session(item: dict, settings: dict) -> dict | None:
     """
-    复用已保存的会话，不重新注册。
+    不重新注册：先后用已保存的会话，会话失效则用已保存的密码走登录。
 
-    这正是「deploy 登录会话必须保存」的用途：
-      - 号池里的账号已有 hive-portal-production cookie
-      - 直接 GET /api/profile 校验，成功即视为可用
-      - **必须**沿用注册时的 UA/TLS 指纹，否则等于换了一台设备登录
+    顺序（实测 deploy 会话会被轮换/清理）：
+      1. GET /api/profile + 保存的 hive-portal-production cookie → 200 即复用
+      2. 401/403 → GET deploy.com/login?source=home-header + POST /api/login
+      3. 登录也失败 → 返回 None，调用方决定是否重新注册（通常不注册：
+         账号已存在时再注册会被上游当成"已存在账号重复注册"，只会多一封信）
 
-    返回校验后的结果 dict；会话失效返回 None（调用方回落去登录）。
+    必须沿用注册时的 UA/TLS/代理：服务端虽不校验绑定，但换设备登录是自找风控。
     """
     cookie = (item.get("session_cookie") or "").strip()
-    if not cookie:
-        return None
 
     fp = load_fp_layer()
     profile = None
@@ -635,65 +765,25 @@ def resume_session(item: dict, settings: dict) -> dict | None:
         except Exception as e:  # noqa: BLE001
             emit("log", message=f"还原指纹失败，用默认: {e}")
 
-    upstream = normalize_proxy(item.get("proxy") or "")
-    bridge = settings.get("_bridge")
-    proxy_endpoint = ""
-    if upstream and bridge is not None:
-        try:
-            proxy_endpoint = bridge.endpoint_for(upstream)
-        except Exception as e:  # noqa: BLE001
-            emit("log", message=f"代理桥不可用，改直连: {e}")
+    http = build_client(item, settings, profile)
 
-    http = HttpClient(
-        timeout=30,
-        transport=settings.get("transport", "curl_cffi"),
-        profile=profile,
-        proxy=proxy_endpoint or None,
-    )
-    # 预置会话 cookie（原样，绝不能再 urlencode）
-    http.cookies["hive-portal-production"] = cookie
+    if cookie:
+        # 预置会话 cookie（原样，绝不能再 urlencode）
+        http.cookies["hive-portal-production"] = cookie
+        pv = profile_view(http)
+        if pv is not None:
+            # 服务端可能轮换 cookie，刷新保存值
+            emit("log", message=f"会话复用成功 acct={pv['account_id']} verified={pv['is_verified']}")
+            out = {**pv, "reused": True}
+            if not out.get("session_cookie"):
+                out["session_cookie"] = cookie
+            return out
+        emit("log", message="会话已失效，改走登录流程")
+        http.cookies.pop("hive-portal-production", None)
+    else:
+        emit("log", message="没有保存的会话，直接走登录流程")
 
-    r = http.request("GET", PROFILE_URL)
-    j = r.json or {}
-    data = j.get("data") or {}
-    if r.status == 200 and data.get("email"):
-        org = ((data.get("personal_organization") or {}).get("organization_id"))
-        emit("log", message=f"会话复用成功 acct={data.get('id')} verified={data.get('is_verified')}")
-        # 服务端可能轮换 cookie，刷新保存值
-        fresh = http.cookies.get("hive-portal-production", "")
-        return {
-            "status": "verified" if data.get("is_verified") else "registered",
-            "account_id": data.get("id"),
-            "org_id": org,
-            "is_verified": bool(data.get("is_verified")),
-            "session_cookie": fresh or cookie,
-            "reused": True,
-        }
-    emit("log", message=f"会话已失效（HTTP {r.status}: {j.get('message') or ''}），尝试密码登录")
-    password = (item.get("password") or "").strip()
-    if not password:
-        emit("log", message="无已保存密码，无法登录，将重新注册")
-        return None
-
-    reg = Registrar(http, min_interval=2, max_retries=2)
-    lr = reg.login(item["email"], password)
-    if lr.status != 200:
-        emit("log", message=f"登录失败 HTTP {lr.status}: {(lr.json or {}).get('message') or ''}，将重新注册")
-        return None
-
-    pr = http.request("GET", PROFILE_URL)
-    pj = (pr.json or {}).get("data") or {}
-    org = ((pj.get("personal_organization") or {}).get("organization_id"))
-    emit("log", message=f"密码登录成功 acct={pj.get('id')} verified={pj.get('is_verified')}")
-    return {
-        "status": "verified" if pj.get("is_verified") else "registered",
-        "account_id": pj.get("id"),
-        "org_id": org,
-        "is_verified": bool(pj.get("is_verified")),
-        "session_cookie": http.cookies.get("hive-portal-production", ""),
-        "reused": True,
-        "relogin": True,
-    }
+    return login_with_password(item, settings, profile, http=http)
 
 
 def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> dict:
@@ -721,11 +811,20 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         except Exception:  # noqa: BLE001
             resend_since = None
 
-    # --- 0. 会话复用：已有有效会话就直接返回，不重复注册 ---
-    if item.get("session_cookie") and not resend_only and not settings.get("force_register"):
-        resumed = resume_session(item, settings)
-        if resumed:
-            return {"email": email, "password": password, **resumed}
+    # --- 0. 会话复用 / 登录：绝不重复注册已存在的账号 ---
+    force_register = bool(settings.get("force_register"))
+    if not resend_only and not force_register:
+        # 有会话先校验会话，会话失效用保存的密码走登录；
+        # 没有会话但有密码，同样先登录——只有登录明确说"账号不存在"
+        # （或本来就没密码、没会话）才去注册。
+        if item.get("session_cookie") or item.get("password"):
+            resumed = resume_session(item, settings)
+            if resumed:
+                return {"email": email, "password": password, **resumed}
+            if item.get("session_cookie") and not item.get("password"):
+                log("会话失效且无已保存密码，无法走登录")
+            elif item.get("password"):
+                log("登录/会话都不可用，按新账号注册")
     min_interval = float(settings.get("min_interval", 8))
     max_retries = int(settings.get("max_retries", 6))
     verify_timeout = float(settings.get("verify_timeout", 240))
@@ -786,6 +885,18 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         log(f"提交注册 {email}")
         resp = reg.register(payload)
         j = resp.json or {}
+        if email_already_exists(resp):
+            # 上游对已存在邮箱回 201，但只发"已有账号，请去登录"的信（见截图）。
+            # 这时候继续等验证信是白等，直接拿保存的密码走登录。
+            log("账号已存在（注册返回已存在），改走登录流程，不再等待验证信")
+            resumed = login_with_password(item, settings, profile, http=http, password=password)
+            if resumed:
+                return {"email": email, "password": password, **resumed}
+            result["status"] = "registered"
+            result["error"] = "账号已存在于上游，但保存的密码未能登录（可能密码不匹配）"
+            result["detail"] = "already_exists"
+            emit("log", message=result["error"])
+            return result
         if resp.status != 201:
             result["error"] = f"注册失败 HTTP {resp.status}: {j.get('message') or resp.body[:160]}"
             emit("log", message=result["error"])
@@ -823,7 +934,7 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     result["verified"] = True
     log(f"验证通过 account_id={data.get('id')}")
 
-    # --- 4. 确认会话 ---
+    # --- 4. 确认会话（拿不到就登录）---
     pr = reg.profile()
     pj = (pr.json or {}).get("data") or {}
     if pr.status == 200:
@@ -842,7 +953,8 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
             result["org_id"] = ((pj2.get("personal_organization") or {}).get("organization_id"))
             result["account_id"] = pj2.get("id") or result.get("account_id")
 
-    result["session_cookie"] = http.cookies.get("hive-portal-production", "")
+    # 会话保存：服务端下发/轮换后的最终值，后端会原样落库，下次直接复用
+    result["session_cookie"] = find_hive_cookie(http) or result.get("session_cookie", "")
 
     # --- 5. 需要入池时，顺手创建 API Key（Secret Key 只返回一次）---
     if settings.get("import_to_pool") and result.get("org_id"):
