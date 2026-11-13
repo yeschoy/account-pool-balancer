@@ -366,6 +366,21 @@ class MailboxReader:
 # 代理
 # --------------------------------------------------------------------------
 
+def resolve_sys_proxy(settings: dict) -> str:
+    """
+    系统代理（本机 Clash 之类）的地址，空字符串表示"没有系统代理"。
+
+    注意不能用 `settings.get("sys_proxy") or "127.0.0.1:10808"`：容器里根本没有
+    10808 监听（那是 macOS 本机 Clash 的地址），空值被 or 悄悄换成 10808 后，
+    桥的每一跳都会 ConnectionRefused，最终表现成 curl (7) CONNECT tunnel
+    failed / response 502 —— 看起来像"出口挂了"，实际是这个假默认值。
+
+    只有显式给了非空值才用它；否则返回 ""，桥会直连上游代理。
+    """
+    v = str(settings.get("sys_proxy") or "").strip()
+    return v
+
+
 class ProxyBridge:
     """
     本地代理桥管理器。
@@ -911,7 +926,7 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     transport = settings.get("transport", "curl_cffi")
     auto_verify = settings.get("auto_verify", True)
     upstream = normalize_proxy(settings.get("proxy") or "")
-    sys_proxy = settings.get("sys_proxy") or "127.0.0.1:10808"
+    sys_proxy = resolve_sys_proxy(settings)
 
     # 指纹
     profile = pick_profile(seed=item.get("fp_seed"))
@@ -1068,12 +1083,13 @@ def cmd_job(job_path: str) -> int:
     # 代理桥：整个批次共用一个管理器，按账号轮询复用
     bridge = None
     if any((it.get("proxy") or settings.get("proxy")) for it in items):
+        sys_proxy = resolve_sys_proxy(settings)
         bridge = ProxyBridge(
-            sys_proxy=settings.get("sys_proxy") or "127.0.0.1:10808",
+            sys_proxy=sys_proxy,
             base_port=int(settings.get("bridge_port") or 17500),
         )
         settings["_bridge"] = bridge
-        emit("log", message=f"代理桥已启用（系统代理 {bridge.sys_proxy}）")
+        emit("log", message=f"代理桥已启用（系统代理 {bridge.sys_proxy or '直连上游'}）")
 
     for idx, item in enumerate(items):
         emit("item_start", index=idx, email=item.get("email"))

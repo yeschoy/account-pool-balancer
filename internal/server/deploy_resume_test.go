@@ -280,3 +280,22 @@ print(bool(d.ACCOUNT_NOT_FOUND_RE.search("ConnectionError: curl: (7) CONNECT tun
 		t.Fatalf("unexpected account-not-found detection: %q", out)
 	}
 }
+
+// 空的 sys_proxy 必须解析成"没有系统代理"，不能被悄悄换成 127.0.0.1:10808。
+// 容器里没有 10808 监听（那是 macOS 本机 Clash 的地址），假默认值会让桥的
+// 每跳 ConnectionRefused，最终报成 curl (7) CONNECT tunnel failed / 502。
+func TestDeploySysProxyEmptyMeansDirect(t *testing.T) {
+	py := `import sys, json
+sys.path.insert(0, "tools")
+import deploy_registrar as d
+print(d.resolve_sys_proxy({}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": ""}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": "   "}) == "")
+print(d.resolve_sys_proxy({"sys_proxy": "10.0.0.1:7890"}))
+print(d.resolve_sys_proxy({"sys_proxy": None}) == "")
+`
+	out := runPython(t, py)
+	if out != "True\nTrue\nTrue\n10.0.0.1:7890\nTrue" {
+		t.Fatalf("unexpected sys_proxy resolution: %q", out)
+	}
+}
