@@ -209,6 +209,11 @@ tr[data-id]:hover { background: var(--line2); }
 .pc-registration-form textarea { width: 100%; resize: vertical; }
 .pc-registration-form .hint { color: var(--muted); font-size: 12px; }
 .pc-registration-form .btn { justify-self: start; margin-top: 4px; }
+/* Deploy 号池：统计区。原先用了不存在的 .kv/<dl>，导致统计项按浏览器默认
+   块级样式竖着堆在表单下方，中间留出大片空白且没有对齐。改用 .chips+.badge。 */
+.dr-status-block { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.dr-status-block .chips { gap: 8px; }
+.pc-registration-form > .panel { display: flex; flex-direction: column; }
 .pc-secret-input { color: transparent; caret-color: var(--text); -webkit-text-security: disc; }
 .pc-secret-input::placeholder { color: var(--muted); -webkit-text-security: none; }
 #pc-auto-rows td:nth-child(4) { min-width: 180px; overflow-wrap: anywhere; }

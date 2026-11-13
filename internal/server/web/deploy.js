@@ -108,14 +108,17 @@ function renderDeployRows(rows) {
 function renderDeployStatus(s) {
   const el = document.getElementById('dr-status');
   if (!el) return;
-  el.innerHTML = [
-    ['总数', s.total],
-    ['待注册', s.queued],
-    ['注册中', s.running],
-    ['已验证', s.verified],
-    ['失败', s.failed],
-    ['worker', s.busy ? '运行中' : '空闲'],
-  ].map(([k, v]) => `<div><dt>${k}</dt><dd>${drEsc(v)}</dd></div>`).join('');
+  const items = [
+    ['总数', s.total, ''],
+    ['待注册', s.queued, s.queued ? 'warn' : ''],
+    ['注册中', s.running, s.running ? 'warn' : ''],
+    ['已验证', s.verified, s.verified ? 'ok' : ''],
+    ['失败', s.failed, s.failed ? 'bad' : ''],
+    ['worker', s.busy ? '运行中' : '空闲', s.busy ? 'warn' : ''],
+  ];
+  el.innerHTML = items
+    .map(([k, v, cls]) => `<span class="badge ${cls}">${drEsc(k)} ${drEsc(v)}</span>`)
+    .join('');
 }
 
 function renderDeployLogs(logs) {
