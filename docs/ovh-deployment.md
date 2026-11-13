@@ -1976,3 +1976,63 @@ new-api → 两个别名 200/200；`POST /api/deploy/candidates/x/import` 未登
 
 **本地实测**：单条入池返回 `deploy-dep-test1`，账号以 provider=deploy、group=deploy、
 enabled 写入配置，Secret Key 作为 runtimeKey；批量入池统计正确。
+
+## Deploy 注册机可用性修复 + 代理可见可改（2026-11-13 17:57 UTC，2613f0a）
+
+用户截图反馈注册必然失败：`找不到 tools/deploy_registrar.py（cwd=/）`。
+
+**根因两处叠加**：
+
+1. **Dockerfile 从未 COPY deploy 脚本** —— mistral/perch 都装了，唯独 deploy 漏了，
+   镜像里根本没有这个文件；此前一直没暴露是因为没有真正执行过注册。
+2. **scriptPaths() 只在 cwd 与其上两级找** —— 容器内 `cwd=/`、二进制在
+   `/usr/local/bin`，两个位置都不可能命中。
+
+**修复**：镜像内 `COPY tools/{deploy_registrar,deploy_payment,fp_layer,proxy_bridge,gen_ua_pool}.py`
+与 `data/ua_pool.json` 到 `/usr/local/share/deploy-signup/`；新增 `/opt/deploy-signup` venv
+（curl_cffi + playwright）；`ENV DEPLOY_REGISTRAR / DEPLOY_PYTHON` 与 MISTRAL_WORKER_* 一致；
+`scriptPaths()` 依次尝试 `$DEPLOY_REGISTRAR` → 容器固定路径 → cwd → 可执行文件目录。
+**解释器必须用 venv**，系统 python3 没有 curl_cffi。
+
+**顺带解掉两个构建阻断**（此前只因层缓存命中而没暴露）：
+
+| 问题 | 原因 | 处理 |
+|---|---|---|
+| Chrome 下载 404 | `142.0.7444.59-1` 已从 Google apt 仓库下架 | 锁 `157.0.8103.78-1`（与指纹基线一致；150 仍可用留作备选） |
+| `libatomic.so.1` 缺失 | Chrome 157 不再隐式带入，playwright node driver 退出 127 | apt 显式加 `libatomic1` |
+
+**代理可见可改**：
+
+- `drProxyLabel()` 原先把用户名密码剥掉只留 host:port，改为完整明文展示；
+  长 URL 允许 `overflow-wrap:anywhere`，可框选复制
+- 新增 `PATCH /api/deploy/candidates/{id}` 修改代理；注册中拒绝；空串=直连；
+  已入池账号同步更新账号池 `ProxyURL`
+- 行内「改」按钮，从当前单元格取现值
+
+**存储加密**：`deploysignupstore` 原为明文 JSON，会话 cookie / Secret Key / 邮箱密码 /
+代理密码全部裸盘。改为 AES-256-GCM 整份加密（routingSecret 经 HMAC-SHA256 派生密钥，
+AAD=`deploysignupstore/v1`）；settings 不含凭据仍明文。旧明文文件可读，下次落盘自动升级。
+新增 `TestEncryptAtRest` 验证落盘无明文、重开可解密、错误密钥必须失败。
+
+- 提交：`4fb88be`（镜像修复）→ `2613f0a`（代理 + 加密）
+- 镜像：`account-pool-balancer:release-2613f0a-20261113T175900Z`
+- 备份：`releases/20261113T175900Z-2613f0a/data-pre-2613f0a.tar.gz`（33M，0600）
+- 上次镜像：`release-4fb88be-20261113T175500Z`
+
+**时间**：镜像构建 09:45:53–09:47:19（86s，装 Chrome 157 + pip 依赖）；
+代理版构建 09:56:26–09:56:34（8s，缓存命中）；切换 09:57:14；healthy ≤6s。停机约 10 秒。
+
+**验收**：
+
+| 项 | 结果 |
+|---|---|
+| 容器 | `healthy` |
+| revision | `2613f0a` |
+| `/healthz` 本地 / 公网 | 200 / 200 |
+| new-api → 两个别名 | 200 / 200 |
+| 容器内 `/usr/local/share/deploy-signup/deploy_registrar.py` | 存在，`--help` 正常 |
+| 容器内 `curl_cffi` | 0.17.0 可导入 |
+| `/api/deploy/candidates` 未登录 | 401（鉴权正常）|
+
+**遗留**：线上 store 仍是明文（读到了但尚未触发落盘），下次任何写入会自动升级为加密。
+本地实测加密生效、代理明文展示与编辑正常。
