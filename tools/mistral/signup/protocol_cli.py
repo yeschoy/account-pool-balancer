@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.chain_gateway import GatewayPool, find_working_proxy
-from core.fingerprint import build_profile, billing_address
+from core.fingerprint import build_profile, billing_address, resolve_country
 from core.browser import BrowserOptions, SignupBrowser
 from core.mailbox import ICloudMailbox, Mailbox
 from core.proxy_pool import DEFAULT_SIDS, ProxyPool
@@ -45,18 +45,19 @@ from runner import gen_name, gen_password
 
 # ---------------------------------------------------------------- provision
 def provision(email: str, password: str, proxy_pool: ProxyPool,
-              gw: GatewayPool, headless: bool = True,
+              gw: GatewayPool, headless: bool = False,
               login_only: bool = False) -> dict:
     """
     用浏览器过一次 CF 并登录，导出 cookie。
     login_only=True 时假定账号已存在（走密码登录）。
     返回 {"cookies": {...}, "proxy": "socks5://...", "sid": "..."}
     """
-    px, local = find_working_proxy(proxy_pool, gw, "https://v2.auth.mistral.ai/login")
+    px, local, geo = find_working_proxy(proxy_pool, gw)
     if not px:
         raise RuntimeError("no working proxy")
+    country = resolve_country((geo or {}).get("country"), "CA")
 
-    prof = build_profile(email, "CA")
+    prof = build_profile(email, country)
     with SignupBrowser(prof, local, BrowserOptions(headless=headless)) as sb:
         page = sb.page
         page.goto("https://v2.auth.mistral.ai/login",
@@ -76,13 +77,15 @@ def provision(email: str, password: str, proxy_pool: ProxyPool,
 
         cookies = {c["name"]: c["value"] for c in sb.context.cookies()}
         return {"cookies": cookies, "proxy": local, "sid": px.sid,
-                "url": page.url}
+                "url": page.url, "country": country,
+                "exit_ip": (geo or {}).get("ip", "")}
 
 
 def make_client(prov: dict, email: str, region: str = "CA") -> ProtocolClient:
-    prof = build_profile(email, region)
+    country = prov.get("country") or region
+    prof = build_profile(email, country)
     sess = ProtocolSession(cookies=prov["cookies"], headers=prof.headers(),
-                           proxy=prov["proxy"])
+                           nav_headers=prof.nav_headers(), proxy=prov["proxy"])
     return ProtocolClient(sess)
 
 
@@ -263,7 +266,7 @@ def cmd_batch(a):
     for i, mb in enumerate(todo, 1):
         print(f"\n[{i}/{len(todo)}] {mb.email}")
         ns = argparse.Namespace(email=mb.email, mailbox=mb.url,
-                                password="", out=a.out, headless=True)
+                                password="", out=a.out, headless=False)
         try:
             cmd_run(ns)
             ok += 1

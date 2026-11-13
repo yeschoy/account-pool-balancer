@@ -257,42 +257,82 @@ class GatewayPool:
             self._gws.clear()
 
 
-# ---------------------------------------------------------------- 健康检查
-def probe_proxy(local_socks: str, target: str = "https://v2.auth.mistral.ai/login",
-                timeout: int = 35) -> tuple[bool, str]:
-    """
-    通过本地 gateway 实际访问目标站，确认这条链路可用。
-    返回 (ok, info)
+# ---------------------------------------------------------------- 出口探测
+#
+# ⚠️ 2026-11-09 修正：健康检查绝不能再打目标站。
+#
+# 旧实现是 `curl --socks5-hostname ... https://v2.auth.mistral.ai/login`：
+#   - UA 是 curl/8.x，JA3 是 curl 的，无 cookie
+#   - 目标就是会被注册的那个域
+#   - find_working_proxy 最多重试 6 次 => 同一 IP 最多 6 次 curl 探测
+#   - 探测完 30~60 秒后，同一个 IP 上出现一个 "Chrome 156" 的注册
+# 在 Mistral 侧日志里这就是 "先 curl 后注册"，注册机的教科书指纹。
+#
+# 现在改成打 Cloudflare 的 /cdn-cgi/trace：第三方回显，顺带把出口国解析出来，
+# 一举解决"语言/时区/账单地址靠人工填 region"的地理矛盾问题。
+TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+
+
+def probe_exit(local_socks: str, timeout: int = 25) -> dict:
+    """通过本地 gateway 解析出口 IP / 国家 / 机房。不碰目标站。
+
+    返回 {"ok","ip","country","colo","raw","error"}
     """
     import subprocess
     host_port = local_socks.replace("socks5://", "").replace("socks5h://", "")
     try:
         r = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", str(timeout),
-             "--socks5-hostname", host_port, target],
+            ["curl", "-s", "-m", str(timeout), "--socks5-hostname", host_port, TRACE_URL],
             capture_output=True, text=True, timeout=timeout + 10)
-        code = r.stdout.strip()
-        return (code not in ("", "000"), code)
+        raw = (r.stdout or "").strip()
     except Exception as e:
-        return (False, str(e)[:60])
+        return {"ok": False, "ip": "", "country": "", "colo": "",
+                "raw": "", "error": str(e)[:80]}
+
+    kv: dict[str, str] = {}
+    for line in raw.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            kv[k.strip()] = v.strip()
+
+    ip = kv.get("ip", "")
+    country = kv.get("loc", "").upper()
+    ok = bool(ip) and bool(country)
+    return {
+        "ok": ok,
+        "ip": ip,
+        "country": country,
+        "colo": kv.get("colo", ""),
+        "raw": raw[:400],
+        "error": "" if ok else "trace parse failed",
+    }
 
 
-def find_working_proxy(pool, gw_pool: GatewayPool, target: str,
-                       max_tries: int = 6) -> tuple:
+def find_working_proxy(pool, gw_pool: GatewayPool, target: str = "",
+                       max_tries: int = 6, exclude_ips=None,
+                       start_index: int = 0) -> tuple:
+    """从代理池里找一个真能连上、且出口 IP 未被占用的代理。
+
+    target 参数保留只为兼容旧调用，**不再被访问**。
+
+    返回 (proxy, local_socks_url, exit_info)；失败返回 (None, None, {})。
     """
-    从代理池里找一个真能连上目标的。
-    返回 (proxy, local_socks_url)
-    """
+    exclude = {str(ip) for ip in (exclude_ips or []) if ip}
     tried = 0
-    while tried < max_tries:
-        p = pool.acquire()
-        if not p:
-            return (None, None)
+    for p in pool.rotated(start_index):
+        if tried >= max_tries:
+            break
+        if not p.alive:
+            continue
         local = gw_pool.get(p.url)
-        ok, info = probe_proxy(local, target)
+        info = probe_exit(local)
         tried += 1
-        if ok:
-            pool.report_ok(p)
-            return (p, local)
-        pool.report_fail(p)
-    return (None, None)
+        if not info["ok"]:
+            pool.report_fail(p)
+            continue
+        if info["ip"] in exclude:
+            # 这个出口 IP 已经注册过号了，换下一个，不算失败
+            continue
+        pool.report_ok(p, exit_ip=info["ip"])
+        return (p, local, info)
+    return (None, None, {})

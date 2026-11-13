@@ -65,6 +65,11 @@ type Candidate struct {
 	ImportToPool bool `json:"import_to_pool,omitempty"`
 	// ProxyIndex 是分配到的代理序号（按 candidates 顺序轮转）。
 	ProxyIndex int `json:"proxy_index"`
+	// ExitIP 是本次注册实际使用的出口 IP（cloudflare trace 实测）。
+	// 用于"一 IP 一号"：同一个出口 IP 不允许注册第二个账号。
+	ExitIP string `json:"exit_ip,omitempty"`
+	// Country 是出口 IP 所在国，设备画像与账单地址都按它生成。
+	Country string `json:"country,omitempty"`
 	// ImportedAccountID 是入池后的账号 ID，空表示未入池。
 	ImportedAccountID string    `json:"imported_account_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`

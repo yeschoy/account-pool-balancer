@@ -118,6 +118,10 @@ func (s *Server) apiMistralCandidateAdd(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// ProxyIndex 必须按已有序号往后排。
+	// 旧实现没设这个字段 => 零值 0 => by_index(0) => 所有手动添加的候选
+	// 都从同一个代理出口，等于把"一 IP 多号"写死进代码。
+	proxyIndex := len(m.store.List())
 	c, err := m.store.Add(mistralsignupstore.Candidate{
 		Email:        body.Email,
 		Password:     body.Password,
@@ -126,6 +130,7 @@ func (s *Server) apiMistralCandidateAdd(w http.ResponseWriter, r *http.Request) 
 		ProxyURL:     body.ProxyURL,
 		Status:       mistralsignupstore.Queued,
 		ImportToPool: body.ImportToPool,
+		ProxyIndex:   proxyIndex,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -256,6 +261,8 @@ func (s *Server) apiMistralCandidateRegister(w http.ResponseWriter, r *http.Requ
 			}
 			x.OrgUUID = res.OrgUUID
 			x.WorkspaceID = res.WorkspaceUUID
+			x.ExitIP = res.ExitIP
+			x.Country = res.Country
 			x.Keys = mistralsignupstore.Keys{
 				API:     res.Keys["API"],
 				Vibe:    res.Keys["Vibe"],
@@ -325,6 +332,8 @@ type mistralWorkerResult struct {
 	WorkspaceUUID string            `json:"workspace_uuid"`
 	Keys          map[string]string `json:"keys"`
 	VibeCLIKey    string            `json:"vibe_cli_key"`
+	ExitIP        string            `json:"exit_ip"`
+	Country       string            `json:"country"`
 	Status        string            `json:"status"`
 	Error         string            `json:"error"`
 	// 分配到的银行卡（脱敏）。当前不参与注册，供订阅步骤关联使用。
@@ -364,6 +373,7 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 		"region":        c.Region,
 		"skip_register": skipRegister,
 		"proxy_index":   proxyIndex,
+		"used_exit_ips": s.usedExitIPs(),
 	}
 	if c.ProxyURL != "" {
 		payload["proxy"] = c.ProxyURL
@@ -443,6 +453,37 @@ func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Cand
 		return out, errors.New(out.Error)
 	}
 	return out, nil
+}
+
+// usedExitIPs 返回 24 小时内已经用过的出口 IP。
+//
+// 一 IP 一号：worker 会跳过这些 IP 对应的代理，避免同一个住宅 IP
+// 在几十分钟内连续注册多个账号（旧实现是 by_index(n) = n % len，
+// 10 个代理 40 个号 => 每个 IP 4 个号，IP 信誉直接打穿）。
+func (s *Server) usedExitIPs() []string {
+	st, err := s.mistralStore()
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range st.List() {
+		if c.ExitIP == "" || seen[c.ExitIP] {
+			continue
+		}
+		switch c.Status {
+		case mistralsignupstore.Ready, mistralsignupstore.Registered, mistralsignupstore.Running:
+		default:
+			continue
+		}
+		if c.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		seen[c.ExitIP] = true
+		out = append(out, c.ExitIP)
+	}
+	return out
 }
 
 func mistralErrDetail(r mistralWorkerResult) string {

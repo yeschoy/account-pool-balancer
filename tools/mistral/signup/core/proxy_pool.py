@@ -101,6 +101,15 @@ class ProxyPool:
                 return None
             return self._proxies[max(0, n) % len(self._proxies)]
 
+    def rotated(self, start: int = 0) -> list[Proxy]:
+        """从 start 开始按顺序轮转整个代理列表（确定性，便于复现）。"""
+        with self._lock:
+            n = len(self._proxies)
+            if not n:
+                return []
+            start = max(0, int(start)) % n
+            return [self._proxies[(start + i) % n] for i in range(n)]
+
     def acquire(self) -> Optional[Proxy]:
         with self._lock:
             now = time.time()

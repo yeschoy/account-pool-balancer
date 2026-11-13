@@ -26,15 +26,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.browser import BrowserOptions, SignupBrowser
-from core.chain_gateway import GatewayPool, find_working_proxy
-from core.fingerprint import billing_address, build_profile
+from core.chain_gateway import GatewayPool, find_working_proxy, probe_exit
+from core.fingerprint import billing_address, build_profile, resolve_country
 from core.mailbox import ICloudMailbox, Mailbox
 from core.pacing import Pacer
 from core.protocol import (
     AdminProtocol, ChatProtocol, ConsoleProtocol, KratosProtocol,
     ProtocolClient, ProtocolSession, parse_trpc, trpc_batch,
 )
-from core.proxy_pool import DEFAULT_SIDS, ProxyPool
+from core.proxy_pool import DEFAULT_SIDS, Proxy, ProxyPool
 
 
 # ---------------------------------------------------------------- 浏览器侧动作
@@ -195,6 +195,9 @@ class HybridResult:
     billing: dict = field(default_factory=dict)
     status: str = "pending"
     error: str = ""
+    # 本次实际使用的出口 IP 与国家（由 cloudflare trace 实测）
+    exit_ip: str = ""
+    country: str = ""
 
     def to_dict(self):
         return self.__dict__.copy()
@@ -202,7 +205,7 @@ class HybridResult:
 
 class HybridRunner:
     def __init__(self, pool: ProxyPool | None = None,
-                 gw: GatewayPool | None = None, headless: bool = True):
+                 gw: GatewayPool | None = None, headless: bool = False):
         self.pool = pool or ProxyPool(DEFAULT_SIDS)
         self.gw = gw or GatewayPool()
         self.headless = headless
@@ -218,16 +221,36 @@ class HybridRunner:
     # ---------- 入口 ----------
     def run(self, email: str, mailbox_url: str, password: str,
             first: str = "", last: str = "", region: str = "CA",
-            skip_register: bool = False) -> HybridResult:
+            skip_register: bool = False, forced_proxy: str = "",
+            exit_geo: dict | None = None,
+            exclude_ips: list[str] | None = None,
+            start_index: int = 0) -> HybridResult:
+        """跑一个账号。
+
+        forced_proxy / exit_geo 由 worker 预先解析好传进来（省一次探测）；
+        不传就自己从池里挑一个出口 IP 未被占用的代理。
+        region 只在出口国无法识别时作为回退，正常情况下以实测出口国为准。
+        """
         r = HybridResult(email=email, password=password)
         try:
-            px, local = find_working_proxy(self.pool, self.gw,
-                                           "https://v2.auth.mistral.ai/login")
+            if forced_proxy:
+                px = Proxy.from_url(forced_proxy)
+                local = self.gw.get(forced_proxy)
+                geo = exit_geo or probe_exit(local)
+            else:
+                px, local, geo = find_working_proxy(
+                    self.pool, self.gw,
+                    exclude_ips=exclude_ips, start_index=start_index)
             if not px:
-                raise RuntimeError("no working proxy")
+                raise RuntimeError("no working proxy (or every exit IP already used)")
+
             r.sid = px.sid
-            prof = build_profile(email, region)
-            r.billing = billing_address(email, region)
+            r.exit_ip = (geo or {}).get("ip", "")
+            # 画像国家必须来自实测出口国，而不是人工填的 region
+            country = resolve_country((geo or {}).get("country"), region)
+            r.country = country
+            prof = build_profile(email, country)
+            r.billing = billing_address(email, country)
 
             # ========== 阶段 A: 注册 + 验证（协议） ==========
             if not skip_register:
@@ -237,7 +260,8 @@ class HybridRunner:
                                  wait_until="domcontentloaded", timeout=60000)
                     cookies = {c["name"]: c["value"] for c in sb.context.cookies()}
 
-                sess = ProtocolSession(cookies=cookies, headers=prof.headers(), proxy=local)
+                sess = ProtocolSession(cookies=cookies, headers=prof.headers(),
+                                       nav_headers=prof.nav_headers(), proxy=local)
                 cli = ProtocolClient(sess)
                 k = KratosProtocol(cli)
 
@@ -285,7 +309,8 @@ class HybridRunner:
                 self._log(f"[B] chat actions {list(chat_res.keys())}")
 
             # --- 协议侧：admin 域全部 ---
-            sess = ProtocolSession(cookies=cookies, headers=prof.headers(), proxy=local)
+            sess = ProtocolSession(cookies=cookies, headers=prof.headers(),
+                                   nav_headers=prof.nav_headers(), proxy=local)
             cli = ProtocolClient(sess)
             adm = AdminProtocol(cli)
 

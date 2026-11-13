@@ -26,7 +26,7 @@ from typing import Optional
 
 from core.browser import BrowserOptions, SignupBrowser
 from core.chain_gateway import GatewayPool, find_working_proxy
-from core.fingerprint import DeviceProfile, billing_address, build_profile
+from core.fingerprint import DeviceProfile, billing_address, build_profile, resolve_country
 from core.mailbox import ICloudMailbox, Mailbox
 from core.proxy_pool import DEFAULT_SIDS, ProxyPool
 from core.subscribe import ensure_studio_tos
@@ -61,6 +61,9 @@ class Account:
     status: str = "pending"
     error: str = ""
     created_at: str = ""
+    # 实测出口 IP / 国家（cloudflare trace），画像与账单地址都按它来
+    exit_ip: str = ""
+    country: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -133,17 +136,21 @@ class SignupRunner:
     def _prepare(self, acct: Account):
         acct.password = acct.password or gen_password()
         acct.first_name, acct.last_name = gen_name(acct.email)
-        px, local = find_working_proxy(self.pool, self.gw, f"{AUTH_UI}/login")
+        px, local, geo = find_working_proxy(self.pool, self.gw)
         if not px:
             raise RuntimeError("no working proxy passed health check")
         acct.sid = px.sid
         acct.proxy_url = px.url
+        acct.exit_ip = (geo or {}).get("ip", "")
+        acct.country = resolve_country((geo or {}).get("country"), acct.region)
         self._local = local
-        acct.billing = billing_address(acct.email, acct.region)
-        self._log(f"[prepare] {acct.email} sid={px.sid} local={local}")
+        acct.billing = billing_address(acct.email, acct.country)
+        self._log(f"[prepare] {acct.email} sid={px.sid} exit={acct.exit_ip} "
+                  f"country={acct.country} local={local}")
 
     def profile_for(self, acct: Account) -> DeviceProfile:
-        return build_profile(acct.email, acct.region, acct.platform or None)
+        return build_profile(acct.email, acct.country or acct.region,
+                             acct.platform or None)
 
     def local_proxy(self, acct: Account) -> str:
         return self._local or self.gw.get(acct.proxy_url)

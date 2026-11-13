@@ -29,6 +29,8 @@ Mistral 注册 worker —— Go 服务通过 subprocess 调用
     "workspace_uuid": "...",
     "keys": {"API": "mstrl_...", "Vibe": "...", "Studio": "..."},
     "vibe_cli_key": "",
+    "exit_ip": "203.0.113.7",   # 本次实际出口 IP（cloudflare trace 实测）
+    "country": "CA",            # 画像/账单地址依据的出口国
     "status": "ok",
     "card_masked": "463343******7213",   # 分配到的卡（脱敏）
     "card_expiry": "05/28",
@@ -51,6 +53,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -64,6 +68,79 @@ sys.path.insert(0, str(ROOT))
 def emit_progress(msg: str):
     """进度写 stderr，Go 侧会收集"""
     print(msg, file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------- 虚拟显示
+#
+# 浏览器必须 headed：新 headless 的 WebGL 是 SwiftShader，
+# 与画像声称的真实 GPU 直接矛盾，一条 getParameter(37446) 就判死。
+# Linux 容器里用 Xvfb 提供一个无头显示，Chrome 自己以为是 headed。
+_XVFB: subprocess.Popen | None = None
+
+
+def ensure_display() -> str:
+    """确保有 DISPLAY；没有就在本地起一个 Xvfb。返回 DISPLAY 值。"""
+    global _XVFB
+    disp = os.environ.get("DISPLAY", "").strip()
+    if disp:
+        return disp
+    if os.name == "nt" or sys.platform == "darwin":
+        # macOS/Windows 有真实窗口服务，不需要 Xvfb
+        return ""
+
+    xvfb = shutil.which("Xvfb") or shutil.which("xvfb-run")
+    if not xvfb:
+        emit_progress("[display] 未找到 Xvfb，浏览器会退到 headless（WebGL 将暴露）")
+        return ""
+
+    num = int(os.environ.get("MISTRAL_XVFB_DISPLAY") or 99)
+    for _ in range(20):
+        sock = f"/tmp/.X11-unix/X{num}"
+        if os.path.exists(sock) and _probe_display(f":{num}"):
+            os.environ["DISPLAY"] = f":{num}"
+            return f":{num}"
+        try:
+            proc = subprocess.Popen(
+                [xvfb, f":{num}", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            emit_progress(f"[display] Xvfb 启动失败: {e}")
+            return ""
+        import time as _t
+        for _ in range(30):
+            _t.sleep(0.1)
+            if os.path.exists(sock) and proc.poll() is None:
+                _XVFB = proc
+                os.environ["DISPLAY"] = f":{num}"
+                emit_progress(f"[display] Xvfb 已启动 DISPLAY=:{num}")
+                return f":{num}"
+        if proc.poll() is not None:
+            num += 1
+            continue
+        break
+    emit_progress("[display] Xvfb 起不来，退到 headless")
+    return ""
+
+
+def _probe_display(disp: str) -> bool:
+    xdpy = shutil.which("xdpyinfo")
+    if not xdpy:
+        return True  # 没有探测工具就假设可用
+    try:
+        r = subprocess.run([xdpy, "-display", disp], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def stop_display():
+    global _XVFB
+    if _XVFB is not None:
+        try:
+            _XVFB.terminate()
+        except Exception:
+            pass
+        _XVFB = None
 
 
 def main() -> int:
@@ -85,6 +162,9 @@ def main() -> int:
         from core.cards import cards_from_env, pick_card
         from runner import gen_name
 
+        # headed 真 Chrome 需要一个显示（Linux 容器里由 Xvfb 提供）
+        ensure_display()
+
         password = req.get("password") or ""
         if not password:
             from runner import gen_password
@@ -105,34 +185,54 @@ def main() -> int:
             if card:
                 emit_progress(f"[card] 已分配 {card.masked()} exp={card.expiry}")
 
-        # proxy: 显式 URL 优先，其次按 proxy_index 从代理池轮转
-        proxy = (req.get("proxy") or "").strip()
-        if not proxy and req.get("proxy_index") is not None:
-            from core.proxy_pool import ProxyPool
-            px = ProxyPool().by_index(int(req.get("proxy_index") or 0))
-            if px:
-                from core.chain_gateway import ChainGateway
-                gw = ChainGateway(pre_proxy="", target_proxy=px.url)
-                port = gw.start()
-                proxy = f"socks5://127.0.0.1:{port}"
-                emit_progress(f"[proxy] index={req.get('proxy_index')} sid={px.sid} local={proxy}")
+        # ---------- 代理 + 出口 IP 去重 ----------
+        #
+        # 一 IP 一号：同一个出口 IP 只允许注册一个账号。
+        # 旧实现是 by_index(n) = proxies[n % len]，10 个代理 40 个号 =>
+        # 每个住宅 IP 4 个号，串行连续跑，IP 信誉直接打穿。
+        from core.chain_gateway import GatewayPool, probe_exit
+        from core.proxy_pool import ProxyPool
 
-        runner = HybridRunner(headless=True)
+        used = [str(x) for x in (req.get("used_exit_ips") or []) if x]
+        explicit = (req.get("proxy") or "").strip()
+        start = int(req.get("proxy_index") or 0)
+
+        pool = ProxyPool()
+        gw_pool = GatewayPool()
+        chosen, geo = "", {}
+
+        if explicit:
+            local = gw_pool.get(explicit)
+            geo = probe_exit(local)
+            if geo.get("ip") and geo["ip"] in used:
+                raise RuntimeError(
+                    f"出口 IP {geo['ip']} 已被其他账号使用（一 IP 一号），拒绝复用")
+            chosen = explicit
+            emit_progress(f"[proxy] 指定代理 exit={geo.get('ip')} country={geo.get('country')}")
+        else:
+            for attempt in range(8):
+                px = pool.by_index(start + attempt)
+                if not px:
+                    break
+                local = gw_pool.get(px.url)
+                geo = probe_exit(local)
+                if not geo.get("ok"):
+                    emit_progress(f"[proxy] {px.sid} 探测失败: {geo.get('error')}")
+                    continue
+                if geo["ip"] in used:
+                    emit_progress(f"[proxy] {px.sid} exit={geo['ip']} 已用过，跳过")
+                    continue
+                chosen = px.url
+                emit_progress(
+                    f"[proxy] index={start + attempt} sid={px.sid} "
+                    f"exit={geo['ip']} country={geo.get('country')}")
+                break
+            if not chosen:
+                raise RuntimeError("没有可用的未占用出口 IP（一 IP 一号）")
+
+        # headless=False：走 xvfb 里的 headed 真 Chrome，WebGL 是真 GPU
+        runner = HybridRunner(pool=pool, gw=gw_pool, headless=False)
         runner.debug(True)
-        if proxy:
-            # 单代理模式：绕过健康检查，直接用指定代理
-            from core.proxy_pool import Proxy
-            runner._forced_proxy = proxy
-            orig = runner._prepare
-
-            def _prepare_with_proxy(acct):
-                acct.password = acct.password or password
-                acct.first_name, acct.last_name = first, last
-                acct.proxy_url = proxy
-                runner._local = proxy
-                runner._log(f"[prepare] forced proxy {proxy[:40]}...")
-
-            runner._prepare = _prepare_with_proxy
 
         res = runner.run(
             email=email,
@@ -142,6 +242,9 @@ def main() -> int:
             last=last,
             region=req.get("region") or "CA",
             skip_register=bool(req.get("skip_register")),
+            forced_proxy=chosen,
+            exit_geo=geo,
+            exclude_ips=used,
         )
 
         out = {
@@ -153,6 +256,8 @@ def main() -> int:
             "keys": res.keys or {},
             "vibe_cli_key": res.vibe_cli_key,
             "sid": res.sid,
+            "exit_ip": res.exit_ip,
+            "country": res.country,
             "status": res.status,
             "error": res.error,
             # 分配到的卡（脱敏，仅用于展示与后续订阅关联）
@@ -174,4 +279,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        stop_display()

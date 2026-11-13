@@ -111,6 +111,48 @@ def parse_trpc(text: str):
     return out
 
 
+# ---------------------------------------------------------------- 浏览器语义
+def _origin_of(url: str) -> str:
+    u = urllib.parse.urlsplit(url)
+    return f"{u.scheme}://{u.netloc}"
+
+
+# 每个 API 域名对应的"浏览器当前页面"。
+# Kratos 的接口在 auth.mistral.ai，但用户看到的页面是 v2.auth.mistral.ai，
+# 所以跨源 POST 的 Origin 必须是 v2.auth.mistral.ai 而不是 auth.mistral.ai。
+PAGE_ORIGINS = {
+    "auth.mistral.ai": "https://v2.auth.mistral.ai",
+    "v2.auth.mistral.ai": "https://v2.auth.mistral.ai",
+    "admin.mistral.ai": "https://admin.mistral.ai",
+    "console.mistral.ai": "https://console.mistral.ai",
+    "chat.mistral.ai": "https://chat.mistral.ai",
+}
+
+
+def page_origin_for(url: str) -> str:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return PAGE_ORIGINS.get(host) or _origin_of(url)
+
+
+def _site_of(url: str) -> str:
+    """粗粒度 eTLD+1：mistral.ai / example.com"""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _fetch_site(target: str, page_origin: str) -> str:
+    """sec-fetch-site：same-origin / same-site / cross-site"""
+    if not page_origin:
+        return "same-site"
+    t, p = _origin_of(target), _origin_of(page_origin)
+    if t == p:
+        return "same-origin"
+    if _site_of(target) == _site_of(page_origin):
+        return "same-site"
+    return "cross-site"
+
+
 # ---------------------------------------------------------------- 会话容器
 @dataclass
 class ProtocolSession:
@@ -118,6 +160,12 @@ class ProtocolSession:
     cookies: dict = field(default_factory=dict)
     headers: dict = field(default_factory=dict)
     proxy: str = ""          # 本地 gateway 的 socks 地址
+    # 浏览器当前所在页面的 origin。Origin/Referer 必须按它来发，
+    # 而不是按请求自己的 host —— Kratos 的 API 在 auth.mistral.ai，
+    # 但页面在 v2.auth.mistral.ai，跨源时 Origin 必须是页面的那个。
+    page_origin: str = ""
+    # 导航类请求用的头集合（document/navigate），由 DeviceProfile.nav_headers() 提供
+    nav_headers: dict = field(default_factory=dict)
 
     def csrf(self, domain: str = "") -> Optional[str]:
         for k, v in self.cookies.items():
@@ -127,6 +175,35 @@ class ProtocolSession:
 
     def cookie_header(self) -> str:
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+
+
+# curl 实际支持的压缩算法（按二进制缓存一次）。
+# 浏览器发的是 "gzip, deflate, br, zstd"；如果 curl 不支持 br/zstd 就不能照抄，
+# 否则响应解不开。这里探测一次，能支持就对齐浏览器，不能就退到 gzip/deflate。
+_ENC_CACHE: dict[str, str] = {}
+
+
+def curl_accept_encoding(curl_bin: str) -> str:
+    hit = _ENC_CACHE.get(curl_bin)
+    if hit:
+        return hit
+    enc = "gzip, deflate"
+    try:
+        import subprocess
+        out = subprocess.run([curl_bin, "-V"], capture_output=True, text=True,
+                             timeout=10).stdout
+        feats = ""
+        for line in out.splitlines():
+            if line.lower().startswith("features:"):
+                feats = line.lower()
+        if "brotli" in feats:
+            enc = "gzip, deflate, br"
+        if "zstd" in feats:
+            enc = enc + ", zstd"
+    except Exception:
+        pass
+    _ENC_CACHE[curl_bin] = enc
+    return enc
 
 
 class ProtocolClient:
@@ -144,6 +221,7 @@ class ProtocolClient:
         self.sess = sess
         self.curl = curl_bin
         self.timeout = timeout
+        self._accept_encoding = curl_accept_encoding(curl_bin)
         import tempfile, os
         self._jar = tempfile.NamedTemporaryFile(
             mode="w", suffix=".cookies", delete=False).name
@@ -159,7 +237,8 @@ class ProtocolClient:
             f.write("\n".join(lines) + "\n")
 
     def _run(self, method: str, url: str, headers: dict | None = None,
-             body: str | None = None, params: dict | None = None) -> tuple[int, str]:
+             body: str | None = None, params: dict | None = None,
+             nav: bool = False) -> tuple[int, str]:
         import subprocess
         if params:
             import urllib.parse as up
@@ -175,11 +254,24 @@ class ProtocolClient:
         if method.upper() != "GET":
             cmd += ["-X", method]
 
-        hdrs = dict(self.sess.headers)
-        # 该 curl 构建不支持 br/zstd，统一改 gzip
-        hdrs["Accept-Encoding"] = "gzip, deflate"
+        # 导航请求用 document/navigate 那套头；XHR 用 empty/cors 那套。
+        # 用 XHR 头去打 /self-service/*/browser 这种导航端点，
+        # 是"非浏览器客户端"的最短判定路径。
+        base = self.sess.nav_headers if (nav and self.sess.nav_headers) else self.sess.headers
+        hdrs = dict(base)
         if headers:
             hdrs.update(headers)
+
+        # Origin / Referer：真浏览器一定会发，之前完全缺失
+        page_origin = self.sess.page_origin or page_origin_for(url)
+        hdrs.setdefault("Referer", page_origin.rstrip("/") + "/")
+        if method.upper() != "GET":
+            hdrs.setdefault("Origin", page_origin)
+        if not nav:
+            hdrs["sec-fetch-site"] = _fetch_site(url, page_origin)
+        # 与浏览器一致的压缩协商（按 curl 实际能力裁剪）
+        hdrs.setdefault("Accept-Encoding", self._accept_encoding)
+
         for k, v in hdrs.items():
             cmd += ["-H", f"{k}: {v}"]
 
@@ -201,6 +293,11 @@ class ProtocolClient:
         return status, out
 
     def _apply_csrf(self, url: str) -> dict:
+        """只在写请求上带 x-csrftoken。
+
+        真浏览器的 GET 不会带这个头；之前所有 GET 都带，
+        等于给每个读请求盖了一个"非浏览器"的章。
+        """
         import urllib.parse as up
         host = up.urlsplit(url).hostname or ""
         h = {}
@@ -209,11 +306,11 @@ class ProtocolClient:
             h["x-csrftoken"] = c
         return h
 
-    def get(self, url, params=None, headers=None, **kw):
-        h = self._apply_csrf(url)
+    def get(self, url, params=None, headers=None, nav: bool = False, **kw):
+        h = {} if nav else self._apply_csrf(url)
         if headers:
             h.update(headers)
-        st, body = self._run("GET", url, h, None, params)
+        st, body = self._run("GET", url, h, None, params, nav=nav)
         return Resp(st, body)
 
     def post(self, url, json=None, data=None, headers=None, params=None, **kw):
@@ -295,7 +392,7 @@ class KratosProtocol:
         所以不能只看状态码，要看 nodes 结构与 4000037。
         """
         r = self.c.get(f"{AUTH}/self-service/login/browser",
-                       params={"return_to": RETURN_TO})
+                       params={"return_to": RETURN_TO}, nav=True)
         flow = r.json()
         body = {"csrf_token": self._csrf(flow), "identifier": email,
                 "method": "identifier_first", "transient_payload": {}}
@@ -336,7 +433,7 @@ class KratosProtocol:
                  first: str = "", last: str = "") -> dict:
         r = self.c.get(f"{AUTH}/self-service/registration/browser",
                        params={"return_to": RETURN_TO,
-                               "after_verification_return_to": RETURN_TO})
+                               "after_verification_return_to": RETURN_TO}, nav=True)
         flow = r.json()
         body = {
             "csrf_token": self._csrf(flow),
@@ -376,7 +473,7 @@ class KratosProtocol:
              - 再 GET 一次会重置 flow -> choose_method
              - 用旧 csrf 会 400 (4010006 Could not find a strategy)
         """
-        r = self.c.get(f"{AUTH}/self-service/verification/browser")
+        r = self.c.get(f"{AUTH}/self-service/verification/browser", nav=True)
         flow = r.json()
         body = {"csrf_token": self._csrf(flow), "email": email,
                 "method": "code", "transient_payload": {}}
