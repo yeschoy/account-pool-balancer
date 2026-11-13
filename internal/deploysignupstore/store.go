@@ -9,7 +9,11 @@
 package deploysignupstore
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -155,17 +159,44 @@ type Store struct {
 	rows     []Candidate
 	settings Settings
 	dirty    bool
+	aead     cipher.AEAD
 }
 
+// envelope 是磁盘格式。
+//
+// 早期版本把候选（含会话 cookie、Secret Key、邮箱密码）明文写成 rows。
+// 现在整份内容用 AES-256-GCM 加密放在 data 里；rows 仅用于读取旧文件后
+// 自动迁移，不再写入。
 type envelope struct {
 	Version  int         `json:"version"`
-	Rows     []Candidate `json:"rows"`
+	Nonce    string      `json:"nonce,omitempty"`
+	Data     string      `json:"data,omitempty"`
+	Rows     []Candidate `json:"rows,omitempty"`
 	Settings Settings    `json:"settings"`
 }
 
+const aadDeployStore = "deploysignupstore/v1"
+
 // Open loads (or creates) the store at path.
-func Open(path string, _ []byte) (*Store, error) {
-	s := &Store{path: path, settings: DefaultSettings()}
+//
+// routingSecret 至少 16 字节。文件内容整份 AES-256-GCM 加密——候选里含
+// 会话 cookie、Secret Key 和邮箱密码，不能明文落盘。
+// 读到旧版明文文件（有 rows、无 data）时自动在下次落盘时升级为加密格式。
+func Open(path string, routingSecret []byte) (*Store, error) {
+	if path == "" || len(routingSecret) < 16 {
+		return nil, fmt.Errorf("%w: routing secret too short", ErrCorrupt)
+	}
+	h := hmac.New(sha256.New, routingSecret)
+	h.Write([]byte(aadDeployStore))
+	block, err := aes.NewCipher(h.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{path: path, settings: DefaultSettings(), aead: aead}
 
 	raw, err := os.ReadFile(path)
 	switch {
@@ -181,6 +212,28 @@ func Open(path string, _ []byte) (*Store, error) {
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+	}
+
+	// 新格式：整份加密
+	if env.Data != "" {
+		nonce, derr := hex.DecodeString(env.Nonce)
+		blob, berr := hex.DecodeString(env.Data)
+		if derr != nil || berr != nil || len(nonce) != aead.NonceSize() {
+			return nil, ErrCorrupt
+		}
+		plain, oerr := aead.Open(nil, nonce, blob, []byte(aadDeployStore))
+		if oerr != nil {
+			return nil, ErrCorrupt
+		}
+		var data struct {
+			Version int         `json:"version"`
+			Rows    []Candidate `json:"rows"`
+		}
+		if json.Unmarshal(plain, &data) != nil {
+			return nil, ErrCorrupt
+		}
+		env.Rows = data.Rows
+		s.dirty = true // 让下一次落盘写成加密格式
 	}
 	s.rows = env.Rows
 	if env.Settings.MinIntervalSec > 0 {
@@ -333,7 +386,25 @@ func (s *Store) Flush() error {
 }
 
 func (s *Store) flushLocked() error {
-	env := envelope{Version: 1, Rows: s.rows, Settings: s.settings}
+	// 候选整份加密；settings 不含凭据，放在明文方便排查配置问题。
+	payload, err := json.Marshal(struct {
+		Version int         `json:"version"`
+		Rows    []Candidate `json:"rows"`
+	}{Version: 1, Rows: s.rows})
+	if err != nil {
+		return err
+	}
+	nonce := make([]byte, s.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return err
+	}
+	sealed := s.aead.Seal(nil, nonce, payload, []byte(aadDeployStore))
+	env := envelope{
+		Version:  1,
+		Nonce:    hex.EncodeToString(nonce),
+		Data:     hex.EncodeToString(sealed),
+		Settings: s.settings,
+	}
 	enc, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
 		return err

@@ -50,6 +50,7 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/candidates/{id}/resume", s.apiDeployCandidateResume)
 	a("POST /api/deploy/candidates/{id}/import", s.apiDeployCandidateImport)
 	a("POST /api/deploy/candidates/import-all", s.apiDeployImportAll)
+	a("PATCH /api/deploy/candidates/{id}", s.apiDeployCandidateUpdate)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -763,4 +764,63 @@ func (s *Server) apiDeployImportAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"imported": imported, "skipped": skipped, "failed": failed, "errors": errs,
 	})
+}
+
+
+// apiDeployCandidateUpdate 修改候选的可编辑字段。
+//
+// 目前只开放代理：运营经常要在注册失败后换出口重试，而代理是唯一
+// 需要手工纠正的字段（邮箱/接码地址由导入决定）。
+// 已入池的账号同步更新账号池里那条记录的 ProxyURL，避免两边不一致。
+func (s *Server) apiDeployCandidateUpdate(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		ProxyURL *string `json:"proxy_url"`
+	}
+	if err := readBody(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.ProxyURL == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有要修改的字段"})
+		return
+	}
+	if cur, gerr := m.store.Get(id); gerr == nil && cur.Status == deploysignupstore.Running {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "注册进行中，不能改代理"})
+		return
+	}
+
+	newProxy := strings.TrimSpace(*body.ProxyURL)
+	upd, uerr := m.store.Update(id, func(x *deploysignupstore.Candidate) error {
+		x.ProxyURL = newProxy
+		return nil
+	})
+	if uerr != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": uerr.Error()})
+		return
+	}
+
+	// 已入池则同步账号池，保持一致
+	if upd.ImportedAcctID != "" {
+		_, _ = s.cfg.Update(-1, func(cfg *config.Config) error {
+			for i := range cfg.Accounts {
+				if cfg.Accounts[i].ID == upd.ImportedAcctID {
+					cfg.Accounts[i].ProxyURL = newProxy
+					break
+				}
+			}
+			return nil
+		})
+	}
+	shown := newProxy
+	if shown == "" {
+		shown = "直连"
+	}
+	m.addLog("updated", upd.Email, "代理改为 "+shown)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy_url": newProxy})
 }

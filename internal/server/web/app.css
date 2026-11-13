@@ -211,6 +211,8 @@ tr[data-id]:hover { background: var(--line2); }
 .pc-registration-form .btn { justify-self: start; margin-top: 4px; }
 /* Deploy 号池：统计区。原先用了不存在的 .kv/<dl>，导致统计项按浏览器默认
    块级样式竖着堆在表单下方，中间留出大片空白且没有对齐。改用 .chips+.badge。 */
+/* 代理明文展示：完整 URL 会很长，允许换行且保留凭证可读性 */
+.dr-proxy { font-size: 12px; overflow-wrap: anywhere; word-break: break-all; user-select: text; }
 .dr-status-block { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
 .dr-status-block .chips { gap: 8px; }
 .pc-registration-form > .panel { display: flex; flex-direction: column; }

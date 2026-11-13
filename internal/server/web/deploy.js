@@ -34,14 +34,11 @@ function drEsc(s) {
   ));
 }
 
+// 代理明文展示：按用户要求显示完整 URL（含账号密码），方便核对与排错。
+// 不截断、不脱敏；表格单元格允许换行，长代理不会撑破布局。
 function drProxyLabel(url) {
   if (!url) return '<span class="muted">直连</span>';
-  try {
-    const u = new URL(url);
-    return `${u.protocol.replace(':', '')}//${u.hostname}:${u.port}`;
-  } catch (_) {
-    return drEsc(url.slice(0, 40));
-  }
+  return `<span class="dr-proxy">${drEsc(url)}</span>`;
 }
 
 // ---------------------------------------------------------------- 号池页
@@ -95,7 +92,7 @@ function renderDeployRows(rows) {
       <td>${drBadge(c.status)}</td>
       <td>${acct}<br><span class="muted small">${org}</span></td>
       <td>${fp}</td>
-      <td>${drProxyLabel(c.proxy_url)}</td>
+      <td>${drProxyLabel(c.proxy_url)} <button type="button" class="btn small ghost" data-dr-proxy="${drEsc(c.id)}" title="编辑代理">改</button></td>
       <td class="small">${note}</td>
       <td class="row-actions">
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
@@ -284,12 +281,31 @@ function initDeployPage() {
     const delId = t.dataset.drDel;
     const resumeId = t.dataset.drResume;
     const importId = t.dataset.drImport;
+    const proxyId = t.dataset.drProxy;
     try {
       if (runId) {
         await drApi(`/candidates/${encodeURIComponent(runId)}/register`, { method: 'POST', body: '{}' });
         startDeployPolling();
       } else if (cancelId) {
         await drApi(`/candidates/${encodeURIComponent(cancelId)}/cancel`, { method: 'POST', body: '{}' });
+      } else if (proxyId) {
+        // 从当前单元格取现值（明文展示，直接可用）
+        const cell = t.closest('td');
+        const shown = cell ? cell.querySelector('.dr-proxy') : null;
+        const cur = shown ? shown.textContent.trim() : '';
+        const next = window.prompt('代理地址（留空 = 直连）\n支持 socks5:// 与 http://', cur);
+        if (next === null) return;
+        try {
+          await drApi(`/candidates/${encodeURIComponent(proxyId)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ proxy_url: next.trim() }),
+          });
+          toast('代理已更新');
+          await loadDeployRegistrations();
+        } catch (e) {
+          toast(e.message);
+        }
+        return;
       } else if (importId) {
         const r = await drApi(`/candidates/${encodeURIComponent(importId)}/import`, { method: 'POST', body: '{}' });
         toast(r.already ? '已在池中' : `已入池 ${r.account_id}`);
