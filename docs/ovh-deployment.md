@@ -38,7 +38,18 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Deploy 点击测试判定修正（2026-11-13 18:27 UTC，c52dedc）
+## 当前部署：Deploy 登录失败不再回落注册（2026-11-13 18:46 UTC，98eb0f4）
+
+- 用户连发两张日志截图（02:20:35 的 `halter_squeaks6u@icloud.com`、02:24:59 的 `ovens_stoles.8v@icloud.com`），都是 `登录失败 HTTP 0 … 502` → `登录/会话都不可用，按新账号注册` → `提交注册` → `注册成功 201` → 干等验证信 240s。用户明确质问"是不是走了注册流程，我需要的是登录流程"。
+- 根因两条叠加：① `run_one` 第 0 步只要候选有密码，登录失败就无条件"按新账号注册"，把代理故障/密码错位全翻译成一次 `POST /api/register`；② `HttpClient` 把网络层失败（`status=0`）与"会话失效"混为一谈，账号真实状态未知却按新账号处理。
+- 修法（`25332fb`）：`HttpClient.last_error` 区分网络层失败与上游错误码；`login_with_password` 增加 `result` 回传，失败分类 `transport`/`account_not_found`/`http_<code>`/`no_session`；新增 `ACCOUNT_NOT_FOUND_RE`，**只有上游明确说"该邮箱没有账号"**才允许改走注册；`run_one` 入口重写为"有密码或会话就只登录"；`handleEvent` 落 `detail` 供 UI 区分"出口不通可重试"与"登录被拒"。
+- 第二条根因（`4057018`）：`settings.get("sys_proxy") or "127.0.0.1:10808"` 把空值悄悄换成 10808。**容器里没有 10808 监听**（那是 macOS 本机 Clash 的地址），桥每跳 `ConnectionRefused`，最终报成 `curl (7) CONNECT tunnel failed / 502`。改为 `resolve_sys_proxy()`，空值即"无系统代理、直连上游"。
+- 首次上线 `046ad3a` 时已证实 `register_calls=0`（502/密码错/账号不存在三种输入），但因 10808 兜底仍报 502；`98eb0f4` 才让出口真正可用。
+- 部署：`release/deploy-login-guard-20261114` 从线上 `c52dedc` 起分支，只 cherry-pick 这两个提交，发布差异 3 文件（`deploy_registrar.py`、`deploy_registration.go`、`deploy_resume_test.go`），未带入 Mistral/Essevin 窗口改动。`go build`/`go vet`/`TestDeploy*` 全通过（全量 `internal/server` 77.3s 通过）。构建 18:47:21–18:47:55（34s），完整备份 data（sha256 `18d8fc67…9d729ffd`），18:48:15 切换、18:48:46 healthy/0 重启；双内网入口均 `{"ok":true}`、别名含 `opendesign-balancer`、user 1000:1000、挂载/端口未变、2 条候选 + 12 项设置保留。
+- **真实链路验证**：容器内用该账号跑 `--job-file`，日志为 `没有保存的会话，直接走登录流程` → `密码登录成功 acct=1117752285 verified=True`，**全程零 `提交注册`**。回退镜像 `rollback-20261113T184650Z`（046ad3a）保留，备份目录 `20261113T184650Z-deploy-login-guard-98eb0f4`。
+- **尚未解决的出口问题（下一项任务，未宣称已修复）**：`ajax-portal.deploy.com:443` 在 `socks5h://v6-0021@167.114.158.4:21000` 与 `socks5://51.222.52.200:1080` 两个出口上都被 TLS 层直接断开（`curl (35) SSL_connect: Connection closed abruptly`），而同出口访问 `deploy.com` 正常 200；只有服务器直连能拿到 `/api/csrf` 200。即：登录逻辑已正确，但经代理出口仍会在登录前失败，需要换出口或排查该域名对这两个 IP 的拦截。数据里候选仍带这两个代理，重试前应先处理出口，否则只会稳定复现 `detail=transport`。
+
+## 历史部署：Deploy 点击测试判定修正（2026-11-13 18:27 UTC，c52dedc）
 
 - 用户看图后质疑"Deploy 的测试是不是有点问题"。`fe5a04b` 已在 master，release 分支追加为 **`c52dedc`**，发布差异只有 `admin.go`、`deploy_test.go`、`web/app.js`、`quota/deploy.go` 四个文件，未带入 Mistral/注册机窗口改动。
 - 结论：截图里 `"ok": true / status 200` 是上游真实回的 200，不是编造；问题有三处：① 200 但 `choices[0].message.content` 为空（只有被 `max_tokens=256` 截断的 reasoning，`finish_reason=length`）时旧逻辑只要 choices 非空就判 ok，会把"还没生成回答"当成推理通过；② 弹窗不展示该账号目录里的模型名，用户只能猜默认 `deepseek-v4.1-flash-1017`（实测该账号直连返回 `content='pong 🏓'` + 24 reasoning tokens，目录为 deepseek-v4.1-flash-1017 与 glm-5.3-flash）；③ 额度 not-connected 文案没给"怎样才有数"。
