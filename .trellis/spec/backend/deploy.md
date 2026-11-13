@@ -9,7 +9,6 @@
 - `GET/PUT /api/settings?provider=deploy`：顶层routing/quota/pricing/errorRules/retryRules，deploy对象含baseUrl/modelSyncSec/detailLog。
 - 复用`/api/accounts` CRUD/import、`/api/accounts/{id}/test`、`/refresh-quota`，以及client/import Key管理。
 - 下游仅`GET /v1/models`、`POST /v1/chat/completions`。其他协议/方法/子路径本地拒绝。
-- master同时保留既有`/api/deploy/*`注册链路，注册设置与`/api/settings?provider=deploy`推理路由设置分开；不自动触发注册或支付。前端`isDeploy`与`DR_PAGES`只在app.js声明，deploy.js复用共享api的管理员/CSRF边界。Deploy标签唯一，注册页深链仅允许本池并负责初始化事件，离开本池停止轮询。
 
 ## 3. Contracts
 ### 凭据与配置

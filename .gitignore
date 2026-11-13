@@ -71,6 +71,8 @@ pnpm-debug.log*
 !/tools/fp_layer.py
 !/tools/proxy_bridge.py
 !/tools/gen_ua_pool.py
+# 取信时序判断的纯本地测试（不含凭据，无网络请求）
+!/tools/deploy_mailbox_time_test.py
 !/tools/data/
 !/tools/data/ua_pool.json
 # 运行时产物：卡台账含卡指纹，永不入库
