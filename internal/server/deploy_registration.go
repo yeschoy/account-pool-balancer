@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/deploy/candidates/{id}/import", s.apiDeployCandidateImport)
 	a("POST /api/deploy/candidates/import-all", s.apiDeployImportAll)
 	a("PATCH /api/deploy/candidates/{id}", s.apiDeployCandidateUpdate)
+	a("POST /api/deploy/candidates/assign-proxies", s.apiDeployAssignProxies)
 	a("GET /api/deploy/logs", s.apiDeployLogs)
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
@@ -823,4 +825,86 @@ func (s *Server) apiDeployCandidateUpdate(w http.ResponseWriter, r *http.Request
 	}
 	m.addLog("updated", upd.Email, "代理改为 "+shown)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy_url": newProxy})
+}
+
+
+// apiDeployAssignProxies 按顺序把代理池里的代理逐个写进候选记录。
+//
+// 与注册时的临时轮询不同，这会把分配结果**落盘**，因此：
+//   - 表格里能立刻看到每个账号会用哪个出口；
+//   - 账号与会话绑定同一个出口，后续复用不会换 IP；
+//   - 想手工调整就单独改某一条，不会被下一次注册覆盖。
+//
+// overwrite=false 只补空白（默认）；true 则全部按顺序重排。
+func (s *Server) apiDeployAssignProxies(w http.ResponseWriter, r *http.Request) {
+	m, err := s.deployMgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		Overwrite *bool  `json:"overwrite"`
+		OnlyIDs   []string `json:"only_ids"`
+	}
+	if r.ContentLength != 0 {
+		if err := readBody(r, &body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	overwrite := body.Overwrite != nil && *body.Overwrite
+	pool := m.store.Settings().ProxyPool
+	if len(pool) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "代理池是空的，先在左侧粘贴代理并保存设置"})
+		return
+	}
+	only := map[string]bool{}
+	for _, id := range body.OnlyIDs {
+		only[id] = true
+	}
+
+	// 固定按创建时间排序，保证同一组数据每次分配结果一致
+	rows := m.store.List()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CreatedAt.Before(rows[j].CreatedAt) })
+
+	assigned, kept := 0, 0
+	n := 0 // 轮询游标，只对真正被分配的条目前进
+	for _, c := range rows {
+		if len(only) > 0 && !only[c.ID] {
+			continue
+		}
+		if c.Status == deploysignupstore.Running {
+			kept++
+			continue
+		}
+		if c.ProxyURL != "" && !overwrite {
+			kept++
+			continue
+		}
+		next := pool[n%len(pool)]
+		n++
+		if _, uerr := m.store.Update(c.ID, func(x *deploysignupstore.Candidate) error {
+			x.ProxyURL = next
+			return nil
+		}); uerr != nil {
+			continue
+		}
+		assigned++
+		if c.ImportedAcctID != "" {
+			_, _ = s.cfg.Update(-1, func(cfg *config.Config) error {
+				for i := range cfg.Accounts {
+					if cfg.Accounts[i].ID == c.ImportedAcctID {
+						cfg.Accounts[i].ProxyURL = next
+						break
+					}
+				}
+				return nil
+			})
+		}
+	}
+	m.addLog("proxy_assign", "", fmt.Sprintf("分配 %d 个，保留 %d 个（池内 %d 个代理，%s）",
+		assigned, kept, len(pool), map[bool]string{true: "覆盖", false: "只补空白"}[overwrite]))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"assigned": assigned, "kept": kept, "pool_size": len(pool),
+	})
 }

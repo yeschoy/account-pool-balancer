@@ -241,6 +241,28 @@ function initDeployPage() {
     }
   });
 
+  // 分配代理：把代理池按顺序落盘到每条候选记录
+  document.getElementById('dr-assign-proxies')?.addEventListener('click', async () => {
+    const errEl = document.getElementById('dr-form-error');
+    const resEl = document.getElementById('dr-bulk-result');
+    errEl.textContent = '';
+    const overwrite = window.confirm(
+      '把代理池按顺序分配给账号。\n\n' +
+      '确定 = 全部重排（覆盖已有代理）\n' +
+      '取消 = 只补还没代理的账号'
+    );
+    try {
+      const r = await drApi('/candidates/assign-proxies', {
+        method: 'POST',
+        body: JSON.stringify({ overwrite }),
+      });
+      resEl.textContent = `已分配 ${r.assigned} 个，保留 ${r.kept} 个（池内 ${r.pool_size} 个）`;
+      await loadDeployRegistrations();
+    } catch (e) {
+      errEl.textContent = e.message;
+    }
+  });
+
   const pxEl = document.getElementById('dr-proxies');
   pxEl?.addEventListener('input', () => { pxEl.dataset.dirty = '1'; });
 
