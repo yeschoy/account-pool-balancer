@@ -330,3 +330,70 @@ tr[data-id]:hover { background: var(--line2); }
   user-select: none;
 }
 .mr-advanced > summary:hover { color: var(--text-default, #222); }
+
+/* ---------------------------------------------------------------- Deploy: 卡池行 */
+
+.dr-card-list { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 4px; }
+.dr-card-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.025);
+}
+.dr-card-row code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dr-card-row.bad { color: #b42318; background: rgba(180, 35, 24, 0.08); }
+.dr-card-row select { font-size: 12px; padding: 2px 4px; max-width: 220px; }
+
+/* ---------------------------------------------------------------- Deploy: 日志浮层 */
+
+/* 收起态：右下角一个小方块，不占正文空间；点开后从右侧滑出占半屏。 */
+.dr-log-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.dr-log-toggle {
+  position: relative;
+  width: 56px; height: 56px; border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.dr-log-toggle:hover { background: #f7f7f8; }
+.dr-log-badge {
+  position: absolute; top: -6px; right: -6px;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: #d92d20; color: #fff; font-size: 11px; line-height: 18px;
+  text-align: center;
+}
+.dr-log-panel { display: none; }
+
+/* 展开态：面板贴在右下，固定在视口内，日志再多也不会把正文挤走。 */
+.dr-log-dock.expanded .dr-log-panel {
+  display: block;
+  width: min(720px, 52vw);
+  max-height: 62vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
+  padding: 12px 14px;
+}
+.dr-log-dock.expanded .dr-log-panel .table-wrap {
+  overflow: auto;
+  max-height: calc(62vh - 64px);
+}
+.dr-log-dock.expanded .dr-log-toggle { display: none; }
+.dr-log-dock .head-row { margin: 0 0 8px; }
+
+@media (max-width: 720px) {
+  .dr-log-dock.expanded .dr-log-panel { width: calc(100vw - 24px); max-height: 70vh; }
+}

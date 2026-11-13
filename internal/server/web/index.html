@@ -354,12 +354,15 @@
             <label for="dr-proxies">代理池（每行一个，留空则直连）</label>
             <textarea id="dr-proxies" rows="4" spellcheck="false"
               placeholder="socks5://user:pass@host:port"></textarea>
-            <span class="hint">按候选顺序轮转，一号一出口。可在此粘贴代理后点「保存设置」。</span>
+            <span class="hint">粘贴后点「保存设置」即持久化，刷新/重进页面会自动载回。
+              分配规则：<b>一号一个出口，账号数多于代理数时从头发复用</b>；新导入的账号自动取下一个。
+              重新粘贴一整段再保存 = 整体覆盖。</span>
 
             <label for="dr-cards">银行卡列表（每行一张，可选）</label>
             <textarea id="dr-cards" rows="4" spellcheck="false" autocomplete="off"
               placeholder="4480602749951616----05/31----858"></textarea>
             <span class="hint">格式：<code>卡号----月/年----CVV</code>（有效期支持 <code>05/31</code>、<code>5/2031</code>、<code>0531</code>）。可选，留空则不绑卡。保存时自动校验位数与 Luhn，无效行列在下方。<b>一卡一账号。</b></span>
+            <div id="dr-card-list" class="dr-card-list"></div>
             <span id="dr-card-msg" class="muted small" role="status"></span>
 
             <div class="row-actions">
@@ -391,15 +394,30 @@
         </section>
       </div>
 
-      <section class="panel mt">
-        <div class="head-row"><h2>运行日志</h2><button type="button" class="btn small" id="dr-log-clear">清空</button></div>
-        <div class="table-wrap mt">
-          <table class="table" id="dr-log-table">
-            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
-            <tbody></tbody>
-          </table>
+      <!-- 运行日志：默认收成右下角小方块，点开才展开到右侧。
+           原来是一整块常驻面板，注册/绑卡时日志一多就把号池表格挤出视口。 -->
+      <aside id="dr-log-dock" class="dr-log-dock collapsed" aria-live="polite">
+        <button type="button" class="dr-log-toggle" id="dr-log-toggle"
+                title="运行日志（点击展开/收起）" aria-expanded="false">
+          <span class="dr-log-icon">日志</span>
+          <span class="dr-log-badge" id="dr-log-badge">0</span>
+        </button>
+        <div class="dr-log-panel">
+          <div class="head-row">
+            <h2>运行日志</h2>
+            <div class="row-actions">
+              <button type="button" class="btn small" id="dr-log-clear">清空</button>
+              <button type="button" class="btn small ghost" id="dr-log-close" title="收起">收起</button>
+            </div>
+          </div>
+          <div class="table-wrap mt">
+            <table class="table" id="dr-log-table">
+              <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
-      </section>
+      </aside>
     </section>
 
     <section id="page-dsettings" class="page hidden">

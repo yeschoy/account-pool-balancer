@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -345,5 +346,73 @@ print(p.credit_total(FakeClient(200, [{"amount": "bad"}, {"amount": "2.5"}]), "1
 	out := runPython(t, py)
 	if out != "106.0\n0.0\nTrue\n2.5" {
 		t.Fatalf("unexpected credit total: %q", out)
+	}
+}
+
+// 代理池保存后要能复用：新导入的账号按池顺序一号一个，账号多于代理时从头发复用。
+// 以前导入完全不碰 proxy_pool，用户配好池子后新账号仍然直连，得再点一次「分配代理」。
+func TestDeployBulkImportAssignsProxyFromPool(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { time.Sleep(300 * time.Millisecond); _ = os.RemoveAll(dir) })
+	s, err := New(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.deployMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.store.Settings()
+	st.ProxyPool = []string{"socks5://u:p@10.0.0.1:1080", "socks5://u:p@10.0.0.2:1080"}
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+
+	text := strings.Join([]string{
+		"a@icloud.com----https://m.invalid/messages/a?token=t",
+		"b@icloud.com----https://m.invalid/messages/b?token=t",
+		"c@icloud.com----https://m.invalid/messages/c?token=t",
+	}, "\n")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/deploy/candidates/bulk",
+		strings.NewReader(`{"text":`+strconv.Quote(text)+`}`))
+	s.apiDeployCandidateBulk(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk import = %d %s", rec.Code, rec.Body.String())
+	}
+
+	want := map[string]string{
+		"a@icloud.com": "socks5://u:p@10.0.0.1:1080",
+		"b@icloud.com": "socks5://u:p@10.0.0.2:1080",
+		"c@icloud.com": "socks5://u:p@10.0.0.1:1080", // 池只有 2 个，第三个从头发复用
+	}
+	for _, c := range m.store.List() {
+		if got := want[c.Email]; got != c.ProxyURL {
+			t.Fatalf("%s proxy = %q, want %q", c.Email, c.ProxyURL, got)
+		}
+	}
+}
+
+// 没有代理池时导入保持直连（不能凭空造代理）。
+func TestDeployBulkImportWithoutPoolStaysDirect(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { time.Sleep(300 * time.Millisecond); _ = os.RemoveAll(dir) })
+	s, err := New(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.deployMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "solo@icloud.com----https://m.invalid/messages/s?token=t"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/deploy/candidates/bulk",
+		strings.NewReader(`{"text":`+strconv.Quote(text)+`}`))
+	s.apiDeployCandidateBulk(rec, req)
+	for _, c := range m.store.List() {
+		if c.ProxyURL != "" {
+			t.Fatalf("%s should be direct, got %q", c.Email, c.ProxyURL)
+		}
 	}
 }

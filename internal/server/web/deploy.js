@@ -34,19 +34,28 @@ function drEsc(s) {
   ));
 }
 
-// 候选上的卡只显示品牌+后四位，绝不回显完整卡号。
+// 候选上的卡按用户要求明文展示（可看可复制），不再只给后四位。
+// 附带有效期/CVC 与复制按钮；数据来自 /data/deploy-signup.json 的完整卡记录。
 function drCardLabel(c) {
   const card = c.card || null;
   if (!card || !card.number) return '<span class="muted">未绑</span>';
   const n = String(card.number).replace(/\D/g, '');
-  const tail = n.slice(-4);
   const brand = card.brand || '卡';
+  const exp = (card.exp_mon && card.exp_year)
+    ? ` ${String(card.exp_mon).padStart(2, '0')}/${String(card.exp_year).slice(-2)}`
+    : '';
+  const cvc = card.cvc ? ` CVC ${card.cvc}` : '';
+  const full = [n, card.exp_mon ? String(card.exp_mon).padStart(2, '0') : '',
+                card.exp_year || '', card.cvc || ''].filter(Boolean).join('|');
   // 余额读不到时显示"余额未知"而不是 0——没读到不等于没有。
   const bal = c.credit_balance
     ? ` <span class="badge ok">余额 $${drEsc(c.credit_balance)}</span>`
     : '';
   const mark = c.recharged ? ' <span class="badge ok">已充</span>' : '';
-  return `${drEsc(brand)} ****${drEsc(tail)}${mark}${bal}`;
+  return `<span class="dr-card-num" title="点击复制">${drEsc(brand)} `
+    + `<code>${drEsc(n)}</code>${drEsc(exp)}${drEsc(cvc)}</span>`
+    + `<button type="button" class="btn small ghost" data-dr-copycard="${drEsc(full)}" title="复制完整卡信息（卡号|月|年|CVC）">复制</button>`
+    + `${mark}${bal}`;
 }
 
 // 代理明文展示：按用户要求显示完整 URL（含账号密码），方便核对与排错。
@@ -69,7 +78,9 @@ async function loadDeployRegistrations() {
       drApi('/logs'),
       drApi('/settings'),
     ]);
-    renderDeployRows(list.candidates || []);
+    drLastCandidates = list.candidates || [];
+    renderDeployRows(drLastCandidates);
+    renderDeployCardList(drLastCandidates);
     renderDeployStatus(status);
     renderDeployLogs(logs.logs || []);
     // 代理池只在用户没编辑过时回填，避免覆盖正在输入的内容
@@ -140,9 +151,27 @@ function renderDeployStatus(s) {
     .join('');
 }
 
+// drLogSeen 记录已渲染过的日志条数，用于收起态的数字角标（未读条数）。
+let drLogSeen = 0;
+
 function renderDeployLogs(logs) {
   const body = document.querySelector('#dr-log-table tbody');
   if (!body) return;
+  const dock = document.getElementById('dr-log-dock');
+  const expanded = dock && dock.classList.contains('expanded');
+  const badge = document.getElementById('dr-log-badge');
+  if (badge) {
+    if (expanded) {
+      drLogSeen = logs.length;
+      badge.textContent = '0';
+      badge.style.display = 'none';
+    } else {
+      const unread = Math.max(0, logs.length - drLogSeen);
+      // 收起时才提示；展开着说明用户正在看，数字没有意义
+      badge.textContent = unread > 99 ? '99+' : String(unread);
+      badge.style.display = unread ? '' : 'none';
+    }
+  }
   const rows = logs.slice(-200).reverse();
   body.innerHTML = rows.length
     ? rows.map((l) => `<tr>
@@ -185,10 +214,19 @@ async function loadDeploySettings() {
     if (av) av.checked = settings.auto_verify !== false;
     const ip = document.getElementById('ds-import-to-pool');
     if (ip) ip.checked = !!settings.import_to_pool;
-    // 卡列表在号池页（注册机）而非设置页
+    // 卡列表与代理池都在号池页（注册机）而非设置页。
+    //
+    // 代理池原来只读不回显：保存后刷新页面就看不到自己填过什么，也没法复用。
+    // 现在保存即持久化到 settings.proxy_pool，刷新/重进页面原样载回；
+    // 用户重新粘贴一整段再保存时整体覆盖（这是"重新输入号池就覆盖"的语义）。
+    // 正在编辑（dirty）时不覆盖，避免把用户手上的输入冲掉。
     const cd = document.getElementById('dr-cards');
     if (cd && document.activeElement !== cd && !cd.dataset.dirty) {
       cd.value = (settings.cards || []).join('\n');
+    }
+    const pd = document.getElementById('dr-proxies');
+    if (pd && document.activeElement !== pd && !pd.dataset.dirty) {
+      pd.value = (settings.proxy_pool || []).join('\n');
     }
   } catch (e) {
     const err = document.getElementById('ds-error');
@@ -235,6 +273,53 @@ function showCardResult(count, errors) {
     el.className = 'muted small';
     el.textContent = '未填写银行卡（不绑卡）';
   }
+}
+
+// drCardRows 把卡池渲染成"一行一张 + 绑到某账号"的可操作列表。
+//
+// 卡池本身仍是那个多行文本框（保持"粘贴即覆盖"的编辑习惯），这里只做只读
+// 投影：解析出卡号/有效期/CVV，并提供「绑到…」下拉直接写进候选记录，
+// 省掉先去账号行点「设卡」再手输卡号的往返。
+let drLastCandidates = [];
+
+function drParseCardLine(line) {
+  const parts = String(line || '').split('----').map((s) => s.trim());
+  if (parts.length < 3) return null;
+  const num = parts[0].replace(/\D/g, '');
+  if (num.length < 12) return null;
+  return { raw: line, number: num, exp: parts[1], cvc: parts[2] };
+}
+
+function renderDeployCardList(candidates) {
+  const box = document.getElementById('dr-card-list');
+  if (!box) return;
+  const lines = readDeployCards();
+  if (!lines.length) { box.innerHTML = ''; return; }
+  // 已绑定其它账号的卡做标记，避免看起来"没被用"
+  const usedBy = {};
+  (candidates || []).forEach((c) => {
+    const cn = c.card && c.card.number ? String(c.card.number).replace(/\D/g, '') : '';
+    if (cn) usedBy[cn] = c.email;
+  });
+  const opts = (candidates || [])
+    .filter((c) => c.session_cookie || c.status === 'verified')
+    .map((c) => `<option value="${drEsc(c.id)}">${drEsc(c.email)}</option>`).join('');
+  box.innerHTML = lines.map((line, i) => {
+    const c = drParseCardLine(line);
+    if (!c) return `<div class="dr-card-row bad">第 ${i + 1} 行格式不对：${drEsc(line.slice(0, 40))}</div>`;
+    const owner = usedBy[c.number];
+    const stamp = owner
+      ? ` <span class="badge">已绑 ${drEsc(owner)}</span>`
+      : ' <span class="muted small">未使用</span>';
+    return `<div class="dr-card-row">
+      <code>${drEsc(c.number)}</code> ${drEsc(c.exp)} CVC ${drEsc(c.cvc)}${stamp}
+      <button type="button" class="btn small ghost" data-dr-copycard="${drEsc(c.number + '|' + c.exp + '|' + c.cvc)}">复制</button>
+      ${opts ? `<select class="dr-card-target" data-dr-cardline="${i}">
+        <option value="">绑到…</option>${opts}
+      </select>
+      <button type="button" class="btn small" data-dr-bindcard="${i}">绑卡</button>` : ''}
+    </div>`;
+  }).join('');
 }
 
 // ---------------------------------------------------------------- 绑定事件
@@ -317,7 +402,43 @@ function initDeployPage() {
   const pxEl = document.getElementById('dr-proxies');
   pxEl?.addEventListener('input', () => { pxEl.dataset.dirty = '1'; });
   const cdEl = document.getElementById('dr-cards');
-  cdEl?.addEventListener('input', () => { cdEl.dataset.dirty = '1'; });
+  cdEl?.addEventListener('input', () => {
+    cdEl.dataset.dirty = '1';
+    renderDeployCardList(drLastCandidates);
+  });
+  // 上一层容器上的委托：卡池渲染出的「绑卡」按钮（每次重渲染都是新节点）
+  document.getElementById('dr-card-list')?.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-dr-bindcard]');
+    if (!btn) return;
+    const idx = Number(btn.dataset.drBindcard);
+    const sel = document.querySelector(`select[data-dr-cardline="${idx}"]`);
+    const targetId = sel && sel.value;
+    if (!targetId) { toast('先选一个账号'); return; }
+    const line = readDeployCards()[idx];
+    const parsed = drParseCardLine(line);
+    if (!parsed) { toast('这一行卡格式不对'); return; }
+    const cand = (drLastCandidates || []).find((c) => c.id === targetId);
+    if (!cand) return;
+    if (!window.confirm(`把卡 ****${parsed.number.slice(-4)} 绑到 ${cand.email} 并充值？\n\n会真实扣款。`)) return;
+    btn.disabled = true;
+    try {
+      // 先「设卡」再「绑卡」，两步都不改卡池文本（池是模板，账号才是实际绑的那张）
+      await drApi(`/candidates/${encodeURIComponent(targetId)}/card`, {
+        method: 'PATCH',
+        body: JSON.stringify({ card: line }),
+      });
+      const r = await drApi(`/candidates/${encodeURIComponent(targetId)}/bind-card`, {
+        method: 'POST',
+        body: JSON.stringify({ live: true }),
+      });
+      toast(r.ok ? '绑卡成功' : `绑卡失败：${r.error || r.step}`);
+      await loadDeployRegistrations();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   // 刷新
   document.getElementById('dr-refresh')?.addEventListener('click', () => {
@@ -391,8 +512,12 @@ function initDeployPage() {
     const proxyId = t.dataset.drProxy;
     const bindId = t.dataset.drBind;
     const cardId = t.dataset.drCard;
+    const copyCard = t.dataset.drCopycard;
     try {
-      if (runId) {
+      if (copyCard) {
+        // 完整卡信息：卡号|月|年|CVC，可直接粘到别处或导入别的账号
+        copyText(copyCard);
+      } else if (runId) {
         await drApi(`/candidates/${encodeURIComponent(runId)}/register`, { method: 'POST', body: '{}' });
         startDeployPolling();
       } else if (cancelId) {
@@ -466,6 +591,30 @@ function initDeployPage() {
       toast(e.message);
     }
   });
+
+  // 日志浮层：右下角小方块，点开占右侧
+  const logDock = document.getElementById('dr-log-dock');
+  const setLogExpanded = (on) => {
+    if (!logDock) return;
+    logDock.classList.toggle('expanded', on);
+    logDock.classList.toggle('collapsed', !on);
+    const btn = document.getElementById('dr-log-toggle');
+    if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on) {
+      // 展开即视为已读，并把最新日志重新拉一遍
+      drLogSeen = Number.MAX_SAFE_INTEGER;
+      const badge = document.getElementById('dr-log-badge');
+      if (badge) badge.style.display = 'none';
+      loadDeployRegistrations().catch(() => {});
+    }
+  };
+  document.getElementById('dr-log-toggle')?.addEventListener('click', () => {
+    const on = !(logDock && logDock.classList.contains('expanded'));
+    // 重新开始计数：收起后再来的日志才算未读
+    if (on) drLogSeen = 0;
+    setLogExpanded(on);
+  });
+  document.getElementById('dr-log-close')?.addEventListener('click', () => setLogExpanded(false));
 
   document.getElementById('dr-log-clear')?.addEventListener('click', () => {
     const body = document.querySelector('#dr-log-table tbody');

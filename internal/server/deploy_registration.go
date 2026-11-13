@@ -179,6 +179,10 @@ func (s *Server) apiDeployCandidateBulk(w http.ResponseWriter, r *http.Request) 
 	}
 	added, skipped := 0, 0
 	var errs []string
+	// 导入即绑定出口：从已保存的代理池按"一号一个、轮询复用"分配，
+	// 这样用户配好代理池后新导入的账号立刻有出口，不必再点「分配代理」。
+	pool := m.store.Settings().ProxyPool
+	n := 0
 	for _, line := range strings.Split(body.Text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -201,9 +205,15 @@ func (s *Server) apiDeployCandidateBulk(w http.ResponseWriter, r *http.Request) 
 			skipped++
 			continue
 		}
-		if _, err := m.store.Add(deploysignupstore.Candidate{
+		cand := deploysignupstore.Candidate{
 			Email: email, MailboxURL: url, Status: deploysignupstore.Queued,
-		}); err != nil {
+		}
+		if len(pool) > 0 {
+			// 账号数 > 代理数时从头复用，保证"一号一个、可复用"。
+			cand.ProxyURL = pool[n%len(pool)]
+			n++
+		}
+		if _, err := m.store.Add(cand); err != nil {
 			skipped++
 			errs = append(errs, email+": "+err.Error())
 			continue
