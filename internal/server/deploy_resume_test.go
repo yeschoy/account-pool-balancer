@@ -207,3 +207,76 @@ print(d.LOGIN_REFERER)`
 		t.Fatalf("login entry not wired: %q", out)
 	}
 }
+
+// 登录失败（网络层失败 / 密码错 / 上游拒绝）**绝不能**回落到提交注册。
+// 2026-11-14 事故：代理 CONNECT 502 导致登录失败，旧逻辑"按新账号注册"，
+// 对一个早已存在的账号又 POST 了一次 /api/register，日志出现"提交注册"，
+// 用户看到的就成了注册流程而不是登录流程。
+func TestDeployLoginFailureNeverFallsBackToRegister(t *testing.T) {
+	py := `import sys, json
+sys.path.insert(0, "tools")
+import deploy_registrar as d
+
+posted = []
+class Fake(d.HttpClient):
+    def __init__(self, login_resp):
+        d.HttpClient.__init__(self, transport="urllib")
+        self.login_resp = login_resp
+    def request(self, method, url, payload=None, extra_headers=None):
+        posted.append(f"{method} {url}")
+        if url.endswith("/api/register"):
+            raise AssertionError("registered an existing account")
+        if url.endswith("/api/csrf"):
+            return d.Response(200, json.dumps({"data": {"csrf": "t"}}))
+        if "/api/login" in url:
+            return self.login_resp
+        return d.Response(401, "")
+
+d.emit = lambda kind, **kw: None
+d.load_fp_layer = lambda: None
+d.pick_profile = lambda seed=None: None
+
+cases = {
+    "transport": d.Response(0, "network error: curl: (7) CONNECT tunnel failed, response 502"),
+    "bad_password": d.Response(422, json.dumps({"message": "Incorrect password."})),
+    "http_401": d.Response(401, ""),
+}
+out = {}
+for name, resp in cases.items():
+    fake = Fake(resp)
+    d.build_client = lambda item, settings, profile=None, _f=fake: _f
+    # 有会话的候选：会话过期后登录失败，应停在 registered，不应注册
+    r = d.run_one({"email": "halter@icloud.com", "password": "pw",
+                   "status": "registered", "session_cookie": "stale"},
+                  {"transport": "urllib"}, lambda _r: None)
+    # 没会话但有密码：应如实 failed
+    r2 = d.run_one({"email": "halter@icloud.com", "password": "pw", "status": "registered"},
+                   {"transport": "urllib"}, lambda _r: None)
+    out[name] = [r.get("status"), r2.get("status"), r2.get("detail"),
+                 any("register" in p for p in posted)]
+
+print(json.dumps(out, sort_keys=True))
+`
+	out := runPython(t, py)
+	want := `{"bad_password": ["registered", "failed", "http_422", false], ` +
+		`"http_401": ["registered", "failed", "http_401", false], ` +
+		`"transport": ["registered", "failed", "transport", false]}`
+	if out != want {
+		t.Fatalf("unexpected login-failure handling:\n got %s\nwant %s", out, want)
+	}
+}
+
+// 只有上游明确回复"邮箱不存在"时才允许改走注册。
+func TestDeployAccountNotFoundAllowsRegister(t *testing.T) {
+	py := `import sys
+sys.path.insert(0, "tools")
+import deploy_registrar as d
+print(bool(d.ACCOUNT_NOT_FOUND_RE.search("No account with this email.")))
+print(bool(d.ACCOUNT_NOT_FOUND_RE.search("Incorrect password.")))
+print(bool(d.ACCOUNT_NOT_FOUND_RE.search("ConnectionError: curl: (7) CONNECT tunnel failed, response 502")))
+`
+	out := runPython(t, py)
+	if out != "True\nFalse\nFalse" {
+		t.Fatalf("unexpected account-not-found detection: %q", out)
+	}
+}

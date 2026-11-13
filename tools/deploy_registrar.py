@@ -138,6 +138,9 @@ class HttpClient:
         self.profile = profile
         self.proxy = proxy
         self._session = None
+        # 最近一次网络层失败（status=0）。用来区分"代理/隧道断了"和"上游回了
+        # 错误码"——前者账号状态未知，绝不能据此判断账号是否存在。
+        self.last_error = ""
         if transport == "curl_cffi":
             from curl_cffi.requests import Session  # type: ignore
 
@@ -201,7 +204,9 @@ class HttpClient:
                     if attempt < 2:
                         time.sleep(0.8 * (attempt + 1))
             else:
-                return Response(0, f"network error: {type(last).__name__}: {last}", {})
+                self.last_error = f"{type(last).__name__}: {last}"
+                return Response(0, f"network error: {self.last_error}", {})
+            self.last_error = ""
             try:
                 for sc in r.headers.get_list("Set-Cookie"):
                     self._absorb(sc)
@@ -212,14 +217,17 @@ class HttpClient:
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                self.last_error = ""
                 for sc in r.headers.get_all("Set-Cookie") or []:
                     self._absorb(sc)
                 return Response(r.status, r.read().decode("utf-8", "replace"), dict(r.headers))
         except urllib.error.HTTPError as e:
+            self.last_error = ""
             for sc in e.headers.get_all("Set-Cookie") or []:
                 self._absorb(sc)
             return Response(e.code, e.read().decode("utf-8", "replace"), dict(e.headers))
         except urllib.error.URLError as e:
+            self.last_error = str(e.reason)
             return Response(0, f"network error: {e.reason}", {})
 
 
@@ -574,6 +582,18 @@ ALREADY_EXISTS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 登录接口**明确**表示"这个邮箱没有账号"。只有命中它才允许改走注册；
+# 其它 4xx（密码错、需要验证码、风控）以及网络层失败一律停在登录失败。
+ACCOUNT_NOT_FOUND_RE = re.compile(
+    r"(no\s+account\s+with\s+(?:this|that)\s+email)"
+    r"|(account\s+(?:does\s*not|doesn't)\s+exist)"
+    r"|(user\s+(?:does\s*not|doesn't)\s+exist)"
+    r"|(email\s+(?:not\s+found|does\s*not\s+exist|is\s+not\s+registered))"
+    r"|(unable\s+to\s+find\s+(?:your\s+)?account)"
+    r"|(账号不存在|该邮箱未注册)",
+    re.IGNORECASE,
+)
+
 
 def email_already_exists(resp: Response) -> bool:
     """
@@ -704,17 +724,38 @@ def profile_view(http: HttpClient) -> dict | None:
 
 def login_with_password(item: dict, settings: dict, profile: Any = None,
                         http: HttpClient | None = None,
-                        password: str | None = None) -> dict | None:
+                        password: str | None = None,
+                        result: dict | None = None) -> dict | None:
     """
     走登录流程：GET /login?source=home-header → csrf → POST /api/login → profile。
 
     注册时把密码存下来（后端 Candidate.Password），账号已存在或会话过期时
     用同一个密码登回去，而不是再提交一次注册。
+
+    **只做登录，不提交任何注册请求。** 失败原因写进 result["error"] /
+    result["detail"]，并置 result["login_attempted"]，让调用方能区分
+    "登录失败"和"账号不存在"。
+
+    detail 取值：
+      no_password        没有已保存的密码，无从登录
+      transport          网络层失败（代理不通 / CONNECT 502），账号状态未知
+      account_not_found  上游明确回复该邮箱没有账号（唯一允许改走注册的情形）
+      http_<code>        上游明确拒绝（密码错、需要验证码、风控）
+      no_session         登录 200 但没拿到会话
     """
     email = (item.get("email") or "").strip()
     password = (password or item.get("password") or "").strip()
+
+    def fail(detail: str, msg: str) -> None:
+        if result is not None:
+            result["detail"] = detail
+            result["error"] = msg
+        emit("log", message=msg)
+
+    if result is not None:
+        result["login_attempted"] = True
     if not email or not password:
-        emit("log", message="没有已保存的密码，无法走登录")
+        fail("no_password", "没有已保存的密码，无法走登录")
         return None
     if http is None:
         http = build_client(item, settings, profile)
@@ -729,24 +770,38 @@ def login_with_password(item: dict, settings: dict, profile: Any = None,
     lr = reg.login(email, password)
     j = lr.json or {}
     if lr.status != 200:
-        emit("log", message=f"登录失败 HTTP {lr.status}: {j.get('message') or (lr.body or '')[:120]}")
+        body = (lr.body or "")[:160]
+        msg_txt = str(j.get("message") or "") if isinstance(j, dict) else ""
+        if lr.status == 0:
+            # 网络层失败：代理/隧道断了。账号本身状态未知，绝不能据此判"账号不存在"，
+            # 更不能顺手再提交一次注册。
+            fail("transport", f"登录请求没发出去（{http.last_error or body}），当前出口不可用，账号状态未知")
+        elif lr.status in (400, 401, 404, 422) and ACCOUNT_NOT_FOUND_RE.search(f"{msg_txt} {body}"):
+            fail("account_not_found", f"上游回复邮箱不存在 HTTP {lr.status}: {msg_txt or body}")
+        else:
+            fail(f"http_{lr.status}", f"登录失败 HTTP {lr.status}: {msg_txt or body}")
         return None
     pv = profile_view(http)
     if pv is None:
+        fail("no_session", "登录返回 200 但未能确认会话（profile 不可用）")
         return None
+    if result is not None:
+        result.pop("detail", None)
+        result.pop("error", None)
     emit("log", message=f"密码登录成功 acct={pv['account_id']} verified={pv['is_verified']}")
     return {**pv, "reused": True, "relogin": True}
 
 
-def resume_session(item: dict, settings: dict) -> dict | None:
+def resume_session(item: dict, settings: dict, result: dict | None = None) -> dict | None:
     """
     不重新注册：先后用已保存的会话，会话失效则用已保存的密码走登录。
 
     顺序（实测 deploy 会话会被轮换/清理）：
       1. GET /api/profile + 保存的 hive-portal-production cookie → 200 即复用
       2. 401/403 → GET deploy.com/login?source=home-header + POST /api/login
-      3. 登录也失败 → 返回 None，调用方决定是否重新注册（通常不注册：
-         账号已存在时再注册会被上游当成"已存在账号重复注册"，只会多一封信）
+      3. 登录也失败 → 返回 None，**调用方一律不因此重新注册**：账号在
+         deploy.com 那边通常已经存在，再提交注册只会多一封 "Existing Account"
+         信，并覆盖一次账号状态。只有上游明确回复"邮箱不存在"才允许注册。
 
     必须沿用注册时的 UA/TLS/代理：服务端虽不校验绑定，但换设备登录是自找风控。
     """
@@ -778,12 +833,20 @@ def resume_session(item: dict, settings: dict) -> dict | None:
             if not out.get("session_cookie"):
                 out["session_cookie"] = cookie
             return out
+        if http.last_error:
+            # 不是会话失效，是出口断了：账号状态未知。既不走登录更不走注册。
+            msg = f"校验会话时出口不可用（{http.last_error}），账号状态未知，稍后重试"
+            if result is not None:
+                result["detail"] = "transport"
+                result["error"] = msg
+            emit("log", message=msg)
+            return None
         emit("log", message="会话已失效，改走登录流程")
         http.cookies.pop("hive-portal-production", None)
     else:
         emit("log", message="没有保存的会话，直接走登录流程")
 
-    return login_with_password(item, settings, profile, http=http)
+    return login_with_password(item, settings, profile, http=http, result=result)
 
 
 def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> dict:
@@ -811,20 +874,37 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         except Exception:  # noqa: BLE001
             resend_since = None
 
-    # --- 0. 会话复用 / 登录：绝不重复注册已存在的账号 ---
+    # --- 0. 会话复用 / 登录：只有"确认是新账号"才提交注册 ---
+    #
+    # 判定原则（2026-11-14 修正）：
+    #   有密码或有会话 → 只走登录。登录失败就如实报失败，**不因登录失败注册**。
+    #   旧实现是"登录失败 → 按新账号注册"，于是代理 CONNECT 502、密码错位
+    #   全被翻译成一次 POST /api/register：日志出现"提交注册 xxx"，上游多一封
+    #   Existing Account 信，用户看到的就成了注册流程而不是登录流程。
+    #   唯一允许注册的情形：上游明确回复"邮箱不存在"，或候选从未提交过注册。
     force_register = bool(settings.get("force_register"))
+    result: dict[str, Any] = {"email": email, "password": password, "status": "failed"}
     if not resend_only and not force_register:
-        # 有会话先校验会话，会话失效用保存的密码走登录；
-        # 没有会话但有密码，同样先登录——只有登录明确说"账号不存在"
-        # （或本来就没密码、没会话）才去注册。
         if item.get("session_cookie") or item.get("password"):
-            resumed = resume_session(item, settings)
+            resumed = resume_session(item, settings, result=result)
             if resumed:
                 return {"email": email, "password": password, **resumed}
-            if item.get("session_cookie") and not item.get("password"):
-                log("会话失效且无已保存密码，无法走登录")
-            elif item.get("password"):
-                log("登录/会话都不可用，按新账号注册")
+            if result.get("detail") != "account_not_found":
+                # 登录是唯一允许的路径；原因留在 result 里给后端展示。
+                # 有会话的候选停在 registered（会话只是过期，账号仍已验证），
+                # 没会话的如实 failed。
+                result["status"] = "registered" if item.get("session_cookie") else "failed"
+                result["relogin"] = True
+                return result
+            log("上游明确回复邮箱不存在，改为提交注册")
+        elif str(item.get("status") or "") == "registered":
+            # 后端标了 registered 却既没会话也没密码：只能如实报错，绝不重注册
+            result["error"] = "该账号已注册过但没有可用密码/会话，无法登录（不重复提交注册）"
+            result["detail"] = "no_password"
+            emit("log", message=result["error"])
+            return result
+        else:
+            log("没有会话也没有密码：按新账号注册")
     min_interval = float(settings.get("min_interval", 8))
     max_retries = int(settings.get("max_retries", 6))
     verify_timeout = float(settings.get("verify_timeout", 240))
@@ -832,8 +912,6 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     auto_verify = settings.get("auto_verify", True)
     upstream = normalize_proxy(settings.get("proxy") or "")
     sys_proxy = settings.get("sys_proxy") or "127.0.0.1:10808"
-
-    result: dict[str, Any] = {"email": email, "password": password, "status": "failed"}
 
     # 指纹
     profile = pick_profile(seed=item.get("fp_seed"))
@@ -889,12 +967,14 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
             # 上游对已存在邮箱回 201，但只发"已有账号，请去登录"的信（见截图）。
             # 这时候继续等验证信是白等，直接拿保存的密码走登录。
             log("账号已存在（注册返回已存在），改走登录流程，不再等待验证信")
-            resumed = login_with_password(item, settings, profile, http=http, password=password)
+            resumed = login_with_password(item, settings, profile, http=http,
+                                          password=password, result=result)
             if resumed:
                 return {"email": email, "password": password, **resumed}
             result["status"] = "registered"
-            result["error"] = "账号已存在于上游，但保存的密码未能登录（可能密码不匹配）"
-            result["detail"] = "already_exists"
+            # 保留登录真实的失败原因；detail 已由 login_with_password 写入
+            result["error"] = result.get("error") or "账号已存在于上游，但保存的密码未能登录"
+            result["detail"] = result.get("detail") or "already_exists"
             emit("log", message=result["error"])
             return result
         if resp.status != 201:

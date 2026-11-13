@@ -820,9 +820,16 @@ func (m *deployManager) handleEvent(ev map[string]any, ids []string) {
 			return
 		}
 		id := ids[idx]
+		detail, _ := ev["detail"].(string)
 		_, _ = m.store.Update(id, func(c *deploysignupstore.Candidate) error {
 			if s, ok := ev["status"].(string); ok {
 				c.Status = deploysignupstore.Status(s)
+			}
+			// 登录尝试的结论落到 detail：transport 表示出口不可用（账号状态
+			// 未知，可直接重试），其余是登录本身失败（密码/验证码/上游拒绝）。
+			// 两种都不再回落到注册，UI 需要能区分。
+			if detail != "" {
+				c.Detail = detail
 			}
 			if s, ok := ev["password"].(string); ok && s != "" {
 				c.Password = s
