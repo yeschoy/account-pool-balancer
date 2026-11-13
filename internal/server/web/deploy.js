@@ -109,7 +109,7 @@ function renderDeployRows(rows) {
       <td class="row-actions">
         ${canRun ? `<button type="button" class="btn small" data-dr-run="${drEsc(c.id)}">注册</button>` : ''}
         ${(!busy && c.status === 'registered' && !c.is_verified && !c.session_cookie)
-          ? `<button type="button" class="btn small" data-dr-resend="${drEsc(c.id)}" title="重新读取接码箱里的验证信并完成验证（不会重新注册）">重发验证</button>` : ''}
+          ? `<button type="button" class="btn small" data-dr-resend="${drEsc(c.id)}" title="重新读取接码箱里的验证信并完成验证。不会重发邮件，也不会重新注册。">重新认证</button>` : ''}
         ${c.session_cookie ? `<button type="button" class="btn small" data-dr-resume="${drEsc(c.id)}">校验会话</button>` : ''}
         ${(c.status === 'verified' && !c.imported_account_id) ? `<button type="button" class="btn small primary" data-dr-import="${drEsc(c.id)}">入池</button>` : ''}
         ${(c.status === 'verified' && !c.recharged && c.session_cookie) ? `<button type="button" class="btn small" data-dr-bind="${drEsc(c.id)}">绑卡</button>` : ''}
@@ -446,7 +446,7 @@ function initDeployPage() {
       } else if (resendId) {
         toast('正在重新读取接码箱并验证…');
         const r = await drApi(`/candidates/${encodeURIComponent(resendId)}/resend-verification`, { method: 'POST', body: '{}' });
-        toast(r.status === 'verified' ? '重新取信后验证成功' : (r.error || r.detail || '接码箱里还没有验证信'));
+        toast(r.status === 'verified' ? '认证成功' : (r.error || r.detail || '接码箱里还没有验证信，过几分钟再试'));
         await loadDeployRegistrations();
         return;
       } else if (resumeId) {
