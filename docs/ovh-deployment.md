@@ -1890,3 +1890,37 @@ startup: /data/config.json is corrupt: json: unknown field "deploy"
 | 配置完整性 | 201 个账号；`deploy` 与 `modelstudio` 字段均存在 |
 
 **未做**：未向生产导入测试 Key、未触发 Deploy 注册、未调用绑卡接口。Deploy 号池页面需登录后在浏览器验收。
+
+## Deploy 注册机页统计区样式修复（2026-11-13 16:51 UTC，f6b2781）
+
+用户截图反馈 Deploy 注册机页左侧「总数/待注册/注册中/已验证/失败/worker」统计被竖排堆在表单下方，
+不对齐、无分隔线，与按钮之间大片空白。
+
+**根因**：`index.html` 用了 `<dl class="kv">`，但 `app.css` 从未定义 `.kv`。
+`<dl>` 因此退化为浏览器默认块级布局，每个 `<dt>/<dd>` 各占一行。
+（检查过全部 CSS 类名清单，确认 `.kv` 不存在，不是被覆盖。）
+
+**修复**：改用项目已有 `.chips` + `.badge`（与其它池一致），并新增 `.dr-status-block`
+提供顶部细分隔线与上下内边距。状态值按语义着色：待注册/注册中 warn、已验证 ok、失败 bad。
+仅前端呈现，表格列、接口、数据结构均不变。
+
+- 提交：`f6b2781`（fix(web): render Deploy pool stats with existing chips/badges）
+- 镜像：`account-pool-balancer:release-f6b2781-20261113T165100Z`
+- 备份：`releases/20261113T165100Z-f6b2781/data-pre-f6b2781.tar.gz`（70M，0600）
+- 上次镜像：`release-885f84a-20261113T161200Z`
+
+**时间**：构建 08:50:14–08:50:21（7s）；切换 08:51:24；healthy ≤3s；验收 08:51:32。停机约 6 秒。
+
+**验收**：
+
+| 项 | 结果 |
+|---|---|
+| 容器 | `healthy` |
+| revision | `f6b2781` |
+| `/healthz` 本地 / 公网 | 200 / 200 |
+| new-api → 两个别名 | 200 / 200 |
+| `/assets/app.css` 含 `.dr-status-block` | 2 处 |
+| HTML 使用 `.dr-status-block` + `.chips` | ✅ |
+| 残留 `class="kv"` | 0 |
+
+**本地渲染验证**：Playwright 登录后截图确认统计项以护栏形式横排、带分隔线，不再竖排堆叠。
