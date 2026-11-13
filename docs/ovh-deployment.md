@@ -38,7 +38,27 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Deploy 详情正文独立5MiB（2026-11-13 09:30 UTC，cbafc8d）
+## 当前部署：Deploy 已存在账号改走登录（2026-11-13 18:06 UTC，bf75d7f）
+
+- 用户明确要求"都提交推送，然后部署"，并授权清理工作树。本地按窗口分三次提交并推送 master：`b74a501`（Mistral headed 浏览器/指纹/代理序号）、`012bbef`（本轮 Deploy 登录修复）、`64e9d41`（文档与 .gitignore）。从线上实际运行 `519531b` 建 `release/deploy-login-20261114`，**只 cherry-pick `012bbef`**（`bf75d7f`），发布差异 6 文件：注册机、resume 守卫、批次筛选、前端按钮、2 份文档 + 新增回归测试；未带入 Mistral/Essevin 窗口与 README 改动。
+- 根因：上游对已存在邮箱仍回 201，但不发验证信，改发 "Sign Up Attempt for Existing Deploy Account"（请去登录/重置密码）。旧逻辑把 201 当注册成功，白等 verify_timeout 且在 `resume` 时若会话失效会回落重注册。新版识别该响应/409/422，直接用**注册时保存的密码**走 `GET https://deploy.com/login?source=home-header` → `/api/csrf` → `/api/login?enforce_csrf=true`；`registered` 候选不再进入注册分支。`go build`/`go vet`/`TestDeploy*` 与 python 语法检查通过。
+- 预检：旧版 healthy/0 重启、Healthcheck 为 wget healthz、user 1000:1000、`ai-internal` 别名含 `opendesign-balancer`、端口绑定 127.0.0.1:8790、磁盘 219GiB 余量、容器内仅 odb 进程、Deploy 候选 2 条（1 verified/1 registered，均带密码与会话，无 queued/running）。沿线上 Compose 只追加 image override，保留用户/环境/卷/端口/网络别名/Healthcheck/资源。
+- 新镜像就绪后完整备份 data（gzip+sha256 校验）再切换。**219 账号、deploy-signup 2 行与 12 项设置、config.json 174340 字节原样保留**。切换后 healthy/0 重启，NewAPI 分别请求 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`，五静态资源 200 且 `deploy.js`/`app.js` SHA256 与源码一致，公网登录页/healthz/资源均 200。
+- **镜像内真实链路验证**：用新镜像以 1000:1000 起一次性容器跑注册机（只读挂载作业文件、只读探测 profile），两条候选均"会话复用成功 verified=True"，未改线上 data。`registered` 那条同时验证了新代码：会话失效且直连被出口 502 拦截时，走登录失败后**未再提交注册**，正确停在 `registered`。
+- 首次冒烟未清空 `proxy`，脚本沿用账号代理并落到宿主机系统代理 127.0.0.1:10808（容器内不可达），被 502 拦截后**对其中一条老候选提交了一次注册**；上游对已存在邮箱只回 201+发信，不覆盖状态。data 行数前后同为 2，该账号已用直连复用会话复核 verified；已知副作用是上游多一封 "Existing Account" 信，登记为事故并已在新逻辑里阻断同类路径。
+
+| 阶段 | UTC 2026-11-13 |
+|---|---|
+| 归档/构建 | 18:03:29 / 18:03:40–18:03:57 |
+| 完整一致备份 | 18:06:0x（data.tar.gz 80,115,472 字节） |
+| 切换请求 / 启动 | 18:06:47.491 / 18:06:49.621 |
+| 首 healthy | 18:07:20 |
+| 双内网 / 资产核对 | 18:08 前后 |
+| 公网复查 | 18:12:35 |
+
+镜像 `account-pool-balancer:release-bf75d7f-20261113T180329Z`（ID `sha256:5e21b03eeea9b14a28b17933ff035e2b97ccaba4088db552d9df39450c4b5fd1`）；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261113T180329Z-bf75d7f`；完整备份 `/home/ubuntu/backups/account-pool-balancer/20261113T180329Z-deploy-login-bf75d7f`（data SHA256 `01fb4e061cb3a627ff8e3152368167401c6d386260f703440c1af6e3d0ca8fce`），冒烟日志同目录 `login-smoke*.log`；回退镜像 `account-pool-balancer:rollback-20261113T180329Z`（即 519531b）保留。回退先保护上线后新写入，不自动恢复旧 data。
+
+## 历史部署：Deploy 详情正文独立5MiB（2026-11-13 09:30 UTC，cbafc8d）
 
 - 用户明确授权推送部署；`ed90ac6`及预检补充修正 **`cbafc8d33b37c9a897955e0021a4a106a901e02f`** 已推送master并上线。从实际运行f6b2781核对，业务差异仅3个Go实现和1个回归测试文件；未带入其他窗口注册机/指纹/Dockerfile/README等未提交修改。
 - 预检发现线上共享`logs.detailBodyKB=64`，原ed90ac6会被共享值压回64KiB；补充修正使Deploy独立固定5MiB，全局和其他池设置不改。相关精准红后normal5.036秒/race19.389秒/vet/build通过，复用已完成的全仓normal/race结果，不重复无关回归。**本次仅扩大采集能力，Deploy详情开关保持false，未继续正文采集/主动推理/业务重放，不宣称400根因已修复。**
