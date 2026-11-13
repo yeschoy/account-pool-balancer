@@ -583,11 +583,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				w, cw, reqHeader = cw.ResponseWriter, nil, nil
 			}
 		} else {
+			limit := nativeDetailBodyLimit(cfg, rec.Provider)
 			if cw == nil {
-				cw = &captureWriter{ResponseWriter: w, max: min(cfg.Logs.DetailBodyKB, 64) << 10}
+				cw = &captureWriter{ResponseWriter: w, max: limit}
 				w, reqHeader = cw, r.Header.Clone()
 			}
-			cw.max = min(cw.max, 64<<10)
+			cw.max = min(cw.max, limit)
 		}
 	}
 	if rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor {

@@ -27,7 +27,7 @@ Deploy独立Routing/Quota/ModelSyncSec/DetailLog/Pricing/ErrorRules/RetryRules�
 
 405精确组织暂停文案独立识别，可能涉及余额/条款，不证明封禁或零余额。429遵守完整秒数/日期Retry-After，冷却和停止换号均生效。Deploy的stop优先于错误规则的换号建议，但错误动作仍执行；其他池维持原语义。未知发送结果/已提交流输出不能被自定义规则绕过；截断流不计成功、不伪造DONE、不重放。
 
-本池详情默认关闭且不受global detail影响；复用有界native隐私预览，Key/Cookie/会话头体/响应回显脱敏，每体<=64KiB。普通摘要与各失败尝试保留；成功重试前的失败可关联详情，末次失败不重复写。管理员完整Key查看沿用既有admin/no-store/CSRF和退出清理，不新增会话迁移。
+本池详情默认关闭且不受global detail影响；复用有界native隐私预览，Key/Cookie/会话头体/响应回显脱敏。Deploy成功完成与失败尝试统一采用每体`min(logs.detailBodyKB,5120)`KiB采集预算（最大5MiB，超限明确标记截断；原始输入超过8MiB仍沿隐私扫描保护整体省略），不扩大其他池的64KiB上限，不修改全局配置或自动开启详情；非2xx上游错误响应仍沿原64KiB读取边界，不为日志额外排空上游。普通摘要与各失败尝试保留；成功重试前的失败可关联详情，末次失败不重复写。管理员完整Key查看沿用既有admin/no-store/CSRF和退出清理，不新增会话迁移。
 
 ## 4. Validation & Error Matrix
 | 条件 | 结果 |
@@ -53,6 +53,7 @@ Bad：把目录200当Key激活、用注册赠金填余额、把405组织暂停�
 - `internal/quota/deploy*_test.go`：成功/失败保历史、JSON往返、sync0/手动强制、来源迟到/重定向、独立并发预算。
 - `internal/pool/deploy_test.go`：来源/过期/错误目录门禁，无OpenDesign funding污染。
 - `internal/server/deploy_test.go`：原生字节/工具/大整数/Key隔离、路径本地拒绝、规则实际换号与stop、配置磁盘与跨池、导入/auth/CSRF、默认模型与未知余额、详情脱敏/流截断/未知结果不重放/凭据不重定向。
+- `internal/server/deploy_detail_limit_test.go`：1.37MB成功/失败正文完整保留、5MiB边界/超限标记、响应采集预算、较小共享限额、详情关闭、凭据与会话脱敏及TH/Mistral仍64KiB；不得用截断预览冒充完整失败请求。
 - `node internal/server/deploy_web_test.js`与真实本地浏览器：入口可见，设置/规则保存刷新核对API/磁盘，未知与错误转义，目录不冒充额度，Mock/真实小额推理严格区分。部署需另行授权。
 
 ## 7. Wrong vs Correct

@@ -103,6 +103,16 @@ func maskBody(cfg *config.Config, b []byte, max int) (string, bool) {
 	return redactSecrets(cfg, strings.ToValidUTF8(string(b), "\uFFFD")), cut
 }
 
+// nativeDetailBodyLimit keeps the completion and failed-attempt capture paths
+// on the same provider-specific cap. A smaller shared limit is still respected.
+func nativeDetailBodyLimit(cfg *config.Config, provider string) int {
+	capKB := 64
+	if provider == config.ProviderDeploy {
+		capKB = 5 * 1024
+	}
+	return min(cfg.Logs.DetailBodyKB, capKB) << 10
+}
+
 // captureWriter keeps the status and the first and last max/2 bytes of what goes to the client.
 type captureWriter struct {
 	http.ResponseWriter

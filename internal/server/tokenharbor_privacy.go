@@ -262,10 +262,10 @@ func (s *Server) thFailureDetail(cfg *config.Config, rec *requestLog, r *http.Re
 		rec.failureDetails = map[int]bool{}
 	}
 	rec.failureDetails[index] = true
-	limit := min(cfg.Logs.DetailBodyKB, 64) << 10
+	limit := nativeDetailBodyLimit(cfg, rec.Provider)
 	req, reqCut := thBodyPreview(body, res.privateIdentities, limit)
 	resp, respCut := thBodyPreview(res.body, res.privateIdentities, limit)
-	requestText, _ := maskBody(cfg, req, limit)
+	requestText, requestCut := maskBody(cfg, req, limit)
 	responseText, responseCut := maskBody(cfg, resp, limit)
 	headers := maskHeaders(cfg, thPrivateHeaders(r.Header))
 	for _, name := range cfg.Routing.SessionHeaders {
@@ -279,5 +279,5 @@ func (s *Server) thFailureDetail(cfg *config.Config, rec *requestLog, r *http.Re
 	if status < 100 {
 		status = 502
 	}
-	s.logs.Append("details", rec.TS, &detailLog{TS: rec.TS, RequestID: rec.RequestID, AttemptIndex: index, Context: "failed_attempt", Terminal: res.terminal, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: "failed", RequestHeaders: headers, RequestBody: requestText, RequestBodyBytes: len(body), RequestBodyTruncated: reqCut, ResponseHeaders: maskHeaders(cfg, thPrivateHeaders(res.header)), ResponseBody: responseText, ResponseBodyBytes: len(res.body), ResponseBodyTruncated: respCut || responseCut})
+	s.logs.Append("details", rec.TS, &detailLog{TS: rec.TS, RequestID: rec.RequestID, AttemptIndex: index, Context: "failed_attempt", Terminal: res.terminal, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: "failed", RequestHeaders: headers, RequestBody: requestText, RequestBodyBytes: len(body), RequestBodyTruncated: reqCut || requestCut, ResponseHeaders: maskHeaders(cfg, thPrivateHeaders(res.header)), ResponseBody: responseText, ResponseBodyBytes: len(res.body), ResponseBodyTruncated: respCut || responseCut})
 }
