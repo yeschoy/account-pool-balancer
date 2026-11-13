@@ -2036,3 +2036,24 @@ AAD=`deploysignupstore/v1`）；settings 不含凭据仍明文。旧明文文件
 
 **遗留**：线上 store 仍是明文（读到了但尚未触发落盘），下次任何写入会自动升级为加密。
 本地实测加密生效、代理明文展示与编辑正常。
+
+## Deploy 存储改回明文（2026-11-13 21:56 UTC，b82c213）
+
+用户明确要求不要加密，直接明文。`deploysignupstore` 恢复为明文 JSON：
+
+- `Open` 不再使用 routingSecret，`flushLocked` 去掉 AES-GCM 封装
+- rows 与 settings 均明文落盘（卡号/CVV/会话 cookie/Secret Key/代理密码原文可读）
+- 删除 `encryption_test.go`
+
+**数据迁移**：线上原文件是上一版写入的加密格式（`data` 字段），新版本无法解析。
+部署前确认该文件为加密格式且 **0 条记录**后删除，备份存于
+`releases/20261113T215400Z-b82c213/deploy-signup.encrypted.json`（0600）。
+删除是安全的：仅有空数据，无账号丢失。
+
+- 提交：`b82c213`
+- 镜像：`account-pool-balancer:release-b82c213-20261113T215400Z`
+- 上次镜像：`release-a923864-20261113T213500Z`
+- 切换 13:56:54；healthy ≤3s；双入口 200/200
+
+**说明**：`data/deploy-signup.json` 在首次写入前不存在属正常；
+本地实测同一版本写入结果为明文（rows/settings 直出卡号与代理密码）。
