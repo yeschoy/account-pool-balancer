@@ -38,6 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：卡台账改到持久数据目录（2026-11-13 20:44 UTC，bde4a27）
+
+- 用户 04:42:08 绑卡失败：`PermissionError: [Errno 13] Permission denied: '/usr/local/share/deploy-signup/data/card_ledger.json'`。上一轮的 `ERR_TUNNEL_CONNECTION_FAILED` 已消失，说明代理桥那层真的通了，这次卡在写台账。
+- 根因：卡指纹台账（记录某张卡已绑过哪些 org，用于"一卡一账号"前置拦截）属于**运行期可变数据**，却被放在镜像内的程序目录：`/usr/local/share/deploy-signup/data` 属 `root:root 755`，容器以 `1000:1000` 运行，写不进去。
+- 修法（`5c61c85`）：新增 `_ledger_path()`，优先 `ODB_DATA_DIR`（镜像里 `/data`，属主 `1000:1000` 且是持久卷），否则 `/data`，再否则脚本同级 `data/`（本地开发）。台账放持久卷也顺带保证重建容器后"一卡一账号"记录不丢。
+- **无历史数据丢失**：线上 `/data` 与宿主 data 目录原本都没有 `card_ledger.json` —— 上次绑卡在写台账前就失败了，从未成功写过。
+- **隔离容器实测**：`LEDGER=/data/card_ledger.json` → 写入成功 → `_load_ledger()` 回读一致 → `assert_card_unused` 对第二个 org 正确抛出 `CardReuseError`（拦截文案正常）。
+- 部署：`release/deploy-ledger-20261114` 从线上 `c52dedc` 起，cherry-pick 五个提交，发布差异 4 文件。构建 20:44，备份 data（sha256 `8c7d443f…86794c`），20:45:51 切换、20:46:22 healthy/0 重启；双内网入口 `{"ok":true}`、别名含 `opendesign-balancer`、2 候选（均 `verified`）+ 12 设置保留；线上实际 `LEDGER=/data/card_ledger.json` 且父目录可写。回退镜像 `rollback-20261113T204400Z`（e0671b4）保留。
+
 ## 当前部署：绑卡链路补齐回环过滤（2026-11-13 20:15 UTC，e0671b4）
 
 - 用户 04:12:15 点绑卡失败：`Stripe token 失败: Page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://deploy.com/signup`。同时 04:11:42 的 `状态=verified` 说明登录那一路已经好了。
