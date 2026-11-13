@@ -492,7 +492,15 @@ def bind_card_and_charge(
     if proxy:
         try:
             import deploy_registrar as _dr
-            sys_proxy = os.environ.get("DEPLOY_PAY_SYS_PROXY", "").strip()
+            # 必须走 resolve_sys_proxy：线上 data 里的 sys_proxy 是
+            # 127.0.0.1:10808（macOS 本机 Clash），容器内是回环、无人监听。
+            # 直接拿来建桥会让桥每跳 ConnectionRefused，Chromium 报
+            # net::ERR_TUNNEL_CONNECTION_FAILED —— 绑卡就卡在 Page.goto。
+            raw_sys = os.environ.get("DEPLOY_PAY_SYS_PROXY", "").strip()
+            sys_proxy = _dr.resolve_sys_proxy({"sys_proxy": raw_sys})
+            if raw_sys and not sys_proxy:
+                print(f"[pay] 系统代理 {raw_sys} 是回环地址，容器内不可达，按直连上游处理",
+                      file=sys.stderr, flush=True)
             bport = int(os.environ.get("DEPLOY_PAY_BRIDGE_PORT", "17550") or "17550")
             bridge = _dr.ProxyBridge(sys_proxy=sys_proxy, base_port=bport)
             browser_proxy = bridge.endpoint_for(proxy)
