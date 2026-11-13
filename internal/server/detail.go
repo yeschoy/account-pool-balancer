@@ -104,13 +104,13 @@ func maskBody(cfg *config.Config, b []byte, max int) (string, bool) {
 }
 
 // nativeDetailBodyLimit keeps the completion and failed-attempt capture paths
-// on the same provider-specific cap. A smaller shared limit is still respected.
+// on the same provider-specific cap. Deploy has its own fixed budget so a
+// legacy shared 64KiB setting cannot silently defeat its opt-in diagnostics.
 func nativeDetailBodyLimit(cfg *config.Config, provider string) int {
-	capKB := 64
 	if provider == config.ProviderDeploy {
-		capKB = 5 * 1024
+		return 5 << 20
 	}
-	return min(cfg.Logs.DetailBodyKB, capKB) << 10
+	return min(cfg.Logs.DetailBodyKB, 64) << 10
 }
 
 // captureWriter keeps the status and the first and last max/2 bytes of what goes to the client.

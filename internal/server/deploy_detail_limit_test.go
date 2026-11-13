@@ -20,7 +20,8 @@ func TestNativeDetailBodyLimitProviderIsolation(t *testing.T) {
 		want     int
 	}{
 		{config.ProviderDeploy, 6144, 5 << 20},
-		{config.ProviderDeploy, 128, 128 << 10},
+		{config.ProviderDeploy, 128, 5 << 20},
+		{config.ProviderDeploy, 64, 5 << 20},
 		{config.ProviderTokenHarbor, 6144, 64 << 10},
 		{config.ProviderMistral, 6144, 64 << 10},
 		{config.ProviderTokenHarbor, 32, 32 << 10},
@@ -56,7 +57,8 @@ func TestDeployDetailBodyLimit(t *testing.T) {
 		{name: "shared-enabled-exact-5MiB", status: 200, bodyBytes: capBytes, sharedDetail: true, enabled: true, globalKB: 6144},
 		{name: "response-exact-5MiB", status: 200, bodyBytes: 1024, responseSize: capBytes, enabled: true, globalKB: 6144},
 		{name: "response-over-5MiB", status: 200, bodyBytes: 1024, responseSize: capBytes + (128 << 10), enabled: true, globalKB: 6144, responseCut: true},
-		{name: "smaller-global-limit", status: 400, bodyBytes: 200 << 10, enabled: true, globalKB: 128, requestCut: true},
+		{name: "global-64KiB-failed", status: 400, bodyBytes: 1372993, enabled: true, globalKB: 64},
+		{name: "global-64KiB-success-shared-on", status: 200, bodyBytes: 1372993, responseSize: 200 << 10, sharedDetail: true, enabled: true, globalKB: 64},
 		{name: "disabled-overrides-shared", status: 400, bodyBytes: 1372993, sharedDetail: true, globalKB: 6144},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,7 +120,7 @@ func TestDeployDetailBodyLimit(t *testing.T) {
 			if d.RequestBodyBytes != len(body) || d.RequestBodyTruncated != tc.requestCut || d.ResponseBodyTruncated != tc.responseCut {
 				t.Fatalf("wrong lengths/truncation: request bytes=%d cut=%t response cut=%t", d.RequestBodyBytes, d.RequestBodyTruncated, d.ResponseBodyTruncated)
 			}
-			limit := min(tc.globalKB<<10, capBytes)
+			limit := capBytes
 			if len(d.RequestBody) > limit+256 || len(d.ResponseBody) > limit+256 {
 				t.Fatal("detail exceeded the body cap including bounded truncation marker")
 			}
