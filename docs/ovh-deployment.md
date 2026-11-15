@@ -2938,3 +2938,42 @@ API：`GET|PUT /api/altapi/auto`、`GET /api/altapi/auto/status`、
 | 线上数据 | `status` 200 / 0.5ms；卡片应显示 **余额合计 $129.98 · 已读 13/13**、**候选 86 个 · Key 13 · 入池 13** |
 
 回退镜像：`account-pool-balancer:release-0dc31ba-20261115T173008Z`。
+
+## 当前部署：账号行长凭据折叠（2026-11-15 19:19 UTC，14b3063）
+
+用户反馈：altapi 的控制 Key 是 300+ 字符的 session cookie，明文铺开后一个账号
+的行高占到十条的视觉空间，账号列表没法看。
+
+### 改法
+
+`credentialHTML()` 按长度分流：
+
+| 长度 | 显示 |
+|---|---|
+| ≤48 字符（普通 sk- Key、代理地址） | 照旧明文 + 复制 |
+| >48 字符（altapi 控制 Key） | 首尾各 6 位 + `…`，`展开` 看全文，`复制` 始终复制完整值 |
+
+细节：
+
+- **完整值不写进 data 属性**，展开时从 `accountsCache` 按字段取——省 DOM 体积，
+  也避开 HTML 属性转义的边界问题
+- 展开是就地切换 `textContent`，不重绘整行，不会闪
+- CSS：折叠态 `white-space: nowrap`；展开态 `word-break: break-all` 折行，
+  都不横向撑破表格
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-14b3063-20261115T191926Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 前端新代码 | `app.js` 含 `cred-trunc`/`data-account-reveal`（4 处）、`app.css` 含对应规则 |
+| 折叠效果 | 309 字符 → 13 字符（`MTc5ND…xxxxxx`），行高约 10 行 → 1 行 |
+| 单测 | mistral_web_test 新增：长值不明文、有省略号、有展开与复制按钮、短值不折叠 |
+
+顺带把 `credentialHTML` 移到 `accountCredentialHTML` 与 `accountRow` 之间，
+让按区间截取源码的既有测试能同时拿到两个函数（否则 mistral_web_test 报
+`credentialHTML is not defined`）。
+
+回退镜像：`account-pool-balancer:release-a76832a-20261115T190633Z`。
