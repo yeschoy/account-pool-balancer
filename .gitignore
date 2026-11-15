@@ -76,3 +76,9 @@ pnpm-debug.log*
 # 运行时产物：卡台账含卡指纹，永不入库
 /tools/data/card_ledger.json
 /tools/__pycache__/
+
+# 50x registrar run artifacts (credentials)
+_runs/
+
+# built binary
+/x50reg

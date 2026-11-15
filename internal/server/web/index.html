@@ -9,6 +9,7 @@
 <script src="/assets/perch.js" defer></script>
 <script src="/assets/tokenharbor.js" defer></script>
 <script src="/assets/deploy.js" defer></script>
+<script src="/assets/x50.js" defer></script>
 </head>
 <body>
 <div id="auth" class="auth hidden">
@@ -46,6 +47,9 @@
       <div class="nav-sep hidden" data-pool-nav="deploy" hidden>Deploy</div>
       <a data-page="dreg" data-pool-nav="deploy" class="hidden" hidden>Deploy 注册机</a>
       <a data-page="dsettings" data-pool-nav="deploy" class="hidden" hidden>Deploy 注册设置</a>
+      <div class="nav-sep hidden" data-pool-nav="x50" hidden>50X AI</div>
+      <a data-page="x50reg" data-pool-nav="x50" class="hidden" hidden>50X 注册机</a>
+      <a data-page="x50settings" data-pool-nav="x50" class="hidden" hidden>50X 注册设置</a>
       <div class="nav-sep" data-pool-nav="tokenharbor" hidden>TokenHarbor</div>
       <a data-page="thoverview" data-pool-nav="tokenharbor" hidden>TokenHarbor 概览</a>
       <a data-page="thregister" data-pool-nav="tokenharbor" hidden>TokenHarbor 注册机</a>
@@ -69,6 +73,7 @@
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
+      <button class="pool-tab" data-pool="x50" role="tab">50X AI</button>
     </div>
     <section id="page-overview" class="page">
       <header class="page-head"><h1>概览</h1><div class="actions"><span class="muted" id="ov-updated"></span><button type="button" class="btn small" id="btn-reset-cache-rate">清空24h缓存命中率</button></div></header>
@@ -390,6 +395,130 @@
             <tbody></tbody>
           </table>
         </div>
+      </section>
+    </section>
+
+
+    <section id="page-x50reg" class="page hidden">
+      <header class="page-head">
+        <h1>50X AI 注册机</h1>
+        <div class="actions">
+          <button type="button" class="btn" id="x50-refresh">刷新</button>
+          <button type="button" class="btn" id="x50-export">导出已完成</button>
+          <button type="button" class="btn primary" id="x50-bulk-run">批量注册</button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <p class="muted small">ai.50x.energy 注册链路：<code>POST /api/auth/register</code>（仅 email + password）→ 收确认邮件 → <code>/api/auth/verify</code> → 建 Key → 读 welcome 额度。没有验证码和 consent 字段。已完成账号不会重复注册，避免同一账号生成第二个 Key；重试只针对失败/取消的账号，并沿用原绑定代理。</p>
+      </div>
+
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>导入账号</h2>
+          <form id="x50-form" autocomplete="off">
+            <label for="x50-accounts">iCloud 账号 + 接码地址（每行一个）</label>
+            <textarea id="x50-accounts" rows="8" spellcheck="false" placeholder="user1@icloud.com----https://icloud.mida.vip/messages/user1%40icloud.com?token=xxx&#10;user2@icloud.com----https://icloud.mida.vip/messages/user2%40icloud.com?token=yyy"></textarea>
+            <span class="hint">格式：<code>邮箱----接码地址</code>。接码地址是 iCloud HME 分享链接，必须带 <code>token=</code>，否则这一行会被跳过。</span>
+
+            <label for="x50-proxies">代理池（每行一个，留空直连）</label>
+            <textarea id="x50-proxies" rows="5" spellcheck="false" placeholder="socks5://user:pass@host:port&#10;http://user:pass@host:port"></textarea>
+            <span class="hint">按顺序轮询分配：一个账号绑定一个代理，代理可复用。绑定一旦写入账号行，重试沿用同一出口，不会静默换 IP。</span>
+
+            <div class="row-actions">
+              <button type="submit" class="btn primary" id="x50-submit">导入</button>
+              <button type="button" class="btn" id="x50-save-proxies">保存代理池</button>
+            </div>
+            <p id="x50-form-error" class="error" role="alert"></p>
+            <p id="x50-bulk-result" class="hint"></p>
+          </form>
+
+          <div class="mt">
+            <div class="muted small">池状态</div>
+            <div class="chips" id="x50-status"></div>
+          </div>
+        </section>
+
+        <section class="panel pc-registration-tasks">
+          <div class="head-row">
+            <h2>账号（<span id="x50-count">0</span>）</h2>
+            <span id="x50-poll-error" class="error" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>邮箱</th><th>状态</th><th>进度</th><th>代理</th><th>Key / 额度</th><th>说明</th><th>操作</th></tr></thead>
+              <tbody id="x50-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel mt">
+        <div class="head-row"><h2>运行日志</h2><span class="muted small">最近 400 条</span></div>
+        <div class="table-wrap mt">
+          <table class="table" id="x50-log-table">
+            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-x50settings" class="page hidden">
+      <header class="page-head"><h1>50X 注册设置</h1>
+        <div class="actions"><button type="button" class="btn primary" id="x50s-save">保存</button></div>
+      </header>
+      <section class="panel">
+        <h2>注册参数</h2>
+        <form id="x50s-form" class="form-grid" autocomplete="off">
+          <label for="x50s-concurrency">并发数（1–10）</label>
+          <input id="x50s-concurrency" type="number" min="1" max="10" step="1" value="2">
+          <span class="hint">实测单账号 13–20 秒；6 个账号 2 并发约 49 秒完成。</span>
+
+          <label for="x50s-mail-timeout">等确认邮件上限（秒）</label>
+          <input id="x50s-mail-timeout" type="number" min="30" step="10" value="240">
+          <span class="hint">实测邮件 3–7 秒到达；上游承诺链接 48 小时有效。</span>
+
+          <label for="x50s-mail-poll">收件箱轮询间隔（秒）</label>
+          <input id="x50s-mail-poll" type="number" min="1" max="60" step="1" value="3">
+
+          <label for="x50s-request-timeout">单请求超时（秒）</label>
+          <input id="x50s-request-timeout" type="number" min="5" step="5" value="30">
+
+          <label for="x50s-key-name">新建 API Key 名称</label>
+          <input id="x50s-key-name" value="registrar" autocomplete="off">
+
+          <label for="x50s-api-base">上游 API 根（留空用官方地址）</label>
+          <input id="x50s-api-base" placeholder="https://api.ai.50x.energy" autocomplete="off">
+
+          <label for="x50s-mail-base">接码服务根（留空用官方地址）</label>
+          <input id="x50s-mail-base" placeholder="https://icloud.mida.vip" autocomplete="off">
+          <span class="hint">两项只在联调/镜像环境使用；留空即默认官方端点。改错会导致全部注册在「检查注册开关」阶段失败。</span>
+
+          <label for="x50s-password-mode">密码策略</label>
+          <select id="x50s-password-mode">
+            <option value="random">随机生成（18 位，含符号）</option>
+            <option value="email">与邮箱相同（手工调试用）</option>
+          </select>
+
+          <label class="check"><input id="x50s-auto-bind" type="checkbox" checked>导入时自动按顺序绑定代理</label>
+          <span class="hint">关闭后新导入的账号不带代理，按当前出口直连。</span>
+
+          <label for="x50s-proxies">代理池（每行一个，顺序即轮询顺序）</label>
+          <textarea id="x50s-proxies" rows="8" spellcheck="false" placeholder="socks5://user:pass@host:port"></textarea>
+          <span class="hint">保存后只影响之后的绑定；已绑定账号保持原代理。界面只显示去掉凭据的 <code>scheme://host:port</code>。</span>
+
+          <p id="x50s-error" class="error" role="status"></p>
+        </form>
+      </section>
+      <section class="panel mt">
+        <h2>边界</h2>
+        <ul class="muted small">
+          <li>不求解验证码：上游注册接口当前没有挑战；若上游加上 Turnstile，本机不会自动通过，会在「提交注册」阶段报错。</li>
+          <li>邮箱确认必须真实收到邮件；接码地址失效时该行失败并可重试，不会伪造已验证状态。</li>
+          <li>API Key 明文只在创建时返回一次，已落盘；列表只显示 <code>sk-50x-</code> 前缀，需显式点击「复制 Key」才返回完整值。</li>
+          <li>注册赠送额度为上游 welcome credit（当前 $100，starter 档），不是本机推算，也不是可续余额。</li>
+        </ul>
       </section>
     </section>
 

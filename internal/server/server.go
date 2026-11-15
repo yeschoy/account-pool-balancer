@@ -28,6 +28,7 @@ import (
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/stats"
 	"account-pool-balancer/internal/thsignupstore"
+	"account-pool-balancer/internal/x50signupstore"
 )
 
 type metadata struct {
@@ -95,6 +96,14 @@ type Server struct {
 	// Deploy 注册机：复用 mistralMu 保护懒初始化，存储与并发独立
 	deployStoreRef *deploysignupstore.Store
 	deployMgrRef   *deployManager
+	// 50x AI 注册机：独立存储与并发预算，懒初始化。
+	// 后台注册必须活过发起它的 HTTP 请求，所以共享一个服务级根 context。
+	x50Mu       sync.Mutex
+	x50StoreRef *x50signupstore.Store
+	x50MgrRef   *x50Manager
+	x50RootMu   sync.Mutex
+	x50Root     context.Context
+	x50Cancel   context.CancelFunc
 	// Token Harbor: the registration machine's store and its concurrency
 	// budget (both created on first use).
 	thStoreMu sync.Mutex
@@ -427,6 +436,7 @@ func (s *Server) Run(ctx context.Context) {
 			}
 			s.stopPerch()
 			s.stopTokenHarbor()
+			s.stopX50()
 			s.logs.Close()
 			return
 		case <-counters.C:
@@ -518,6 +528,17 @@ func (s *Server) trackRequests(next http.Handler) http.Handler {
 		defer cancel()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// baseCtx returns the service-scoped context used by background workers. It is
+// cancelled at shutdown, never when the HTTP handler that queued work returns.
+func (s *Server) x50BaseCtx() context.Context {
+	s.x50RootMu.Lock()
+	defer s.x50RootMu.Unlock()
+	if s.x50Root == nil {
+		s.x50Root, s.x50Cancel = context.WithCancel(context.Background())
+	}
+	return s.x50Root
 }
 
 // stopTokenHarbor cancels and waits for background registrations, so nothing

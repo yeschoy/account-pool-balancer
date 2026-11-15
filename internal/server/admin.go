@@ -54,6 +54,8 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	index = bytes.ReplaceAll(index, []byte(`/assets/app.js"`), []byte(`/assets/app.js`+ver+`"`))
 	index = bytes.ReplaceAll(index, []byte(`/assets/perch.js"`), []byte(`/assets/perch.js`+ver+`"`))
 	index = bytes.ReplaceAll(index, []byte(`/assets/tokenharbor.js"`), []byte(`/assets/tokenharbor.js`+ver+`"`))
+	index = bytes.ReplaceAll(index, []byte(`/assets/deploy.js"`), []byte(`/assets/deploy.js`+ver+`"`))
+	index = bytes.ReplaceAll(index, []byte(`/assets/x50.js"`), []byte(`/assets/x50.js`+ver+`"`))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", csp)
@@ -115,6 +117,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	s.registerTokenHarbor(mux, a)
 	s.registerMistral(mux, a)
 	s.registerDeploy(mux, a)
+	s.registerX50(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {
