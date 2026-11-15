@@ -10,11 +10,11 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'perch', 'opencode-zen', 'opencode-go', 'x50', 'altapi'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'perch', 'opencode-zen', 'opencode-go', 'x50', 'telnyx', 'altapi'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI', altapi: 'ALTapi' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI', telnyx: 'Telnyx', altapi: 'ALTapi' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50', altapi: 'altapi' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50', telnyx: 'telnyx', altapi: 'altapi' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
@@ -27,6 +27,7 @@ const isModelStudio = () => pool === 'modelstudio';
 const isDeploy = () => pool === 'deploy';
 // 50X AI 目前只提供注册机；没有可调用的推理号池入口。
 const isX50 = () => pool === 'x50';
+const isTelnyx = () => pool === 'telnyx';
 // ALTapi.ai（TokenPower / new-api 定制分支）：注册机 + 号池管理（altapi.js）
 const isALTapi = () => pool === 'altapi';
 // ALTapi 有自己的推理号池（runtimeKey 可管理、账号可启停），一并纳入。
@@ -258,6 +259,16 @@ function showApp() {
   go(location.hash.slice(1) || 'overview');
 }
 
+// go() rewrites the hash on every navigation, so a bare listener would loop.
+// Only follow hash changes the user (or a deep link) made from outside.
+window.addEventListener('hashchange', () => {
+  if (!currentPage) return;
+  const want = location.hash.slice(1);
+  if (!want || want === currentPage) return;
+  if (!pages[want]) return;
+  go(want);
+});
+
 // ---- navigation ----
 // The Perch pool runs on sessions, not API keys, and has no routing rules of
 // its own; its pages live in perch.js. It still needs both console keys —
@@ -274,6 +285,8 @@ const MR_PAGES = ['mregister'];
 const DR_PAGES = ['dreg', 'dsettings'];
 // 50X AI 号池：注册机与注册设置（x50.js）
 const X50_PAGES = ['x50reg', 'x50settings'];
+// Telnyx 号池：注册机与注册设置（telnyx.js）
+const TELNYX_PAGES = ['telnyxreg', 'telnyxsettings'];
 // ALTapi 号池：通用管理页（概览/账号/密钥/路由/日志）+ 注册机与注册设置。
 // 和 Deploy 同构——ALTapi 有自己的推理号池，所以通用管理页全部适用。
 const ALTAPI_PAGES = [...PROXY_PAGES, 'altreg', 'altsettings'];
@@ -286,6 +299,7 @@ const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, 
   mregister: () => loadMistralRegistrations(),
   dreg: () => loadDeployRegistrations(), dsettings: () => loadDeploySettings(),
   x50reg: () => loadX50Registrations(), x50settings: () => loadX50Settings(),
+  telnyxreg: () => loadTelnyxRegistrations(), telnyxsettings: () => loadTelnyxSettings(),
   altoverview: () => loadALTStatus(), altreg: () => loadALTRegistrations(), altsettings: () => loadALTSettings(),
   // ALTapi 池走通用「概览」时渲染自己的号池统计（在 loadOverview 里分派）
   };
@@ -295,16 +309,20 @@ function go(page) {
   if (DR_PAGES.includes(page) && !isDeploy()) page = pool === 'perch' ? 'perch' : 'overview';
   if (DR_PAGES.includes(page) && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (X50_PAGES.includes(page) && !isX50()) page = pool === 'perch' ? 'perch' : 'overview';
+  if (TELNYX_PAGES.includes(page) && !isTelnyx()) page = pool === 'perch' ? 'perch' : 'overview';
   // 只有 altapi 专属页需要跨池拦截；通用页（accounts/keys/…）所有池都能用。
   if (ALTAPI_ONLY_PAGES.includes(page) && !isALTapi()) page = pool === 'perch' ? 'perch' : 'overview';
   if (isALTapi() && !ALTAPI_PAGES.includes(page)) page = 'altreg';
   if (ALTAPI_ONLY_PAGES.includes(page) && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
   if (isX50() && window.POOL_X50) window.POOL_X50.init();
+  if (isTelnyx() && !TELNYX_PAGES.includes(page)) page = 'telnyxreg';
+  if (TELNYX_PAGES.includes(page) && window.POOL_TELNYX) window.POOL_TELNYX.init();
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
   if (currentPage === 'mregister' && page !== currentPage) stopMistralPolling();
   if (currentPage === 'dreg' && page !== currentPage) stopDeployPolling();
   if (currentPage === 'x50reg' && page !== currentPage && typeof stopX50Polling === 'function') stopX50Polling();
+  if (currentPage === 'telnyxreg' && page !== currentPage && typeof stopTelnyxPolling === 'function') stopTelnyxPolling();
   if (currentPage === 'altreg' && page !== currentPage && typeof stopALTPolling === 'function') stopALTPolling();
   if (currentPage === 'altsettings' && page !== currentPage && typeof stopALTAutoPolling === 'function') stopALTAutoPolling();
   currentPage = page;
@@ -315,6 +333,7 @@ function go(page) {
   pages[page]().catch((e) => toast(e.message));
   if (page === 'dreg') startDeployPolling();
   if (page === 'x50reg') startX50Polling();
+  if (page === 'telnyxreg') startTelnyxPolling();
   if (page === 'altreg') startALTPolling();
   if (page === 'altsettings') startALTAutoPolling();
   if (page === 'overview' || page === 'accounts' || page === 'thoverview') {
@@ -332,8 +351,8 @@ function renderPoolTabs() {
     const page = a.dataset.page;
     // own = 只属于某个池的专属页（需要按池隐藏）；通用管理页永远可见，
     // 所以这里用 ALTAPI_ONLY_PAGES 而不是 ALTAPI_PAGES。
-    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page) || ALTAPI_ONLY_PAGES.includes(page);
-    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page)) || (isX50() && X50_PAGES.includes(page)) || (isALTapi() && ALTAPI_PAGES.includes(page));
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page) || TELNYX_PAGES.includes(page) || ALTAPI_ONLY_PAGES.includes(page);
+    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page)) || (isX50() && X50_PAGES.includes(page)) || (isTelnyx() && TELNYX_PAGES.includes(page)) || (isALTapi() && ALTAPI_PAGES.includes(page));
     a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
   });
@@ -355,6 +374,10 @@ function renderPoolTabs() {
   });
   $$('#nav [data-pool-nav="x50"]').forEach((el) => {
     el.classList.toggle('hidden', !isX50());
+    el.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="telnyx"]').forEach((el) => {
+    el.classList.toggle('hidden', !isTelnyx());
     el.removeAttribute('hidden');
   });
   $$('#nav [data-pool-nav="altapi"]').forEach((el) => {
@@ -399,14 +422,16 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   renderPoolTabs();
   if (pool === 'deploy' && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (pool === 'x50' && window.POOL_X50) window.POOL_X50.init();
+  if (pool === 'telnyx' && window.POOL_TELNYX) window.POOL_TELNYX.init();
   if (pool === 'altapi' && window.POOL_ALTAPI) {
     window.POOL_ALTAPI.init();
     // 预取号池状态，让「概览」页首屏就有余额卡片
     window.POOL_ALTAPI.altPrefetchStatus();
   }
   // switching pools lands on that pool's first page
-  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : pool === 'x50' ? [...PROXY_PAGES, ...X50_PAGES] : pool === 'altapi' ? ALTAPI_PAGES : PROXY_PAGES;
-  // 50X 与其他完整推理池一样保留通用管理与注册页面。
+  // Telnyx 目前只有注册机（没有推理号池），所以落地页只有那两个；
+  // 50X 已经是完整推理池，保留通用管理页。
+  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : pool === 'x50' ? [...PROXY_PAGES, ...X50_PAGES] : pool === 'telnyx' ? TELNYX_PAGES : pool === 'altapi' ? ALTAPI_PAGES : PROXY_PAGES;
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });

@@ -10,6 +10,7 @@
 <script src="/assets/tokenharbor.js" defer></script>
 <script src="/assets/deploy.js" defer></script>
 <script src="/assets/x50.js" defer></script>
+<script src="/assets/telnyx.js" defer></script>
 <script src="/assets/altapi.js" defer></script>
 </head>
 <body>
@@ -51,6 +52,9 @@
       <div class="nav-sep hidden" data-pool-nav="x50" hidden>50X AI</div>
       <a data-page="x50reg" data-pool-nav="x50" class="hidden" hidden>50X 注册机</a>
       <a data-page="x50settings" data-pool-nav="x50" class="hidden" hidden>50X 注册设置</a>
+      <div class="nav-sep hidden" data-pool-nav="telnyx" hidden>Telnyx</div>
+      <a data-page="telnyxreg" data-pool-nav="telnyx" class="hidden" hidden>Telnyx 注册机</a>
+      <a data-page="telnyxsettings" data-pool-nav="telnyx" class="hidden" hidden>Telnyx 注册设置</a>
       <div class="nav-sep hidden" data-pool-nav="altapi" hidden>ALTapi 注册</div>
       <a data-page="altreg" data-pool-nav="altapi" class="hidden" hidden>ALTapi 注册机</a>
       <a data-page="altsettings" data-pool-nav="altapi" class="hidden" hidden>ALTapi 注册设置</a>
@@ -78,6 +82,7 @@
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
       <button class="pool-tab" data-pool="x50" role="tab">50X AI</button>
+      <button class="pool-tab" data-pool="telnyx" role="tab">Telnyx</button>
       <button class="pool-tab" data-pool="altapi" role="tab">ALTapi</button>
     </div>
     <section id="page-overview" class="page">
@@ -552,6 +557,164 @@
           <li>邮箱确认必须真实收到邮件；接码地址失效时该行失败并可重试，不会伪造已验证状态。</li>
           <li>API Key 明文只在创建时返回一次，已落盘；列表只显示 <code>sk-50x-</code> 前缀，需显式点击「复制 Key」才返回完整值。</li>
           <li>注册赠送额度为上游 welcome credit（当前 $100，starter 档），不是本机推算，也不是可续余额。</li>
+        </ul>
+      </section>
+    </section>
+
+    <section id="page-telnyxreg" class="page hidden">
+      <header class="page-head">
+        <h1>Telnyx 注册机</h1>
+        <div class="actions">
+          <button type="button" class="btn" id="telnyx-refresh">刷新</button>
+          <button type="button" class="btn" id="telnyx-clear-finished">清理已完成</button>
+          <button type="button" class="btn" id="telnyx-export">导出已完成</button>
+          <button type="button" class="btn primary" id="telnyx-bulk-run">批量注册</button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <p class="muted small">telnyx.com 注册链路：<code>POST /api/validate-email</code> → Turnstile 打码 → <code>POST /v2/unified_signup</code> → 收一次性登录邮件 → <code>POST /v2/ai_dev_event_sessions</code> 换 Portal 会话 → <code>POST /v2/api_keys</code> → 读 promo 额度。已完成账号不会重复注册：单账号只允许 1 个 Key，重跑必然报 <code>10039</code>。</p>
+        <p id="telnyx-captcha-warn" class="error small" style="display:none">
+          还没配置打码令牌。<a href="#" data-page="telnyxsettings">去「Telnyx 注册设置」</a>填入 captcha.run 令牌，否则所有注册都会在第一步失败。
+        </p>
+      </div>
+
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>导入账号</h2>
+          <form id="telnyx-form" autocomplete="off">
+            <label for="telnyx-accounts">Outlook 账号（每行一个）</label>
+            <textarea id="telnyx-accounts" rows="9" spellcheck="false" placeholder="user@outlook.com----邮箱密码----9e5f94bc-xxxx-xxxx-xxxx-xxxxxxxxxxxx----M.C533_BAY.0.U.MsaArtifacts.-xxxx$$"></textarea>
+            <span class="hint">
+              两种格式都收：<code>邮箱----密码----clientId----refreshToken</code>（自动换取件地址），
+              或 <code>邮箱----密码----取件token</code>（<code>#s=</code> 后面那串）。
+              第三段若是 UUID 一律当 clientId：那是所有行共享的微软 OAuth client id，不是取件 token。
+            </span>
+            <span class="hint">
+              <strong>refreshToken 会轮换</strong>：每次解析后旧值立刻失效，新值已回写到该行，不要用导出文件里的旧值重试。
+            </span>
+
+            <label for="telnyx-proxies">代理池（每行一个，留空直连）</label>
+            <textarea id="telnyx-proxies" rows="5" spellcheck="false" placeholder="http://127.0.0.1:17230&#10;socks5://user:pass@host:port"></textarea>
+            <span class="hint">
+              按负载均衡分配：一个账号绑定一个代理并写入该行，重试沿用同一出口。
+              Portal 会话与出口 IP 绑定，中途换 IP 会让新鲜的邮件链接返回 401。
+            </span>
+
+            <div class="row-actions">
+              <button type="submit" class="btn primary" id="telnyx-submit">导入</button>
+              <button type="button" class="btn" id="telnyx-save-proxies">保存代理池</button>
+            </div>
+            <p id="telnyx-form-error" class="error" role="alert"></p>
+            <p id="telnyx-bulk-result" class="hint"></p>
+          </form>
+
+          <div class="mt">
+            <div class="muted small">池状态</div>
+            <div class="chips" id="telnyx-status"></div>
+          </div>
+        </section>
+
+        <section class="panel pc-registration-tasks">
+          <div class="head-row">
+            <h2>账号（<span id="telnyx-count">0</span>）</h2>
+            <span id="telnyx-poll-error" class="error" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>邮箱</th><th>状态</th><th>进度</th><th>邮箱凭据</th><th>代理</th><th>Key / 额度</th><th>说明</th><th>操作</th></tr></thead>
+              <tbody id="telnyx-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel mt">
+        <div class="head-row"><h2>运行日志</h2><span class="muted small">最近 400 条</span></div>
+        <div class="table-wrap mt">
+          <table class="table" id="telnyx-log-table">
+            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-telnyxsettings" class="page hidden">
+      <header class="page-head"><h1>Telnyx 注册设置</h1>
+        <div class="actions"><button type="button" class="btn primary" id="telnyxs-save">保存</button></div>
+      </header>
+      <section class="panel">
+        <h2>注册参数</h2>
+        <form id="telnyxs-form" class="form-grid" autocomplete="off">
+          <label for="telnyxs-concurrency">并发数（1–10，建议 ≤2）</label>
+          <input id="telnyxs-concurrency" type="number" min="1" max="10" step="1" value="2">
+          <span class="hint">实测单账号 30–53 秒。并发 ≥2 时打码平台在高负载下返回的 token 质量不稳，会被判 <code>your browser could not be authenticated</code>；已有换 token 重试兜底，但吞吐仍会下降。</span>
+
+          <label for="telnyxs-captcha-token">打码令牌（captcha.run）</label>
+          <input id="telnyxs-captcha-token" type="password" autocomplete="off" placeholder="captcha.run 的 API 令牌">
+          <span class="hint">已保存的令牌不回显；留空保存表示保持不变。实测 Turnstile 4–10 秒出 token，单价约 $0.0294。</span>
+
+          <label for="telnyxs-site-key">Turnstile siteKey</label>
+          <input id="telnyxs-site-key" value="0x4AAAAAABkzL3BycQIQz_Ti" autocomplete="off">
+          <span class="hint">取自 /sign-up 页 <code>.cf-turnstile</code> 的 <code>data-sitekey</code>。上游改版时需同步。</span>
+
+          <label for="telnyxs-action">Turnstile data-action</label>
+          <input id="telnyxs-action" value="signup" autocomplete="off">
+          <span class="hint">取自同一元素的 <code>data-action</code>。action 参与 token 签名，填错一定被拒（<code>your browser could not be authenticated</code>），这是最常见的一处失败。</span>
+
+          <label for="telnyxs-captcha-attempts">单账号最多换几次 token</label>
+          <input id="telnyxs-captcha-attempts" type="number" min="1" max="10" step="1" value="3">
+
+          <label for="telnyxs-mail-timeout">等登录邮件上限（秒）</label>
+          <input id="telnyxs-mail-timeout" type="number" min="30" step="10" value="240">
+          <span class="hint">邮件 token 是一次性且数小时内过期。窗口开太大只会让失败来得更晚，不会让链接复活。</span>
+
+          <label for="telnyxs-mail-poll">收件箱轮询间隔（秒）</label>
+          <input id="telnyxs-mail-poll" type="number" min="2" max="60" step="1" value="6">
+
+          <label for="telnyxs-request-timeout">单请求超时（秒）</label>
+          <input id="telnyxs-request-timeout" type="number" min="5" step="5" value="45">
+
+          <label for="telnyxs-key-tags">API Key tags</label>
+          <input id="telnyxs-key-tags" value="new" autocomplete="off">
+          <span class="hint">对应 <code>POST /v2/api_keys</code> 的 <code>tags</code>。官网 Portal 建 Key 时用的就是 <code>["new"]</code>。</span>
+
+          <label class="check"><input id="telnyxs-optin" type="checkbox" checked>勾选订阅产品更新（subscription_opt_in）</label>
+          <span class="hint">与真实浏览器抓包一致；关闭后该字段传 false。</span>
+
+          <label class="check"><input id="telnyxs-auto-bind" type="checkbox" checked>导入时自动绑定代理</label>
+          <span class="hint">关闭后新导入的账号不带代理，按当前出口直连。</span>
+
+          <label for="telnyxs-proxies">代理池（每行一个）</label>
+          <textarea id="telnyxs-proxies" rows="8" spellcheck="false" placeholder="http://127.0.0.1:17230"></textarea>
+          <span class="hint">留空保存表示沿用已保存的代理，避免误清空。</span>
+
+          <label for="telnyxs-site-origin">站点根（留空用官方地址）</label>
+          <input id="telnyxs-site-origin" placeholder="https://telnyx.com" autocomplete="off">
+
+          <label for="telnyxs-api-base">API 根（留空用官方地址）</label>
+          <input id="telnyxs-api-base" placeholder="https://api.telnyx.com" autocomplete="off">
+
+          <label for="telnyxs-portal-base">Portal 根（留空用官方地址）</label>
+          <input id="telnyxs-portal-base" placeholder="https://portal.telnyx.com" autocomplete="off">
+
+          <label for="telnyxs-mail-base">取件服务根（留空用官方地址）</label>
+          <input id="telnyxs-mail-base" placeholder="https://tool.yaoyiyaocoffee.cn" autocomplete="off">
+          <span class="hint">四项只在联调/镜像环境使用；留空即默认官方端点。</span>
+        </form>
+        <p id="telnyxs-error" class="error" role="alert"></p>
+      </section>
+
+      <section class="panel mt">
+        <h2>边界说明</h2>
+        <ul class="muted small">
+          <li>免费账号为 <code>pretrial</code> 等级，赠 <strong>$25 promo credit</strong>（30 天窗口），部分接口会报 <code>10038 Feature not permitted</code>（如 <code>/v2/organization</code>），属上游限制，不是本机推算。</li>
+          <li><strong>单账号只允许 1 个 API Key</strong>：超出报 <code>10039</code>。需要轮换时先在官网删旧 Key。</li>
+          <li>API Key 明文只在创建响应里出现一次，之后查询返回 <code>&lt;encrypted&gt;</code>；列表只显示 Key 前缀，需显式点击「复制 Key」才返回完整值。</li>
+          <li>邮件链接一次性且数小时内过期；窗口过期后该行只能重新注册，不能续跑。</li>
+          <li>每账号的 Portal 会话与其提交注册时的出口 IP 绑定；换 IP 会让新鲜链接返回 401。</li>
+          <li>turnstile 校验的是 sitekey + action 的组合，不校验 UA，所以纯 HTTP 客户端可行；这也是 action 必须配对的原因。</li>
         </ul>
       </section>
     </section>

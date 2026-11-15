@@ -137,6 +137,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	s.registerDeploy(mux, a)
 	s.registerALTAPI(mux, a)
 	s.registerX50(mux, a)
+	s.registerTelnyx(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {

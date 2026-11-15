@@ -28,6 +28,7 @@ import (
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
 	"account-pool-balancer/internal/stats"
+	"account-pool-balancer/internal/telnyxsignupstore"
 	"account-pool-balancer/internal/thsignupstore"
 	"account-pool-balancer/internal/x50signupstore"
 )
@@ -111,6 +112,15 @@ type Server struct {
 	x50RootMu   sync.Mutex
 	x50Root     context.Context
 	x50Cancel   context.CancelFunc
+	// Telnyx 注册机：独立存储与并发预算，懒初始化。
+	// 后台注册必须活过发起它的 HTTP 请求，所以共享一个服务级根 context。
+	telnyxMu        sync.Mutex
+	telnyxOnce      sync.Once
+	telnyxInitErr   error
+	telnyxStoreRef  *telnyxsignupstore.Store
+	telnyxMgrRef    *telnyxManager
+	telnyxCtx       context.Context
+	telnyxCtxCancel context.CancelFunc
 	// Token Harbor: the registration machine's store and its concurrency
 	// budget (both created on first use).
 	thStoreMu sync.Mutex
@@ -450,6 +460,7 @@ func (s *Server) Run(ctx context.Context) {
 			s.stopPerch()
 			s.stopTokenHarbor()
 			s.stopX50()
+			s.stopTelnyx() // cancels in-flight registrations and flushes the store
 			s.logs.Close()
 			return
 		case <-counters.C:
