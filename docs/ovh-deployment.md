@@ -2387,3 +2387,68 @@ Deploy 早修过同一个坑（`deploy_resume_test.go:353` 注释），语义照
 
 探测候选 5 条已在验收后删除，线上候选数据恢复原状（12 条）。
 回退镜像：`account-pool-balancer:release-12c92cc-20261115T110037Z`。
+
+## 当前部署：ALTapi 步骤节奏 + 注册后自动入池（2026-11-15 11:53–11:55 UTC，e899481）
+
+用户提两点：支持导入到号池；注册时注意核心步骤之间的频率，防止被识别是注册机。
+
+### 1. 核心步骤节奏（防注册机识别）
+
+站点 `turnstile_check=false`，风控只能靠行为与频率。原实现**只有账号之间的 30s 间隔**
+（`run_job` 的 `last_send` 逻辑），单个账号内部完全无停顿：
+
+```
+发码 → 收信 → 提交注册 → 登录 → 读 /api/user/self → 建 Key
+```
+
+后三步挤在几百毫秒内。人类做不出「提交注册后 80ms 就登录、再 50ms 读身份、再 50ms
+建 Token」这个时序，是最容易被打标的地方。
+
+新增 `pace()`：在核心步骤之间插入**范围随机**的停顿（随机而非固定，避免所有账号
+出现完全一致的时间特征）：
+
+| 常量 | 区间 | 用途 |
+|---|---|---|
+| `PACE_STEP` | 2.0–4.5s | 相邻核心步骤 |
+| `PACE_AFTER_REGISTER` | 3.0–6.0s | 注册成功 → 登录（用户会看结果页） |
+| `PACE_AFTER_LOGIN` | 1.5–3.0s | 登录 → 读身份（控制台要渲染） |
+
+插入点 5 处：收码→注册、注册→登录、登录→读身份、读身份→建 Key、已存在账号接管→登录。
+
+设置项 `pace_scale` 整体调节（1.0 默认 / 2.0 更稳 / 0 关闭），设置页可改，写进 job
+file 传给 Python。上限克制：单次注册本来 8–20 秒，多等 5–8 秒对吞吐影响有限。
+
+### 2. 注册后自动入池
+
+`import_to_pool` 原来只被塞进 Python job file，**Go 侧完全没有自动导入逻辑**：
+勾着「注册成功后自动建 Key 并入池」，注册完列表里还是「未导入」，得再点
+「全部导入号池」。
+
+现在 `handleEvent` 收到 `item_done` + `key_created` 时调 `autoImport()`，复用
+`importALTAPICandidate`（已有 `ImportedAcctID` 守卫，天然幂等）。失败只记日志，
+不影响注册结果。
+
+### 时间线
+
+| 阶段 | UTC |
+|---|---|
+| 构建 | 11:53:35.4 – 11:54:10.8（35.4s） |
+| 数据快照（37K） | 11:54:3x |
+| 切换 | 11:54:36.7 |
+| Docker healthy / 0 重启 | 11:55:07 |
+| 双入口 / 线上验收 | 11:55 |
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-e899481-20261115T115335Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 两者均 `{"ok":true}` |
+| 线上设置 | `pace_scale=1`、`import_to_pool=True`、`workers=2`、`min_interval_sec=31` |
+| 前端设置项 | `id="alts-pace"` 已在页面 |
+| 镜像内节奏点 | `grep -c "pace(PACE"` = 5 |
+| 号池导入实测（隔离环境） | key_created 候选 → `POST /{id}/import` → 账号 `alt-<id>` provider=altapi 入池，候选标记 `imported_account_id`；无 session 时余额为 `None`（显示未知，不写 0） |
+| 候选数据 | 12 条完整保留 |
+
+回退镜像：`account-pool-balancer:release-a684eaf-20261115T113938Z`。
