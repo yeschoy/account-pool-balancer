@@ -49,9 +49,12 @@ RUN wget -q -O /tmp/chrome.deb \
 # ---- Deploy 注册机（curl_cffi + Playwright）----
 # curl_cffi 提供 TLS/JA3 指纹伪装；playwright 用于 Stripe.js 生成绑卡 token。
 RUN python3 -m venv /opt/deploy-signup \
-    && /opt/deploy-signup/bin/pip install --no-cache-dir curl_cffi playwright
+    && /opt/deploy-signup/bin/pip install --no-cache-dir curl_cffi playwright websocket-client
 COPY tools/deploy_registrar.py tools/deploy_payment.py tools/fp_layer.py \
-     tools/proxy_bridge.py tools/gen_ua_pool.py /usr/local/share/deploy-signup/
+     tools/proxy_bridge.py tools/gen_ua_pool.py \
+     tools/deploy_quota.py tools/ads_transport.py tools/ads_remote.py \
+     tools/ads_provision.py tools/ads_tunnel_daemon.py \
+     /usr/local/share/deploy-signup/
 COPY tools/data/ua_pool.json /usr/local/share/deploy-signup/data/ua_pool.json
 RUN chmod -R a+rX /usr/local/share/deploy-signup
 
