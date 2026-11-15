@@ -38,6 +38,18 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：50X 注册机自动纠正代理协议（2026-11-15 21:33 UTC，ccf3cc2）
+
+- 用户明确要求提交推送并部署。根因来自一次 499 行全失败的排查：控制台把无 scheme 的代理行补成 `socks5://`，而 zooproxy 网关只支持 HTTP CONNECT，于是每行都以 `context deadline exceeded` / `server gave HTTP response to HTTPS client` / `context canceled` 失败，三条报错都不提代理，无法归因。
+- 修复（`ccf3cc2`）纯 Go，无数据格式变化：`DetectProxyScheme` 用 SOCKS5 问候判别（800ms，HTTP 代理在见请求行前不返回任何字节），必要时再用 CONNECT 确认；`CoerceProxyScheme` 仅在探测成功且与声明不符时改写 scheme，凭据与粘性 sid 原样保留，探测不通则不动；`ProxyPool.CoerceAll` 16 并发整池纠正；`startRows` 每次启动纠正一次并回写到已绑定行，日志打印「已自动纠正 N 个代理的协议」；`Registrar.New` 建 Transport 前兜底纠正。保存的 `Settings.ProxyPool` 不被改写。
+- 真实网关实测：`declared=socks5 → detected=http → 改写为 http://…`，凭据保留。全仓 build/vet 与 `x50reg`/`server` 测试在提交前全过；新增 7 个测试覆盖双假网关识别、正确项不改写、不可达项不改写、整池纠正与日志不泄露凭据。
+- 从干净 Git 归档构建（`git archive ccf3cc2`），沿线上 Compose 只覆盖 image，保留 UID1000:1000、挂载、端口、`ai-internal` 兼容别名、Healthcheck 与资源参数；未在旧工作树构建，未改线上配置或功能开关。
+- **21:30:27 UTC 验收通过**：运行镜像 `release-ccf3cc2-20261115T212813Z`，Docker healthy/0 重启；从 `new-api` 容器分别请求 `http://account-pool-balancer:8790/healthz` 与 `http://opendesign-balancer:8790/healthz` **均为 `{"ok":true}`**，宿主机 healthz 200；网络别名仍含 `account-pool-balancer` + `opendesign-balancer`；`/assets/x50.js` 200，`/api/x50/settings` 401（鉴权正常）。二进制符号确认含 `DetectProxyScheme`/`CoerceProxyScheme`/`(*ProxyPool).CoerceAll` 与日志串「已自动纠正 %d 个代理的协议（例 %s → %s）」。
+- 数据保留：499 条 x50 记录、500 条代理池设置、`deploy-signup.json`/`tokenharbor-signup.json`/`altapi-signup.json` 全部在位；data 目录属主与权限未变。
+- 时间（UTC）：构建 **21:28:50.154–21:28:57.417**（7.3s）；备份一致快照 **21:29:14.979–21:29:16.784**；切换 **21:29:55.742**、新容器启动完成；Docker healthy **21:30:27**。旧退出到新启动在秒级，非精确停机；构建与健康等待不计停机。
+- 镜像 `account-pool-balancer:release-ccf3cc2-20261115T212813Z`（ID `6d986599bf9f`）；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261115T212813Z-ccf3cc2`；备份 `/home/ubuntu/backups/account-pool-balancer/20261115T212813Z-x50-proxy-scheme-ccf3cc2`（data SHA256 `62f918a3644312c1eabf75b583757bc931fe0ca3971bcc14d31a82c3b37c3730`）；回退镜像 `account-pool-balancer:rollback-20261115T212813Z`（原 `release-0010c20-…`）保留。回退不自动恢复旧 data 覆盖上线后新写入。
+- **未处理的遗留**：本轮只修协议识别。代理 403 的根因是 zooproxy 网关的**来源 IP 白名单**（`msg: forbidden ip=… not supported`，无凭据请求同样 403 而非 407），属网关侧配置；「已存在账号改走登录建 Key」的补救路径与「代理失败熔断换绑」仍未实现。
+
 ## 当前部署：模型列表分层缓存（2026-11-15 18:32 UTC，eada1fe）
 
 - 用户明确授权直接推送部署；`eada1fe6b95c969bfebe950b5dd7a1b480b46979` 已推送 master，从干净 Git 归档构建。线上基线 `0dc31ba`，业务差异仅模型列表缓存/失效与对应测试；复用已通过的全仓 normal/race/vet/build，不重复测试、不建 Trellis 任务。
