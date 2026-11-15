@@ -158,6 +158,12 @@ func New(cfg Config) (*Registrar, error) {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	if cfg.ProxyURL != "" {
+		// A proxy list is usually pasted as host:port or with a guessed scheme;
+		// correct it to the protocol the gateway really answers before the first
+		// request, so a scheme mismatch cannot surface as an opaque timeout.
+		if fixed, changed := CoerceProxyScheme(cfg.ProxyURL); changed {
+			cfg.ProxyURL = fixed
+		}
 		pu, err := url.Parse(cfg.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy: %w", err)
