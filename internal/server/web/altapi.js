@@ -27,6 +27,35 @@ let altSettings = null;
 let altLogSeen = 0;
 // 选中的候选 id。批量按钮只作用于它；为空时按按钮各自的"全部"语义执行。
 const altSelected = new Set();
+// 候选筛选：pending（默认，隐藏已入池）/ imported / all。
+// 已入池的候选已经进了号池，混在待办列表里会让"还有多少要处理"看不出来。
+const ALT_TAB_KEY = 'odb-alt-tab';
+let altTab = ['pending', 'imported', 'all'].includes(localStorage.getItem(ALT_TAB_KEY))
+  ? localStorage.getItem(ALT_TAB_KEY) : 'pending';
+
+// 已入池：imported_account_id 非空。
+const altIsImported = (r) => !!r.imported_account_id;
+
+// altSwitchTab 切到指定标签页（点击与代码路径共用）。
+function altSwitchTab(next, { keepSelection = false } = {}) {
+  if (!['pending', 'imported', 'all'].includes(next) || next === altTab) return;
+  altTab = next;
+  localStorage.setItem(ALT_TAB_KEY, next);
+  document.querySelectorAll('.alt-tab').forEach((b) => {
+    const on = b.dataset.altTab === next;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (!keepSelection) altSelected.clear();
+  renderALTRows(altRows);
+}
+
+// altVisibleRows 按当前标签页过滤候选。
+function altVisibleRows(rows) {
+  if (altTab === 'imported') return rows.filter(altIsImported);
+  if (altTab === 'all') return rows;
+  return rows.filter((r) => !altIsImported(r));
+}
 
 // ---------------------------------------------------------------- helpers
 
@@ -209,13 +238,28 @@ async function loadALTRegistrations() {
   }
 }
 
-function renderALTRows(rows) {
+function renderALTRows(allRows) {
+  const rows = altVisibleRows(allRows);
   const body = document.getElementById('alt-rows');
   const cnt = document.getElementById('alt-count');
   if (cnt) cnt.textContent = String(rows.length);
+
+  // 标签页计数：待处理 / 已入池 / 全部
+  const importedN = allRows.filter(altIsImported).length;
+  const setN = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
+  setN('alt-tab-pending', allRows.length - importedN);
+  setN('alt-tab-imported', importedN);
+  setN('alt-tab-all', allRows.length);
+
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="8" class="muted">还没有候选。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。</td></tr>';
+    const hint = altTab === 'imported'
+      ? '还没有候选入池。在「待处理」里注册成功并导入号池后，会显示在这里。'
+      : altTab === 'pending'
+        ? '没有待处理的候选。切到「已入池」看看已经进号池的。'
+        : '还没有候选。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。';
+    body.innerHTML = `<tr><td colspan="9" class="muted">${hint}</td></tr>`;
+    syncALTSelHint();
     return;
   }
   body.innerHTML = rows.map((r) => {
@@ -262,7 +306,7 @@ function syncALTSelHint() {
     el.textContent = altSelected.size ? `已选 ${altSelected.size} 个` : '';
   }
   if (all) {
-    const ids = altRows.map((r) => r.id);
+    const ids = altVisibleRows(altRows).map((r) => r.id);
     all.checked = ids.length > 0 && ids.every((id) => altSelected.has(id));
     all.indeterminate = altSelected.size > 0 && !all.checked;
   }
@@ -429,8 +473,14 @@ function initALTPage() {
   document.getElementById('alt-check-all')?.addEventListener('change', (ev) => {
     const on = ev.currentTarget.checked;
     altSelected.clear();
-    if (on) altRows.forEach((r) => altSelected.add(r.id));
+    // 只选当前标签页可见的：在「待处理」下全选不该把已入池的也勾上。
+    if (on) altVisibleRows(altRows).forEach((r) => altSelected.add(r.id));
     renderALTRows(altRows);
+  });
+
+  // 候选筛选标签页
+  document.querySelectorAll('.alt-tab').forEach((btn) => {
+    btn.addEventListener('click', () => altSwitchTab(btn.dataset.altTab));
   });
 
   // 行内勾选（事件委托，渲染后不用重绑）
@@ -465,6 +515,13 @@ function initALTPage() {
     } finally {
       btn.disabled = false;
     }
+  });
+
+  // 恢复上次的筛选标签（刷新页面后不跳回「待处理」）
+  document.querySelectorAll('.alt-tab').forEach((b) => {
+    const on = b.dataset.altTab === altTab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
 
   // 概览刷新
@@ -567,6 +624,8 @@ function initALTPage() {
         + (failed.length ? `，失败 ${failed.length} 个：${failed[0]}` : ''));
       altSelected.clear();
       await loadALTRegistrations();
+      // 导入成功就直接跳到「已入池」，免得用户以为没生效。
+      if ((r.imported || 0) > 0) altSwitchTab('imported');
     } catch (e) {
       toast(e.message);
     } finally {

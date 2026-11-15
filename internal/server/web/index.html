@@ -618,6 +618,13 @@
         <section class="panel pc-registration-tasks">
           <div class="head-row">
             <h2>候选（<span id="alt-count">0</span>）</h2>
+            <!-- 已入池的候选默认不展示：它们已经进了号池，再混在待办列表里
+                 会让「还有多少要处理」看不出来。用标签页切换查看。 -->
+            <div class="alt-tabs" role="tablist" aria-label="候选筛选">
+              <button type="button" class="alt-tab active" data-alt-tab="pending" role="tab" aria-selected="true">待处理 <span id="alt-tab-pending">0</span></button>
+              <button type="button" class="alt-tab" data-alt-tab="imported" role="tab" aria-selected="false">已入池 <span id="alt-tab-imported">0</span></button>
+              <button type="button" class="alt-tab" data-alt-tab="all" role="tab" aria-selected="false">全部 <span id="alt-tab-all">0</span></button>
+            </div>
             <span id="alt-poll-error" class="error" role="status"></span>
           </div>
           <div class="table-wrap">

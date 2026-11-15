@@ -93,7 +93,9 @@ const unescaped = [...altSource.matchAll(/<td[^>]*>\$\{([^}]*)\}<\/td>/g)]
   .filter((expr) => !expr.includes('altEsc') && !expr.includes('altMoney') && !expr.includes('altKeyCell') && !expr.includes('altProxyCell')
     && !expr.includes('altBadge') && !expr.includes('actions') && !expr.includes('altCandidateBalance')
     // 下面三类不来自上游文本：时间格式化结果、本地拼好的片段、布尔开关渲染的常量标记。
-    && !expr.includes('toLocaleTimeString()') && !expr.includes('note') && !expr.includes('r.enabled'));
+    && !expr.includes('toLocaleTimeString()') && !expr.includes('note') && !expr.includes('r.enabled')
+    // hint 是本地写死的空态提示文案，不含上游内容
+    && !expr.includes('hint'));
 assert.deepEqual(unescaped, [], '存在未转义的单元格插值');
 
 // 9.5) 日志必须是右下角常驻浮窗（与 Deploy 同构），不能是常驻正文面板。
@@ -162,6 +164,25 @@ assert.ok(appSource.includes("classList.toggle('hidden', !isALTapi())"), '按钮
 assert.match(appSource, /\/api\/altapi\/return-to-registrar/);
 // altapi 也必须有勾选框与批量栏，否则选不中账号就退不回
 assert.match(appSource, /const managedKeyPool = \(\) =>[^;]*isALTapi\(\)/);
+
+// 9.11) 候选筛选标签页：默认隐藏已入池
+for (const t of ['pending', 'imported', 'all']) {
+  assert.ok(html.includes(`data-alt-tab="${t}"`), '缺少标签 ' + t);
+}
+assert.ok(/data-alt-tab="pending"[^>]*class="alt-tab active"/.test(html) || html.includes('class="alt-tab active" data-alt-tab="pending"'),
+  '默认激活的应是「待处理」');
+assert.ok(html.includes('data-alt-tab="imported" role="tab" aria-selected="false">已入池'), '缺少「已入池」标签');
+assert.match(altSource, /const altIsImported = \(r\) => !!r\.imported_account_id/);
+assert.match(altSource, /if \(altTab === 'imported'\) return rows\.filter\(altIsImported\)/);
+assert.match(altSource, /if \(altTab === 'all'\) return rows;/);
+assert.match(altSource, /return rows\.filter\(\(r\) => !altIsImported\(r\)\)/, 'pending 默认要排除已入池');
+// 计数与全选都要基于可见行
+assert.match(altSource, /setN\('alt-tab-imported', importedN\)/);
+assert.match(altSource, /altVisibleRows\(altRows\)\.forEach/);
+assert.ok(altSource.includes("altSwitchTab('imported')"), '导入成功后应跳到已入池');
+// CSS 有标签样式
+const css2 = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
+assert.ok(css2.includes('.alt-tab.active'), 'CSS 缺少激活态样式');
 
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
