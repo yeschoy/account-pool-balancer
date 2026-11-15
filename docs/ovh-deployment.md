@@ -2610,3 +2610,54 @@ items 变少，分不清跳过还是失败。现在返回 `skipped` 计数。
 | 双入口验收 | 12:54 |
 
 回退镜像：`account-pool-balancer:release-4363dcc-20261115T121941Z`。
+
+## 当前部署：批量按钮选中项 + 分配代理（2026-11-15 13:02–13:03 UTC，7e4252f）
+
+用户要求：① 顶部按钮支持针对选中项操作（刷新额度/导入号池/注册）；
+② 增加批量给「未注册且直连」的账号分配代理池。
+
+### 1. 按钮支持选中
+
+候选表加勾选列 + 表头全选，顶部显示「已选 N 个」。三个按钮改为：**有勾选
+只处理勾选的，没勾选走原来的「全部」语义**。
+
+后端接口同步支持 `ids`：
+
+| 接口 | 参数 |
+|---|---|
+| `POST /candidates/import-all` | `{ids?}` |
+| `POST /quota-refresh` | `{ids?}` |
+| `POST /candidates/bulk-register` | `{ids?, all?}`（原本就支持） |
+
+### 2. 新增「分配代理」
+
+`POST /api/altapi/candidates/assign-proxy` `{ids?}`
+
+解决场景：候选导入后仍是直连（导入时池子还没配好，或池子是后来加的）。
+
+规则：
+
+- 只处理 **queued / failed / cancelled** 且 `proxy_url` 为空 的候选
+- **已注册/已登录/已建 Key 一律跳过**——出口已定，换 IP 会让上游看到
+  「同一账号换地区登录」，风险比保持直连更高；这类必须走单条 PATCH 显式改
+- 轮询游标接着现有绑定往下走（`countAltapiProxyUse`），避免每次从池首开始
+  导致前几个代理承担的候选数明显多于后面
+- 空池返回 400 明确报错，不静默
+
+响应 `{assigned, kept, skipped, poolSize}`，并写日志。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-7e4252f-20261115T130242Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 页面元素 | `alt-check-all` / `alt-assign-proxy` / `alt-sel-hint` / `<th class="col-check">` 全部在 |
+| 前端资源 | `altapi.js?v=f68928f9d1` |
+| 线上接口 | `assign-proxy` 返回 200 |
+| 线上数据 | 代理 4 个，候选 12 条其中 **2 条直连**（可用新按钮直接补） |
+| 隔离实测 | 4 条（2 直连 + 2 已绑）→ `assigned=2, kept=2`；清 1 条后带 ids → `assigned=1` |
+| ids 精确性 | `quota-refresh` 带 1 个 id → items=0/skipped=1；不带 → skipped=4 |
+
+回退镜像：`account-pool-balancer:release-3b13bfe-20261115T125256Z`。
