@@ -9,6 +9,7 @@
 7. [x] 本地真实浏览器一次性mock全链路核对API/磁盘。
 8. [x] gofmt; go test ./...; go test -race ./...; go vet ./...; go build ./cmd/odb; 15 Node tests及check。
 9. [x] trellis-check、文档/日志；本分支提交（不部署推送），hash见git log。
-10. [ ] 本轮真实鉴权billing/生产推理、部署与线上验收：无凭据/未授权，不冒称完成。
+10. [x] 后续用户授权合入远端master并推送2986f74、OVH部署健康/双内网/公网资源与数据保留验收；原master脏工作区未强行更新。
+11. [ ] 本轮真实50X鉴权billing/生产推理业务验收：未执行，不冒称完成。
 
 状态 in_progress；用户已明确授权直接实施，无流程许可阻塞。单人实现，不启动agent。

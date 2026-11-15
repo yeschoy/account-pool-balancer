@@ -50,7 +50,28 @@
 - 镜像 `account-pool-balancer:release-ccf3cc2-20261115T212813Z`（ID `6d986599bf9f`）；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261115T212813Z-ccf3cc2`；备份 `/home/ubuntu/backups/account-pool-balancer/20261115T212813Z-x50-proxy-scheme-ccf3cc2`（data SHA256 `62f918a3644312c1eabf75b583757bc931fe0ca3971bcc14d31a82c3b37c3730`）；回退镜像 `account-pool-balancer:rollback-20261115T212813Z`（原 `release-0010c20-…`）保留。回退不自动恢复旧 data 覆盖上线后新写入。
 - **未处理的遗留**：本轮只修协议识别。代理 403 的根因是 zooproxy 网关的**来源 IP 白名单**（`msg: forbidden ip=… not supported`，无凭据请求同样 403 而非 407），属网关侧配置；「已存在账号改走登录建 Key」的补救路径与「代理失败熔断换绑」仍未实现。
 
-## 当前部署：模型列表分层缓存（2026-11-15 18:32 UTC，eada1fe）
+## 当前部署：50X 独立推理号池（2026-11-15 22:05 UTC，2986f74）
+
+- 用户明确授权合入 master、提交推送并部署。业务提交 `cd0a57c` 在独立 worktree 合入最新 `origin/master=24c92de`，生成合并提交 **`2986f7424a65ba59e41326990131ce8f5263ed7b`** 并快进推送远端 master；保留 master 新近的50X代理协议纠正和ALTapi修复。原master工作区有另一项Telnyx未提交修改，未stash/checkout/reset/覆盖或带入它们，原工作区本地分支暂不强行快进。
+- 合并结果重新通过全仓 `go test ./...`、`go test -race ./...`、`go vet ./...`、构建及15个Node套件。部署不新建Trellis任务，复用既有构建/备份/Compose切换引擎，从干净Git归档核验787个源码文件；旧远端工作树未用于构建。
+- 预检旧版2356115 healthy/零重启，双NewAPI入口正常、UID1000:1000、Healthcheck/兼容别名/环境匹配、余量318GiB。发现ALTapi自然补号worker运行，构建就绪后确认worker已空闲再切换，没有取消候选或修改自动补号配置。
+- 新镜像以线上UID1000:1000、network=none、只读原数据 + tmpfs副本实际启动/health/干净退出兼容预检通过。新镜像就绪后停止旧进程，完整一致数据备份经gzip/SHA256校验；沿线上Compose只覆盖image，未覆盖在线配置或启用新功能。
+- **22:05:43.459 UTC 本地验收通过并立即反馈**：运行目标revision、Docker healthy/零重启，NewAPI分别到 `http://account-pool-balancer:8790/healthz` 与 `http://opendesign-balancer:8790/healthz` 成功，7个本机静态资源hash匹配。256账号、186条TH核心注册、配置完整字节/routingSecret、X50/Deploy/Mistral注册文件和原隔离及全部运行参数保持；预检255→切换256账号来自切换前自然ALTapi补号，未人为导入或改代理。
+- **22:07:57.340 UTC 公网验收登记**：真实未登录浏览器登录页可见、healthz200、7个带 `?v=406a7d29ec` 的资源状态200且SHA256匹配提交；仍healthy0重启、无OOM。未登录生产执行50X入池/代理重置，未发真实50X注册、billing或付费推理；这些业务路径本轮仍以本地mock验收和历史证据区分，部署入口通过不代表真实上游授权已复验。
+
+| 阶段 | UTC |
+|---|---|
+| 构建 | 22:05:01.818–22:05:08.994（约7.18秒） |
+| 断网同UID预检通过 | 22:05:10.291 |
+| 旧退出 / 备份开始 | 22:05:10.467 / 22:05:10.757 |
+| 完整备份完成 / 切换请求 | 22:05:12.639 / 22:05:12.639 |
+| 新启动 / 首HTTP | 22:05:12.884 / 22:05:14.020 |
+| Docker healthy / 双内网 | 22:05:43.266 / 22:05:43.393 |
+| 公网核验登记 | 22:07:57.340 |
+
+旧退出至首HTTP观测约3.55秒，非精确停机；构建和健康等待不计停机。镜像 `account-pool-balancer:release-2986f74-20261115T220442Z`；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261115T220442Z-2986f74`；完整备份 `/home/ubuntu/backups/account-pool-balancer/20261115T220442Z-x50-pool-2986f74`（data SHA256 `baf958cb0b4f3bddbcc02656ea36b176996e48df0aa2ab7402a54d1127e7238b`）；回退镜像 `account-pool-balancer:rollback-20261115T220442Z` 保留，回退不自动恢复旧data覆盖新写入。停止的断网预检容器 `account-pool-balancer-check-x50-20261115t220442z` 无持久tmpfs凭据；本地 `.tmp/x50-deploy/` 日志/浏览器回执已登记，清理需用户同意。后续仅补记录，不重新部署。
+
+## 历史部署：模型列表分层缓存（2026-11-15 18:32 UTC，eada1fe）
 
 - 用户明确授权直接推送部署；`eada1fe6b95c969bfebe950b5dd7a1b480b46979` 已推送 master，从干净 Git 归档构建。线上基线 `0dc31ba`，业务差异仅模型列表缓存/失效与对应测试；复用已通过的全仓 normal/race/vet/build，不重复测试、不建 Trellis 任务。
 - 复用既有 rollout 引擎，沿线上 Compose 只覆盖 image，保留 UID1000:1000、环境、挂载、端口、网络兼容别名、Healthcheck 和原资源参数；未在旧工作树构建、未更改线上配置或功能开关。无持久化格式变化，不额外复制凭据做断网预检。

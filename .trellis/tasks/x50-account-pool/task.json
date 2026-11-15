@@ -13,6 +13,6 @@
   "branch": "x50-account-pool",
   "base_branch": "master",
   "worktree_path": "/Users/lyh_god/orca/workspaces/account-pool-balancer/x50-account-pool",
-  "notes": "四项本地实现与本地验收完成。当前公开协议文档已核查，billing鉴权与真实推理仅有历史证据；本轮未用真实凭据产生费用。完整provider-onboarding线上实测未全部完成，保留in_progress不归档。用户明确禁止委派，单人执行。未推送、未部署、未合并。公共Trellis只读，未修改共享任务指针。",
-  "meta": {"codeStatus":"implemented", "localValidation":"passed", "realUpstream":"not-tested-this-run", "deployment":"not-authorized"}
+  "notes": "四项本地实现与本地验收完成。当前公开协议文档已核查，billing鉴权与真实推理仅有历史证据；本轮未用真实凭据产生费用。完整provider-onboarding线上实测未全部完成，保留in_progress不归档。用户明确禁止委派，单人执行。后续用户授权后已合入并推送远端master（2986f74）、部署OVH，健康/双NewAPI入口/公网资源/数据保留验收通过；本轮真实50X上游业务仍未复验。原master工作区Telnyx脏改动未触碰。公共Trellis只读，未修改共享任务指针。",
+  "meta": {"codeStatus":"implemented", "localValidation":"passed", "realUpstream":"not-tested-this-run", "deployment":"deployed-2986f74-entry-accepted"}
 }

@@ -12,3 +12,10 @@
 - Trellis-check内联自审，无委派。复查发现错误规则refresh在关闭周期时应仍能生效，50X改为RefreshSession强制调度；保持别池语义。
 - 只读核对原工作区时它已由其他操作者推进至24c92de且干净；本任务未写入/checkout/reset原工作区，不将其当前改动带入本分支。
 - 临时文件/进程均登记，停止自建服务与mock但未经用户同意不删除产物。Trellis记录永久保留。
+
+## 后续授权合并部署（UTC 2026-11-15 22:05，本地2026-11-16）
+- 用户要求合入master、提交推送并部署。master=24c92de，原工作区出现Telnyx未提交修改，未stash/重置/覆盖；在当前独立worktree合入origin/master无冲突，保留50X代理协议纠正与ALTapi修复。
+- 合并提交2986f74再次完整normal/race/vet/build与15Node通过，快进推送origin/master（不强推）；原master工作区本地指针不强行更新以保护脏修改。
+- 复用已有rollout引擎，从干净提交归档787文件核验；7.18秒构建；同UID network-none tmpfs真实兼容预检通过；等待自然ALTapi worker空闲再切换，未取消任务/改自动配置。
+- 完整一致备份/gzip/SHA256通过，沿线上Compose只覆盖image，保留256账号/注册数据/配置/routingSecret/旧隔离/运行参数/Healthcheck/兼容别名。双NewAPI入口通过，healthy零重启22:05:43立即反馈。
+- 真实未登录公网浏览器登录页/healthz/7个版本化资源200且hash逐项匹配，22:07:57登记。一次串行抓取超时只读检查后改有界并行fetch完成，不改WAF、不重启容器。未执行生产50X入池/代理重置或付费推理。正式release/备份/rollback镜像保留，临时产物登记未经同意不删除。

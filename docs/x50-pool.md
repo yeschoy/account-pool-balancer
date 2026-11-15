@@ -45,4 +45,4 @@
 - 当前公开文档浏览器核查：`https://ai.50x.energy/docs/quickstart`、`/docs/api-reference`、`/docs/balance-usage`、`/docs/pricing-credits`。确认模型精确大小写、Chat/SSE/tools/models、共享账号余额和限流；文档当前明确**新账号无免费额度**，公开页面价格需登录，不能沿用历史$100作为保证。
 - 历史带凭据证据：`docs/x50reg.md` 的 Token billing 与6次真实Chat记录。本轮未重做真实注册/鉴权billing/生产推理，不把历史或mock当成当前实测。
 - 后端/页面/保存重载：本地mock与一次性数据已覆盖，详见 `.trellis/tasks/x50-account-pool/validation.md`。
-- 提交、部署、线上验收分别报告；没有部署授权，不部署、不推送、不自动合并。
+- 后续用户授权合入master、推送、部署：业务cd0a57c合入最新master生成2986f74，已推送远端master并上线OVH，健康/双NewAPI入口/公网资源/数据保留验收通过（见部署文档）。真实50X上游鉴权/付费推理仍未在本轮复验，不把入口验收当上游授权证明。
