@@ -428,6 +428,9 @@ func (s *Server) apiALTAPICandidateAdd(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Lines string `json:"lines"`
+		// Proxies 可选：按导入成功的顺序轮转绑定，一个候选一个出口。
+		// 空值表示直连，不清空候选上已有的代理（PATCH 才是改绑入口）。
+		Proxies []string `json:"proxies"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -437,6 +440,12 @@ func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	var pool []string
+	for _, p := range in.Proxies {
+		if p = strings.TrimSpace(p); p != "" {
+			pool = append(pool, p)
+		}
 	}
 	added, skipped := 0, []string{}
 	for _, ln := range strings.Split(in.Lines, "\n") {
@@ -456,9 +465,13 @@ func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) 
 			skipped = append(skipped, ln)
 			continue
 		}
-		if _, err := m.store.Add(altapisignupstore.Candidate{
+		cand := altapisignupstore.Candidate{
 			Email: email, MailboxURL: box, Status: altapisignupstore.Queued,
-		}); err != nil {
+		}
+		if len(pool) > 0 {
+			cand.ProxyURL = pool[added%len(pool)]
+		}
+		if _, err := m.store.Add(cand); err != nil {
 			skipped = append(skipped, email)
 			continue
 		}

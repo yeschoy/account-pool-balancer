@@ -10,11 +10,11 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'perch', 'opencode-zen', 'opencode-go', 'x50'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'perch', 'opencode-zen', 'opencode-go', 'x50', 'altapi'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI' };
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI', altapi: 'ALTapi' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50', altapi: 'altapi' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
@@ -27,6 +27,8 @@ const isModelStudio = () => pool === 'modelstudio';
 const isDeploy = () => pool === 'deploy';
 // 50X AI 目前只提供注册机；没有可调用的推理号池入口。
 const isX50 = () => pool === 'x50';
+// ALTapi.ai（TokenPower / new-api 定制分支）：注册机 + 号池管理（altapi.js）
+const isALTapi = () => pool === 'altapi';
 const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio() || isDeploy();
 const keyNeedsProvider = () => isOllama() || managedKeyPool();
 const RT_HINT = { opendesign: 'sk-amr-…', river: 'rv_…', ollama: 'ollama.com/settings/keys 签发的 key 原样粘贴',
@@ -269,19 +271,25 @@ const MR_PAGES = ['mregister'];
 const DR_PAGES = ['dreg', 'dsettings'];
 // 50X AI 号池：注册机与注册设置（x50.js）
 const X50_PAGES = ['x50reg', 'x50settings'];
+// ALTapi 号池：概览、注册机与注册设置（altapi.js）
+const ALTAPI_PAGES = ['altoverview', 'altreg', 'altsettings'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
   perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
   thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings(),
   mregister: () => loadMistralRegistrations(),
   dreg: () => loadDeployRegistrations(), dsettings: () => loadDeploySettings(),
-  x50reg: () => loadX50Registrations(), x50settings: () => loadX50Settings() };
+  x50reg: () => loadX50Registrations(), x50settings: () => loadX50Settings(),
+  altoverview: () => loadALTStatus(), altreg: () => loadALTRegistrations(), altsettings: () => loadALTSettings() };
 function go(page) {
   if (!pages[page]) page = 'overview';
   if (MR_PAGES.includes(page) && !isMistral()) page = pool === 'perch' ? 'perch' : 'overview';
   if (DR_PAGES.includes(page) && !isDeploy()) page = pool === 'perch' ? 'perch' : 'overview';
   if (DR_PAGES.includes(page) && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (X50_PAGES.includes(page) && !isX50()) page = pool === 'perch' ? 'perch' : 'overview';
+  if (ALTAPI_PAGES.includes(page) && !isALTapi()) page = pool === 'perch' ? 'perch' : 'overview';
+  if (isALTapi() && !ALTAPI_PAGES.includes(page)) page = 'altreg';
+  if (ALTAPI_PAGES.includes(page) && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
   if (isX50() && !X50_PAGES.includes(page)) page = 'x50reg';
   if (X50_PAGES.includes(page) && window.POOL_X50) window.POOL_X50.init();
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
@@ -289,6 +297,7 @@ function go(page) {
   if (currentPage === 'mregister' && page !== currentPage) stopMistralPolling();
   if (currentPage === 'dreg' && page !== currentPage) stopDeployPolling();
   if (currentPage === 'x50reg' && page !== currentPage && typeof stopX50Polling === 'function') stopX50Polling();
+  if (currentPage === 'altreg' && page !== currentPage && typeof stopALTPolling === 'function') stopALTPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
@@ -297,6 +306,7 @@ function go(page) {
   pages[page]().catch((e) => toast(e.message));
   if (page === 'dreg') startDeployPolling();
   if (page === 'x50reg') startX50Polling();
+  if (page === 'altreg') startALTPolling();
   if (page === 'overview' || page === 'accounts' || page === 'thoverview') {
     refreshTimer = setInterval(() => { if (!document.hidden && !$('#modal').open) pages[currentPage]().catch(() => {}); }, 15000);
   }
@@ -310,8 +320,8 @@ function renderPoolTabs() {
   // actually toggles visibility.
   $$('#nav a[data-page]').forEach((a) => {
     const page = a.dataset.page;
-    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page);
-    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page)) || (isX50() && X50_PAGES.includes(page));
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page) || ALTAPI_PAGES.includes(page);
+    const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page)) || (isX50() && X50_PAGES.includes(page)) || (isALTapi() && ALTAPI_PAGES.includes(page));
     a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
   });
@@ -333,6 +343,10 @@ function renderPoolTabs() {
   });
   $$('#nav [data-pool-nav="x50"]').forEach((el) => {
     el.classList.toggle('hidden', !isX50());
+    el.removeAttribute('hidden');
+  });
+  $$('#nav [data-pool-nav="altapi"]').forEach((el) => {
+    el.classList.toggle('hidden', !isALTapi());
     el.removeAttribute('hidden');
   });
   document.title = POOL_LABEL[pool] + ' 账号池';
@@ -369,8 +383,9 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   renderPoolTabs();
   if (pool === 'deploy' && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (pool === 'x50' && window.POOL_X50) window.POOL_X50.init();
+  if (pool === 'altapi' && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
   // switching pools lands on that pool's first page
-  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : pool === 'x50' ? X50_PAGES : PROXY_PAGES;
+  const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : pool === 'x50' ? X50_PAGES : pool === 'altapi' ? ALTAPI_PAGES : PROXY_PAGES;
   // 50X 目前只有注册机，概览页对它没有意义，所以切换后直接进注册机。
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });

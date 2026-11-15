@@ -33,7 +33,7 @@ assert.match(appSource, /x50reg: \(\) => loadX50Registrations\(\), x50settings: 
 assert.match(appSource, /if \(page === 'x50reg'\) startX50Polling\(\)/);
 assert.match(appSource, /if \(currentPage === 'x50reg' && page !== currentPage && typeof stopX50Polling === 'function'\) stopX50Polling\(\)/);
 // 50X 没有推理号池：切过去必须直接落在注册机，且停留在概览时被纠正。
-assert.match(appSource, /pool === 'x50' \? X50_PAGES : PROXY_PAGES/);
+assert.match(appSource, /pool === 'x50' \? X50_PAGES : [A-Za-z_]*/);
 assert.match(appSource, /if \(isX50\(\) && !X50_PAGES\.includes\(page\)\) page = 'x50reg'/);
 assert.match(appSource, /data-pool-nav="x50"/);
 

@@ -307,3 +307,74 @@ python3 tools/test_altapi_registrar.py       # Python 侧
 
 `balance_usd` 只在表里由 Go 校验：余额换算只发生在 Go 端，Python 没有对应实现，
 跳过不是遗漏。
+
+## 前端控制台（2026-11-15 补齐）
+
+之前 altapi 只做了后端（子进程注册机 + 号池读余额），控制台没有入口：`POOLS` 里
+没有 `altapi`，`index.html` 没有标签也没有侧栏，`app.js`/`index.html` 里
+`altapi` 出现次数是 0。所以顶部只有 12 个标签，看不到 ALTapi。
+
+本次补齐前端，接线分布：
+
+```
+internal/server/web/altapi.js       新增，~600 行，与 x50.js / deploy.js 同构
+  ├─ 概览（altoverview）   GET /api/altapi/status
+  ├─ 注册机（altreg）      /candidates /logs /candidates/bulk /bulk-register
+  │                        /{id}/register /{id}/cancel /{id}/import
+  │                        /{id}/quota /import-all /quota-refresh
+  └─ 设置（altsettings）   GET|PUT /api/altapi/settings, POST /proxy-test
+
+internal/server/web/app.js
+  POOLS             += 'altapi'                 （标签顺序：… 50X AI, ALTapi）
+  POOL_LABEL         altapi: 'ALTapi'
+  POOL_GROUP         altapi: 'altapi'
+  isALTapi()         pool === 'altapi'
+  ALTAPI_PAGES       ['altoverview','altreg','altsettings']
+  pages              三个 loader
+  go()               跨池深链纠正 + init + 轮询启停
+  renderPoolTabs()   own/mine 归属 + data-pool-nav 显隐
+
+internal/server/web/index.html
+  顶部标签           <button data-pool="altapi">ALTapi</button>
+  侧栏               nav-sep + 三个 data-page/data-pool-nav="altapi"
+  页面区块           三个 <section id="page-alt*">
+  脚本               <script src="/assets/altapi.js">
+```
+
+### 一并修的后端缺陷
+
+`POST /api/altapi/candidates/bulk` 原来只解码 `lines`，前端传的 `proxies` 被静默丢弃：
+页面填了代理池、点导入、提示成功，实际每个候选仍是直连。现在按导入顺序轮转绑定，
+空代理不清空已有绑定（改绑走 PATCH）。用 `TestALTAPIBulkImportBindsProxies` 锁住。
+
+### 字段名契约
+
+后端 `Summary` 用 camelCase（`byStatus` / `withKey` / `balanceUnknown`），
+不是 snake_case。前端第一版读成了 `by_status`，会让所有计数恒为 0 而页面看起来正常。
+`altapi_web_test.js` 现在直接读 `store.go` 的 `json:` tag 做双向断言。
+
+### 验收记录
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 标签渲染 13 个，末位 ALTapi | ✅ 已验证 | 真实 `index.html` grep 出 13 个 `role="tab"` |
+| 侧栏三页显隐归属 | ✅ 已验证 | `pool_navigation_web_test.js`（13 池遍历） |
+| 三页 loader 隔离 | ✅ 已验证 | 同上，`loadALTStatus/Registrations/Settings` 只在 altapi 下触发 |
+| `/assets/altapi.js` 可访问 | ✅ 已验证 | HTTP 200，21173 字节 |
+| 四个 GET 接口 | ✅ 已验证 | `status`/`candidates`/`settings`/`logs` 全 200 |
+| 批量导入绑代理 | ✅ 已验证 | 实测 p1→p1 代理、p2→p2 代理；Go 测试锁住轮转 |
+| 设置保存往返 | ✅ 已验证 | PUT 后 GET 返回 `workers=3 min_interval=45 token_name=mykey aff=ABC123 proxies=[1]` |
+| 重启后设置仍在 | ✅ 已验证 | 换 data dir 重启，设置与候选全部保留 |
+| 前端单测 | ✅ 14/14 过 | 含新增 `altapi_web_test.js` |
+| Go 全量 | ✅ 全过 | `go test ./...` 无 FAIL |
+
+### 前端边界
+
+- 余额 `null` 渲染成「未知」，绝不落成 `$0.00`（没有 session 时余额确实未知）。
+- API Key 列表只显示前 8 位；完整值只从行内数据读，需显式点「复制 Key」。
+- 注册逻辑仍由 `tools/altapi_registrar.py` 子进程执行，前端不重写注册流程。
+
+### 未做
+
+- 未部署（按约定部署需单独走预检 → 构建 → 备份切换 → 验收，且需你确认）。
+- 未提交 git。

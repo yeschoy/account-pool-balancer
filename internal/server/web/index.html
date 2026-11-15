@@ -10,6 +10,7 @@
 <script src="/assets/tokenharbor.js" defer></script>
 <script src="/assets/deploy.js" defer></script>
 <script src="/assets/x50.js" defer></script>
+<script src="/assets/altapi.js" defer></script>
 </head>
 <body>
 <div id="auth" class="auth hidden">
@@ -50,6 +51,10 @@
       <div class="nav-sep hidden" data-pool-nav="x50" hidden>50X AI</div>
       <a data-page="x50reg" data-pool-nav="x50" class="hidden" hidden>50X 注册机</a>
       <a data-page="x50settings" data-pool-nav="x50" class="hidden" hidden>50X 注册设置</a>
+      <div class="nav-sep hidden" data-pool-nav="altapi" hidden>ALTapi</div>
+      <a data-page="altoverview" data-pool-nav="altapi" class="hidden" hidden>ALTapi 概览</a>
+      <a data-page="altreg" data-pool-nav="altapi" class="hidden" hidden>ALTapi 注册机</a>
+      <a data-page="altsettings" data-pool-nav="altapi" class="hidden" hidden>ALTapi 注册设置</a>
       <div class="nav-sep" data-pool-nav="tokenharbor" hidden>TokenHarbor</div>
       <a data-page="thoverview" data-pool-nav="tokenharbor" hidden>TokenHarbor 概览</a>
       <a data-page="thregister" data-pool-nav="tokenharbor" hidden>TokenHarbor 注册机</a>
@@ -74,6 +79,7 @@
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
       <button class="pool-tab" data-pool="opencode-go" role="tab">OpenCode Go</button>
       <button class="pool-tab" data-pool="x50" role="tab">50X AI</button>
+      <button class="pool-tab" data-pool="altapi" role="tab">ALTapi</button>
     </div>
     <section id="page-overview" class="page">
       <header class="page-head"><h1>概览</h1><div class="actions"><span class="muted" id="ov-updated"></span><button type="button" class="btn small" id="btn-reset-cache-rate">清空24h缓存命中率</button></div></header>
@@ -545,6 +551,159 @@
           <li>邮箱确认必须真实收到邮件；接码地址失效时该行失败并可重试，不会伪造已验证状态。</li>
           <li>API Key 明文只在创建时返回一次，已落盘；列表只显示 <code>sk-50x-</code> 前缀，需显式点击「复制 Key」才返回完整值。</li>
           <li>注册赠送额度为上游 welcome credit（当前 $100，starter 档），不是本机推算，也不是可续余额。</li>
+        </ul>
+      </section>
+    </section>
+
+    <section id="page-altoverview" class="page hidden">
+      <header class="page-head">
+        <h1>ALTapi 号池</h1>
+        <div class="actions"><button type="button" class="btn" id="alt-overview-refresh">刷新</button></div>
+      </header>
+      <div class="cards" id="alt-overview-cards"></div>
+      <section class="panel mt">
+        <div class="head-row"><h2>号池账号</h2><span class="muted small">余额来自 <code>/api/user/self</code>，需要会话凭据</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>账号</th><th>分组</th><th>状态</th><th>余额</th><th>已用</th><th>请求</th><th>最近错误</th></tr></thead>
+            <tbody id="alt-overview-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-altreg" class="page hidden">
+      <header class="page-head">
+        <h1>ALTapi 注册机</h1>
+        <div class="actions">
+          <button type="button" class="btn" id="alt-refresh">刷新</button>
+          <button type="button" class="btn" id="alt-quota-refresh">刷新余额</button>
+          <button type="button" class="btn" id="alt-import-all">全部导入号池</button>
+          <button type="button" class="btn" id="alt-export">导出已完成</button>
+          <button type="button" class="btn primary" id="alt-bulk-run">批量注册</button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <p class="muted small">altapi.ai（TokenPower / new-api 定制分支）注册链路：<code>GET /api/verification?email=</code> 发码 → 收信取 6 位码 → <code>POST /api/user/register</code> → 登录拿 session → 建 Key → 读 <code>/api/user/self</code> 额度。站点实测：<code>turnstile_check=false</code>（无 Turnstile、无图形码）；密码 8–20 位；发码按邮箱 30 秒一次；验证码 6 位且无尝试次数限制。</p>
+      </div>
+
+      <div class="pc-registration-layout">
+        <section class="panel pc-registration-form">
+          <h2>导入候选</h2>
+          <form id="alt-form" autocomplete="off">
+            <label for="alt-accounts">邮箱 + 接码地址（每行一个）</label>
+            <textarea id="alt-accounts" rows="8" spellcheck="false" placeholder="user1@mail.example.com----https://your-catchall/messages/user1%40mail.example.com?token=xxx&#10;user2@mail.example.com----https://your-catchall/messages/user2%40mail.example.com?token=yyy"></textarea>
+            <span class="hint">格式：<code>邮箱----接码地址</code>。接码地址缺失的行会被标记但不会注册。</span>
+
+            <label for="alt-proxies">代理池（每行一个，留空直连）</label>
+            <textarea id="alt-proxies" rows="5" spellcheck="false" placeholder="socks5://user:pass@host:port&#10;http://user:pass@host:port"></textarea>
+            <span class="hint">一个候选绑定一个出口，重试沿用原代理，不会静默换 IP。</span>
+
+            <div class="row-actions">
+              <button type="submit" class="btn primary" id="alt-submit">导入</button>
+              <button type="button" class="btn" id="alt-save-proxies">保存代理池</button>
+            </div>
+            <p id="alt-form-error" class="error" role="alert"></p>
+            <p id="alt-bulk-result" class="hint"></p>
+          </form>
+
+          <div class="mt">
+            <div class="muted small">池状态</div>
+            <div class="chips" id="alt-status-chips"></div>
+          </div>
+        </section>
+
+        <section class="panel pc-registration-tasks">
+          <div class="head-row">
+            <h2>候选（<span id="alt-count">0</span>）</h2>
+            <span id="alt-poll-error" class="error" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>邮箱</th><th>状态</th><th>余额</th><th>Key / 会话</th><th>代理</th><th>UID</th><th>说明</th><th>操作</th></tr></thead>
+              <tbody id="alt-rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel mt">
+        <div class="head-row"><h2>运行日志</h2><span class="muted small">最近 500 条</span></div>
+        <div class="table-wrap mt">
+          <table class="table" id="alt-log-table">
+            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-altsettings" class="page hidden">
+      <header class="page-head"><h1>ALTapi 注册设置</h1>
+        <div class="actions"><button type="button" class="btn primary" id="alts-save">保存</button></div>
+      </header>
+      <section class="panel">
+        <h2>注册参数</h2>
+        <form id="alts-form" class="form-grid" autocomplete="off">
+          <label for="alts-workers">并发数</label>
+          <input id="alts-workers" type="number" min="1" max="10" step="1" value="2">
+          <span class="hint">受代理池大小限制。同 IP 高并发会触发 Cloudflare 突发保护，返回空响应体。</span>
+
+          <label for="alts-min-interval">发码最小间隔（秒）</label>
+          <input id="alts-min-interval" type="number" min="30" step="1" value="31">
+          <span class="hint">站点实测同邮箱 30 秒一次；低于 30 会拿到「发送过于频繁」并消耗重试。</span>
+
+          <label for="alts-max-retries">429/CF 重试次数</label>
+          <input id="alts-max-retries" type="number" min="0" max="10" step="1" value="2">
+
+          <label for="alts-max-attempts">单候选最大尝试次数</label>
+          <input id="alts-max-attempts" type="number" min="1" max="10" step="1" value="2">
+
+          <label for="alts-verify-timeout">等验证邮件上限（秒）</label>
+          <input id="alts-verify-timeout" type="number" min="30" step="10" value="180">
+
+          <label for="alts-base-url">站点根地址</label>
+          <input id="alts-base-url" value="https://altapi.ai" autocomplete="off">
+          <span class="hint">不带 <code>/v1</code>。改错会导致全部注册在发码阶段失败。</span>
+
+          <label for="alts-python-bin">注册机解释器</label>
+          <input id="alts-python-bin" value="python3" autocomplete="off">
+          <span class="hint">注册逻辑在 <code>tools/altapi_registrar.py</code>，以子进程方式运行。</span>
+
+          <label for="alts-token-group">建 Key 分组</label>
+          <input id="alts-token-group" value="default" autocomplete="off">
+
+          <label for="alts-token-name">Key 名称</label>
+          <input id="alts-token-name" value="registrar" autocomplete="off">
+
+          <label for="alts-aff">邀请码（可选）</label>
+          <input id="alts-aff" placeholder="留空则不填 aff_code" autocomplete="off">
+
+          <label class="check"><input id="alts-auto-verify" type="checkbox" checked>收码后自动验证</label>
+          <label class="check"><input id="alts-import-to-pool" type="checkbox" checked>注册成功后自动建 Key 并入池</label>
+
+          <label for="alts-proxies">代理池（每行一个，顺序即轮询顺序）</label>
+          <textarea id="alts-proxies" rows="8" spellcheck="false" placeholder="socks5://user:pass@host:port"></textarea>
+          <span class="hint">留空保存表示沿用已保存代理；已绑定候选保持原代理。</span>
+
+          <p id="alts-error" class="error" role="status"></p>
+        </form>
+      </section>
+      <section class="panel mt">
+        <h2>代理连通性测试</h2>
+        <label for="alt-proxy-list">待测代理（每行一个）</label>
+        <textarea id="alt-proxy-list" rows="5" spellcheck="false" placeholder="socks5://user:pass@host:port"></textarea>
+        <div class="row-actions"><button type="button" class="btn" id="alt-proxy-test">测试</button></div>
+        <div id="alt-proxy-result" class="muted small"></div>
+      </section>
+      <section class="panel mt">
+        <h2>边界</h2>
+        <ul class="muted small">
+          <li>不求解验证码：站点当前 <code>turnstile_check=false</code>；若上游打开 Turnstile，注册会在发码阶段失败并如实报错。</li>
+          <li>余额只在 <code>/api/*</code> 控制面可读，需要 session cookie；没有会话时显示「未知」，绝不写 0。</li>
+          <li>注册赠送额度是上游策略（页面文案 <code>$1 free trial</code>），以注册后 <code>/api/user/self</code> 实读为准，不做推算。</li>
+          <li>API Key 明文落盘于候选存储，列表只显示前 8 位，需显式点「复制 Key」才返回完整值。</li>
         </ul>
       </section>
     </section>
