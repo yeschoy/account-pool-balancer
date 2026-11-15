@@ -1811,6 +1811,12 @@ func errorStatus(m map[string]any, raw []byte) int {
 		return 429
 	case strings.Contains(lower, "invalid_api_key"), strings.Contains(lower, "authentication_error"):
 		return 401
+	// altapi / new-api answer HTTP 200 with this envelope for a rejected key
+	// (measured 2026-11-15: {"error":{"message":"Invalid token (request id: …)",
+	// "type":"new_api_error"}}). Without a status the error rules would see 0
+	// and never match, so the request would look like a success.
+	case strings.Contains(lower, "invalid token"), strings.Contains(lower, "new_api_error"):
+		return 401
 	case strings.Contains(lower, "tier_model_not_entitled"), strings.Contains(lower, "permission"):
 		return 403
 	case strings.Contains(lower, "unknown inference model"):

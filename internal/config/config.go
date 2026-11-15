@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI:
 		return provider
 	}
 	return DefaultGroup
@@ -136,7 +136,7 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
@@ -189,6 +189,9 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 		return strings.HasPrefix(key, RiverKeyPrefix)
 	case ProviderDeploy:
 		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
+	case ProviderALTAPI:
+		// altapi.ai 的 key 是 48 字符 [A-Za-z0-9]，sk- 前缀可加可不加。
+		return len(key) >= altapiKeyMinLen && openCodeTokenRe.MatchString(key)
 	case ProviderMistral:
 		// Mistral also issues opaque keys; mstrl_ is only an inference hint.
 		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
@@ -233,7 +236,7 @@ func KnownProvider(p string) bool {
 func ResolveProvider(declared, key string) string {
 	// OpenCode credentials are opaque and can overlap sk-/other prefixes.
 	// Only an explicit declaration selects a tier; never infer it from a key.
-	if IsOpenCode(declared) || declared == ProviderMistral || declared == ProviderDeploy {
+	if IsOpenCode(declared) || declared == ProviderMistral || declared == ProviderDeploy || declared == ProviderALTAPI {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
@@ -314,6 +317,8 @@ func runtimeKeyError(provider string) string {
 		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderDeploy:
 		return "Deploy runtime key must be the 8..512 character secret (not access_key), without whitespace"
+	case ProviderALTAPI:
+		return "altapi runtime key must be the 8..512 character API key (sk- optional), without whitespace"
 	case ProviderMistral:
 		return "Mistral runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderRiver:
@@ -354,6 +359,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
 	case ProviderDeploy:
 		return c.DeployErrorRules, c.DeployRetryRules
+	case ProviderALTAPI:
+		return c.ALTAPIErrorRules, c.ALTAPIRetryRules
 	case ProviderModelStudio:
 		return c.ModelStudioErrorRules, c.ModelStudioRetryRules
 	}
@@ -385,6 +392,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultTokenHarborErrorRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployErrorRules()
+	case ProviderALTAPI:
+		return rules.DefaultALTAPIErrorRules()
 	case ProviderModelStudio:
 		return rules.DefaultModelStudioErrorRules()
 	}
@@ -415,6 +424,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultTokenHarborRetryRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployRetryRules()
+	case ProviderALTAPI:
+		return rules.DefaultALTAPIRetryRules()
 	case ProviderModelStudio:
 		return rules.DefaultModelStudioRetryRules()
 	}
@@ -527,6 +538,13 @@ func (c *Config) RuntimeBase(a Account) string {
 			return c.Deploy.BaseURL
 		}
 		return DeployDefaultBase
+	case ProviderALTAPI:
+		// altapi is OpenAI-compatible at <origin>/v1; the configured base
+		// already ends in /v1, so it is used verbatim.
+		if c.ALTAPI.BaseURL != "" {
+			return c.ALTAPI.BaseURL
+		}
+		return ALTAPIDefaultBase
 	case ProviderModelStudio:
 		// Plan and region decide the host; see ModelStudioInferenceBase for
 		// the per-protocol (Anthropic) variant.
@@ -1062,8 +1080,11 @@ type Config struct {
 	ModelStudioErrorRules []rules.ErrorRule `json:"modelStudioErrorRules"`
 	ModelStudioRetryRules []rules.RetryRule `json:"modelStudioRetryRules"`
 	Deploy                Deploy            `json:"deploy"`
+	ALTAPI                ALTAPI            `json:"altapi"`
 	DeployErrorRules      []rules.ErrorRule `json:"deployErrorRules"`
+	ALTAPIErrorRules      []rules.ErrorRule `json:"altapiErrorRules"`
 	DeployRetryRules      []rules.RetryRule `json:"deployRetryRules"`
+	ALTAPIRetryRules      []rules.RetryRule `json:"altapiRetryRules"`
 	Logs                  Logs              `json:"logs"`
 	Pricing               pricing.Config    `json:"pricing"`
 }
@@ -1116,6 +1137,9 @@ func Default() *Config {
 		Deploy:                DefaultDeploy(),
 		DeployErrorRules:      rules.DefaultDeployErrorRules(),
 		DeployRetryRules:      rules.DefaultDeployRetryRules(),
+		ALTAPI:                DefaultALTAPI(),
+		ALTAPIErrorRules:      rules.DefaultALTAPIErrorRules(),
+		ALTAPIRetryRules:      rules.DefaultALTAPIRetryRules(),
 		ModelStudio:           DefaultModelStudio(),
 		ModelStudioErrorRules: rules.DefaultModelStudioErrorRules(),
 		ModelStudioRetryRules: rules.DefaultModelStudioRetryRules(),
@@ -1512,6 +1536,9 @@ func (c *Config) Normalize() error {
 	if err := c.normalizeDeploy(); err != nil {
 		return err
 	}
+	if err := c.normalizeALTAPI(); err != nil {
+		return err
+	}
 	if err := c.normalizeModelStudio(); err != nil {
 		return err
 	}
@@ -1615,9 +1642,19 @@ func (c *Config) Normalize() error {
 		if !ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, runtimeKeyError(a.Provider))
 		}
-		if a.Provider != ProviderOpenDesign {
+		// OpenDesign reads its control plane with a vela_ctrl_ control key;
+		// altapi holds a console session cookie there instead, which is the
+		// only way to read a real balance (its inference key cannot). Every
+		// other provider has no control plane, so a stray key is a mistake.
+		if a.Provider != ProviderOpenDesign && a.Provider != ProviderALTAPI {
 			if a.ControlKey != "" {
 				return fmt.Errorf("accounts[%s]: %s accounts have no control key", a.ID, a.Provider)
+			}
+		}
+		if a.Provider == ProviderALTAPI {
+			// A 48-char value or a pasted cookie string; never a header dump.
+			if strings.ContainsAny(a.ControlKey, " \t\r\n") && !strings.Contains(a.ControlKey, "session=") {
+				return fmt.Errorf("accounts[%s]: altapi control key must be the session cookie value", a.ID)
 			}
 		}
 		if a.Provider == ProviderPerch {
@@ -1638,7 +1675,11 @@ func (c *Config) Normalize() error {
 			// legitimate. The console warns instead (see the pool tab).
 			_ = a
 		}
-		if a.ControlKey != "" && !strings.HasPrefix(a.ControlKey, "vela_ctrl_") {
+		// OpenDesign's control key is a vela_ctrl_ token. altapi's is a
+		// console session cookie, which has no prefix; it is validated by
+		// shape above and by the quota read itself.
+		if a.ControlKey != "" && a.Provider != ProviderALTAPI &&
+			!strings.HasPrefix(a.ControlKey, "vela_ctrl_") {
 			return fmt.Errorf("accounts[%s]: control key must start with vela_ctrl_", a.ID)
 		}
 		if a.Group == "" {

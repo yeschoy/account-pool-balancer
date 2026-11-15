@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/altapisignupstore"
 	"account-pool-balancer/internal/deploysignupstore"
 	"account-pool-balancer/internal/fsutil"
 	"account-pool-balancer/internal/logstore"
@@ -95,6 +96,9 @@ type Server struct {
 	// Deploy 注册机：复用 mistralMu 保护懒初始化，存储与并发独立
 	deployStoreRef *deploysignupstore.Store
 	deployMgrRef   *deployManager
+	// altapi 注册机：复用 mistralMu 保护懒初始化
+	altapiStoreRef *altapisignupstore.Store
+	altapiMgrRef   *altapiManager
 	// Token Harbor: the registration machine's store and its concurrency
 	// budget (both created on first use).
 	thStoreMu sync.Mutex

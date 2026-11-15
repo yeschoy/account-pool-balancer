@@ -78,6 +78,7 @@ type Snapshot struct {
 	OpenCode    *opencode.State   `json:"opencode,omitempty"`
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 	Mistral     *MistralState     `json:"mistral,omitempty"`
+	ALTAPI      *ALTAPIState      `json:"altapi,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
@@ -1051,6 +1052,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchModelStudio(ctx, cfg, a, false)
 	case config.ProviderDeploy:
 		return p.fetchDeploy(ctx, cfg, a, false)
+	case config.ProviderALTAPI:
+		return p.fetchALTAPI(ctx, cfg, a, false)
 	case config.ProviderPerch:
 		return p.fetchPerch(ctx, cfg, a)
 	}
