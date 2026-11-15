@@ -2204,3 +2204,83 @@ Chrome 建不了用户数据目录。修复：`mkdir -p /home/odb && chown 1000:
 
 边界：50X 目前只有注册机，没有推理路由，故这批账号在号池里是存档，
 不参与下游调度。宿主机与公网验收时间点见上；本次未重新部署文档改动。
+
+## 当前部署：ALTapi 号池标签与注册机前端（2026-11-15 08:45–08:50 UTC，9d77f23）
+
+- 用户反馈顶部没有 ALTapi 标签。核查结论：**代码没被删**。`7f9cc77` 合并的 altapi 只含后端
+  24 个文件（`.go`/`.py`/`.md`），`internal/server/web/` 一个都没碰；`POOLS` 里没有 `altapi`，
+  `index.html` 没有标签和侧栏。是前端入口从未做过，不是后续改动挤掉。
+- 补齐（`6942c9d`）：新增 `internal/server/web/altapi.js`（概览/注册机/设置三页），
+  `app.js` 加 `POOLS`/`POOL_LABEL`/`POOL_GROUP`/`isALTapi`/`ALTAPI_PAGES`/loader/go() 守卫与轮询，
+  `index.html` 加标签、侧栏三项、三个页面区块。顶部由 12 个标签变 13 个，末位 `ALTapi`。
+- 顺带修后端：`POST /api/altapi/candidates/bulk` 原来只解码 `lines`，前端传的 `proxies` 被静默
+  丢弃——页面填了代理池、点导入、提示成功，实际每个候选仍是直连。现在按导入顺序轮转绑定，
+  空代理不清空已有绑定；`TestALTAPIBulkImportBindsProxies` 锁住。
+- **部署预检抓到镜像缺陷**（`9d77f23`）：隔离容器实测发现镜像里没有 `altapi_registrar.py`。
+  后端 `scriptPaths()` 在镜像内只认 `/usr/local/share/altapi-signup/altapi_registrar.py`，
+  但 Dockerfile 从未 COPY 该文件。前端接好之后点「注册」只会得到「找不到 altapi_registrar.py」，
+  而这个错误只在真正注册时出现，前端接线测试发现不了。修法：新增 `/opt/altapi-signup` venv
+  （装 PySocks）+ COPY 脚本；`altapiDefaultPython()` 优先该 venv（注册机纯标准库，只有候选绑了
+  socks5 出口时才 `import socks`，用系统 python3 会在那条分支抛 `ModuleNotFoundError`）。
+
+### 分叉核对
+
+远端工作树 HEAD 为 `e6f063b`（3 个 Perch 增量修复），与 master merge-base 为 `0da57b6`；
+这 3 个提交在 master 上已有等价改动（`f3eaeeb`/`3311201`/`f10fa53`），**不存在需要合并的分叉**，
+直接以 master 部署，未强制抹平任何分支。
+
+### 时间线
+
+| 阶段 | UTC |
+|---|---|
+| 首次构建（6942c9d） | 08:42:41.9 – 08:42:48.4（6.5s） |
+| 隔离容器发现缺注册机脚本 | 08:43 |
+| 修复后重新构建（9d77f23） | 08:44:53.5 – 08:45:30.5（37s） |
+| 备份 data（145M） | 08:46:00.7 – 08:46:06.4 |
+| **首次切换（失败）** | 08:47:01.6 |
+| **回退恢复** | 08:48:18.6 |
+| 正确切换（新镜像） | 08:48:55.1 |
+| Docker healthy / 0 重启 | 08:49:28 |
+| 公网验收 | 08:50 |
+
+### 事故与教训：`compose up --no-build` 会回落到旧 `latest`
+
+首次切换只执行 `docker compose up -d --no-build --force-recreate`，得到
+`image=account-pool-balancer:latest`——该标签指向 **2026-11-11 的 `a63bddd0c768`**，
+比线上版本老 4 天，读到当前 `config.json` 时直接 `unknown field "quota"` 崩溃循环：
+
+```
+startup: /data/config.json is corrupt: json: unknown field "quota"
+```
+
+容器 `Restarting (1)`，**服务中断约 77 秒**（08:47:01→08:48:18）。数据未受损
+（`config.json` mtime 仍是 16:36，切换前）。
+
+两次未生效的尝试：`IMAGE=... docker compose up`（compose 里 image 写死，环境变量无效）、
+`docker compose up` 不带 override（仍旧 latest）。最终用
+`docker-compose.override.yml` 覆盖 `image` 才生效。
+
+**约定补充**：本项目 compose 的 `image: account-pool-balancer:latest` 指向历史旧版本，
+`build: .` 又意味着 `up` 可能触发构建。切换必须写 `docker-compose.override.yml` 指定
+release 标签，不得裸 `up --no-build`。回退同样走 override。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 双内网入口（从 new-api 容器） | `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}` |
+| 网络别名 | `ai-internal` 含 `account-pool-balancer` + `opendesign-balancer` 两者 |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 运行镜像 | `account-pool-balancer:release-9d77f23-20261115T084453Z` |
+| 顶部标签 | 13 个，末位 `ALTapi`（宿主机与公网 HTML 双确认） |
+| 侧栏 | ALTapi 概览 / 注册机 / 注册设置 |
+| 静态资源 | `/assets/altapi.js?v=7c58518270` → 200，21165 字节 |
+| 注册机脚本 | `/usr/local/share/altapi-signup/altapi_registrar.py` 在，venv 内 `import socks` OK |
+| altapi API | `status`/`candidates`/`settings` 未登录 401（路由已挂），登录后 200 |
+| 设置读写往返（线上） | `workers` 2→3→2 读回一致，已还原原值 |
+| 重启后持久化 | 重启后 `workers=2`/`token_name=newapi`/`base_url` 保留 |
+| 账号数据 | 220 个账号全在（opendesign 16 / tokenharbor 96 / mistral 40 / deploy 28 / modal 18 / ollama 13 / river 3 / opencode-go 5 / perch 1） |
+| 公网登录页 | `https://ods.yeschoy.io/` 200，含 ALTapi 标签 |
+
+回退镜像：`account-pool-balancer:release-aadb089-20261115T073730Z`（5426be64d63d）。
+数据备份：`/home/ubuntu/backup-odb-20261115T084600Z.tar.gz`（145M，sha256 `0a1a1881…6533633`）。
