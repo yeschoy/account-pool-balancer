@@ -2284,3 +2284,51 @@ release 标签，不得裸 `up --no-build`。回退同样走 override。
 
 回退镜像：`account-pool-balancer:release-aadb089-20261115T073730Z`（5426be64d63d）。
 数据备份：`/home/ubuntu/backup-odb-20261115T084600Z.tar.gz`（145M，sha256 `0a1a1881…6533633`）。
+
+## 当前部署：补通用缓存忽略规则（2026-11-15 11:00–11:02 UTC，12c92cc）
+
+- 用户要求把不必要的东西加进 gitignore（go/py 缓存等，构建时重新生成即可）。
+- 排查结论：原规则是**按目录逐个打的补丁**（`/tools/perch-register/__pycache__/`、
+  `/tools/mistral/**/__pycache__` 等），只能覆盖当时那几个目录。实测在
+  `internal/server/` 造 `__pycache__`/`.pyc` 时 `git status` 直接显示未跟踪。
+- 修法（`12c92cc`，仅两个忽略文件）：
+  - `.gitignore` 新增通用段：Python（`__pycache__/`、`*.py[cod]`、`.pytest_cache/`、
+    `.mypy_cache/`、`.ruff_cache/`、`*.egg-info/`、`.venv/`）、Go（`.gocache` 等合并、
+    `*.test`、`*.out`、`coverage.out/html`）、本地 build 产物（`/odb`、`/odb-*`、
+    `/*-test`、`/x50reg`、`/dsh`，保留 `cmd/**`）、JS（`.eslintcache`、`/dist/`、
+    `/build/`、`.next/`、`.nuxt/`）、编辑器/系统（`.DS_Store`、`.idea/`、`.vscode/`、`*.swp`）。
+  - `.dockerignore` 同步补 `**/` 兜底，避免 `COPY . .` 把缓存带进镜像层。
+- 验证：造脏文件后 `git check-ignore` 8/8 命中；已跟踪文件零误伤
+  （`git ls-files | git check-ignore --stdin` 返回空）；按 dockerignore glob 语义
+  模拟匹配 `tools/mistral`/`tools/perch-register`/`internal`/`cmd`/`vendor` 全部文件，
+  命中 0 个；`go build ./...` 通过。
+
+### 时间线
+
+| 阶段 | UTC |
+|---|---|
+| 预检（线上 healthy / 双入口 ok / 磁盘 58%） | 18:59 |
+| 构建 | 11:00:38.3 – 11:00:44.8（6.6s） |
+| 隔离容器验证 | 11:00:5x |
+| 核心数据快照（36K） | 11:01:23.2 |
+| 切换 | 11:01:23.2 |
+| Docker healthy / 0 重启 | 11:01:55 |
+| 双入口 / 公网验收 | 11:01:5x / 11:02 |
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-12c92cc-20261115T110037Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | `account-pool-balancer:8790` 与 `opendesign-balancer:8790` 均 `{"ok":true}` |
+| 网络别名 | `ai-internal` 含两者 |
+| 顶部标签 | 13 个，末位 `ALTapi`（宿主机 + 公网双确认） |
+| `/assets/altapi.js?v=7c58518270` | 200，21165 字节 |
+| 注册机脚本 | `/usr/local/share/altapi-signup/altapi_registrar.py` 在 |
+| 账号数据 | 220 个全在 |
+| 公网 | `https://ods.yeschoy.io/` 200，含 ALTapi 标签 |
+
+本次只改忽略文件，二进制与页面均无变化；切换按 override 指定 release 标签，未回落 `latest`。
+回退镜像：`account-pool-balancer:release-9d77f23-20261115T084453Z`。
+数据快照：`/home/ubuntu/backup-odb-core-20261115T110123Z.tar.gz`（36K）。
