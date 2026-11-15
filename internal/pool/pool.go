@@ -314,7 +314,7 @@ func (p *Pool) classLocked(cfg *config.Config, model string, now time.Time) stri
 	class := "unknown"
 	inCatalog := false
 	for _, a := range cfg.Accounts {
-		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderDeploy {
+		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider) {
 			continue
 		} // Independent catalogs must not teach OpenDesign funding classes
 		snap := p.quota(a.ID)
@@ -373,7 +373,7 @@ func (p *Pool) Succeeded(cfg *config.Config, id, model string) {
 	if st == nil || len(st.Strikes) == 0 {
 		return
 	}
-	if a, ok := cfg.Account(id); ok && (config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral || a.Provider == config.ProviderDeploy) {
+	if a, ok := cfg.Account(id); ok && (config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider)) {
 		delete(st.Strikes, "account")
 	}
 	delete(st.Strikes, "plan")
@@ -458,8 +458,19 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
-	if (a.Provider == config.ProviderMistral || a.Provider == config.ProviderDeploy) && snap != nil && snap.CatalogSource != quota.ResponseBindingSource(cfg, a) {
+	if (a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider)) && snap != nil && snap.CatalogSource != quota.ResponseBindingSource(cfg, a) {
 		snap = nil // a changed key/base/proxy cannot reuse old permissions
+	}
+	if a.Provider == config.ProviderX50 {
+		r, q := cfg.X50.EffectiveRouting(), cfg.X50.EffectiveQuota()
+		stale := time.Duration(q.StaleSec) * time.Second
+		if !r.IgnoreCatalog && model != "" && snap != nil && snap.CatalogError == "" && snap.FreshCatalog(now, stale) && !snap.Catalog[model] {
+			return "not-entitled"
+		}
+		if snap.FreshX50(now, stale) && (snap.X50.Tier == "paid" || snap.X50.Tier == "prepaid") && *snap.X50.BalanceUSD <= 0 {
+			return "quota-exhausted"
+		}
+		return "" // no OpenDesign funding classification
 	}
 	if a.Provider == config.ProviderDeploy {
 		r := cfg.Deploy.EffectiveRouting()

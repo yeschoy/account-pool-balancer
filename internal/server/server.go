@@ -192,6 +192,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.TokenHarborFetch = s.fetchTHObservation
 	s.quota.DeployHTTPFor = s.deployHTTPClient
+	s.quota.X50HTTPFor = s.x50HTTPClient
 	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
 		return s.ensureGoEgress(ctx, cfg, a, false)
 	}
@@ -231,7 +232,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
-			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama || a.Provider == config.ProviderDeploy) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
+			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama || config.NativeChatOnly(a.Provider)) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
 				continue
 			}
 			quotas[id] = q
@@ -293,9 +294,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 func (s *Server) onConfigChange(old, next *config.Config) {
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
-	s.pruneDeployTransports(old, next)
+	s.pruneNativeChatTransports(old, next)
 	s.rebindPerch(next)
-	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Deploy.BaseURL != next.Deploy.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Deploy.BaseURL != next.Deploy.BaseURL || old.X50.BaseURL != next.X50.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -309,7 +310,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
-		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama || a.Provider == config.ProviderDeploy) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama || config.NativeChatOnly(a.Provider)) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}
@@ -353,6 +354,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 		}
 		if a.Provider == config.ProviderTokenHarbor {
 			if o, ok := old.Account(a.ID); !ok || o.RuntimeKey != a.RuntimeKey || o.ProxyURL != a.ProxyURL || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.TokenHarbor.AccountInterval() != next.TokenHarbor.AccountInterval() {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderX50 && next.X50.EffectiveQuota().Enabled {
+			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) || old.X50.ModelSyncSec != next.X50.ModelSyncSec || old.X50.EffectiveQuota() != next.X50.EffectiveQuota() {
 				s.quota.RefreshSession(a.ID)
 			}
 		}

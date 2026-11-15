@@ -74,8 +74,8 @@ for (const provider of vm.runInContext('POOLS', context)) {
   assert.equal(mistralSeparator.classList.contains('hidden'), provider !== 'mistral', provider + ' separator visibility');
   const before = loaded.length;
   context.go('mregister');
-  // 50X 只有注册机，所以深链被纠正到自己的首页而不是通用概览。
-  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
+  // 50X 已具有通用推理管理页，跨池专属深链回到概览。
+  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : 'overview');
   assert.equal(context.hash, '#' + context.currentPage);
   assert.equal(sections.find(el => el.id === 'page-mregister').classList.contains('hidden'), provider !== 'mistral');
   assert.equal(loaded.slice(before).includes('loadMistralRegistrations'), provider === 'mistral', provider + ' deep-link isolation');
@@ -84,7 +84,7 @@ for (const provider of vm.runInContext('POOLS.filter(p => p !== "mistral")', con
   switchPool('mistral');
   context.go('mregister');
   switchPool(provider);
-  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : provider === 'altapi' ? 'overview' : 'overview');
+  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : 'overview');
   assert.equal(registration.classList.contains('hidden'), true);
   assert.equal(mistralSeparator.classList.contains('hidden'), true);
 }
@@ -95,7 +95,7 @@ for (const provider of vm.runInContext('POOLS', context)) {
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'deploy');
     const before = loaded.length;
     context.go(page);
-    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
+    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : 'overview');
     assert.equal(loaded.slice(before).includes(loader), provider === 'deploy', provider + ' Deploy deep-link isolation');
     assert.equal(loaded.slice(before).includes('initDeployPage'), provider === 'deploy', 'Deploy deep links bind handlers');
   }

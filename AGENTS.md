@@ -26,6 +26,6 @@
 
 ## 50X AI 注册机
 
-控制台新增 `50X AI` 顶部标签（`pool='x50'`），侧栏为「50X 注册机」与「50X 注册设置」。当前只实现注册机，没有推理号池。代码在 `internal/x50reg`（HTTP 流程）、`internal/x50signupstore`（存储）、`internal/server/x50_registration.go`（runner + API）、`internal/server/web/x50.js`（前端）；接线改动在 `app.js` 的 `POOLS`/`X50_PAGES`/`isX50` 与 `index.html` 的导航、标签、`/assets/x50.js`。验收与边界见 `docs/x50reg.md`。
+控制台新增 `50X AI` 顶部标签（`pool='x50'`），侧栏为「50X 注册机」与「50X 注册设置」。已实现独立推理号池及注册机批量入池/已入池隐藏、50X范围的推理代理批量重置、注册日志右下角浮层。推理合同见 `docs/x50-pool.md` 与 `.trellis/spec/backend/x50.md`，历史注册证据不是当前赠金保证。注册代码在 `internal/x50reg`（HTTP 流程）、`internal/x50signupstore`（存储）、`internal/server/x50_registration.go`（runner + API）、`internal/server/web/x50.js`（前端）；接线改动在 `app.js` 的 `POOLS`/`X50_PAGES`/`isX50` 与 `index.html` 的导航、标签、`/assets/x50.js`。注册验收与历史边界见 `docs/x50reg.md`；账号CRUD/路由/规则/额度/日志沿用通用管理页。推理配置 `Config.X50` 与注册设置/代理存储分离。
 
 后台注册任务必须挂在服务级 context（`Server.x50BaseCtx()`）上，不能继承 `r.Context()`——否则 handler 返回即取消任务。关闭走 `stopX50()`。

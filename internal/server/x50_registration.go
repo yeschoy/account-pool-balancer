@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -59,26 +60,28 @@ type x50RegisterRequest struct {
 // x50RowView is the console projection of a row. Credentials other than the
 // masked key prefix never appear here.
 type x50RowView struct {
-	ID         string     `json:"id"`
-	Email      string     `json:"email"`
-	HasMailbox bool       `json:"hasMailbox"`
-	ProxyLabel string     `json:"proxyLabel"`
-	ProxyBound bool       `json:"proxyBound"`
-	Status     string     `json:"status"`
-	StatusText string     `json:"statusText"`
-	Stage      string     `json:"stage,omitempty"`
-	KeyPrefix  string     `json:"keyPrefix,omitempty"`
-	HasKey     bool       `json:"hasKey"`
-	HasSession bool       `json:"hasSession"`
-	Plan       string     `json:"plan,omitempty"`
-	Tier       string     `json:"tier,omitempty"`
-	BalanceUSD string     `json:"balanceUsd,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Attempts   int        `json:"attempts,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
-	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
-	KeyedAt    *time.Time `json:"keyedAt,omitempty"`
+	ID            string     `json:"id"`
+	Email         string     `json:"email"`
+	HasMailbox    bool       `json:"hasMailbox"`
+	ProxyLabel    string     `json:"proxyLabel"`
+	ProxyBound    bool       `json:"proxyBound"`
+	Status        string     `json:"status"`
+	StatusText    string     `json:"statusText"`
+	Stage         string     `json:"stage,omitempty"`
+	KeyPrefix     string     `json:"keyPrefix,omitempty"`
+	HasKey        bool       `json:"hasKey"`
+	HasSession    bool       `json:"hasSession"`
+	Plan          string     `json:"plan,omitempty"`
+	Tier          string     `json:"tier,omitempty"`
+	BalanceUSD    string     `json:"balanceUsd,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	Attempts      int        `json:"attempts,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	VerifiedAt    *time.Time `json:"verifiedAt,omitempty"`
+	KeyedAt       *time.Time `json:"keyedAt,omitempty"`
+	PoolAccountID string     `json:"poolAccountId,omitempty"`
+	InPool        bool       `json:"inPool"`
 }
 
 // x50StatusText maps status to the console label.
@@ -215,7 +218,26 @@ func (s *Server) x50Mgr() (*x50Manager, error) {
 	return m, nil
 }
 
+var x50LogSecret = regexp.MustCompile(`(?i)(?:authorization\s*[:=]\s*(?:Token|Bearer)\s+|\b(?:session_token|api_key|password|token)\s*["']?\s*[:=]\s*["']?)[^\s"'&,}]+`)
+
+func (m *x50Manager) safeText(text string, extra ...string) string {
+	if m.srv != nil {
+		text = redactSecrets(m.srv.cfg.Get(), text)
+	}
+	if m.store != nil {
+		for _, r := range m.store.Snapshot() {
+			extra = append(extra, r.APIKey, r.SessionToken, r.Password, r.MailboxURL, r.MailboxToken, r.ProxyURL)
+		}
+	}
+	for _, v := range extra {
+		if v != "" {
+			text = strings.ReplaceAll(text, v, "[REDACTED]")
+		}
+	}
+	return x50LogSecret.ReplaceAllString(text, "[REDACTED]")
+}
 func (m *x50Manager) addLog(typ, email, msg string) {
+	msg = m.safeText(msg)
 	m.logMu.Lock()
 	defer m.logMu.Unlock()
 	m.logs = append(m.logs, x50LogLine{At: time.Now(), Type: typ, Email: email, Message: msg})
@@ -425,11 +447,12 @@ func (m *x50Manager) runOne(ctx context.Context, job x50RunJob, keyName string, 
 		})
 	})
 	reg.SetTracer(func(f string, a ...any) {
-		m.addLog("info", job.Email, fmt.Sprintf(f, a...))
+		m.addLog("info", job.Email, m.safeText(fmt.Sprintf(f, a...), password, job.Proxy, job.Mailbox.Token))
 	})
 
 	acc, err := reg.Register(ctx)
 	if err != nil {
+		err = errors.New(m.safeText(err.Error(), password, job.Proxy, job.Mailbox.Token))
 		m.addLog("error", job.Email, err.Error())
 		m.finish(job.RowID, x50signupstore.Failed, "", err)
 		return
@@ -452,6 +475,7 @@ func (m *x50Manager) runOne(ctx context.Context, job x50RunJob, keyName string, 
 // finish records the terminal state of one attempt. Optional mutators run
 // before the status/error fields are written.
 func (m *x50Manager) finish(id string, status x50signupstore.Status, password string, cause error, mutators ...func(*x50signupstore.Row)) {
+	message := m.safeText(x50ErrorText(cause), password)
 	_, _ = m.store.Update(id, func(r *x50signupstore.Row) error {
 		for _, fn := range mutators {
 			fn(r)
@@ -462,7 +486,7 @@ func (m *x50Manager) finish(id string, status x50signupstore.Status, password st
 		r.Status = status
 		r.Attempts++
 		if status == x50signupstore.Failed {
-			r.Error = x50ErrorText(cause)
+			r.Error = message
 			r.Stage = ""
 		} else {
 			r.Error = ""
@@ -531,6 +555,8 @@ func x50TokenFromURL(raw string) string {
 
 func (s *Server) registerX50(_ *http.ServeMux, a func(string, http.HandlerFunc)) {
 	a("GET /api/x50/candidates", s.apiX50Candidates)
+	a("POST /api/x50/pool/import", s.apiX50PoolImport)
+	a("POST /api/x50/pool/proxy", s.apiX50PoolProxy)
 	a("POST /api/x50/candidates/bulk", s.apiX50BulkImport)
 	a("POST /api/x50/candidates/import-completed", s.apiX50ImportCompleted)
 	a("DELETE /api/x50/candidates/{id}", s.apiX50DeleteRow)
@@ -583,8 +609,12 @@ func (s *Server) apiX50Candidates(w http.ResponseWriter, r *http.Request) {
 	st := m.store
 	rows := st.List()
 	views := make([]x50RowView, 0, len(rows))
+	cfg := s.cfg.Get()
 	for _, row := range rows {
-		views = append(views, x50ViewRow(row))
+		v := x50ViewRow(row)
+		v.PoolAccountID = x50AccountFor(cfg, row.APIKey)
+		v.InPool = v.PoolAccountID != ""
+		views = append(views, v)
 	}
 	settings := st.Settings()
 	writeJSON(w, http.StatusOK, map[string]any{

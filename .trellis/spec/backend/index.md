@@ -2,6 +2,7 @@
 
 **Before adding or completing any provider, read [Provider onboarding gates](provider-onboarding.md).** Account/quota/routing/rules/logs/test/UI persistence and isolation are mandatory, not optional follow-up work.
 
+Read [50X pool contracts](x50.md) before changing 50X inference/billing, registration bulk import and derived imported state, proxy scope or registration log dock. Current signup has no guaranteed welcome credit; shared account balances are not summed by Key.
 Read [Deploy pool contracts](deploy.md) before changing its opaque-Key/provider boundary, independent settings/pricing, public catalog vs inference authorization, 405/429 rules, native Chat/privacy or unknown-balance projection.
 Read [ALTAPI session and settings isolation](altapi.md) before changing its independent routing/config validation, real-session vs cache identity priority, downstream-Key scope or busy/TTL binding semantics.
 Read [OpenDesign diagnostics contracts](opendesign.md) before changing its

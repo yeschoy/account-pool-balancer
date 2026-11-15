@@ -42,15 +42,18 @@ func (s *Server) deployHTTPClient(cfg *config.Config, proxy string) *http.Client
 	key := deployTransportPrefix + strconv.Itoa(r.DirectMaxConns) + ":" + strconv.Itoa(r.ProxyMaxConns) + ":" + proxy
 	return &http.Client{Transport: s.transportFor(proxy, r, key), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
-func (s *Server) pruneDeployTransports(old, next *config.Config) {
-	a, b := old.Deploy.EffectiveRouting(), next.Deploy.EffectiveRouting()
+func (s *Server) pruneNativeChatTransports(old, next *config.Config) {
+	s.pruneProviderTransports(old.X50.EffectiveRouting(), next.X50.EffectiveRouting(), "\x00x50:")
+	s.pruneProviderTransports(old.Deploy.EffectiveRouting(), next.Deploy.EffectiveRouting(), deployTransportPrefix)
+}
+func (s *Server) pruneProviderTransports(a, b config.Routing, prefix string) {
 	if a.DirectMaxConns == b.DirectMaxConns && a.ProxyMaxConns == b.ProxyMaxConns {
 		return
 	}
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	s.transports.Range(func(key, value any) bool {
-		if strings.HasPrefix(key.(string), deployTransportPrefix) {
+		if strings.HasPrefix(key.(string), prefix) {
 			value.(*http.Transport).CloseIdleConnections()
 			s.transports.Delete(key)
 		}

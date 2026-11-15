@@ -32,13 +32,13 @@ assert.match(appSource, /const isX50 = \(\) => pool === 'x50'/);
 assert.match(appSource, /x50reg: \(\) => loadX50Registrations\(\), x50settings: \(\) => loadX50Settings\(\)/);
 assert.match(appSource, /if \(page === 'x50reg'\) startX50Polling\(\)/);
 assert.match(appSource, /if \(currentPage === 'x50reg' && page !== currentPage && typeof stopX50Polling === 'function'\) stopX50Polling\(\)/);
-// 50X 没有推理号池：切过去必须直接落在注册机，且停留在概览时被纠正。
-assert.match(appSource, /pool === 'x50' \? X50_PAGES : [A-Za-z_]*/);
-assert.match(appSource, /if \(isX50\(\) && !X50_PAGES\.includes\(page\)\) page = 'x50reg'/);
+// 50X 拥有通用推理管理页，同时保留注册机专属页面。
+assert.ok(appSource.includes("pool === 'x50' ? [...PROXY_PAGES, ...X50_PAGES] :"));
+assert.ok(!appSource.includes("if (isX50() && !X50_PAGES.includes(page)) page = 'x50reg'"));
 assert.match(appSource, /data-pool-nav="x50"/);
 
 // 5) 池切换通过 vm 跑一遍真实函数。
-const context = { console, Date, window: {}, localStorage: { getItem() { return 'x50'; } } };
+const context = { console, Date, currentPage: 'x50reg', window: {}, localStorage: { getItem() { return 'x50'; } } };
 vm.createContext(context);
 vm.runInContext(appSource.slice(appSource.indexOf('const POOLS ='), appSource.indexOf('const esc =')), context);
 

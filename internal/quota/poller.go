@@ -79,6 +79,7 @@ type Snapshot struct {
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 	Mistral     *MistralState     `json:"mistral,omitempty"`
 	ALTAPI      *ALTAPIState      `json:"altapi,omitempty"`
+	X50         *X50State         `json:"x50,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
 	LastError   string    `json:"lastError,omitempty"`
@@ -327,6 +328,14 @@ func (s *Snapshot) clone() *Snapshot {
 		}
 	}
 	c.OpenCode = s.OpenCode.Clone()
+	if s.X50 != nil {
+		x := *s.X50
+		if x.BalanceUSD != nil {
+			v := *x.BalanceUSD
+			x.BalanceUSD = &v
+		}
+		c.X50 = &x
+	}
 	c.TokenHarbor = s.TokenHarbor.clone()
 	c.Mistral = s.Mistral.clone()
 	c.Windows = append([]Window(nil), s.Windows...)
@@ -603,6 +612,7 @@ type Poller struct {
 	Cfg              func() *config.Config
 	HTTPFor          func(proxyURL string) *http.Client
 	DeployHTTPFor    func(*config.Config, string) *http.Client
+	X50HTTPFor       func(*config.Config, string) *http.Client
 	OnUpdate         func(accountID string)
 	GoEgressCheck    func(context.Context, *config.Config, config.Account) error
 	TokenHarborFetch func(context.Context, *config.Config, config.Account) (*TokenHarborState, error)
@@ -817,6 +827,14 @@ func (p *Poller) dispatch(ctx context.Context) {
 	now := time.Now()
 	p.mu.Lock()
 	inFlight := len(p.running)
+	x50InFlight := 0
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderX50 && p.running[a.ID] != nil {
+			x50InFlight++
+		}
+	}
+	inFlight -= x50InFlight
+	x50Limit := cfg.X50.EffectiveQuota().Concurrency
 	deployInFlight := 0
 	for _, a := range cfg.Accounts {
 		if a.Provider == config.ProviderDeploy && p.running[a.ID] != nil {
@@ -851,7 +869,12 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 	}
 	for _, a := range append(urgent, due...) {
-		if a.Provider == config.ProviderDeploy {
+		if a.Provider == config.ProviderX50 {
+			if x50InFlight >= x50Limit {
+				continue
+			}
+			x50InFlight++
+		} else if a.Provider == config.ProviderDeploy {
 			if deployInFlight >= deployLimit {
 				continue
 			}
@@ -952,6 +975,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
 	}
 	if a.Provider == config.ProviderModelStudio {
 		return p.fetchModelStudio(ctx, p.Cfg(), a, true)
+	}
+	if a.Provider == config.ProviderX50 {
+		return p.fetchX50(ctx, p.Cfg(), a, true)
 	}
 	if a.Provider == config.ProviderDeploy {
 		return p.fetchDeploy(ctx, p.Cfg(), a, true)
@@ -1058,6 +1084,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchModelStudio(ctx, cfg, a, false)
 	case config.ProviderDeploy:
 		return p.fetchDeploy(ctx, cfg, a, false)
+	case config.ProviderX50:
+		return p.fetchX50(ctx, cfg, a, false)
 	case config.ProviderALTAPI:
 		return p.fetchALTAPI(ctx, cfg, a, false)
 	case config.ProviderPerch:

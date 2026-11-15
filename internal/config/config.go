@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI, ProviderX50:
 		return provider
 	}
 	return DefaultGroup
@@ -136,13 +136,15 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI, ProviderX50}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
 // key of a self-hosted Ollama): such an account must name its provider.
 func ProviderForKey(key string) string {
 	switch {
+	case strings.HasPrefix(key, "sk-50x-"):
+		return ProviderX50
 	case strings.HasPrefix(key, MistralKeyPrefix):
 		return ProviderMistral
 	case strings.HasPrefix(key, RiverKeyPrefix):
@@ -181,12 +183,17 @@ func ModalTokenIncomplete(key string) bool {
 
 // ValidRuntimeKeyFor reports whether key may be provider's runtime key.
 func ValidRuntimeKeyFor(provider, key string) bool {
+	if strings.HasPrefix(key, "sk-50x-") && provider != ProviderX50 {
+		return false
+	}
 	if key == "" || len(key) > 512 || strings.TrimSpace(key) != key {
 		return false
 	}
 	switch provider {
 	case ProviderRiver:
 		return strings.HasPrefix(key, RiverKeyPrefix)
+	case ProviderX50:
+		return strings.HasPrefix(key, "sk-50x-") && len(key) > 7 && openCodeTokenRe.MatchString(key)
 	case ProviderDeploy:
 		return len(key) >= 8 && openCodeTokenRe.MatchString(key)
 	case ProviderALTAPI:
@@ -240,7 +247,7 @@ func ResolveProvider(declared, key string) string {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
-	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral, ProviderModelStudio:
+	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral, ProviderModelStudio, ProviderX50:
 		return inferred
 	}
 	if declared == "" {
@@ -315,6 +322,8 @@ func runtimeKeyError(provider string) string {
 	switch provider {
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
 		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
+	case ProviderX50:
+		return "50X runtime key must start with sk-50x- and contain no whitespace"
 	case ProviderDeploy:
 		return "Deploy runtime key must be the 8..512 character secret (not access_key), without whitespace"
 	case ProviderALTAPI:
@@ -357,6 +366,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.PerchErrorRules, c.PerchRetryRules
 	case ProviderTokenHarbor:
 		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
+	case ProviderX50:
+		return c.X50ErrorRules, c.X50RetryRules
 	case ProviderDeploy:
 		return c.DeployErrorRules, c.DeployRetryRules
 	case ProviderALTAPI:
@@ -390,6 +401,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultPerchErrorRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborErrorRules()
+	case ProviderX50:
+		return rules.DefaultX50ErrorRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployErrorRules()
 	case ProviderALTAPI:
@@ -422,6 +435,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultPerchRetryRules()
 	case ProviderTokenHarbor:
 		return rules.DefaultTokenHarborRetryRules()
+	case ProviderX50:
+		return rules.DefaultX50RetryRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployRetryRules()
 	case ProviderALTAPI:
@@ -533,6 +548,11 @@ func (c *Config) RuntimeBase(a Account) string {
 			return strings.TrimRight(strings.TrimSpace(c.TokenHarbor.BaseURL), "/")
 		}
 		return "https://tokenharbor.ai/v1"
+	case ProviderX50:
+		if c.X50.BaseURL != "" {
+			return c.X50.BaseURL
+		}
+		return X50DefaultBase
 	case ProviderDeploy:
 		if c.Deploy.BaseURL != "" {
 			return c.Deploy.BaseURL
@@ -1079,6 +1099,9 @@ type Config struct {
 	ModelStudio           ModelStudio       `json:"modelstudio"`
 	ModelStudioErrorRules []rules.ErrorRule `json:"modelStudioErrorRules"`
 	ModelStudioRetryRules []rules.RetryRule `json:"modelStudioRetryRules"`
+	X50                   X50               `json:"x50"`
+	X50ErrorRules         []rules.ErrorRule `json:"x50ErrorRules"`
+	X50RetryRules         []rules.RetryRule `json:"x50RetryRules"`
 	Deploy                Deploy            `json:"deploy"`
 	ALTAPI                ALTAPI            `json:"altapi"`
 	DeployErrorRules      []rules.ErrorRule `json:"deployErrorRules"`
@@ -1134,6 +1157,9 @@ func Default() *Config {
 		Mistral:               DefaultMistral(),
 		MistralErrorRules:     rules.DefaultMistralErrorRules(),
 		MistralRetryRules:     rules.DefaultMistralRetryRules(),
+		X50:                   DefaultX50(),
+		X50ErrorRules:         rules.DefaultX50ErrorRules(),
+		X50RetryRules:         rules.DefaultX50RetryRules(),
 		Deploy:                DefaultDeploy(),
 		DeployErrorRules:      rules.DefaultDeployErrorRules(),
 		DeployRetryRules:      rules.DefaultDeployRetryRules(),
@@ -1533,6 +1559,9 @@ func (c *Config) Normalize() error {
 	if err := c.normalizeTokenHarbor(); err != nil {
 		return err
 	}
+	if err := c.normalizeX50(); err != nil {
+		return err
+	}
 	if err := c.normalizeDeploy(); err != nil {
 		return err
 	}
@@ -1635,6 +1664,9 @@ func (c *Config) Normalize() error {
 		// the key's prefix settles the provider when it names one, so a
 		// swapped key can never leave a stale provider behind; otherwise the
 		// stored provider stands (an Ollama key carries no prefix)
+		if strings.HasPrefix(a.RuntimeKey, "sk-50x-") && a.Provider != "" && a.Provider != ProviderX50 {
+			return fmt.Errorf("accounts[%s]: 50X key cannot belong to another provider", a.ID)
+		}
 		a.Provider = ResolveProvider(a.Provider, a.RuntimeKey)
 		if !KnownProvider(a.Provider) {
 			return fmt.Errorf("accounts[%s]: unknown provider", a.ID)
@@ -1646,7 +1678,7 @@ func (c *Config) Normalize() error {
 		// altapi holds a console session cookie there instead, which is the
 		// only way to read a real balance (its inference key cannot). Every
 		// other provider has no control plane, so a stray key is a mistake.
-		if a.Provider != ProviderOpenDesign && a.Provider != ProviderALTAPI {
+		if a.Provider != ProviderOpenDesign && a.Provider != ProviderALTAPI && a.Provider != ProviderX50 {
 			if a.ControlKey != "" {
 				return fmt.Errorf("accounts[%s]: %s accounts have no control key", a.ID, a.Provider)
 			}
@@ -1678,7 +1710,10 @@ func (c *Config) Normalize() error {
 		// OpenDesign's control key is a vela_ctrl_ token. altapi's is a
 		// console session cookie, which has no prefix; it is validated by
 		// shape above and by the quota read itself.
-		if a.ControlKey != "" && a.Provider != ProviderALTAPI &&
+		if a.Provider == ProviderX50 && (len(a.ControlKey) > 4096 || strings.ContainsAny(a.ControlKey, " \t\r\n")) {
+			return fmt.Errorf("accounts[%s]: 50X session must be a bare token without whitespace", a.ID)
+		}
+		if a.ControlKey != "" && a.Provider != ProviderALTAPI && a.Provider != ProviderX50 &&
 			!strings.HasPrefix(a.ControlKey, "vela_ctrl_") {
 			return fmt.Errorf("accounts[%s]: control key must start with vela_ctrl_", a.ID)
 		}
@@ -1688,7 +1723,7 @@ func (c *Config) Normalize() error {
 		if !groupRe.MatchString(a.Group) {
 			return fmt.Errorf("accounts[%s]: invalid group", a.ID)
 		}
-		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup || a.Provider == ProviderDeploy || a.Group == ProviderDeploy {
+		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup || a.Provider == ProviderDeploy || a.Group == ProviderDeploy || a.Provider == ProviderX50 || a.Group == ProviderX50 {
 			for _, p := range Providers {
 				if p != a.Provider && GroupForProvider(p) == a.Group {
 					return fmt.Errorf("accounts[%s]: provider requires its own group", a.ID)
@@ -1886,13 +1921,13 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing, c.ALTAPI.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing, c.ALTAPI.Routing, c.X50.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
-		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing, nested.Deploy.Routing, nested.ALTAPI.Routing = nil, nil, nil, nil, nil
+		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing, nested.Deploy.Routing, nested.ALTAPI.Routing, nested.X50.Routing = nil, nil, nil, nil, nil, nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)

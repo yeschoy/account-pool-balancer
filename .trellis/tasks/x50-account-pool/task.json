@@ -1,0 +1,18 @@
+{
+  "id": "x50-account-pool",
+  "name": "x50-account-pool",
+  "title": "50X独立推理号池、批量入池、代理重置与注册日志浮层",
+  "status": "in_progress",
+  "dev_type": "fullstack",
+  "scope": "x50-provider",
+  "priority": "P1",
+  "creator": "lyh_god",
+  "assignee": "lyh_god",
+  "createdAt": "2026-11-16",
+  "completedAt": null,
+  "branch": "x50-account-pool",
+  "base_branch": "master",
+  "worktree_path": "/Users/lyh_god/orca/workspaces/account-pool-balancer/x50-account-pool",
+  "notes": "四项本地实现与本地验收完成。当前公开协议文档已核查，billing鉴权与真实推理仅有历史证据；本轮未用真实凭据产生费用。完整provider-onboarding线上实测未全部完成，保留in_progress不归档。用户明确禁止委派，单人执行。未推送、未部署、未合并。公共Trellis只读，未修改共享任务指针。",
+  "meta": {"codeStatus":"implemented", "localValidation":"passed", "realUpstream":"not-tested-this-run", "deployment":"not-authorized"}
+}

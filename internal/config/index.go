@@ -55,6 +55,9 @@ func (c *Config) ClientKey(id string) (ClientKey, bool) {
 // trusted merely because the account ID matched a previously indexed entry.
 func (c *Config) NativeBindingSource(a Account) string {
 	base := c.RuntimeBase(a)
+	if a.Provider == ProviderX50 {
+		return HashKey(a.Provider + "\x00" + a.RuntimeKey + "\x00" + a.ControlKey + "\x00" + a.ProxyURL + "\x00" + base)
+	}
 	if c.index != nil {
 		if v, ok := c.index.sources[a.ID]; ok && v.provider == a.Provider && v.key == a.RuntimeKey && v.proxy == a.ProxyURL && v.base == base {
 			return v.hash

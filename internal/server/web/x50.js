@@ -4,6 +4,40 @@
 let x50PollTimer = null;
 let x50Rows = [];
 let x50Settings = null;
+let x50LoadSeq = 0;
+let x50LogSeen = 0;
+const x50Selected = new Set();
+
+function x50VisibleRows(rows) {
+  return rows.filter((r) => document.getElementById('x50-show-imported')?.checked || !r.inPool);
+}
+function setX50LogExpanded(on) {
+  const dock = document.getElementById('x50-log-dock');
+  dock?.classList.toggle('expanded', on);
+  dock?.classList.toggle('collapsed', !on);
+  document.getElementById('x50-log-toggle')?.setAttribute('aria-expanded', String(on));
+  if (on) { x50LogSeen = Number.MAX_SAFE_INTEGER; loadX50Registrations().catch(() => {}); }
+}
+function x50QuotaHTML(a) {
+  const q = a.quota?.x50;
+  const measured = q && q.balanceUsd != null;
+  return `<div>${measured ? esc(q.balanceUsd) + ' USD' : '未知'}</div><div class="muted small">${a.quotaFresh ? '真实余额' : measured ? '历史读数 / 已过期或刷新失败' : '需管理会话 Token'}</div>${q?.at ? `<div class="muted small">${esc(fmtTime(q.at))}</div>` : ''}${q?.error ? `<div class="error small">${esc(q.error)}</div>` : ''}`;
+}
+async function x50ResetPoolProxy() {
+  if (!isX50()) return;
+  await modal({ title: '批量重置50X推理代理', body: `<p>仅修改50X推理账号，不修改其他厂商或注册机的代理、凭据与历史。</p><div class="form"><label>作用域</label><select id="x50-proxy-scope"><option value="selected">所选50X账号（${ocSelected.size}个）</option><option value="all">50X池内全部账号（包含停用账号）</option></select><label>出口</label><select id="x50-proxy-mode"><option value="direct">直连（清空推理代理）</option><option value="proxy">指定代理URL</option></select><label>代理URL</label><input id="x50-proxy-value" autocomplete="off" placeholder="选择指定代理时填写"></div>`, buttons: [{ label: '取消', value: 'c' }, { label: '确认修改50X', value: 'ok', primary: true, action: async () => {
+    if (!isX50()) throw new Error('号池已切换，请重新操作');
+    const scope = document.getElementById('x50-proxy-scope').value;
+    const direct = document.getElementById('x50-proxy-mode').value === 'direct';
+    const proxyUrl = direct ? '' : document.getElementById('x50-proxy-value').value.trim();
+    if (!direct && !proxyUrl) throw new Error('请填写代理URL');
+    const ids = scope === 'selected' ? accountsCache.filter((a) => a.provider === 'x50' && ocSelected.has(a.id)).map((a) => a.id) : [];
+    if (scope === 'selected' && !ids.length) throw new Error('请先选择50X账号');
+    const r = await x50Api('/pool/proxy', {method:'POST',body:JSON.stringify({scope,ids,proxyUrl,confirm:'x50'})});
+    toast(`已修改${r.updated}个50X推理账号为${r.direct ? '直连' : '指定代理'}`);
+  } }] });
+  if (isX50()) await loadAccounts();
+}
 
 // ---------------------------------------------------------------- helpers
 
@@ -37,10 +71,12 @@ function x50Esc(s) {
 
 async function loadX50Registrations() {
   if (!isX50()) return;
+  const seq = ++x50LoadSeq;
   const errEl = document.getElementById('x50-poll-error');
   if (errEl) errEl.textContent = '';
   try {
     const [list, logs] = await Promise.all([x50Api('/candidates'), x50Api('/logs')]);
+    if (seq !== x50LoadSeq || !isX50() || currentPage !== 'x50reg') return;
     x50Rows = list.rows || [];
     x50Settings = list.settings || null;
     renderX50Rows(x50Rows);
@@ -55,17 +91,22 @@ async function loadX50Registrations() {
         : 'socks5://user:pass@host:port';
     }
   } catch (e) {
-    if (errEl) errEl.textContent = e.message;
+    if (seq === x50LoadSeq && isX50() && currentPage === 'x50reg' && errEl) errEl.textContent = e.message;
   }
 }
 
 function renderX50Rows(rows) {
+  rows = x50VisibleRows(rows);
+  const visible = new Set(rows.filter((r) => r.status === 'keyed' && r.hasKey).map((r) => r.id));
+  for (const id of x50Selected) if (!visible.has(id)) x50Selected.delete(id);
+  const all = document.getElementById('x50-select-all');
+  if (all) all.checked = visible.size > 0 && [...visible].every((id) => x50Selected.has(id));
   const body = document.getElementById('x50-rows');
   const cnt = document.getElementById('x50-count');
   if (cnt) cnt.textContent = String(rows.length);
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">还没有账号。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="muted">还没有账号。在上方粘贴 <code>邮箱----接码地址</code> 后点「导入」。</td></tr>';
     return;
   }
   body.innerHTML = rows.map((r) => {
@@ -84,7 +125,8 @@ function renderX50Rows(rows) {
     const canRun = r.status === 'queued' || r.status === 'failed' || r.status === 'cancelled';
     const busy = r.status === 'running' || r.status === 'waiting';
     return `<tr>
-      <td class="small">${x50Esc(r.email)}</td>
+      <td>${r.status === 'keyed' && r.hasKey ? `<input type="checkbox" data-x50-select="${x50Esc(r.id)}" aria-label="选择${x50Esc(r.email)}" ${x50Selected.has(r.id) ? 'checked' : ''}>` : ''}</td>
+      <td class="small">${x50Esc(r.email)}${r.inPool ? '<br><span class="badge ok">已入池</span>' : ''}</td>
       <td>${x50Badge(r.status, r.statusText)}</td>
       <td>${progress}</td>
       <td>${proxy}</td>
@@ -120,6 +162,10 @@ function renderX50Status(s) {
 function renderX50Logs(logs) {
   const body = document.querySelector('#x50-log-table tbody');
   if (!body) return;
+  const expanded = document.getElementById('x50-log-dock')?.classList.contains('expanded');
+  if (expanded) x50LogSeen = logs.length;
+  const badge = document.getElementById('x50-log-badge');
+  if (badge) { const unread = Math.max(0, logs.length - x50LogSeen); badge.textContent = unread > 99 ? '99+' : String(unread); badge.style.display = unread ? '' : 'none'; }
   body.innerHTML = logs.length
     ? logs.map((l) => `<tr>
         <td class="small">${new Date(l.at).toLocaleTimeString()}</td>
@@ -131,7 +177,7 @@ function renderX50Logs(logs) {
 }
 
 function startX50Polling() {
-  stopX50Polling();
+  if (x50PollTimer) clearInterval(x50PollTimer);
   x50PollTimer = setInterval(() => {
     if (document.hidden) return;
     if (!isX50() || currentPage !== 'x50reg') { stopX50Polling(); return; }
@@ -140,6 +186,8 @@ function startX50Polling() {
 }
 
 function stopX50Polling() {
+  x50LoadSeq++;
+  setX50LogExpanded(false);
   if (x50PollTimer) { clearInterval(x50PollTimer); x50PollTimer = null; }
 }
 
@@ -147,10 +195,12 @@ function stopX50Polling() {
 
 async function loadX50Settings() {
   if (!isX50()) return;
+  const seq = ++x50LoadSeq;
   const errEl = document.getElementById('x50s-error');
   if (errEl) errEl.textContent = '';
   try {
     const { settings } = await x50Api('/settings');
+    if (seq !== x50LoadSeq || !isX50() || currentPage !== 'x50settings') return;
     x50Settings = settings;
     const set = (id, v) => { const el = document.getElementById(id); if (el != null) el.value = v; };
     set('x50s-concurrency', settings.concurrency ?? 2);
@@ -203,6 +253,29 @@ function x50CollectSettings(includeProxies) {
 function initX50Page() {
   if (window.__x50Init) return;
   window.__x50Init = true;
+  document.getElementById('x50-log-toggle')?.addEventListener('click', () => setX50LogExpanded(!document.getElementById('x50-log-dock')?.classList.contains('expanded')));
+  document.getElementById('x50-log-close')?.addEventListener('click', () => setX50LogExpanded(false));
+  document.getElementById('x50-log-clear')?.addEventListener('click', () => { const b = document.querySelector('#x50-log-table tbody'); if (b) b.innerHTML = ''; });
+  document.getElementById('x50-pool-proxy')?.addEventListener('click', () => x50ResetPoolProxy().catch((e) => toast(e.message)));
+  document.getElementById('x50-show-imported')?.addEventListener('change', () => renderX50Rows(x50Rows));
+  document.getElementById('x50-select-all')?.addEventListener('change', (e) => {
+    for (const r of x50VisibleRows(x50Rows)) if (r.status === 'keyed' && r.hasKey) { if (e.target.checked) x50Selected.add(r.id); else x50Selected.delete(r.id); }
+    renderX50Rows(x50Rows);
+  });
+  document.getElementById('x50-rows')?.addEventListener('change', (e) => { const id = e.target.dataset.x50Select; if (id) { if (e.target.checked) x50Selected.add(id); else x50Selected.delete(id); } });
+  document.getElementById('x50-pool-import')?.addEventListener('click', async (e) => {
+    const ids = [...x50Selected];
+    if (!ids.length) { toast('请勾选已完成账号'); return; }
+    if (!confirm(`把所选${ids.length}个候选导入50X号池？首次沿用注册代理，重复导入不覆盖已保存策略。删除目标后候选重新可见，可再次导入。`)) return;
+    const button = e.currentTarget;
+    button.disabled = true;
+    try { const r = await x50Api('/pool/import', {method:'POST',body:JSON.stringify({ids})});
+      const failed = (r.results || []).filter((x) => x.error);
+      toast(`新增${r.added}个，已存在${(r.results || []).filter((x) => x.already).length}个，失败${failed.length}个`);
+      const result = document.getElementById('x50-bulk-result'); if (result) result.textContent = failed.map((x) => `${x.id}: ${x.error}`).join('；');
+      x50Selected.clear(); await loadX50Registrations();
+    } catch (err) { toast(err.message); } finally { button.disabled = false; }
+  });
 
   // 导入
   document.getElementById('x50-form')?.addEventListener('submit', async (ev) => {
