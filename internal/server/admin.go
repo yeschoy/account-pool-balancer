@@ -135,6 +135,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	s.registerTokenHarbor(mux, a)
 	s.registerMistral(mux, a)
 	s.registerDeploy(mux, a)
+	s.registerALTAPI(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {
@@ -464,6 +465,10 @@ type accountInput struct {
 	Provider         *string `json:"provider"`
 	Name             *string `json:"name"`
 	Email            *string `json:"email"`
+	// UserID is the provider-side account id. For altapi it is not cosmetic:
+	// /api/user/self requires New-Api-User to equal it, so without it the
+	// balance read is impossible.
+	UserID           *string `json:"userId"`
 	Note             *string `json:"note"`
 	Group            *string `json:"group"`
 	Enabled          *bool   `json:"enabled"`
@@ -488,6 +493,7 @@ func (in accountInput) apply(a *config.Account) {
 	}
 	set(&a.Name, in.Name)
 	set(&a.Email, in.Email)
+	set(&a.UserID, in.UserID)
 	set(&a.Note, in.Note)
 	set(&a.Group, in.Group)
 	set(&a.EgressIP, in.EgressIP)
@@ -1367,6 +1373,17 @@ type settingsDoc struct {
 	Mistral     *config.Mistral      `json:"mistral,omitempty"`
 	ModelStudio *modelStudioSettings `json:"modelStudio,omitempty"`
 	Deploy      *deploySettings      `json:"deploy,omitempty"`
+	ALTAPI      *altapiSettings      `json:"altapi,omitempty"`
+}
+
+// altapiSettings is the console-editable part of the altapi pool. The balance
+// divisor lives here because a fork could change quota_per_unit; the live
+// /api/status value still wins per read.
+type altapiSettings struct {
+	BaseURL      string   `json:"baseUrl"`
+	QuotaPerUnit *float64 `json:"quotaPerUnit,omitempty"`
+	ModelSyncSec *int     `json:"modelSyncSec,omitempty"`
+	DetailLog    *bool    `json:"detailLog,omitempty"`
 }
 
 type deploySettings struct {
@@ -1412,7 +1429,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		defaultPrices = config.DefaultDeployPricing().Models
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
+		"settings":   settingsDoc{Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
@@ -1484,6 +1501,25 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		case config.ProviderTokenHarbor:
 			c.TokenHarbor.Routing = &in.Routing
 			c.TokenHarborErrorRules, c.TokenHarborRetryRules = in.ErrorRules, in.RetryRules
+		case config.ProviderALTAPI:
+			// altapi carries its own base URL and divisor; the pool settings
+			// replace this pool's rules only, never another pool's.
+			if in.ALTAPI != nil {
+				if v := strings.TrimSpace(in.ALTAPI.BaseURL); v != "" {
+					c.ALTAPI.BaseURL = v
+				}
+				if in.ALTAPI.QuotaPerUnit != nil {
+					c.ALTAPI.QuotaPerUnit = *in.ALTAPI.QuotaPerUnit
+				}
+				if in.ALTAPI.ModelSyncSec != nil {
+					c.ALTAPI.ModelSyncSec = *in.ALTAPI.ModelSyncSec
+				}
+				if in.ALTAPI.DetailLog != nil {
+					c.ALTAPI.DetailLog = *in.ALTAPI.DetailLog
+				}
+			}
+			c.ALTAPI.Routing, c.ALTAPI.Quota, c.ALTAPI.Pricing = &in.Routing, &in.Quota, &in.Pricing
+			c.ALTAPIErrorRules, c.ALTAPIRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderModelStudio:
 			if in.ModelStudio != nil {
 				// Reject an unknown region instead of silently falling back:
