@@ -628,15 +628,30 @@
         </section>
       </div>
 
-      <section class="panel mt">
-        <div class="head-row"><h2>运行日志</h2><span class="muted small">最近 500 条</span></div>
-        <div class="table-wrap mt">
-          <table class="table" id="alt-log-table">
-            <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
-            <tbody></tbody>
-          </table>
+      <!-- 运行日志：默认收成右下角小方块，点开才展开到右侧。
+           以前是一整块常驻面板，注册时日志一多就把候选表格挤出视口。 -->
+      <aside id="alt-log-dock" class="dr-log-dock collapsed" aria-live="polite">
+        <button type="button" class="dr-log-toggle" id="alt-log-toggle"
+                title="运行日志（点击展开/收起）" aria-expanded="false">
+          <span class="dr-log-icon">日志</span>
+          <span class="dr-log-badge" id="alt-log-badge">0</span>
+        </button>
+        <div class="dr-log-panel">
+          <div class="head-row">
+            <h2>运行日志</h2>
+            <div class="row-actions">
+              <span class="muted small">最近 200 条</span>
+              <button type="button" class="btn small ghost" id="alt-log-close" title="收起">收起</button>
+            </div>
+          </div>
+          <div class="table-wrap mt">
+            <table class="table" id="alt-log-table">
+              <thead><tr><th>时间</th><th>类型</th><th>账号</th><th>消息</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
-      </section>
+      </aside>
     </section>
 
     <section id="page-altsettings" class="page hidden">

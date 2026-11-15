@@ -27,7 +27,8 @@ for (const part of [
   'id="page-altoverview"', 'id="page-altreg"', 'id="page-altsettings"',
   'id="alt-overview-cards"', 'id="alt-overview-rows"',
   'id="alt-accounts"', 'id="alt-proxies"', 'id="alt-rows"', 'id="alt-status-chips"',
-  'id="alt-log-table"', 'id="alt-proxy-list"', 'id="alt-proxy-result"',
+  'id="alt-log-dock"', 'id="alt-log-toggle"', 'id="alt-log-badge"',
+  'id="alt-log-table"', 'id="alt-log-close"', 'id="alt-proxy-list"', 'id="alt-proxy-result"',
   '/assets/altapi.js',
 ]) {
   assert.ok(html.includes(part), `缺少 ${part}`);
@@ -86,6 +87,19 @@ const unescaped = [...altSource.matchAll(/<td[^>]*>\$\{([^}]*)\}<\/td>/g)]
     // 下面三类不来自上游文本：时间格式化结果、本地拼好的片段、布尔开关渲染的常量标记。
     && !expr.includes('toLocaleTimeString()') && !expr.includes('note') && !expr.includes('r.enabled'));
 assert.deepEqual(unescaped, [], '存在未转义的单元格插值');
+
+// 9.5) 日志必须是右下角常驻浮窗（与 Deploy 同构），不能是常驻正文面板。
+assert.match(html, /<aside id="alt-log-dock" class="dr-log-dock collapsed"/);
+assert.ok(!/id="page-altreg"[\s\S]{0,4000}<section class="panel mt">\s*<div class="head-row"><h2>运行日志<\/h2>/.test(html),
+  '日志不应再是正文里的常驻面板');
+assert.match(altSource, /altLogSeen/);
+assert.match(altSource, /alt-log-badge/);
+assert.match(altSource, /if \(expanded\) \{[\s\S]{0,200}altLogSeen = logs\.length/);
+assert.match(altSource, /alt-log-toggle/);
+assert.match(altSource, /alt-log-close/);
+
+// 9.6) 导入时必须回退到已保存的代理池，否则用户在设置页存好代理后导入仍是直连。
+assert.ok(altSource.includes('proxyPool'), '导入结果应回报本次使用的代理池大小');
 
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。

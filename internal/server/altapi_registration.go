@@ -444,7 +444,9 @@ func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) 
 	var in struct {
 		Lines string `json:"lines"`
 		// Proxies 可选：按导入成功的顺序轮转绑定，一个候选一个出口。
-		// 空值表示直连，不清空候选上已有的代理（PATCH 才是改绑入口）。
+		// 传了就用它（并把池子存进设置，下一次导入不用再贴一遍）；
+		// 不传则回退到已保存的 settings.proxy_pool——否则用户在「注册设置」
+		// 里存好代理池，导入时新候选仍然全是直连，得再手动改一遍。
 		Proxies []string `json:"proxies"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -461,6 +463,20 @@ func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) 
 		if p = strings.TrimSpace(p); p != "" {
 			pool = append(pool, p)
 		}
+	}
+	// 显式传了代理：顺手存成池子，下次导入直接复用。
+	// 没传：沿用已保存的池子。
+	st := m.store.Settings()
+	if len(pool) > 0 {
+		if !equalStrings(st.ProxyPool, pool) {
+			st.ProxyPool = pool
+			if err := m.store.SaveSettings(st); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	} else {
+		pool = st.ProxyPool
 	}
 	added, skipped := 0, []string{}
 	for _, ln := range strings.Split(in.Lines, "\n") {
@@ -492,7 +508,24 @@ func (s *Server) apiALTAPICandidateBulk(w http.ResponseWriter, r *http.Request) 
 		}
 		added++
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"added": added, "skipped": skipped})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added": added, "skipped": skipped,
+		// proxyPool 回给前端，让「导入结果」能说清这次按哪个池子分配的。
+		"proxyPool": len(pool),
+	})
+}
+
+// equalStrings 比较两个字符串切片是否逐位相等（导入时避免无谓写盘）。
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) apiALTAPICandidateUpdate(w http.ResponseWriter, r *http.Request) {

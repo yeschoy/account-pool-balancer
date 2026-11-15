@@ -23,6 +23,8 @@
 let altPollTimer = null;
 let altRows = [];
 let altSettings = null;
+// altLogSeen 记录已渲染过的日志条数，用于收起态的数字角标（未读条数）。
+let altLogSeen = 0;
 
 // ---------------------------------------------------------------- helpers
 
@@ -216,8 +218,24 @@ function renderALTStatus(s) {
 function renderALTLogs(logs) {
   const body = document.querySelector('#alt-log-table tbody');
   if (!body) return;
-  body.innerHTML = logs.length
-    ? logs.map((l) => `<tr>
+  const dock = document.getElementById('alt-log-dock');
+  const expanded = dock && dock.classList.contains('expanded');
+  const badge = document.getElementById('alt-log-badge');
+  if (badge) {
+    if (expanded) {
+      altLogSeen = logs.length;
+      badge.textContent = '0';
+      badge.style.display = 'none';
+    } else {
+      const unread = Math.max(0, logs.length - altLogSeen);
+      // 收起时才提示；展开着说明用户正在看，数字没有意义
+      badge.textContent = unread > 99 ? '99+' : String(unread);
+      badge.style.display = unread ? '' : 'none';
+    }
+  }
+  const rows = logs.slice(-200).reverse();
+  body.innerHTML = rows.length
+    ? rows.map((l) => `<tr>
         <td class="small">${new Date(l.at).toLocaleTimeString()}</td>
         <td class="small">${altEsc(l.type || '')}</td>
         <td class="small">${altEsc(l.email || '')}</td>
@@ -308,6 +326,30 @@ function initALTPage() {
   if (window.__altInit) return;
   window.__altInit = true;
 
+  // 日志浮层：右下角小方块，点开占右侧（与 Deploy 一致）
+  const logDock = document.getElementById('alt-log-dock');
+  const setLogExpanded = (on) => {
+    if (!logDock) return;
+    logDock.classList.toggle('expanded', on);
+    logDock.classList.toggle('collapsed', !on);
+    const btn = document.getElementById('alt-log-toggle');
+    if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on) {
+      // 展开即视为已读，并把最新日志重新拉一遍
+      altLogSeen = Number.MAX_SAFE_INTEGER;
+      const badge = document.getElementById('alt-log-badge');
+      if (badge) badge.style.display = 'none';
+      loadALTRegistrations().catch(() => {});
+    }
+  };
+  document.getElementById('alt-log-toggle')?.addEventListener('click', () => {
+    const on = !(logDock && logDock.classList.contains('expanded'));
+    // 重新开始计数：收起后再来的日志才算未读
+    if (on) altLogSeen = 0;
+    setLogExpanded(on);
+  });
+  document.getElementById('alt-log-close')?.addEventListener('click', () => setLogExpanded(false));
+
   // 概览刷新
   document.getElementById('alt-overview-refresh')?.addEventListener('click', () => {
     loadALTStatus().catch((e) => toast(e.message));
@@ -330,8 +372,14 @@ function initALTPage() {
     try {
       const r = await altApi('/candidates/bulk', { method: 'POST', body: JSON.stringify(payload) });
       if (resEl) {
+        // proxyPool 是后端实际使用的池子大小：没用已存池子时要让用户看见，
+        // 否则「导入成功但全直连」只能靠逐行看代理列才发现。
+        const poolNote = r.proxyPool
+          ? `；代理池 ${r.proxyPool} 个，按顺序轮转分配`
+          : '；没有可用代理池，全部直连';
         resEl.textContent = `导入 ${r.added ?? 0} 个，跳过 ${r.skipped ?? 0} 个`
-          + (r.errors && r.errors.length ? `；${r.errors.slice(0, 3).join('; ')}` : '');
+          + poolNote
+          + (r.skipped && r.skipped.length ? `；跳过示例：${r.skipped.slice(0, 3).join(', ')}` : '');
       }
       document.getElementById('alt-accounts').value = '';
       if (pxEl && payload.proxies) { pxEl.value = ''; delete pxEl.dataset.dirty; }
@@ -518,6 +566,7 @@ window.POOL_ALTAPI = {
   loadALTRegistrations,
   loadALTSettings,
   loadALTStatus,
+  loadALTLogs: () => loadALTRegistrations(),
   startALTPolling,
   stopALTPolling,
   init: initALTPage,
