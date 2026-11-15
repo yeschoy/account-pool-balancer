@@ -697,3 +697,118 @@ func TestX50FailedRowRetriesInPlace(t *testing.T) {
 	}
 	t.Fatal("row never failed")
 }
+
+func TestX50ImportCompletedRecordsKeysWithoutReRegistering(t *testing.T) {
+	e := newX50Env(t)
+	keyCountBefore := int32(0) // no upstream is reachable from this test at all
+	w := e.do(http.MethodPost, "/api/x50/candidates/import-completed", map[string]any{
+		"accounts": []map[string]any{
+			{
+				"email": "done1@icloud.com", "password": "pw1",
+				"mailboxUrl": "https://icloud.mida.vip/messages/done1%40icloud.com?token=t1",
+				"apiKey":     "sk-50x-importedKEY1", "keyPrefix": "sk-50x-impo",
+				"sessionToken": "sess-1", "plan": "starter", "tier": "paid",
+				"balanceUsd": "100.000000000",
+			},
+			{"email": "bad-prefix@icloud.com", "apiKey": "sk-other-SECRET"},
+			{"email": "no-key@icloud.com"},
+			{"email": "not-an-email", "apiKey": "sk-50x-x"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("import %d %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Added   int      `json:"added"`
+		Skipped int      `json:"skipped"`
+		Errors  []string `json:"errors"`
+		Rows    []struct {
+			Email      string `json:"email"`
+			Status     string `json:"status"`
+			HasKey     bool   `json:"hasKey"`
+			KeyPrefix  string `json:"keyPrefix"`
+			BalanceUSD string `json:"balanceUsd"`
+			HasMailbox bool   `json:"hasMailbox"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Added != 1 || resp.Skipped != 3 {
+		t.Fatalf("added=%d skipped=%d errors=%v", resp.Added, resp.Skipped, resp.Errors)
+	}
+	r := resp.Rows[0]
+	if r.Status != string(x50signupstore.Keyed) || !r.HasKey || !r.HasMailbox {
+		t.Fatalf("imported row not completed: %+v", r)
+	}
+	if r.BalanceUSD != "100.000000000" {
+		t.Fatalf("balance lost: %+v", r)
+	}
+	// The key is stored verbatim and readable only through the explicit read.
+	m, _ := e.s.x50Mgr()
+	row, err := m.store.Get(resp.Rows[0].Email)
+	if err == nil {
+		t.Fatalf("store lookup by email should not resolve; got %+v", row)
+	}
+	list := m.store.List()
+	if len(list) != 1 || list[0].APIKey != "sk-50x-importedKEY1" {
+		t.Fatalf("stored key mismatch: %+v", list)
+	}
+	if list[0].SessionToken != "sess-1" || list[0].Password != "pw1" {
+		t.Fatalf("credentials lost: %+v", list[0])
+	}
+	if atomic.LoadInt32(&keyCountBefore) != 0 {
+		t.Fatal("unreachable")
+	}
+	// A completed row must never be re-run by the batch action.
+	if w := e.do(http.MethodPost, "/api/x50/candidates/bulk-register", map[string]any{}); w.Code != http.StatusOK {
+		t.Fatalf("bulk %d", w.Code)
+	}
+	var bulk struct {
+		Queued int `json:"queued"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &bulk)
+	if bulk.Queued != 0 {
+		t.Fatalf("imported completed row was queued: %d", bulk.Queued)
+	}
+}
+
+func TestX50ImportCompletedNeverOverwritesExistingRow(t *testing.T) {
+	e := newX50Env(t)
+	m, _ := e.s.x50Mgr()
+	orig, err := m.store.Add(x50signupstore.Row{Email: "dup@icloud.com", Status: x50signupstore.Failed, Error: "boom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.do(http.MethodPost, "/api/x50/candidates/import-completed", map[string]any{
+		"accounts": []map[string]any{{"email": "dup@icloud.com", "apiKey": "sk-50x-newKEY"}},
+	})
+	var resp struct {
+		Added   int      `json:"added"`
+		Skipped int      `json:"skipped"`
+		Errors  []string `json:"errors"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Added != 0 || resp.Skipped != 1 {
+		t.Fatalf("existing row overwritten: %+v", resp)
+	}
+	after, _ := m.store.Get(orig.ID)
+	if after.Status != x50signupstore.Failed || after.APIKey != "" {
+		t.Fatalf("existing row mutated: %+v", after)
+	}
+}
+
+func TestX50ImportCompletedDryRunWritesNothing(t *testing.T) {
+	e := newX50Env(t)
+	w := e.do(http.MethodPost, "/api/x50/candidates/import-completed", map[string]any{
+		"dryRun":   true,
+		"accounts": []map[string]any{{"email": "dry@icloud.com", "apiKey": "sk-50x-dry"}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("dry run %d %s", w.Code, w.Body)
+	}
+	m, _ := e.s.x50Mgr()
+	if n := len(m.store.List()); n != 0 {
+		t.Fatalf("dry run persisted %d rows", n)
+	}
+}

@@ -532,6 +532,7 @@ func x50TokenFromURL(raw string) string {
 func (s *Server) registerX50(_ *http.ServeMux, a func(string, http.HandlerFunc)) {
 	a("GET /api/x50/candidates", s.apiX50Candidates)
 	a("POST /api/x50/candidates/bulk", s.apiX50BulkImport)
+	a("POST /api/x50/candidates/import-completed", s.apiX50ImportCompleted)
 	a("DELETE /api/x50/candidates/{id}", s.apiX50DeleteRow)
 	a("POST /api/x50/candidates/{id}/register", s.apiX50RegisterOne)
 	a("POST /api/x50/candidates/{id}/retry", s.apiX50RetryOne)
@@ -1013,4 +1014,129 @@ func (s *Server) apiX50Export(w http.ResponseWriter, r *http.Request) {
 		b.WriteByte('\n')
 	}
 	_, _ = w.Write([]byte(b.String()))
+}
+
+// ---- completed-account import ----------------------------------------------
+
+// x50CompletedInput is one account that was registered elsewhere and only needs
+// to be recorded, not re-registered.
+//
+// This exists because a registration pass runs on a machine that may not be the
+// console host: keys minted there are real, and recreating them here would mint
+// a second key for the same account. The import records the observed result
+// verbatim and never contacts upstream.
+type x50CompletedInput struct {
+	Email        string `json:"email"`
+	MailboxURL   string `json:"mailboxUrl,omitempty"`
+	Password     string `json:"password"`
+	ProxyURL     string `json:"proxyUrl,omitempty"`
+	SessionToken string `json:"sessionToken,omitempty"`
+	APIKey       string `json:"apiKey"`
+	KeyID        int64  `json:"keyId,omitempty"`
+	KeyPrefix    string `json:"keyPrefix,omitempty"`
+	Plan         string `json:"plan,omitempty"`
+	Tier         string `json:"tier,omitempty"`
+	BalanceUSD   string `json:"balanceUsd,omitempty"`
+	Note         string `json:"note,omitempty"`
+}
+
+type x50ImportCompletedRequest struct {
+	Accounts []x50CompletedInput `json:"accounts"`
+	DryRun   bool                `json:"dryRun,omitempty"`
+}
+
+// x50CompletedImportResult reports what the import did per account.
+type x50CompletedImportResult struct {
+	Added   int          `json:"added"`
+	Skipped int          `json:"skipped"`
+	Errors  []string     `json:"errors"`
+	Rows    []x50RowView `json:"rows"`
+}
+
+// apiX50ImportCompleted records already-registered accounts with their keys.
+//
+// Validation rejects an entry before anything is persisted so a malformed batch
+// cannot leave half a queue behind. An existing row is never overwritten: the
+// console already owns that row's state and key.
+func (s *Server) apiX50ImportCompleted(w http.ResponseWriter, r *http.Request) {
+	m, err := s.x50Mgr()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var in x50ImportCompletedRequest
+	if err := readBody(r, &in); err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(in.Accounts) == 0 {
+		apiError(w, http.StatusBadRequest, errors.New("没有要导入的已完成账号"))
+		return
+	}
+	if len(in.Accounts) > x50MaxBatch {
+		apiError(w, http.StatusBadRequest, fmt.Errorf("单次最多导入 %d 个账号", x50MaxBatch))
+		return
+	}
+
+	existing := m.store.Snapshot()
+	seen := map[string]bool{}
+	for _, row := range existing {
+		seen[strings.ToLower(row.Email)] = true
+	}
+
+	now := time.Now().UTC()
+	rows := make([]x50signupstore.Row, 0, len(in.Accounts))
+	var errs []string
+	for _, a := range in.Accounts {
+		email := strings.TrimSpace(a.Email)
+		key := strings.TrimSpace(a.APIKey)
+		switch {
+		case email == "" || !strings.Contains(email, "@"):
+			errs = append(errs, "缺少有效邮箱")
+			continue
+		case key == "":
+			errs = append(errs, email+": 缺少 api_key")
+			continue
+		case !strings.HasPrefix(key, "sk-50x-"):
+			errs = append(errs, email+": api_key 不是 sk-50x- 前缀，拒绝写入")
+			continue
+		}
+		if seen[strings.ToLower(email)] {
+			errs = append(errs, email+": 该邮箱已存在，未覆盖")
+			continue
+		}
+		seen[strings.ToLower(email)] = true
+		row := x50signupstore.Row{
+			Email: email, MailboxURL: strings.TrimSpace(a.MailboxURL),
+			MailboxToken: x50TokenFromURL(strings.TrimSpace(a.MailboxURL)),
+			Password:     a.Password, ProxyURL: strings.TrimSpace(a.ProxyURL),
+			Status:       x50signupstore.Keyed,
+			SessionToken: a.SessionToken, APIKey: key, KeyID: a.KeyID,
+			KeyPrefix: a.KeyPrefix, Plan: a.Plan, Tier: a.Tier, BalanceUSD: a.BalanceUSD,
+			Stage:      string(x50reg.StageDone),
+			VerifiedAt: now, KeyedAt: now,
+			Attempts: 1,
+		}
+		if row.KeyPrefix == "" && len(key) > 12 {
+			row.KeyPrefix = key[:12]
+		}
+		rows = append(rows, row)
+	}
+
+	if in.DryRun {
+		writeJSON(w, http.StatusOK, x50CompletedImportResult{
+			Added: len(rows), Skipped: len(errs), Errors: errs, Rows: viewsOf(rows),
+		})
+		return
+	}
+	added, addErrs, err := m.store.AddMany(rows)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	errs = append(errs, addErrs...)
+	m.addLog("info", "", fmt.Sprintf("导入 %d 个已完成账号，跳过 %d 个", len(added), len(errs)))
+	writeJSON(w, http.StatusOK, x50CompletedImportResult{
+		Added: len(added), Skipped: len(errs), Errors: errs, Rows: viewsOf(added),
+	})
 }
