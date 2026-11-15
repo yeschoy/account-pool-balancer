@@ -432,3 +432,10 @@ tr[data-id]:hover { background: var(--line2); }
 .account-credential { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .account-credential code { word-break: break-all; }
 .account-credential code.cred-trunc:not([data-collapsed="0"]) { white-space: nowrap; }
+
+/* 自动补号：模式二选一 */
+.alt-mode { border: 0; padding: 0; margin: 0; }
+.alt-mode legend { font-weight: 600; margin-bottom: 8px; }
+.alt-mode-body { margin: 4px 0 14px 26px; }
+.alt-mode-body[hidden] { display: none; }
+.alt-mode label.check { font-weight: 600; }

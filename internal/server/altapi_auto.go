@@ -58,7 +58,15 @@ type altAutoManager struct {
 	trigger   chan struct{}
 }
 
+// validAltAutoSettings 校验自动补号配置。
+//
+// 两种模式**互斥**：阈值补号是"缺多少补多少"，频率注册是"按固定节奏持续补"。
+// 同时开启会让池子持续膨胀——阈值刚补满，频率又接着注册，没有停止条件。
+// 所以这里强制二选一，而不是允许并行。
 func validAltAutoSettings(v altAutoSettings) error {
+	if v.Enabled && v.ThresholdEnabled && v.FrequencyEnabled {
+		return errors.New("两种补号模式只能选一个：按阈值补号 或 按频率注册")
+	}
 	if v.MinAvailable < 0 || v.MinAvailable > 10000 {
 		return errors.New("最小可用数需在 0..10000")
 	}
@@ -222,6 +230,9 @@ func (s *Server) altAutoCheck(ctx context.Context) {
 	a.status.Queued = queued
 	a.status.LastError = ""
 	a.mu.Unlock()
+
+	// 两种模式互斥（validAltAutoSettings 已保证），所以下面的 return 是安全的：
+	// 阈值补号一触发，这一轮就不再走频率分支。
 
 	// 一、阈值补号：可用不够就补到阈值。
 	if st.ThresholdEnabled && available+importable < st.MinAvailable {

@@ -185,9 +185,18 @@ const css2 = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
 assert.ok(css2.includes('.alt-tab.active'), 'CSS 缺少激活态样式');
 
 // 9.12) 自动补号设置
+// 模式二选一：用 radio，不是两个 checkbox
+assert.ok(html.includes('name="alta-mode"'), '模式应使用单选');
+assert.ok(html.includes('id="alta-mode-threshold"') && html.includes('id="alta-mode-frequency"'));
+assert.ok(!html.includes('id="alta-threshold-on"'), '旧的双复选框应已移除');
+assert.ok(!html.includes('id="alta-freq-on"'), '旧的双复选框应已移除');
+assert.match(altSource, /function syncALTModeBody\(\)/);
+assert.match(altSource, /threshold_enabled: !freq/);
+assert.match(altSource, /frequency_enabled: freq/);
+
 for (const part of [
-  'id="alta-enabled"', 'id="alta-threshold-on"', 'id="alta-min"',
-  'id="alta-freq-on"', 'id="alta-freq-min"', 'id="alta-freq-max"',
+  'id="alta-enabled"', 'id="alta-min"',
+  'id="alta-freq-min"', 'id="alta-freq-max"',
   'id="alta-max"', 'id="alta-save"', 'id="alta-run"', 'id="alta-status"',
 ]) {
   assert.ok(html.includes(part), '缺少自动补号设置项 ' + part);

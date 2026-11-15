@@ -740,17 +740,26 @@
           <label class="check"><input id="alta-enabled" type="checkbox">启用自动补号</label>
           <span class="hint">总开关。关闭后下面两项都不生效。默认关闭——自动注册会真实消耗邮箱与出口 IP 信誉。</span>
 
-          <label class="check"><input id="alta-threshold-on" type="checkbox" checked>按阈值补号</label>
-          <label for="alta-min">最小可用账号数</label>
-          <input id="alta-min" type="number" min="0" max="10000" step="1" value="5">
-          <span class="hint">「可用」= 已启用且未被熔断的 altapi 账号。低于这个数就补到它为止。</span>
+          <fieldset class="alt-mode">
+            <legend>补号模式（二选一）</legend>
+            <label class="check"><input type="radio" name="alta-mode" id="alta-mode-threshold" value="threshold" checked>按阈值补号</label>
+            <span class="hint">可用账号少于阈值时补到阈值为止。池子稳定在目标规模，不会持续膨胀。</span>
+            <div class="alt-mode-body" id="alta-body-threshold">
+              <label for="alta-min">最小可用账号数</label>
+              <input id="alta-min" type="number" min="0" max="10000" step="1" value="5">
+              <span class="hint">「可用」= 已启用且未被熔断的 altapi 账号。</span>
+            </div>
 
-          <label class="check"><input id="alta-freq-on" type="checkbox">按频率注册</label>
-          <label for="alta-freq-min">随机间隔下限（分钟）</label>
-          <input id="alta-freq-min" type="number" min="1" max="1440" step="1" value="5">
-          <label for="alta-freq-max">随机间隔上限（分钟）</label>
-          <input id="alta-freq-max" type="number" min="1" max="1440" step="1" value="10">
-          <span class="hint">填 5 和 10 就是每轮在上次之后随机 5–10 分钟注册一个。每次触发都重新随机，不用固定间隔——固定间隔本身就是脚本特征。与「按阈值补号」互不影响，可同时开。</span>
+            <label class="check"><input type="radio" name="alta-mode" id="alta-mode-frequency" value="frequency">按时间范围随机补号</label>
+            <span class="hint">不管当前够不够，按节奏持续注册。会一直消耗邮箱与出口 IP，除非你想持续扩池。</span>
+            <div class="alt-mode-body" id="alta-body-frequency">
+              <label for="alta-freq-min">随机间隔下限（分钟）</label>
+              <input id="alta-freq-min" type="number" min="1" max="1440" step="1" value="5">
+              <label for="alta-freq-max">随机间隔上限（分钟）</label>
+              <input id="alta-freq-max" type="number" min="1" max="1440" step="1" value="10">
+              <span class="hint">填 5 和 10 就是每轮在上次之后随机 5–10 分钟注册一个。每次触发都重新随机——固定间隔本身就是脚本特征。</span>
+            </div>
+          </fieldset>
 
           <label for="alta-max">单轮最多注册</label>
           <input id="alta-max" type="number" min="1" max="50" step="1" value="5">
