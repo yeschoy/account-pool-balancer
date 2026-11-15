@@ -426,3 +426,9 @@ tr[data-id]:hover { background: var(--line2); }
 .alt-tab:hover { background: #f7f7f8; }
 .alt-tab.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
 .alt-tab .muted, .alt-tab:not(.active) span { opacity: 0.75; margin-left: 2px; }
+
+/* 账号行的长凭据（控制 Key 是 300+ 字符的 session cookie）：
+   折叠时只显示首尾各 6 位；展开时用等宽字体折行，不横向撑破表格。 */
+.account-credential { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.account-credential code { word-break: break-all; }
+.account-credential code.cred-trunc:not([data-collapsed="0"]) { white-space: nowrap; }

@@ -725,7 +725,31 @@ const effLimit = (own, learned) => { const v = [own, learned].filter((x) => x > 
 function accountCredentialHTML(a) {
   return [['runtimeKey', 'Key'], ['controlKey', '控制 Key'], ['proxyUrl', '代理']]
     .filter(([field]) => a[field])
-    .map(([field, label]) => `<div class="acc-sub account-credential">${label}：<code>${esc(a[field])}</code> <button type="button" class="btn small" data-account-copy="${field}">复制</button></div>`).join('');
+    .map(([field, label]) => credentialHTML(field, label, a[field]))
+    .join('');
+}
+
+// credentialHTML 渲染一条凭据。
+//
+// 控制 Key 是 300+ 字符的 session cookie 值，明文铺开会让一行账号高到看不见
+// 下一条。长值默认显示首尾各 6 位，点击「展开」才显示全文；复制按钮始终复制
+// 完整值，不展开也能用。
+const CREDENTIAL_INLINE_MAX = 48;
+
+function credentialHTML(field, label, value) {
+  const v = String(value || '');
+  if (v.length <= CREDENTIAL_INLINE_MAX) {
+    return `<div class="acc-sub account-credential">${esc(label)}：<code>${esc(v)}</code> <button type="button" class="btn small" data-account-copy="${esc(field)}">复制</button></div>`;
+  }
+  const head = v.slice(0, 6);
+  const tail = v.slice(-6);
+  const title = `${esc(label)} 共 ${v.length} 字符，点「展开」看全文`;
+  return `<div class="acc-sub account-credential">
+    <span title="${title}">${esc(label)}：</span>
+    <code class="cred-trunc" data-cred-field="${esc(field)}">${esc(head)}…${esc(tail)}</code>
+    <button type="button" class="btn small" data-account-reveal="${esc(field)}">展开</button>
+    <button type="button" class="btn small" data-account-copy="${esc(field)}">复制</button>
+  </div>`;
 }
 function copyAccountField(id, field) {
   if (!['runtimeKey', 'controlKey', 'proxyUrl'].includes(field)) return;
@@ -791,6 +815,25 @@ function accountRow(a) {
 }
 
 $('#acc-table').addEventListener('click', (ev) => {
+  // 长凭据（控制 Key 等）的展开/收起：只切换这一条，不重绘整行。
+  const reveal = ev.target.closest('[data-account-reveal]');
+  if (reveal) {
+    const code = reveal.parentElement.querySelector('code.cred-trunc');
+    if (code) {
+      // 从缓存按字段取完整值：不把 300+ 字符的 cookie 塞进 data 属性，
+      // 既省 DOM 体积，也避免 HTML 属性转义带来的边界问题。
+      const row = reveal.closest('tr');
+      const acct = accountsCache.find((a) => a.id === (row && row.dataset.id));
+      const full = String((acct && acct[code.dataset.credField]) || '');
+      if (full) {
+        const collapsed = code.dataset.collapsed !== '0';
+        code.textContent = collapsed ? full : (full.slice(0, 6) + '…' + full.slice(-6));
+        code.dataset.collapsed = collapsed ? '0' : '1';
+        reveal.textContent = collapsed ? '收起' : '展开';
+      }
+    }
+    return;
+  }
   const direct = ev.target.closest('[data-account-copy]');
   if (direct) {
     copyAccountField(direct.closest('tr').dataset.id, direct.dataset.accountCopy);

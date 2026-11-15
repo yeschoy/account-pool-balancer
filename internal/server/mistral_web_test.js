@@ -39,6 +39,18 @@ assert.match(edit, /value="mstrl_full_example_key"/);
 assert.match(edit, /data-copy="runtimeKey"/);
 assert.match(edit, /data-copy="proxyUrl"/);
 assert.match(edit, /user:p&lt;a&gt;ss@/);
+// 长凭据（控制 Key 是 300+ 字符的 session cookie）必须折叠显示，
+// 否则一个账号的行高会高到看不见下一条。
+const longKey = 'M'.repeat(320);
+const longAccount = { id: 'x', runtimeKey: 'sk-short', controlKey: longKey, proxyUrl: 'socks5://u:p@1.2.3.4:1080' };
+const longHtml = context.accountCredentialHTML(longAccount);
+assert.ok(!longHtml.includes(longKey), '长凭据不该明文铺开');
+assert.ok(longHtml.includes('…'), '长凭据应显示省略号');
+assert.ok(longHtml.includes('data-account-reveal="controlKey"'), '长凭据应可展开');
+assert.ok(longHtml.includes('data-account-copy="controlKey"'), '折叠时仍要能复制完整值');
+// 短值不需要折叠
+assert.ok(context.accountCredentialHTML({ id: 'y', runtimeKey: 'sk-short' }).includes('sk-short'));
+
 const display = context.accountCredentialHTML(account);
 assert.match(display, /mstrl_full_example_key/);
 assert.match(display, /data-account-copy="proxyUrl"/);
