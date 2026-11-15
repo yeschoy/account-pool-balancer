@@ -46,6 +46,7 @@ const context = {
   setInterval(fn) { const id = nextTimer++; timers.set(id, fn); return id; },
   clearInterval(id) { timers.delete(id); },
   stopPerchRegistrationPolling() {}, stopTHPolling() {}, stopMistralPolling() {},
+  startX50Polling() {}, stopX50Polling() {},
   startDeployPolling() {}, stopDeployPolling() {},
   toast(message) { throw new Error(message); },
 };
@@ -53,7 +54,8 @@ for (const name of ['loadOverview', 'loadAccounts', 'loadKeys', 'loadSettings', 
   'loadPerchOverview', 'loadPerchAccounts', 'loadPerchRequests', 'loadPerchRegistrations',
   'loadPerchAutosignup', 'loadPerchKeys', 'loadPerchSettings', 'loadTHOverview',
   'loadTHRegistrations', 'loadTHSettings', 'loadMistralRegistrations',
-  'loadDeployRegistrations', 'loadDeploySettings']) {
+  'loadDeployRegistrations', 'loadDeploySettings',
+  'loadX50Registrations', 'loadX50Settings']) {
   context[name] = async () => { loaded.push(name); };
 }
 vm.createContext(context);
@@ -69,7 +71,8 @@ for (const provider of vm.runInContext('POOLS', context)) {
   assert.equal(mistralSeparator.classList.contains('hidden'), provider !== 'mistral', provider + ' separator visibility');
   const before = loaded.length;
   context.go('mregister');
-  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : 'overview');
+  // 50X 只有注册机，所以深链被纠正到自己的首页而不是通用概览。
+  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
   assert.equal(context.hash, '#' + context.currentPage);
   assert.equal(sections.find(el => el.id === 'page-mregister').classList.contains('hidden'), provider !== 'mistral');
   assert.equal(loaded.slice(before).includes('loadMistralRegistrations'), provider === 'mistral', provider + ' deep-link isolation');
@@ -78,7 +81,7 @@ for (const provider of vm.runInContext('POOLS.filter(p => p !== "mistral")', con
   switchPool('mistral');
   context.go('mregister');
   switchPool(provider);
-  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : 'overview');
+  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
   assert.equal(registration.classList.contains('hidden'), true);
   assert.equal(mistralSeparator.classList.contains('hidden'), true);
 }
@@ -89,11 +92,22 @@ for (const provider of vm.runInContext('POOLS', context)) {
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'deploy');
     const before = loaded.length;
     context.go(page);
-    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : 'overview');
+    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
     assert.equal(loaded.slice(before).includes(loader), provider === 'deploy', provider + ' Deploy deep-link isolation');
     assert.equal(loaded.slice(before).includes('initDeployPage'), provider === 'deploy', 'Deploy deep links bind handlers');
   }
 }
+// 50X owns exactly its two pages: the registration machine and its settings.
+for (const provider of vm.runInContext('POOLS', context)) {
+  vm.runInContext(`pool = ${JSON.stringify(provider)}; renderPoolTabs();`, context);
+  for (const [page, loader] of [['x50reg', 'loadX50Registrations'], ['x50settings', 'loadX50Settings']]) {
+    assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'x50', provider + ' 50X page visibility');
+    const before = loaded.length;
+    context.go(page);
+    assert.equal(loaded.slice(before).includes(loader), provider === 'x50', provider + ' 50X page isolation');
+  }
+}
+
 // Existing provider-owned registration links retain their original scope.
 for (const provider of ['perch', 'tokenharbor', 'mistral', 'deploy']) {
   switchPool(provider);

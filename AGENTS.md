@@ -23,3 +23,9 @@
 - 服务上线并验收通过后立即告知用户；补文档、提交记录不应拖延上线反馈。
 - 分别记录构建、切换、健康确认和验收时间；不要将整个操作时长或健康检查等待时间误报为停机时间。
 - 凭证不回显、不写入脚本/日志/Git；临时产物登记在 `_tmp_artifacts.md`，经用户同意后再清理，Trellis 记录保留。
+
+## 50X AI 注册机
+
+控制台新增 `50X AI` 顶部标签（`pool='x50'`），侧栏为「50X 注册机」与「50X 注册设置」。当前只实现注册机，没有推理号池。代码在 `internal/x50reg`（HTTP 流程）、`internal/x50signupstore`（存储）、`internal/server/x50_registration.go`（runner + API）、`internal/server/web/x50.js`（前端）；接线改动在 `app.js` 的 `POOLS`/`X50_PAGES`/`isX50` 与 `index.html` 的导航、标签、`/assets/x50.js`。验收与边界见 `docs/x50reg.md`。
+
+后台注册任务必须挂在服务级 context（`Server.x50BaseCtx()`）上，不能继承 `r.Context()`——否则 handler 返回即取消任务。关闭走 `stopX50()`。

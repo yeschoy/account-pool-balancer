@@ -205,6 +205,14 @@ tr[data-id]:hover { background: var(--line2); }
 .pc-registration-layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .pc-registration-layout > .panel { min-width: 0; }
 .pc-registration-form form { display: grid; gap: 8px; }
+/* 注册设置页：标签独占一行，控件与提示紧随其后，避免长说明挤成横条。 */
+.form-grid { display: grid; grid-template-columns: 1fr; gap: 6px; max-width: 720px; }
+.form-grid > label { color: var(--muted); font-size: 13px; font-weight: 600; margin-top: 10px; }
+.form-grid > label.check { display: flex; align-items: center; gap: 6px; font-weight: 400; color: var(--fg); margin-top: 12px; }
+.form-grid > input, .form-grid > select, .form-grid > textarea { width: 100%; max-width: 520px; }
+.form-grid > input[type=number] { max-width: 140px; }
+.form-grid > textarea { resize: vertical; font-family: var(--mono, monospace); font-size: 12px; }
+.form-grid > .hint { color: var(--muted); font-size: 12px; margin-top: -2px; max-width: 620px; line-height: 1.55; }
 .pc-registration-form form label { font-weight: 600; }
 .pc-registration-form textarea { width: 100%; resize: vertical; }
 .pc-registration-form .hint { color: var(--muted); font-size: 12px; }

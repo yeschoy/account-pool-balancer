@@ -136,6 +136,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	s.registerMistral(mux, a)
 	s.registerDeploy(mux, a)
 	s.registerALTAPI(mux, a)
+	s.registerX50(mux, a)
 }
 
 func readBody(r *http.Request, v any) error {
@@ -468,20 +469,20 @@ type accountInput struct {
 	// UserID is the provider-side account id. For altapi it is not cosmetic:
 	// /api/user/self requires New-Api-User to equal it, so without it the
 	// balance read is impossible.
-	UserID           *string `json:"userId"`
-	Note             *string `json:"note"`
-	Group            *string `json:"group"`
-	Enabled          *bool   `json:"enabled"`
-	RuntimeKey       *string `json:"runtimeKey"`
-	ControlKey       *string `json:"controlKey"`
-	ClearControlKey  bool    `json:"clearControlKey"`
-	MaxConcurrent    *int    `json:"maxConcurrent"`
-	MaxRPM           *int    `json:"maxRpm"`
-	Weight           *int    `json:"weight"`
-	Priority         *int    `json:"priority"`
-	ProxyURL         *string `json:"proxyUrl"`
-	EgressIP         *string `json:"egressIp"`
-	ClearProxy       bool    `json:"clearProxy"`
+	UserID          *string `json:"userId"`
+	Note            *string `json:"note"`
+	Group           *string `json:"group"`
+	Enabled         *bool   `json:"enabled"`
+	RuntimeKey      *string `json:"runtimeKey"`
+	ControlKey      *string `json:"controlKey"`
+	ClearControlKey bool    `json:"clearControlKey"`
+	MaxConcurrent   *int    `json:"maxConcurrent"`
+	MaxRPM          *int    `json:"maxRpm"`
+	Weight          *int    `json:"weight"`
+	Priority        *int    `json:"priority"`
+	ProxyURL        *string `json:"proxyUrl"`
+	EgressIP        *string `json:"egressIp"`
+	ClearProxy      bool    `json:"clearProxy"`
 }
 
 // apply sets the given fields; an empty key or proxy keeps the stored one.

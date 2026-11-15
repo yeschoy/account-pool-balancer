@@ -93,3 +93,9 @@ pnpm-debug.log*
 !/tools/deploy_quota.py
 # profile 映射表含**明文代理凭据**（socks5://user:pass@host），永不入库
 /tools/data/ads_profiles.json
+
+# 50x registrar run artifacts (credentials)
+_runs/
+
+# built binary
+/x50reg
