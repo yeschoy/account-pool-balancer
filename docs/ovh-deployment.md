@@ -3019,3 +3019,49 @@ master 完全对齐（含文档提交）。
 | **真实推理** | **200，0.875s**，返回 `OK` |
 
 回退镜像：`account-pool-balancer:release-14b3063-20261115T191926Z`。
+
+## 当前部署：自动补号强制入池（2026-11-15 20:21–20:23 UTC，aee0206）
+
+用户指出：自动注册时必须自动入池；「注册成功后自动建 Key 并入池」这个开关
+只应跟手动注册有关。
+
+### 问题
+
+`autoImport` 一律检查 `ImportToPool`，无法区分这批注册是手动点的还是自动补号
+发起的。后果：用户为了「手动注册时先看结果再决定」关掉开关，**自动补号也跟着
+不入池**——补了号可用数没涨，下一轮继续补，无限消耗邮箱与出口 IP。
+
+### 改法
+
+批次加来源标记 `batchOrigin`：
+
+| 来源 | 入口 | import_to_pool |
+|---|---|---|
+| `originManual` | `POST /candidates/{id}/register`、`/bulk-register` | 尊重开关 |
+| `originAuto` | `altAutoRegister`（阈值/频率触发） | **强制 true** |
+
+`handleEvent` 把 origin 透传到 `autoImport`：
+
+```go
+if origin != originAuto && !m.store.Settings().ImportToPool {
+    return
+}
+```
+
+job settings 里的 `import_to_pool` 同样按 origin 强制，保证 Python 侧收尾提示一致。
+UI 加了一行说明（「只影响手动注册」），语义不用猜。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-aee0206-20261115T202136Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 线上 `import_to_pool` | **False**（正是用户截图的状态） |
+| **线上自动补号** | **`enabled=True`，可用 23/23** |
+| 线上数据 | 账号 **23 个**，余额 **$229.96**（13 → 23，用户一直在跑） |
+| 隔离实测 | `import_to_pool=False` + 自动补号 → 候选 `imported=alt-09c37eb2d1bfa954`（强制入池生效） |
+| 单测 | TestALTAAutoForcesImportEvenWhenSwitchOff（manual 不入池 / auto 入池对照）、TestALTABatchOriginWiring（三个入口来源标注 + 守卫 + job 强制） |
+
+回退镜像：`account-pool-balancer:release-c6a9f00-20261115T192438Z`。
