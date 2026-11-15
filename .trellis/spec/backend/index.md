@@ -27,6 +27,8 @@ Read [Rolling cache statistics](cache-stats.md) before changing cache-hit rates,
 measured-token counters or administrator resets.
 Read [Business log retention](logs.md) before changing log cleanup, recovery,
 query cutoffs or live-tail retention.
+Read [Model list caching](models-cache.md) before changing `/v1/models`, catalogue
+aggregation, quota-driven invalidation, freshness deadlines or in-flight reads.
 
 Quality gate: gofmt; go test ./...; go test -race ./...; go vet ./...;
 go build ./cmd/odb. Use local mocks, never claim credentials or client tests

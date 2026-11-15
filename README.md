@@ -346,9 +346,10 @@ docker compose up -d --build
 | `POST /v1/fim/completions` | Mistral 代码补全（FIM）接口 |
 | `POST /v1/embeddings` | OpenDesign / Ollama / Mistral 向量嵌入接口 |
 | `POST /v1/*` | 其他 `/v1/` POST 端点（按各号池 `poolPathOK` 白名单校验） |
-| `GET /v1/models` | 当前下游密钥所属分组的可用模型去重并集（按分组缓存 10 分钟，并发请求单飞合并；Modal 池发布统一短名称） |
+| `GET /v1/models` | 当前下游密钥所属分组的可用模型去重并集（按号池＋分组缓存最终响应，默认最多 10 分钟，并发请求单飞合并；Modal 池发布统一短名称） |
 | `GET /healthz` | 存活与健康检查，返回 `200 {"ok":true}` |
 
+- **模型列表缓存**：命中后直接复用最终 JSON，不重复遍历账号或请求上游；时长使用路由设置已有的「模型列表缓存（秒）」（`routing.modelsCacheSec`，默认 `600`）。上游目录并集与本地权限过滤分层缓存，额度快照更新仅失效受影响分组的本地结果（包括显式 OpenCode 回退依赖），不再清空所有池或反复触发全账号网络查询。账号/配置变更会使旧版本缓存失效；TokenHarbor 套餐证明、OpenCode 协议元数据、账号目录及 Deploy 新鲜度边界可让缓存提前过期。首次请求或上游缓存过期仍需聚合本组启用账号，保留各账号目录的完整并集；TokenHarbor/OpenCode/Perch 沿用本地快照，不新增远程查询。缓存仅在内存中，重启后重新填充。
 - **鉴权头**：`Authorization: Bearer sk-odb-…` 或 `x-api-key: sk-odb-…`。
 - **诊断响应头**：`X-Request-Id`（可在请求/错误/详情日志中关联查询）、`X-Attempts`（本次请求实际尝试的上游账号次数）。
 

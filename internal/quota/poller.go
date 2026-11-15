@@ -746,13 +746,19 @@ func (p *Poller) All() map[string]*Snapshot {
 	return out
 }
 
-// Forget drops an account's snapshot (deleted, or its control key changed).
+// Forget drops an account's snapshot (deleted, or its control key changed)
+// and invalidates consumers of the old permissions, just like a stored update.
 func (p *Poller) Forget(id string) {
 	p.mu.Lock()
+	_, existed := p.snaps[id]
 	delete(p.snaps, id)
 	delete(p.pending, id)
 	delete(p.urgent, id)
 	p.mu.Unlock()
+	// Consumers may read snapshots; never invoke them while holding mu.
+	if existed && p.OnUpdate != nil {
+		p.OnUpdate(id)
+	}
 }
 
 // Refresh asks for id to be read at the next tick, unless it was read in

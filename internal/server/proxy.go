@@ -2345,18 +2345,26 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg = cfg.ForProvider(keyPool(cfg, ck))
-	body := s.upstreamModels(r.Context(), cfg, ck.Group)
+	body := s.publishedModels(r.Context(), cfg, ck.Group)
 	if body == nil {
 		writeLocalError(w, "openai", http.StatusBadGateway, "api_error", "models_unavailable", "could not list upstream models", 0)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
+}
+
+// filterModels narrows a cached upstream union once, not on every request.
+// Its result must expire when any contributing account catalogue expires.
+func (s *Server) filterModels(cfg *config.Config, group string, entry modelsEntry) modelsEntry {
+	body := entry.body
 	// An Ollama key's /v1/models is the public cloud catalogue (it answers
 	// 200 even for a refused key), so it can't narrow what this pool serves.
 	allowed, known := map[string]bool{}, false
-	if provider := keyPool(cfg, ck); !cfg.Routing.IgnoreCatalog && provider != config.ProviderOllama && !config.IsOpenCode(provider) {
+	if provider := cfg.GroupPool(group); !cfg.Routing.IgnoreCatalog && provider != config.ProviderOllama && !config.IsOpenCode(provider) {
 		now := time.Now()
 		for _, a := range cfg.Accounts {
-			if a.Group != ck.Group || !a.Enabled {
+			if a.Group != group || !a.Enabled {
 				continue
 			}
 			// PublicModels, not Models: an id that is an alias of another
@@ -2367,6 +2375,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if ms := snap.PublicModels(now); ms != nil {
+				entry.expiresAt = minModelsExpiry(entry.expiresAt, snap.CatalogAt.Add(24*time.Hour))
+				if provider == config.ProviderDeploy {
+					entry.expiresAt = minModelsExpiry(entry.expiresAt, snap.CatalogAt.Add(time.Duration(cfg.Deploy.EffectiveQuota().StaleSec)*time.Second))
+				}
 				known = true
 				for _, m := range ms {
 					allowed[m] = true
@@ -2393,72 +2405,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(body)
-}
-
-type modelsEntry struct {
-	body []byte
-	at   time.Time
-}
-
-// modelsCall is one in-flight upstream read that concurrent misses share.
-type modelsCall struct {
-	done chan struct{}
-	body []byte
-}
-
-// resetModels drops the cached catalogues (the upstream settings changed);
-// a read already in flight then isn't cached.
-func (s *Server) resetModels() {
-	s.models.Lock()
-	s.models.byGroup = nil
-	s.models.gen++
-	s.models.Unlock()
-}
-
-// upstreamModels is the raw /v1/models of an account of group, cached per
-// group; concurrent misses wait for one upstream read.
-func (s *Server) upstreamModels(ctx context.Context, cfg *config.Config, group string) []byte {
-	if cfg.GroupPool(group) == config.ProviderTokenHarbor {
-		return s.thModels(cfg, group)
-	}
-	cfg = cfg.ForProvider(cfg.GroupPool(group))
-	s.models.Lock()
-	if e, ok := s.models.byGroup[group]; ok && time.Since(e.at) < time.Duration(cfg.Routing.ModelsCacheSec)*time.Second {
-		s.models.Unlock()
-		return e.body
-	}
-	if c := s.models.inflight[group]; c != nil {
-		s.models.Unlock()
-		select {
-		case <-c.done:
-			return c.body
-		case <-ctx.Done():
-			return nil
-		}
-	}
-	c := &modelsCall{done: make(chan struct{})}
-	if s.models.inflight == nil {
-		s.models.inflight = map[string]*modelsCall{}
-	}
-	s.models.inflight[group] = c
-	gen := s.models.gen
-	s.models.Unlock()
-
-	// the read outlives a caller that leaves: others may be waiting on it
-	c.body = s.fetchModels(context.WithoutCancel(ctx), cfg, group)
-	s.models.Lock()
-	delete(s.models.inflight, group)
-	if c.body != nil && gen == s.models.gen {
-		if s.models.byGroup == nil {
-			s.models.byGroup = map[string]modelsEntry{}
-		}
-		s.models.byGroup[group] = modelsEntry{body: c.body, at: time.Now()}
-	}
-	s.models.Unlock()
-	close(c.done)
-	return c.body
+	entry.body = body
+	return entry
 }
 
 // fetchModels is the pool's model list: the union of what every enabled

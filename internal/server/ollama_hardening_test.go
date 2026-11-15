@@ -122,7 +122,11 @@ func TestOllamaSourceChangesInvalidateQuotaAndModelCache(t *testing.T) {
 			e := newOllamaEnv(t, []config.Account{{ID: "o", Provider: config.ProviderOllama, Group: "ollama", RuntimeKey: "opaque-upstream-key-long-enough"}})
 			cfg := e.srv.cfg.Get()
 			e.srv.quota.Load(map[string]*quota.Snapshot{"o": {CatalogSource: quota.ResponseBindingSource(cfg, cfg.Accounts[0]), Ollama: &quota.OllamaBalance{IncludedUSD: "0", PurchasedUSD: "0"}, BalanceAt: time.Now(), AuthFailed: true}})
-			before := e.srv.models.gen
+			e.srv.models.Lock()
+			cacheKey := modelsKey{provider: config.ProviderOllama, group: "ollama", published: true}
+			e.srv.models.entries = map[modelsKey]modelsEntry{cacheKey: {body: []byte("old"), expiresAt: time.Now().Add(time.Hour), revision: cfg.Revision}}
+			e.srv.models.inflight = map[modelsKey]*modelsCall{cacheKey: {done: make(chan struct{}), revision: cfg.Revision}}
+			e.srv.models.Unlock()
 			_, err := e.srv.cfg.Update(-1, func(c *config.Config) error {
 				switch change {
 				case "key":
@@ -140,8 +144,11 @@ func TestOllamaSourceChangesInvalidateQuotaAndModelCache(t *testing.T) {
 			if e.srv.quota.Get("o") != nil {
 				t.Fatal("old quota/auth verdict survived a source change")
 			}
-			if e.srv.models.gen <= before {
-				t.Fatal("old model cache survived a source change")
+			e.srv.models.Lock()
+			retained := len(e.srv.models.entries) + len(e.srv.models.inflight)
+			e.srv.models.Unlock()
+			if retained != 0 {
+				t.Fatal("old model cache or in-flight read survived a source change")
 			}
 		})
 	}

@@ -72,9 +72,8 @@ type Server struct {
 
 	models struct {
 		sync.Mutex
-		byGroup  map[string]modelsEntry
-		inflight map[string]*modelsCall
-		gen      int
+		entries  map[modelsKey]modelsEntry
+		inflight map[modelsKey]*modelsCall
 	}
 
 	admin   *adminAuth
@@ -198,9 +197,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	}
 	s.quota.OnUpdate = func(id string) {
 		s.metaDirty.Store(true)
-		if a, ok := s.cfg.Get().Account(id); ok && (config.StrictResponses(a.Provider) || a.Provider == config.ProviderDeploy) {
-			s.resetModels()
-		}
+		s.invalidateAccountModels(id)
 	}
 	s.pool = pool.New(s.quota.View)
 	s.pool.ConfigureBindings(store.Get())
