@@ -2977,3 +2977,45 @@ API：`GET|PUT /api/altapi/auto`、`GET /api/altapi/auto/status`、
 `credentialHTML is not defined`）。
 
 回退镜像：`account-pool-balancer:release-a76832a-20261115T190633Z`。
+
+## 当前部署：master 全量对齐（2026-11-15 19:24–19:25 UTC，c6a9f00）
+
+用户要求：全部本地内容提交推送，部署 OVH。
+
+### 前置状态
+
+工作区干净（`git status` 无输出），本地与 `origin/master` 完全同步，无待提交
+内容——上一轮的 `14b3063`（功能）与 `c6a9f00`（部署记录）都已推送。
+
+线上此前跑的是 `release-14b3063`；本轮按 `c6a9f00` 重建，使线上 revision 与
+master 完全对齐（含文档提交）。
+
+### 时间线
+
+| 阶段 | UTC |
+|---|---|
+| 预检（healthy / 双入口 ok / 磁盘 60%） | 19:24 |
+| 构建 | 19:24:38 – 19:24:45.4（7.4s） |
+| 核心数据快照（51K） | 19:24:45.5 |
+| 切换 | 19:24:45.5 |
+| Docker healthy / 0 重启 | 19:25:15 |
+| 双入口 / 数据 / 推理验收 | 19:25 |
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-c6a9f00-20261115T192438Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | `account-pool-balancer:8790` 与 `opendesign-balancer:8790` 均 `{"ok":true}` |
+| 网络别名 | `ai-internal` 含两者 |
+| 前端资源 | `app.js`/`app.css`/`altapi.js` 均 `?v=5296652874` |
+| 本轮功能点 | `app.js` 含 `cred-trunc`（长凭据折叠）、`altapi.js` 含 `syncALTOverviewCards`（概览卡片） |
+| altapi 账号 | 13 个，13 个启用 |
+| 余额合计 | **$129.98**，已读 13/13 |
+| 候选 | 86 条（Key 13 · 入池 13） |
+| 自动补号 | `enabled=false`，可正常报告 `可用 13/13` |
+| 公网 | `https://ods.yeschoy.io/` 200，资源版本一致 |
+| **真实推理** | **200，0.875s**，返回 `OK` |
+
+回退镜像：`account-pool-balancer:release-14b3063-20261115T191926Z`。
