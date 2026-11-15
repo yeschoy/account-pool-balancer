@@ -134,6 +134,33 @@ func x50ViewRow(r x50signupstore.Row) x50RowView {
 	return v
 }
 
+// coerceProxyPool probes a configured pool once per start request and returns
+// the URLs whose scheme was corrected, plus the ones that did not answer at all.
+func (m *x50Manager) coerceProxyPool(pool []string) (coerced, unreachable map[string]string) {
+	coerced = map[string]string{}
+	unreachable = map[string]string{}
+	if len(pool) == 0 {
+		return coerced, unreachable
+	}
+	got, bad := x50reg.NewProxyPool(pool).CoerceAll()
+	return got, bad
+}
+
+func firstKey[V any](in map[string]V) string {
+	for k := range in {
+		return k
+	}
+	return ""
+}
+
+func firstValue[V any](in map[string]V) V {
+	var zero V
+	for _, v := range in {
+		return v
+	}
+	return zero
+}
+
 // x50ProxyLabel hides credentials but keeps the gateway identity visible.
 func x50ProxyLabel(raw string) string {
 	if raw == "" {
@@ -338,6 +365,21 @@ func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signup
 	}
 	concurrency = max(x50signupstore.MinConcurrency, min(concurrency, x50signupstore.MaxConcurrency))
 
+	// Correct scheme mismatches once for the whole start request. A proxy list is
+	// pasted by hand as `host:port` or `socks5://…`, while gateways such as
+	// zooproxy only speak HTTP CONNECT: without this the mismatch shows up as a
+	// per-account 30s timeout on every row instead of one clear correction.
+	coerced, unreachable := m.coerceProxyPool(settings.ProxyPool)
+	var proxyNote string
+	if len(coerced) > 0 {
+		proxyNote = fmt.Sprintf("已自动纠正 %d 个代理的协议（例 %s → %s）",
+			len(coerced), x50ProxyLabel(firstKey(coerced)), x50ProxyLabel(firstValue(coerced)))
+		m.addLog("info", "", proxyNote)
+	}
+	if len(unreachable) > 0 {
+		m.addLog("error", "", fmt.Sprintf("%d 个代理探测不通，注册前请检查白名单/端口", len(unreachable)))
+	}
+
 	var jobs []x50RunJob
 	seenID := map[string]bool{}
 	for _, id := range ids {
@@ -372,6 +414,20 @@ func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signup
 			RowID: id, Email: row.Email,
 			Mailbox:  x50reg.Mailbox{Email: row.Email, Token: mbTok},
 			Password: row.Password, Proxy: row.ProxyURL,
+		}
+		if fixed, ok := coerced[row.ProxyURL]; ok && fixed != row.ProxyURL {
+			job.Proxy = fixed
+			// Persist the correction on the row too, so a later single-row retry
+			// uses the working protocol without re-probing.
+			if _, rerr := m.store.Update(id, func(r *x50signupstore.Row) error {
+				if r.ProxyURL == job.Proxy {
+					return nil
+				}
+				r.ProxyURL = fixed
+				return nil
+			}); rerr != nil {
+				m.addLog("error", row.Email, "回写代理协议失败: "+rerr.Error())
+			}
 		}
 		// Mark running before the goroutine starts so a concurrent start
 		// request observes the row as busy.

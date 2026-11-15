@@ -376,3 +376,53 @@ func TestALTAAutoScheduleInvertedBounds(t *testing.T) {
 		t.Errorf("倒置区间应退化为下限 600s，实际 %ds", delta)
 	}
 }
+
+// 两种模式互斥：同时开启必须被拒。
+//
+// 阈值补号是"缺多少补多少"，频率注册是"按节奏持续补"。同时开会没有停止
+// 条件——阈值刚补满，频率又接着注册，池子无限膨胀并持续消耗邮箱与出口 IP。
+func TestALTAAutoModesAreExclusive(t *testing.T) {
+	both := altAutoSettings{
+		Enabled: true, ThresholdEnabled: true, MinAvailable: 5,
+		FrequencyEnabled: true, RandomMinSec: 300, RandomMaxSec: 600, MaxPerRound: 5,
+	}
+	if err := validAltAutoSettings(both); err == nil {
+		t.Fatal("两个模式同时开启应被拒绝")
+	}
+
+	onlyThreshold := both
+	onlyThreshold.FrequencyEnabled = false
+	if err := validAltAutoSettings(onlyThreshold); err != nil {
+		t.Errorf("只开阈值应合法: %v", err)
+	}
+
+	onlyFreq := both
+	onlyFreq.ThresholdEnabled = false
+	if err := validAltAutoSettings(onlyFreq); err != nil {
+		t.Errorf("只开频率应合法: %v", err)
+	}
+
+	// 总开关关着时不校验模式（允许用户先配好再启用）
+	disabled := both
+	disabled.Enabled = false
+	if err := validAltAutoSettings(disabled); err != nil {
+		t.Errorf("总开关关闭时不该因模式冲突报错: %v", err)
+	}
+}
+
+// API 层也要拒绝：不能绕过前端直接 POST 两个模式。
+func TestALTAAutoAPIRejectsBothModes(t *testing.T) {
+	s := altAutoTestServer(t)
+	body, _ := json.Marshal(altAutoSettings{
+		Enabled: true, ThresholdEnabled: true, MinAvailable: 5,
+		FrequencyEnabled: true, RandomMinSec: 300, RandomMaxSec: 600, MaxPerRound: 5,
+	})
+	rec := httptest.NewRecorder()
+	s.apiALTAPIAutoSettings(rec, httptest.NewRequest(http.MethodPut, "/api/altapi/auto", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("同时开两个模式应 400，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "只能选一个") {
+		t.Errorf("错误信息应说明互斥，实际: %s", rec.Body.String())
+	}
+}

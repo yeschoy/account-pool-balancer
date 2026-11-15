@@ -501,20 +501,34 @@ function altCollectSettings(includeProxies) {
 
 // ---------------------------------------------------------------- 自动补号
 
+// renderALTAuto 填充表单。**只应在进入页面/保存后调用**——定时刷新用
+// renderALTAutoStatus，否则会把用户正在敲的输入框改回已保存的值（每 5 秒一次）。
 function renderALTAuto(auto) {
   if (!auto) return;
   const st = auto.settings || {};
   const on = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
   const val = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
   on('alta-enabled', st.enabled);
-  on('alta-threshold-on', st.threshold_enabled);
+  // 模式二选一：频率开着就选频率，否则选阈值（默认）
+  const freq = !!st.frequency_enabled;
+  const th = document.getElementById('alta-mode-threshold');
+  const fq = document.getElementById('alta-mode-frequency');
+  if (th) th.checked = !freq;
+  if (fq) fq.checked = freq;
+  syncALTModeBody();
   val('alta-min', st.min_available ?? 5);
-  on('alta-freq-on', st.frequency_enabled);
   // 存储单位是秒，界面按分钟填。四舍五入到整分钟，避免出现 9.9999 这种值。
   val('alta-freq-min', Math.round((st.random_min_sec ?? 600) / 60));
   val('alta-freq-max', Math.round((st.random_max_sec ?? 1200) / 60));
   val('alta-max', st.max_per_round ?? 5);
 
+  renderALTAutoStatus(auto);
+}
+
+// renderALTAutoStatus 只更新状态那一行文字，不碰任何表单控件。
+// 定时轮询调它，避免干扰正在编辑的参数。
+function renderALTAutoStatus(auto) {
+  if (!auto) return;
   const s = auto.status || {};
   const el = document.getElementById('alta-status');
   if (el) {
@@ -535,14 +549,24 @@ function renderALTAuto(auto) {
   }
 }
 
+// syncALTModeBody 只显示当前选中模式对应的参数，避免用户以为两个会同时生效。
+function syncALTModeBody() {
+  const freq = document.getElementById('alta-mode-frequency')?.checked === true;
+  const th = document.getElementById('alta-body-threshold');
+  const fqb = document.getElementById('alta-body-frequency');
+  if (th) th.hidden = freq;
+  if (fqb) fqb.hidden = !freq;
+}
+
 function altCollectAuto() {
   const v = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
   const c = (id) => document.getElementById(id)?.checked === true;
+  const freq = document.getElementById('alta-mode-frequency')?.checked === true;
   return {
     enabled: c('alta-enabled'),
-    threshold_enabled: c('alta-threshold-on'),
+    threshold_enabled: !freq,
     min_available: Number(v('alta-min')) || 0,
-    frequency_enabled: c('alta-freq-on'),
+    frequency_enabled: freq,
     // 界面按分钟填，后端按秒存。
     random_min_sec: (Number(v('alta-freq-min')) || 5) * 60,
     random_max_sec: (Number(v('alta-freq-max')) || 10) * 60,
@@ -556,11 +580,15 @@ function startALTAutoPolling() {
   stopALTAutoPolling();
   altAutoTimer = setInterval(async () => {
     if (document.hidden || !isALTapi() || currentPage !== 'altsettings') return;
+    // 用户正在表单里操作时直接跳过：既省请求，也避免状态行在输入时闪动。
+    const form = document.getElementById('alta-form');
+    if (form && form.contains(document.activeElement)) return;
     try {
       const r = await altApi('/auto');
-      renderALTAuto(r);
+      // 只刷状态文字：表单控件由用户掌控，轮询不碰。
+      renderALTAutoStatus(r);
     } catch { /* 静默：状态刷新失败不该刷屏 */ }
-  }, 5000);
+  }, 10000);
 }
 function stopALTAutoPolling() {
   if (altAutoTimer) { clearInterval(altAutoTimer); altAutoTimer = null; }
@@ -644,6 +672,11 @@ function initALTPage() {
     }
   });
 
+  // 自动补号：切换模式时只显示对应的参数
+  document.querySelectorAll('input[name="alta-mode"]').forEach((r) => {
+    r.addEventListener('change', syncALTModeBody);
+  });
+
   // 自动补号：保存
   document.getElementById('alta-save')?.addEventListener('click', async () => {
     const err = document.getElementById('alta-error');
@@ -671,7 +704,8 @@ function initALTPage() {
       await altApi('/auto/run', { method: 'POST', body: '{}' });
       toast('已触发一次检查，5 秒内刷新状态');
       setTimeout(async () => {
-        try { renderALTAuto(await altApi('/auto')); } catch { /* ignore */ }
+        // 只刷状态文字：立即检查不该覆盖用户还没保存的输入。
+        try { renderALTAutoStatus(await altApi('/auto')); } catch { /* ignore */ }
       }, 3000);
     } catch (e) {
       toast(e.message);

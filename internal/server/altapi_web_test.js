@@ -185,9 +185,18 @@ const css2 = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
 assert.ok(css2.includes('.alt-tab.active'), 'CSS 缺少激活态样式');
 
 // 9.12) 自动补号设置
+// 模式二选一：用 radio，不是两个 checkbox
+assert.ok(html.includes('name="alta-mode"'), '模式应使用单选');
+assert.ok(html.includes('id="alta-mode-threshold"') && html.includes('id="alta-mode-frequency"'));
+assert.ok(!html.includes('id="alta-threshold-on"'), '旧的双复选框应已移除');
+assert.ok(!html.includes('id="alta-freq-on"'), '旧的双复选框应已移除');
+assert.match(altSource, /function syncALTModeBody\(\)/);
+assert.match(altSource, /threshold_enabled: !freq/);
+assert.match(altSource, /frequency_enabled: freq/);
+
 for (const part of [
-  'id="alta-enabled"', 'id="alta-threshold-on"', 'id="alta-min"',
-  'id="alta-freq-on"', 'id="alta-freq-min"', 'id="alta-freq-max"',
+  'id="alta-enabled"', 'id="alta-min"',
+  'id="alta-freq-min"', 'id="alta-freq-max"',
   'id="alta-max"', 'id="alta-save"', 'id="alta-run"', 'id="alta-status"',
 ]) {
   assert.ok(html.includes(part), '缺少自动补号设置项 ' + part);
@@ -227,6 +236,22 @@ const statusSrc = fs.readFileSync(path.join(__dirname, 'altapi_registration.go')
   .match(/func \(s \*Server\) apiALTAPIStatus[\s\S]*?\n\}/)[0];
 assert.ok(statusSrc.includes('s.quota.Get(a.ID)'), '/status 应读配额快照');
 assert.ok(!/altapiFetchQuota/.test(statusSrc), '/status 不能逐账号读上游余额');
+
+// 9.14) 自动补号轮询不能覆盖用户正在编辑的表单
+// 曾经 renderALTAuto 同时填表单和刷状态，5 秒轮询把它当状态刷新用，
+// 结果参数填一半就被改回已保存的值。
+const autoStatusFn = altSource.match(/function renderALTAutoStatus\(auto\)[\s\S]*?\n\}/);
+assert.ok(autoStatusFn, '缺少 renderALTAutoStatus');
+assert.ok(!/\.value\s*=/.test(autoStatusFn[0]), 'renderALTAutoStatus 不能写 input.value');
+assert.ok(!/\.checked\s*=/.test(autoStatusFn[0]), 'renderALTAutoStatus 不能写 input.checked');
+// 轮询必须调状态版，不是表单版
+const pollFn = altSource.match(/function startALTAutoPolling\(\)[\s\S]*?\n\}/);
+assert.ok(pollFn, '缺少 startALTAutoPolling');
+assert.ok(pollFn[0].includes('renderALTAutoStatus(r)'), '轮询应只刷状态');
+assert.ok(!/renderALTAuto\(r\)/.test(pollFn[0]), '轮询不能调 renderALTAuto');
+// 「立即检查」也不能覆盖未保存输入
+const runFn = altSource.match(/alta-run'\}[\s\S]*?\n  \}\);/);
+if (runFn) assert.ok(!/renderALTAuto\(await/.test(runFn[0]), '立即检查不能覆盖表单');
 
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
