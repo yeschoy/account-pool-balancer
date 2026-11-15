@@ -74,7 +74,7 @@ for (const provider of vm.runInContext('POOLS', context)) {
   const before = loaded.length;
   context.go('mregister');
   // 50X 只有注册机，所以深链被纠正到自己的首页而不是通用概览。
-  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : provider === 'altapi' ? 'altreg' : 'overview');
+  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
   assert.equal(context.hash, '#' + context.currentPage);
   assert.equal(sections.find(el => el.id === 'page-mregister').classList.contains('hidden'), provider !== 'mistral');
   assert.equal(loaded.slice(before).includes('loadMistralRegistrations'), provider === 'mistral', provider + ' deep-link isolation');
@@ -83,7 +83,7 @@ for (const provider of vm.runInContext('POOLS.filter(p => p !== "mistral")', con
   switchPool('mistral');
   context.go('mregister');
   switchPool(provider);
-  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : provider === 'altapi' ? 'altoverview' : 'overview');
+  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : provider === 'altapi' ? 'overview' : 'overview');
   assert.equal(registration.classList.contains('hidden'), true);
   assert.equal(mistralSeparator.classList.contains('hidden'), true);
 }
@@ -94,7 +94,7 @@ for (const provider of vm.runInContext('POOLS', context)) {
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'deploy');
     const before = loaded.length;
     context.go(page);
-    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : provider === 'altapi' ? 'altreg' : 'overview');
+    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : provider === 'x50' ? 'x50reg' : 'overview');
     assert.equal(loaded.slice(before).includes(loader), provider === 'deploy', provider + ' Deploy deep-link isolation');
     assert.equal(loaded.slice(before).includes('initDeployPage'), provider === 'deploy', 'Deploy deep links bind handlers');
   }
@@ -110,14 +110,25 @@ for (const provider of vm.runInContext('POOLS', context)) {
   }
 }
 
-// ALTapi owns exactly its three pages: overview, registrar and settings.
+// ALTapi 有自己的推理号池：通用管理页（概览/账号/密钥/路由/日志）在它下面也要
+// 可见可用，另外还有两个注册机专属页。这里守的是「通用页不被误隐藏」和
+// 「专属页只在 altapi 出现」两件事。
 for (const provider of vm.runInContext('POOLS', context)) {
   vm.runInContext(`pool = ${JSON.stringify(provider)}; renderPoolTabs();`, context);
-  for (const [page, loader] of [['altoverview', 'loadALTStatus'], ['altreg', 'loadALTRegistrations'], ['altsettings', 'loadALTSettings']]) {
+  for (const [page, loader] of [['altreg', 'loadALTRegistrations'], ['altsettings', 'loadALTSettings']]) {
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'altapi', provider + ' ALTapi page visibility');
     const before = loaded.length;
     context.go(page);
     assert.equal(loaded.slice(before).includes(loader), provider === 'altapi', provider + ' ALTapi page isolation');
+  }
+}
+// 通用页在任何池下都不能被隐藏（包括 altapi）。
+for (const provider of vm.runInContext('POOLS', context)) {
+  vm.runInContext(`pool = ${JSON.stringify(provider)}; renderPoolTabs();`, context);
+  for (const page of ['overview', 'accounts', 'keys', 'routing', 'requests', 'errors', 'details']) {
+    const el = anchors.find(x => x.dataset.page === page);
+    assert.ok(el, '缺少通用页 ' + page);
+    assert.equal(el.classList.contains('hidden'), false, provider + ' 下通用页 ' + page + ' 不该隐藏');
   }
 }
 

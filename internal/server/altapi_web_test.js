@@ -23,7 +23,9 @@ assert.match(html, /data-pool="altapi" role="tab">ALTapi/);
 
 // 3) 侧栏三页 + 页面区块 + 静态资源都要在。
 for (const part of [
-  'data-page="altoverview"', 'data-page="altreg"', 'data-page="altsettings"',
+  // 通用管理页（与 Deploy 同构）由共用标记提供，ALTapi 不重复声明；
+  // 侧栏只保留注册机专属的两页。
+  'data-page="altreg"', 'data-page="altsettings"',
   'id="page-altoverview"', 'id="page-altreg"', 'id="page-altsettings"',
   'id="alt-overview-cards"', 'id="alt-overview-rows"',
   'id="alt-accounts"', 'id="alt-proxies"', 'id="alt-rows"', 'id="alt-status-chips"',
@@ -48,7 +50,13 @@ for (const part of [
 // 5) app.js 必须把新池接进分页、侧栏、标签路由与轮询。
 assert.match(appSource, /const POOLS = \[[^\]]*'altapi'\]/);
 assert.match(appSource, /altapi: 'ALTapi'/);
-assert.match(appSource, /const ALTAPI_PAGES = \['altoverview', 'altreg', 'altsettings'\]/);
+// ALTapi 有自己的推理号池，所以通用管理页（概览/账号/密钥/路由/日志）全部适用，
+// ALTAPI_PAGES = [...PROXY_PAGES, 注册机两页]；专属页单独列出用于跨池拦截。
+assert.match(appSource, /const ALTAPI_PAGES = \[\.\.\.PROXY_PAGES, 'altreg', 'altsettings'\]/);
+assert.match(appSource, /const ALTAPI_ONLY_PAGES = \['altreg', 'altsettings'\]/);
+for (const shared of ['overview', 'accounts', 'keys', 'routing', 'requests', 'errors', 'details']) {
+  assert.ok(html.includes(`data-page="${shared}"`), '缺少通用页 ' + shared);
+}
 assert.match(appSource, /const isALTapi = \(\) => pool === 'altapi'/);
 assert.match(appSource, /altoverview: \(\) => loadALTStatus\(\), altreg: \(\) => loadALTRegistrations\(\), altsettings: \(\) => loadALTSettings\(\)/);
 assert.match(appSource, /if \(page === 'altreg'\) startALTPolling\(\)/);

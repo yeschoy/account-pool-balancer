@@ -271,8 +271,11 @@ const MR_PAGES = ['mregister'];
 const DR_PAGES = ['dreg', 'dsettings'];
 // 50X AI 号池：注册机与注册设置（x50.js）
 const X50_PAGES = ['x50reg', 'x50settings'];
-// ALTapi 号池：概览、注册机与注册设置（altapi.js）
-const ALTAPI_PAGES = ['altoverview', 'altreg', 'altsettings'];
+// ALTapi 号池：通用管理页（概览/账号/密钥/路由/日志）+ 注册机与注册设置。
+// 和 Deploy 同构——ALTapi 有自己的推理号池，所以通用管理页全部适用。
+const ALTAPI_PAGES = [...PROXY_PAGES, 'altreg', 'altsettings'];
+// 只属于注册机、不与通用页重名的那两个（切换池子后若无有效页时用 altreg 兜底）
+const ALTAPI_ONLY_PAGES = ['altreg', 'altsettings'];
 // perch.js loads after this file, so its loaders are looked up at call time
 const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
   perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
@@ -280,16 +283,19 @@ const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, 
   mregister: () => loadMistralRegistrations(),
   dreg: () => loadDeployRegistrations(), dsettings: () => loadDeploySettings(),
   x50reg: () => loadX50Registrations(), x50settings: () => loadX50Settings(),
-  altoverview: () => loadALTStatus(), altreg: () => loadALTRegistrations(), altsettings: () => loadALTSettings() };
+  altoverview: () => loadALTStatus(), altreg: () => loadALTRegistrations(), altsettings: () => loadALTSettings(),
+  // ALTapi 池走通用「概览」时渲染自己的号池统计（在 loadOverview 里分派）
+  };
 function go(page) {
   if (!pages[page]) page = 'overview';
   if (MR_PAGES.includes(page) && !isMistral()) page = pool === 'perch' ? 'perch' : 'overview';
   if (DR_PAGES.includes(page) && !isDeploy()) page = pool === 'perch' ? 'perch' : 'overview';
   if (DR_PAGES.includes(page) && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (X50_PAGES.includes(page) && !isX50()) page = pool === 'perch' ? 'perch' : 'overview';
-  if (ALTAPI_PAGES.includes(page) && !isALTapi()) page = pool === 'perch' ? 'perch' : 'overview';
+  // 只有 altapi 专属页需要跨池拦截；通用页（accounts/keys/…）所有池都能用。
+  if (ALTAPI_ONLY_PAGES.includes(page) && !isALTapi()) page = pool === 'perch' ? 'perch' : 'overview';
   if (isALTapi() && !ALTAPI_PAGES.includes(page)) page = 'altreg';
-  if (ALTAPI_PAGES.includes(page) && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
+  if (ALTAPI_ONLY_PAGES.includes(page) && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
   if (isX50() && !X50_PAGES.includes(page)) page = 'x50reg';
   if (X50_PAGES.includes(page) && window.POOL_X50) window.POOL_X50.init();
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
@@ -320,7 +326,9 @@ function renderPoolTabs() {
   // actually toggles visibility.
   $$('#nav a[data-page]').forEach((a) => {
     const page = a.dataset.page;
-    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page) || ALTAPI_PAGES.includes(page);
+    // own = 只属于某个池的专属页（需要按池隐藏）；通用管理页永远可见，
+    // 所以这里用 ALTAPI_ONLY_PAGES 而不是 ALTAPI_PAGES。
+    const own = PERCH_PAGES.includes(page) || TH_PAGES.includes(page) || MR_PAGES.includes(page) || DR_PAGES.includes(page) || X50_PAGES.includes(page) || ALTAPI_ONLY_PAGES.includes(page);
     const mine = (isPerch && PERCH_PAGES.includes(page)) || (isTH && TH_PAGES.includes(page)) || (isMistral() && MR_PAGES.includes(page)) || (isDeploy() && DR_PAGES.includes(page)) || (isX50() && X50_PAGES.includes(page)) || (isALTapi() && ALTAPI_PAGES.includes(page));
     a.classList.toggle('hidden', own ? !mine : false);
     a.removeAttribute('hidden');
@@ -383,7 +391,11 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   renderPoolTabs();
   if (pool === 'deploy' && window.POOL_DEPLOY) window.POOL_DEPLOY.init();
   if (pool === 'x50' && window.POOL_X50) window.POOL_X50.init();
-  if (pool === 'altapi' && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
+  if (pool === 'altapi' && window.POOL_ALTAPI) {
+    window.POOL_ALTAPI.init();
+    // 预取号池状态，让「概览」页首屏就有余额卡片
+    window.POOL_ALTAPI.altPrefetchStatus();
+  }
   // switching pools lands on that pool's first page
   const valid = pool === 'perch' ? PERCH_PAGES : pool === 'tokenharbor' ? [...PROXY_PAGES, ...TH_PAGES] : pool === 'mistral' ? [...PROXY_PAGES, ...MR_PAGES] : pool === 'deploy' ? [...PROXY_PAGES, ...DR_PAGES] : pool === 'x50' ? X50_PAGES : pool === 'altapi' ? ALTAPI_PAGES : PROXY_PAGES;
   // 50X 目前只有注册机，概览页对它没有意义，所以切换后直接进注册机。
@@ -447,6 +459,7 @@ async function loadOverview() {
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
     ...(isDeploy() ? [['Deploy 余额', '未知', o.deploy?.quotaReason || '仅绑定推理 Key，未绑定组织控制台会话；不按 Key 累加余额'], ['Deploy 模型目录', `${num(o.deploy?.catalogFresh || 0)} / ${num(o.accounts)}`, '新鲜目录账号 / 总数；目录不是 Key 激活或推理授权证明']] : []),
+    ...(isALTapi() ? altOverviewCards() : []),
     [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 累计缓存读取 ${num(st.k || 0)}（缺失的上游用量不计）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
     ['会话绑定', num(o.bindings), `${o.bindingLimit ? (o.bindingIndependent ? 'Mistral独立 ' + num(o.bindings) : '共享 ' + num(o.sharedBindings ?? o.globalBindings)) + ' / ' + num(o.bindingLimit) + ' · LRU淘汰 · ' : ''}策略 ${o.strategy}`],
     ...(isMistral() && o.mistralBufferLimitBytes ? [['本地字节预算', (o.mistralBufferedBytes / 1048576).toFixed(1) + ' / ' + (o.mistralBufferLimitBytes / 1048576).toFixed(0) + ' MiB', `日志排队 ${(Number(o.logQueuedBytes || 0) / 1048576).toFixed(1)} MiB · ${num(o.logQueueLength || 0)} 条 · 累计丢弃 ${num(o.logsDropped || 0)}；不等于进程RSS`]] : []),
