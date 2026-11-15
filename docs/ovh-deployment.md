@@ -2721,3 +2721,59 @@ ALTAPI_ONLY_PAGES = ['altreg', 'altsettings']   // 跨池拦截只看这两页
 | 后端零改动 | `/api/overview`、`/api/accounts`、`/api/settings`、`/api/logs/{kind}` 全部对 altapi 返回 200 |
 
 回退镜像：`account-pool-balancer:release-7e4252f-20261115T130242Z`。
+
+## 当前部署：已入池标记 + 账号退回注册机（2026-11-15 15:48–15:49 UTC，7c57304）
+
+用户要求：① 已从注册机进号池的，用新状态标记「已入池」；② 号池里的账号可以
+单个/批量选回注册机重跑。
+
+### 1. 已入池标记
+
+候选的 `imported_account_id` 非空即为已入池。此前仍显示「已建 Key」，但
+「Key 存在」与「已进号池可被调度」是两件事，中间还差一次导入动作。
+
+新增派生状态 `imported`（徽章「已入池」），优先级高于 `key_created`：
+
+```js
+altBadge(r.imported_account_id ? 'imported' : r.status)
+```
+
+**不落库、不改状态机**：从数据推导，退回后自然回到原状态。
+
+### 2. 账号退回注册机
+
+`POST /api/altapi/return-to-registrar` `{ids}`
+
+账号 ID 是 `alt-<candidateID>`，据此反查源候选：
+
+| 情形 | 处理 |
+|---|---|
+| 源候选存在 | 清空 `ImportedAcctID`，状态回 `failed`（可重试语义） |
+| 源候选不存在（手工账号） | 用账号的 email/key/session 新建一条候选 |
+| 账号无 email | 明确报错，不静默 |
+
+**账号不删除，但会停用**——避免同一 Key 同时被号池调度和注册机重跑。
+
+前端：账号页批量栏新增「退回 ALTapi 注册机」按钮（仅 altapi 池显示），
+确认弹窗说明三条后果，成功后自动跳注册机页。
+
+### 3. 顺带的必要修复
+
+`managedKeyPool()` 之前不含 altapi，导致账号页**没有勾选框**、批量栏被隐藏——
+不退这一步就选不中账号。已加入（altapi 有自己的 runtimeKey 与管理页，本就该算）。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-7c57304-20261115T154856Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 「已入池」文案 | 线上 altapi.js 命中 5 处 |
+| 退回按钮 | `data-oc-batch="alt-return"` 在页面 |
+| managedKeyPool | 已含 `isALTapi()` |
+| 线上数据 | 12 条候选**全部**带 `imported_account_id`（都应显示已入池） |
+| 退回接口 | 空 ids 返回 400（预期） |
+| 隔离端到端 | 入池 → 退回：`{"returned":1}`，候选 `status=failed / imported=(空) / detail=从号池退回`，账号 `enabled=False` 保留 |
+
+回退镜像：`account-pool-balancer:release-2b83ee4-20261115T150930Z`。
