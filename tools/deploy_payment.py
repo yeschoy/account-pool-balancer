@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import os
 import re
@@ -193,6 +194,91 @@ def _playwright_proxy(url: str) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------
+# Playwright 浏览器端加固
+#
+# 2026-11-14 实测（tools/fp_audit.py --browser）：默认 browser.new_context()
+# 会在 Stripe.js 面前暴露四个可判定特征：
+#   1. UA 含 "HeadlessChrome/157.0.0.0"      → 100% 判定为自动化
+#   2. window.chrome.runtime === undefined    → 真实 Chrome 恒存在
+#   3. screen 固定 1280x720 且 outer==inner   → 无浏览器边框，headless 脚印
+#   4. locale zh-CN / tz Asia/Shanghai        → 与代理出口国家冲突
+#
+# Stripe 的 token 端点会做设备指纹与频率判定；带着 HeadlessChrome 去换
+# tok_xxx，等于主动告诉对方这是脚本。以下两项把它补成自洽的真实身份。
+# --------------------------------------------------------------------------
+
+# 与 fp_layer 的 Chrome 157 实测身份保持一致，避免"注册用 157、绑卡用别的"。
+_GEO_PROFILE = "en-US"
+_GEO_TZ = "America/New_York"
+
+
+def _hardened_context_kwargs() -> dict:
+    """返回与 deploy.com 注册身份自洽的 new_context 参数。"""
+    return {
+        "user_agent": DEFAULT_UA,           # 关键：去掉 HeadlessChrome 标记
+        "locale": _GEO_PROFILE,
+        "timezone_id": _GEO_TZ,
+        "viewport": {"width": 1440, "height": 820},
+        "screen": {"width": 1440, "height": 900},
+        "device_scale_factor": 2,
+        "is_mobile": False,
+        "has_touch": False,
+        "color_scheme": "light",
+        "extra_http_headers": {
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+
+
+# 在页面任何脚本执行前注入，补掉 headless 带来的对象缺失
+_STEALTH_JS = """
+// navigator.webdriver: 真实浏览器里是 undefined
+try {
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+} catch (e) {}
+
+// window.chrome.runtime: 真实 Chrome 一定存在（普通页面下 id 为空）
+try {
+  if (!window.chrome) window.chrome = {};
+  if (!window.chrome.runtime) {
+    window.chrome.runtime = {
+      id: undefined,
+      connect: function () {},
+      sendMessage: function () {},
+    };
+  }
+} catch (e) {}
+
+// outerWidth/Height 与 inner 拉开浏览器 chrome 高度差（headless 下两者相等）
+try {
+  if (window.outerWidth === window.innerWidth) {
+    Object.defineProperty(window, 'outerWidth',
+      { get: () => window.innerWidth });
+  }
+  const delta = 80;
+  Object.defineProperty(window, 'outerHeight',
+    { get: () => window.innerHeight + delta });
+} catch (e) {}
+
+// 少量插件条目，避免 plugins.length === 0 的裸 headless 特征
+try {
+  if (navigator.plugins && navigator.plugins.length === 0) {
+    Object.defineProperty(navigator, 'plugins',
+      { get: () => [1, 2, 3, 4, 5] });
+  }
+} catch (e) {}
+"""
+
+
+def _apply_stealth(ctx) -> None:
+    """把 stealth 脚本挂到 context，所有 page 生效。"""
+    try:
+        ctx.add_init_script(_STEALTH_JS)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def create_stripe_token(card: Card, proxy: str | None = None, headless: bool = True) -> tuple[str | None, str]:
     """
     用真实浏览器里的 Stripe.js 把卡换成一次性 token。
@@ -247,7 +333,9 @@ def create_stripe_token(card: Card, proxy: str | None = None, headless: bool = T
             except Exception:  # noqa: BLE001
                 browser = p.chromium.launch(**launch_args)
             try:
-                page = browser.new_context().new_page()
+                ctx = browser.new_context(**_hardened_context_kwargs())
+                _apply_stealth(ctx)
+                page = ctx.new_page()
                 page.goto("https://deploy.com/signup?source=landing_login",
                           wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(1200)
@@ -308,6 +396,163 @@ def create_stripe_token(card: Card, proxy: str | None = None, headless: bool = T
                     pass
     except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
+
+
+# --------------------------------------------------------------------------
+# AdsPower 路径：Stripe token + portal 请求都在同一个 profile 内
+#
+# 为什么必须这样：Stripe 会做设备指纹判定，并把结论回传给 deploy。
+# 如果绑卡用新开的 Playwright 浏览器，对 Stripe 就是"注册时的那台设备"
+# 和"绑卡时的另一台设备"，这是最容易被关联的断裂点。
+#
+# 这里不新开浏览器，直接复用注册用的 AdsPower profile：
+#   - 同 TLS / 同 UA / 同 WebGL / 同 Canvas / 同出口 IP
+#   - Cookie 天然携带，不需要 session_cookie 参数
+#   - 页面内 fetch 发 portal 请求，Origin/Referer 自然正确
+# --------------------------------------------------------------------------
+
+def create_stripe_token_ads(p: "AdsProfile", card: Card,
+                            page_url: str = "https://deploy.com/explore") -> tuple[str | None, str]:
+    """
+    在 AdsPower profile 当前页面里用 Stripe.js 换 token。
+
+    返回 (tok_xxx, "") 或 (None, 错误原因)。
+    """
+    if not card.luhn_ok():
+        return None, "卡号未通过 Luhn 校验"
+
+    # 1. 确保停在 deploy.com 域下（Stripe.js 要求 origin 正确）
+    cur = p.eval("location.href") or ""
+    if "deploy.com" not in cur:
+        p.navigate(page_url, wait=6)
+
+    # 2. 注入 Stripe.js
+    loaded = p.eval(
+        "(function(){ return new Promise(function(r){"
+        "  if (typeof Stripe === 'function') return r(true);"
+        "  var s=document.createElement('script');"
+        "  s.src='https://js.stripe.com/v3/';"
+        "  s.onload=function(){r(true)}; s.onerror=function(){r(false)};"
+        "  document.head.appendChild(s);"
+        "}); })()"
+    )
+    if not loaded:
+        return None, "Stripe.js 加载失败"
+
+    # 3. 挂载 CardElement
+    ok = p.eval(
+        "(function(key){"
+        "  try{"
+        "    var s=Stripe(key);"
+        "    var old=document.getElementById('__cpx_card'); if(old) old.remove();"
+        "    var m=document.createElement('div'); m.id='__cpx_card';"
+        "    m.style.position='fixed'; m.style.left='0'; m.style.top='0';"
+        "    m.style.width='400px'; m.style.opacity='0.01';"
+        "    document.body.appendChild(m);"
+        "    var card=s.elements().create('card'); card.mount('#__cpx_card');"
+        "    window.__stripe=s; window.__card=card; return true;"
+        "  }catch(e){ window.__lastErr=String(e); return false; }"
+        "})(" + json.dumps(STRIPE_KEY) + ")"
+    )
+    if not ok:
+        return None, f"挂载 CardElement 失败: {p.eval('window.__lastErr') or '未知'}"
+    time.sleep(2.5)
+
+    # 4. 在 Stripe 的 card iframe 里填卡
+    # Stripe 的输入框是受控 React 组件，直接赋值 .value 不会触发 onChange，
+    # 必须走 prototype 上的原生 setter 再派发 input 事件。
+    js_fill = (
+        "(function(v){"
+        "  var setter=Object.getOwnPropertyDescriptor("
+        "    window.HTMLInputElement.prototype,'value').set;"
+        "  var inp=document.querySelectorAll('input');"
+        "  var done=0;"
+        "  function put(el,val){"
+        "    try{ el.focus(); setter.call(el,val);"
+        "      el.dispatchEvent(new Event('input',{bubbles:true}));"
+        "      el.dispatchEvent(new Event('change',{bubbles:true}));"
+        "      el.dispatchEvent(new Event('blur',{bubbles:true}));"
+        "      return true }catch(e){ return false }"
+        "  }"
+        "  for(var i=0;i<inp.length;i++){"
+        "    var n=inp[i].name||inp[i].getAttribute('data-elements-stable-field-name')||'';"
+        "    if(n==='cardnumber'){ if(put(inp[i],v.num)) done++; }"
+        "    else if(n==='exp-date'){ if(put(inp[i],v.exp)) done++; }"
+        "    else if(n==='cvc'){ if(put(inp[i],v.cvc)) done++; }"
+        "    else if(n==='postal'){ if(put(inp[i],v.zip)) done++; }"
+        "  }"
+        "  return done;"
+        "})({num:%s,exp:%s,cvc:%s,zip:%s})" % (
+            json.dumps(re.sub(r"\\D", "", card.number)),
+            json.dumps(f"{card.exp_mon:02d}{str(card.exp_year)[-2:]}"),
+            json.dumps(card.cvc),
+            json.dumps(card.zip),
+        )
+    )
+    # 需要切到 iframe 上下文才能填
+    filled = p.fill_stripe_frames(js_fill)
+    if filled == 0:
+        return None, "找不到 Stripe 输入框（iframe 未就绪）"
+    time.sleep(1.5)
+
+    # 5. createToken
+    # 页面可能已导航导致 window.__stripe 丢失，先检查并按需重建
+    has_inst = p.eval("typeof window.__stripe==='object' && typeof window.__card==='object'")
+    if not has_inst:
+        p.eval(
+            "(function(key){"
+            "  var s=Stripe(key);"
+            "  var old=document.getElementById('__cpx_card'); if(old) old.remove();"
+            "  var m=document.createElement('div'); m.id='__cpx_card';"
+            "  m.style.position='fixed'; m.style.opacity='0.01';"
+            "  document.body.appendChild(m);"
+            "  var card=s.elements().create('card'); card.mount('#__cpx_card');"
+            "  window.__stripe=s; window.__card=card;"
+            "})(" + json.dumps(STRIPE_KEY) + ")"
+        )
+        time.sleep(2.5)
+        p.fill_stripe_frames(js_fill)
+        time.sleep(1.2)
+
+    out = p.eval(
+        "(async function(zip){"
+        "  try{"
+        "    var r=await window.__stripe.createToken(window.__card,{address_zip:zip});"
+        "    if(r.error) return JSON.stringify({err:r.error.message});"
+        "    return JSON.stringify({tok:r.token&&r.token.id});"
+        "  }catch(e){ return JSON.stringify({err:String(e)}); }"
+        "})(" + json.dumps(card.zip) + ")"
+    )
+    try:
+        d = json.loads(out or "{}")
+    except Exception:  # noqa: BLE001
+        return None, f"createToken 返回无法解析: {out!r}"
+    if d.get("tok"):
+        return d["tok"], ""
+    return None, d.get("err") or "未知错误"
+
+
+def bind_card_ads(p: "AdsProfile", org_id: str | int, token: str,
+                  set_primary: bool = True) -> Resp:
+    """在 profile 内 POST payment_methods。"""
+    from ads_transport import AdsResponse  # noqa: PLC0415
+
+    r = p.post_json(f"{BASE}/api/organization/{org_id}/payment_methods",
+                    {"token": token, "set_primary": set_primary})
+    return Resp(status=r.status, body=r.body)
+
+
+def credit_ops_ads(p: "AdsProfile", org_id: str | int, amount: float,
+                   source_id: str) -> tuple[Resp, Resp]:
+    """tax_estimate + buy，都在 profile 内完成。"""
+    from ads_transport import AdsResponse  # noqa: PLC0415
+
+    e = p.post_json(f"{BASE}/api/organization/{org_id}/credit/tax_estimate",
+                    {"amount": amount, "stripe_source_id": source_id})
+    b = p.post_json(f"{BASE}/api/organization/{org_id}/credit/buy",
+                    {"amount": amount, "stripe_source_id": source_id})
+    return (Resp(status=e.status, body=e.body),
+            Resp(status=b.status, body=b.body))
 
 
 # --------------------------------------------------------------------------
@@ -499,9 +744,14 @@ def bind_card_and_charge(
     ua: str = DEFAULT_UA,
     proxy: str | None = None,
     dry_run: bool = False,
+    ads_profile: "AdsProfile | None" = None,
 ) -> BindResult:
     """
     完整绑卡 + 充值一步到位。
+
+    ads_profile: 传入 AdsProfile 时走 AdsPower 路径 —— Stripe token 和
+    portal 请求都在**注册用的同一个 profile** 里完成，指纹/IP/Cookie 全程不变。
+    不传则走旧的 Playwright 新开浏览器路径。
 
     ⚠️ dry_run=True 时不会发出任何真实请求，只做本地校验与流程打印。
     """
@@ -521,6 +771,21 @@ def bind_card_and_charge(
 
     res.step = "stripe_token"
 
+    # ── 拟人停顿 ─────────────────────────────────────────────────────────
+    # 绑卡是整条链路里最值得怀疑的一步：真人注册后不会在几十秒内就去绑卡
+    # 充值。"注册→绑卡"的时间间隔是最强、也最不需要指纹的风控信号。
+    # 默认按部署口径给一个较长的随机停顿；要立刻跑可用 DEPLOY_PAY_NO_DELAY=1。
+    if not os.environ.get("DEPLOY_PAY_NO_DELAY"):
+        import random as _rnd
+        import time as _tm
+        _med = float(os.environ.get("DEPLOY_PAY_PRE_BIND_MEDIAN", "900"))  # 15 分钟
+        _sigma = float(os.environ.get("DEPLOY_PAY_PRE_BIND_SIGMA", "0.9"))
+        _wait = _rnd.lognormvariate(math.log(_med), _sigma) if _med > 0 else 0.0
+        if _wait > 0:
+            print(f"[pay] 绑卡前拟人停顿 {_wait / 60:.1f} 分钟"
+                  f"（DEPLOY_PAY_NO_DELAY=1 可跳过）", file=sys.stderr, flush=True)
+            _tm.sleep(_wait)
+
     if dry_run:
         res.token = "tok_DRYRUN"
         res.source_id = "src_DRYRUN"
@@ -529,6 +794,10 @@ def bind_card_and_charge(
         res.raw = {"card": card.masked(), "brand": card.brand(), "org_id": str(org_id),
                    "amount": amount}
         return res
+
+    # ── AdsPower 路径：同一个 profile 内完成全部操作 ──────────────────
+    if ads_profile is not None:
+        return _bind_via_ads(ads_profile, org_id, card, amount, res)
 
     # 上游代理不能直接交给 Chromium：本机/服务器都需要经系统代理隧道
     # 才能与 zooproxy 握手，且 Playwright 不认 socks5 的用户名密码字段。
@@ -620,6 +889,79 @@ def bind_card_and_charge(
     return res
 
 
+def _bind_via_ads(p: "AdsProfile", org_id: str | int, card: Card,
+                  amount: float, res: BindResult) -> BindResult:
+    """
+    AdsPower 路径的绑卡 + 充值。
+
+    关键点：全程复用注册时的那个 profile。
+      - Stripe.js 在 profile 的页面里生成 token（同设备指纹）
+      - portal 请求用页面内 fetch（同 Origin/Cookie/TLS）
+    不会新开任何浏览器。
+    """
+    res.step = "stripe_token"
+    token, err = create_stripe_token_ads(p, card)
+    if not token:
+        res.error = f"Stripe token 失败: {err}"
+        return res
+    res.token = token
+
+    res.step = "bind"
+    br = bind_card_ads(p, org_id, token)
+    bj = br.json or {}
+    msg = (bj.get("message") or "") if isinstance(bj, dict) else ""
+    dup = br.status == 400 and "duplicate fingerprint" in msg.lower()
+    if br.status not in (200, 201) and not dup:
+        res.error = f"绑卡失败 HTTP {br.status}: {msg or br.body[:200]}"
+        res.raw = bj
+        return res
+
+    # 回查列表拿 internal_id（绑定响应体不含 source id）
+    lm = p.get(f"{BASE}/api/organization/{org_id}/payment_methods")
+    lj = lm.json or {}
+    items = ((lj.get("data") or {}).get("list") or []) if isinstance(lj, dict) else []
+    if items:
+        want = re.sub(r"\D", "", card.number)[-4:]
+        match = [it for it in items if str(it.get("last_four")) == want] or items
+        res.source_id = str(match[0].get("internal_id") or "")
+        res.raw = {"bound": match[0], "duplicate": dup}
+    if not res.source_id:
+        res.error = "绑卡成功但未拿到 internal_id"
+        return res
+    record_card_use(card, org_id)
+
+    res.step = "tax_estimate"
+    p.post_json(f"{BASE}/api/organization/{org_id}/credit/tax_estimate",
+                {"amount": amount, "stripe_source_id": res.source_id})  # 失败不阻断
+
+    res.step = "charge"
+    cr = p.post_json(f"{BASE}/api/organization/{org_id}/credit/buy",
+                     {"amount": amount, "stripe_source_id": res.source_id})
+    cj = cr.json or {}
+    if cr.status not in (200, 201):
+        res.error = f"充值失败 HTTP {cr.status}: {cj.get('message') or cr.body[:200]}"
+        res.raw = cj
+        return res
+
+    res.charged = float(amount)
+    # 余额：读真实流水
+    lr = p.get(f"{BASE}/api/organization/{org_id}/credit")
+    lj2 = lr.json or {}
+    rows = (lj2.get("data") or []) if isinstance(lj2, dict) else []
+    total = None
+    if isinstance(rows, list):
+        try:
+            total = round(sum(float(r.get("amount") or 0) for r in rows if isinstance(r, dict)), 2)
+        except Exception:  # noqa: BLE001
+            total = None
+    res.balance = total
+
+    res.ok = True
+    res.step = "done"
+    res.raw = cj
+    return res
+
+
 def cmd_bind_job(path: str) -> int:
     """
     批处理入口，供后端调用。读 job.json：
@@ -635,6 +977,8 @@ def cmd_bind_job(path: str) -> int:
     live = bool(raw.get("live"))
     amount = float(raw.get("amount") or 5.0)
     items = raw.get("items") or []
+    # AdsPower 模式：job 里给 ads_api_key，item 里给 ads_profile_id
+    ads_key = str(raw.get("ads_api_key") or os.environ.get("ADS_API_KEY") or "")
     okc = 0
     for it in items:
         cid = it.get("id") or ""
@@ -654,15 +998,21 @@ def cmd_bind_job(path: str) -> int:
             print(json.dumps({**base, "ok": False, "step": "card", "error": f"卡解析失败: {e}"},
                              ensure_ascii=False), flush=True)
             continue
-        if not it.get("session_cookie") or not it.get("org_id"):
+        use_ads = bool(ads_key and it.get("ads_profile_id"))
+        if not it.get("org_id") or (not use_ads and not it.get("session_cookie")):
             print(json.dumps({**base, "ok": False, "step": "session",
-                              "error": "缺少会话或组织 ID（需先注册成功）"},
+                              "error": "缺少组织 ID / 会话（AdsPower 模式还需 ads_profile_id）"},
                              ensure_ascii=False), flush=True)
             continue
+        prof = None
         try:
+            if use_ads:
+                from ads_transport import open_profile  # noqa: PLC0415
+                prof = open_profile(ads_key, it["ads_profile_id"])
             r = bind_card_and_charge(
-                session_cookie=it["session_cookie"], org_id=it["org_id"], card=card,
-                amount=amount, proxy=it.get("proxy"), dry_run=not live,
+                session_cookie=it.get("session_cookie", ""), org_id=it["org_id"],
+                card=card, amount=amount, proxy=it.get("proxy"),
+                dry_run=not live, ads_profile=prof,
             )
             if r.ok:
                 okc += 1

@@ -63,6 +63,8 @@ func (s *Server) registerDeploy(mux *http.ServeMux, a func(string, http.HandlerF
 	a("GET /api/deploy/settings", s.apiDeploySettings)
 	a("PUT /api/deploy/settings", s.apiDeploySaveSettings)
 	a("GET /api/deploy/status", s.apiDeployStatus)
+	a("POST /api/deploy/candidates/{id}/quota", s.apiDeployCandidateQuota)
+	a("POST /api/deploy/quota-refresh", s.apiDeployQuotaRefresh)
 }
 
 func (s *Server) deployStore() (*deploysignupstore.Store, error) {
@@ -118,6 +120,41 @@ func (m *deployManager) Logs() []deployLogLine {
 }
 
 // ---------------------------------------------------------------- handlers
+
+// pySettings 把 store.Settings 转成 Python 脚本认识的 dict。
+//
+// 集中在一处：原来注册和绑卡各写了一份 map，加字段时容易漏一边。
+// AdsPower 相关字段只在 transport=adspower 时才有意义，但一并传过去
+// 无副作用（脚本自己判断）。
+func pySettings(st deploysignupstore.Settings, extra map[string]any) map[string]any {
+	m := map[string]any{
+		"min_interval":   st.MinIntervalSec,
+		"max_retries":    st.MaxRetries,
+		"verify_timeout": st.VerifyTimeoutSec,
+		"transport":      st.Transport,
+		"auto_verify":    st.AutoVerify,
+		"sys_proxy":      st.SysProxy,
+		"bridge_port":    st.BridgePort,
+		"import_to_pool": st.ImportToPool,
+	}
+	// AdsPower：只有配了 key 才传，避免空值把脚本带偏
+	if st.AdsAPIKey != "" {
+		m["ads_api_key"] = st.AdsAPIKey
+	}
+	if st.AdsAPIBase != "" {
+		m["ads_api_base"] = st.AdsAPIBase
+	}
+	if st.AdsTunnelDaemon != "" {
+		m["ads_tunnel_daemon"] = st.AdsTunnelDaemon
+	}
+	if st.AdsHeadless {
+		m["ads_headless"] = true
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
 
 func (s *Server) apiDeployCandidates(w http.ResponseWriter, r *http.Request) {
 	m, err := s.deployMgr()
@@ -385,15 +422,7 @@ func (s *Server) apiDeployResendVerification(w http.ResponseWriter, r *http.Requ
 	// 又不会更慢——旧 token 已失效的情况由上游 authenticate 明确报错。
 	sinceStr := ""
 	job := map[string]any{
-		"settings": map[string]any{
-			"min_interval":   st.MinIntervalSec,
-			"max_retries":    st.MaxRetries,
-			"verify_timeout": st.VerifyTimeoutSec,
-			"transport":      st.Transport,
-			"auto_verify":    st.AutoVerify,
-			"sys_proxy":      st.SysProxy,
-			"bridge_port":    st.BridgePort,
-		},
+		"settings": pySettings(st, nil),
 		"items": []map[string]any{{
 			"email":          c.Email,
 			"mailbox_url":    c.MailboxURL,
@@ -406,6 +435,8 @@ func (s *Server) apiDeployResendVerification(w http.ResponseWriter, r *http.Requ
 			"browser":        c.Browser,
 			"platform":       c.Platform,
 			"ja3":            c.JA3,
+			// AdsPower 模式：一个号一个 profile，全程同一指纹/IP
+			"ads_profile_id": c.AdsProfileID,
 		}},
 	}
 	raw, _ := json.Marshal(job)
@@ -631,6 +662,8 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 			"browser":        c.Browser,
 			"platform":       c.Platform,
 			"ja3":            c.JA3,
+			// AdsPower 模式：没有 profile 就无法注册（一号一 profile）
+			"ads_profile_id": c.AdsProfileID,
 		})
 		validIDs = append(validIDs, id)
 		_, _ = m.store.Update(id, func(x *deploysignupstore.Candidate) error {
@@ -653,18 +686,8 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 	}
 
 	job := map[string]any{
-		"settings": map[string]any{
-			"min_interval":   st.MinIntervalSec,
-			"max_retries":    st.MaxRetries,
-			"verify_timeout": st.VerifyTimeoutSec,
-			"transport":      st.Transport,
-			"auto_verify":    st.AutoVerify,
-			"sys_proxy":      st.SysProxy,
-			"bridge_port":    st.BridgePort,
-			// 需要 Secret Key 才能在注册后直接入池
-			"import_to_pool": st.ImportToPool,
-		},
-		"items": items,
+		"settings": pySettings(st, nil),
+		"items":    items,
 	}
 	raw, _ := json.Marshal(job)
 	jobPath := filepath.Join(os.TempDir(), fmt.Sprintf("deploy-job-%d.json", time.Now().UnixNano()))
@@ -1430,7 +1453,8 @@ func (s *Server) apiDeployBindCard(w http.ResponseWriter, r *http.Request) {
 	res, berr := s.runBindCards([]bindItem{{
 		ID: c.ID, Email: c.Email, SessionCookie: c.SessionCookie,
 		OrgID: c.OrgID, CardLine: line, Zip: st.CardZip, Country: st.CardCountry,
-		Proxy: c.ProxyURL,
+		Proxy:        c.ProxyURL,
+		AdsProfileID: c.AdsProfileID,
 	}}, live, amount)
 	if berr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": berr.Error()})
@@ -1551,7 +1575,8 @@ func (s *Server) apiDeployBindCards(w http.ResponseWriter, r *http.Request) {
 		items = append(items, bindItem{
 			ID: c.ID, Email: c.Email, SessionCookie: c.SessionCookie,
 			OrgID: c.OrgID, CardLine: line, Zip: st.CardZip, Country: st.CardCountry,
-			Proxy: c.ProxyURL,
+			Proxy:        c.ProxyURL,
+			AdsProfileID: c.AdsProfileID,
 		})
 	}
 	live := body.Live == nil || *body.Live
@@ -1625,6 +1650,8 @@ type bindItem struct {
 	Zip           string
 	Country       string
 	Proxy         string
+	// AdsProfileID 非空时走 AdsPower：绑卡在注册用的同一 profile 内完成
+	AdsProfileID string
 }
 
 // bindOutcome 是 python 逐行回传的结果。
@@ -1670,9 +1697,16 @@ func (s *Server) runBindCards(items []bindItem, live bool, amount float64) ([]bi
 			"id": it.ID, "email": it.Email, "session_cookie": it.SessionCookie,
 			"org_id": it.OrgID, "card": it.CardLine,
 			"zip": it.Zip, "country": it.Country, "proxy": it.Proxy,
+			// AdsPower 模式：绑卡必须在**注册用的同一个 profile** 里做，
+			// 否则 Stripe 看到的是另一台设备，是最容易触发风控的断裂点。
+			"ads_profile_id": it.AdsProfileID,
 		})
 	}
 	job["items"] = jitems
+	// AdsPower 模式：token 与 portal 请求都在 profile 内，不需要代理桥
+	if st.AdsAPIKey != "" {
+		job["ads_api_key"] = st.AdsAPIKey
+	}
 
 	f, ferr := os.CreateTemp("", "deploy-bind-*.json")
 	if ferr != nil {

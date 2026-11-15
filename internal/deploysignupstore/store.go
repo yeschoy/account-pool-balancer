@@ -79,6 +79,16 @@ type Candidate struct {
 	// 会话：hive-portal-production 的值，用于后续调 portal API
 	SessionCookie string `json:"session_cookie,omitempty"`
 
+	// AdsPower profile ID。一个号一个 profile，全程同一指纹/IP。
+	// 注册、验证、绑卡都在这个 profile 里完成；查额度不需要它（用 cookie 直连）。
+	AdsProfileID string `json:"ads_profile_id,omitempty"`
+	// AdsExitIP 是该 profile 绑定的出口 IP（创建时探测得到）
+	AdsExitIP string `json:"ads_exit_ip,omitempty"`
+	// AdsTimezone 是该 profile 的浏览器时区（与出口 IP 同城，防止指纹矛盾）
+	AdsTimezone string `json:"ads_timezone,omitempty"`
+	// QuotaCheckedAt 是最近一次成功查额度的时刻
+	QuotaCheckedAt time.Time `json:"quota_checked_at,omitempty"`
+
 	// 以下三项来自 POST /api/organization/{org}/tokens，是入池（路由）用的凭据。
 	// Deploy 的路由使用 Secret Key（不是 access_key）。Secret Key 只在创建时返回一次，
 	// 创建后门票接口只回 access_key，所以必须在这里持久化。
@@ -148,6 +158,18 @@ type Settings struct {
 	CardCountry string `json:"card_country,omitempty"`
 	// PythonBin 注册机解释器路径
 	PythonBin string `json:"python_bin"`
+
+	// —— AdsPower 相关（transport=adspower 时生效）——
+	// AdsAPIKey 是 AdsPower 本地 API 的鉴权 key
+	AdsAPIKey string `json:"ads_api_key,omitempty"`
+	// AdsAPIBase 是 AdsPower API 地址。本机是 127.0.0.1:50325；
+	// 跨机时是隧道映射端口（如 127.0.0.1:15025）。
+	AdsAPIBase string `json:"ads_api_base,omitempty"`
+	// AdsTunnelDaemon 是 Mac 侧隧道守护地址（跨机时用），
+	// 形如 http://127.0.0.1:15026。为空表示 AdsPower 就在本机。
+	AdsTunnelDaemon string `json:"ads_tunnel_daemon,omitempty"`
+	// AdsHeadless 是否无头运行 profile（服务器上必须 true）
+	AdsHeadless bool `json:"ads_headless,omitempty"`
 }
 
 // DefaultSettings 返回可用的默认值。
@@ -164,6 +186,8 @@ func DefaultSettings() Settings {
 		BridgePort:  17500,
 		CardZip:     "94607",
 		CardCountry: "US",
+		// AdsPower 默认指向本机
+		AdsAPIBase: "http://127.0.0.1:50325",
 	}
 }
 

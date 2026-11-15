@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import re
@@ -345,7 +346,14 @@ class MailboxReader:
                 blob = (e.get("textContent") or "") + " " + (e.get("htmlContent") or "")
                 if "deploy.com" not in blob and "deploy" not in (e.get("fromAddress") or "").lower():
                     continue
-                m = re.search(r"https://deploy\.com/verify-email\?token=([A-Za-z0-9_\-]+)", blob)
+                # ⚠️ token 是 JWT（形如 xxx.yyy.zzz），**含点号**。
+                # 原来的 [A-Za-z0-9_\-]+ 会在第一个 . 处截断，
+                # 拿到半个 token 导致验证必定失败（"Unable to decrypt token"）。
+                # 这里允许点号与 URL 安全字符，并在末尾去掉可能的 HTML 引号。
+                m = re.search(
+                    r"https://deploy\.com/verify-email\?token=([A-Za-z0-9_.\-%]+)",
+                    blob,
+                )
                 if m:
                     rank = ts if ts is not None else 0.0
                     if best is None or rank >= best[0]:
@@ -542,6 +550,79 @@ def gen_password() -> str:
 
 
 # --------------------------------------------------------------------------
+# 人类节奏（时间侧信道）
+#
+# 2026-11-14 实测问题：原实现固定 min_interval=8s + uniform(2,6)，
+# 相邻账号间隔的变异系数（CV）约 0.1-0.3，而真人操作通常 >0.6。
+# 固定节拍是最廉价、最不需要指纹的自动化信号——上游只要看"注册时间戳
+# 的间隔分布"就能聚类，与 UA/TLS 完全无关。
+#
+# 这里改用对数正态采样：多数快、偶发长尾，贴近真人操作间隔的分布形状。
+# 长尾的意义不只是"看起来随机"，更重要的是偶尔会有几十分钟的空档——
+# 那是真人去开会/吃饭留下的痕迹，任何匀速+抖动的方案都造不出来。
+# --------------------------------------------------------------------------
+
+def human_gap(median_s: float, sigma: float = 0.8) -> float:
+    """对数正态间隔采样。median_s 是典型间隔，sigma 越大越离散。"""
+    if median_s <= 0:
+        return 0.0
+    return random.lognormvariate(math.log(median_s), sigma)
+
+
+def pace_between_accounts(settings: dict) -> float:
+    """
+    两个账号之间的等待。
+
+    settings:
+      pace_median 中位间隔秒（默认 90）
+      pace_sigma  离散度（默认 0.8）
+      long_break_p 长休息概率（默认 0.05）
+      long_break_median 长休息中位秒（默认 25 分钟）
+    """
+    median = float(settings.get("pace_median", 90))
+    sigma = float(settings.get("pace_sigma", 0.8))
+    gap = human_gap(median, sigma)
+
+    p_break = float(settings.get("long_break_p", 0.05))
+    if p_break > 0 and random.random() < p_break:
+        gap += human_gap(float(settings.get("long_break_median", 1500)), 0.6)
+    return gap
+
+
+def pace_stage(settings: dict, stage: str) -> float:
+    """
+    账号内部各阶段的等待（注册→登录→建 key→绑卡）。
+
+    真人不会在一分钟内走完全链路。这里给出各阶段的默认中位值，
+    可按需在 settings["stage_delays"] 里覆盖。
+    """
+    defaults = {
+        # 注册成功 → 取验证信并验证：真人通常过一会儿才点邮件
+        "verify": 180.0,
+        # 验证通过 → 首次登录
+        "login": 300.0,
+        # 登录 → 建 API Key
+        "apikey": 240.0,
+        # 建 Key → 绑卡：最强信号，默认隔夜
+        "bind": 6 * 3600.0,
+    }
+    table = settings.get("stage_delays") or {}
+    median = float(table.get(stage, defaults.get(stage, 0.0)))
+    sigma = float(settings.get("stage_sigma", 0.9))
+    return human_gap(median, sigma) if median > 0 else 0.0
+
+
+def _sleep_stage(settings: dict, stage: str, label: str) -> None:
+    if settings.get("fast_mode"):
+        return
+    secs = pace_stage(settings, stage)
+    if secs <= 0:
+        return
+    emit("log", message=f"[节奏] {label} 等待 {secs / 60:.1f} 分钟（拟人）")
+    time.sleep(secs)
+
+
+# --------------------------------------------------------------------------
 # 注册机
 # --------------------------------------------------------------------------
 
@@ -693,8 +774,148 @@ def create_api_key(http: "HttpClient", org_id: str | int) -> tuple[str, str, str
 # 主流程
 # --------------------------------------------------------------------------
 
+
+# --------------------------------------------------------------------------
+# AdsPower 传输（一个号 = 一个 profile，全程同一指纹/IP）
+#
+# 旧链路的问题：注册走 curl_cffi、绑卡走 Playwright，对服务端是两台
+# 不同设备。换成 AdsPower 后，所有请求都在同一个浏览器进程里由页面
+# 内 fetch() 发出 —— TLS/UA/Cookie/Origin 全由浏览器原生决定，
+# 不存在"手工拼请求导致指纹不一致"的可能。
+#
+# 这个类故意与 HttpClient 保持同一套方法签名，方便替换。
+# --------------------------------------------------------------------------
+
+class AdsHttpClient:
+    """把 AdsProfile 包装成 HttpClient 的形状。"""
+
+    def __init__(self, api_key: str, profile_id: str, *,
+                 headless: bool = False, navigate_on_init: bool = False,
+                 start_url: str = "https://deploy.com/signup?source=landing_login") -> None:
+        from ads_transport import open_profile  # noqa: PLC0415
+
+        self.profile_id = profile_id
+        self.ua = ""
+        self.cookies: dict[str, str] = {}
+        self.last_error = ""
+        self.transport = "adspower"
+        self.profile = None
+        self.proxy = None
+        self.timeout = 60.0
+        self._p = open_profile(api_key, profile_id, headless=headless)
+        try:
+            self.ua = self._p.eval("navigator.userAgent") or ""
+        except Exception:  # noqa: BLE001
+            self.ua = ""
+        if navigate_on_init:
+            self._p.navigate(start_url, wait=7)
+
+    def request(self, method: str, url: str, payload: dict | None = None,
+                extra_headers: dict[str, str] | None = None) -> Response:
+        try:
+            r = self._p.request(method, url, payload=payload,
+                                headers=extra_headers)
+        except Exception as e:  # noqa: BLE001
+            self.last_error = f"{type(e).__name__}: {e}"
+            return Response(0, f"network error: {self.last_error}", {})
+        if r.status == 0:
+            self.last_error = r.error or "fetch 失败"
+            return Response(0, r.body or f"network error: {self.last_error}", {})
+        self.last_error = ""
+        try:
+            self.cookies = self._p.cookies()
+        except Exception:  # noqa: BLE001
+            pass
+        return Response(r.status, r.body, r.headers)
+
+    def get(self, url: str, **kw):
+        return self.request("GET", url, **kw)
+
+    def post_json(self, url: str, payload: dict, **kw):
+        return self.request("POST", url, payload=payload, **kw)
+
+    def navigate(self, url: str, wait: float = 6.0) -> None:
+        self._p.navigate(url, wait=wait)
+        # 导航会改变 cookie 状态（验证链接就是靠导航下发会话的），
+        # 必须立刻刷新，否则上层读到的是过期快照。
+        self.refresh_cookies()
+
+    def refresh_cookies(self) -> None:
+        try:
+            self.cookies = self._p.cookies()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def eval(self, expr: str):
+        return self._p.eval(expr)
+
+    def current_url(self) -> str:
+        try:
+            return self._p.current_url()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def fill_stripe_frames(self, js: str) -> int:
+        """委托给 AdsProfile：Stripe 的 CardElement 在 OOPIF 里。"""
+        try:
+            return self._p.fill_stripe_frames(js)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def wait_for_url(self, needle: str, timeout: float = 60.0) -> bool:
+        try:
+            return self._p.wait_for_url(needle, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def close(self) -> None:
+        try:
+            self._p.stop()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def build_client(item: dict, settings: dict, profile: Any = None) -> HttpClient:
     """按账号档案建 HTTP 客户端：指纹沿用注册时的那一套，出口沿用原代理。"""
+    # AdsPower 模式：整条链路都在一个浏览器 profile 里
+    if settings.get("transport") == "adspower":
+        api_key = settings.get("ads_api_key") or ""
+        pid = item.get("ads_profile_id") or settings.get("ads_profile_id") or ""
+        if not api_key or not pid:
+            raise RuntimeError("transport=adspower 需要 settings.ads_api_key 与 ads_profile_id")
+        # 跨机：API 可能经隧道映射在别的端口
+        base = (settings.get("ads_api_base") or "").strip()
+        daemon = (settings.get("ads_tunnel_daemon") or "").strip()
+        if base and base.rstrip("/") != "http://127.0.0.1:50325":
+            # 通过隧道访问：cookie/会话都在远端 profile 里，
+            # 这里只驱动，不搬会话。
+            from ads_transport import open_remote_profile  # noqa: PLC0415
+            p = open_remote_profile(api_key, pid, api_base=base,
+                                    tunnel_daemon=daemon)
+            client = AdsHttpClient.__new__(AdsHttpClient)
+            client.profile_id = pid
+            client.ua = ""
+            client.cookies = {}
+            client.last_error = ""
+            client.transport = "adspower"
+            client.profile = None
+            client.proxy = None
+            client.timeout = 60.0
+            client._p = p
+            try:
+                client.ua = p.eval("navigator.userAgent") or ""
+            except Exception:  # noqa: BLE001
+                pass
+            return client  # type: ignore[return-value]
+
+        client = AdsHttpClient(
+            api_key, pid,
+            headless=bool(settings.get("ads_headless", False)),
+            navigate_on_init=bool(settings.get("ads_navigate", True)),
+        )
+        # 会话复用：profile 内已有 cookie，直接可用
+        return client  # type: ignore[return-value]
+
     upstream = normalize_proxy(item.get("proxy") or "")
     bridge = settings.get("_bridge")
     proxy_endpoint = ""
@@ -941,13 +1162,19 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     sys_proxy = resolve_sys_proxy(settings)
 
     # 指纹
-    profile = pick_profile(seed=item.get("fp_seed"))
+    # AdsPower 模式下，指纹由 profile 决定，**不能**再套 fp_layer 的
+    # 合成身份 —— 否则记录里写的是 Chrome/131，浏览器实际是 153，
+    # 下次会话复用会按错误的 UA/ja3 重建，反而制造矛盾。
+    is_ads = settings.get("transport") == "adspower"
+    profile = None if is_ads else pick_profile(seed=item.get("fp_seed"))
     if profile is not None:
         result.update({
             "ua": profile.ua, "browser": profile.browser, "platform": profile.platform,
             "ja3": profile.ja3 or "",
         })
         log(f"指纹: {profile.browser}/{profile.platform}")
+    elif is_ads:
+        log(f"指纹: AdsPower profile {item.get('ads_profile_id') or settings.get('ads_profile_id')}（profile 自带，不叠加合成指纹）")
 
     # 代理：经本地桥接（系统代理 -> 上游），curl_cffi 只看到本地 HTTP 代理
     proxy_endpoint = ""
@@ -959,8 +1186,13 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         proxy_endpoint = upstream
         log(f"代理: {re.sub(r'//[^@]+@', '//***@', upstream)}（无桥，直连）")
 
-    http = HttpClient(timeout=30, transport=transport, profile=profile,
-                      proxy=proxy_endpoint or None)
+    # ⚠️ 这里必须走 build_client：它能识别 transport=adspower 并返回
+    # AdsHttpClient（浏览器内请求）。之前这里硬编码 HttpClient，
+    # 导致 AdsPower 完全没参与 —— 请求全是 curl_cffi 发的，
+    # 注册"成功"了但 profile 里连会话 cookie 都没有。
+    http = build_client(item, settings, profile)
+    if is_ads:
+        log("传输: AdsPower profile（浏览器内请求）")
     reg = Registrar(http, min_interval=min_interval, max_retries=max_retries)
 
     # --- 接码准备：记录现有邮件 id ---
@@ -1020,6 +1252,10 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         result["detail"] = "未启用自动验证"
         return result
 
+    # 真人不会注册完立刻点邮件；先停一会儿再开始轮询。
+    # 这段等待也顺带避开了"注册后 3 秒内必查邮箱"的固定特征。
+    _sleep_stage(settings, "verify", "注册→验证邮箱")
+
     got = reader.wait_for_link(before_ids, timeout=verify_timeout, since_ts=resend_since)
     if not got:
         result["error"] = f"{verify_timeout:.0f}s 内未收到验证邮件"
@@ -1030,16 +1266,49 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
     log(f"拿到验证 token ({len(token)} chars)")
 
     # --- 3. 验证 ---
-    ar = reg.authenticate(token)
-    aj = ar.json or {}
-    if ar.status != 200:
-        result["error"] = f"验证失败 HTTP {ar.status}: {aj.get('message')}"
-        emit("log", message=result["error"])
-        # 兜底：走登录
+    #
+    # 取信走独立 HTTP（不占浏览器），但**验证必须在 profile 内打开链接**：
+    # 验证响应会下发会话 cookie，只有浏览器自己收到，才会把它写进 profile。
+    # 用 Python HTTP 去 GET，cookie 落在 Python 的内存 jar 里，profile 仍是
+    # 未登录状态 —— 后面绑卡就是"未登录设备在操作"，前后矛盾。
+    verify_url = f"{AUTHENTICATE_URL}?{urllib.parse.urlencode({'token': token})}"
+    if isinstance(http, AdsHttpClient):
+        log("验证：在 profile 内打开验证链接")
+        http.navigate(verify_url, wait=6)
+        # 用页面内请求确认结果，并让 cookie 落到浏览器
+        ar = http.request("GET", AUTHENTICATE_URL + "?" + urllib.parse.urlencode({"token": token}))
+        aj = ar.json or {}
+        if ar.status != 200:
+            # URL 二次访问可能因 token 一次性而失败，回退到 profile 探测
+            pv_probe = http.request("GET", PROFILE_URL)
+            if pv_probe.status == 200:
+                log("验证链接已消费但会话已建立，判定为成功")
+                aj = {"data": (pv_probe.json or {}).get("data") or {}}
+                ar = Response(200, pv_probe.body, {})
+            else:
+                result["error"] = f"验证失败 HTTP {ar.status}: {aj.get('message')}"
+                emit("log", message=result["error"])
+    else:
+        ar = reg.authenticate(token)
+        aj = ar.json or {}
+        if ar.status != 200:
+            result["error"] = f"验证失败 HTTP {ar.status}: {aj.get('message')}"
+            emit("log", message=result["error"])
+            # 兜底：走登录
     data = aj.get("data") or {}
     result["account_id"] = data.get("id")
-    result["verified"] = True
-    log(f"验证通过 account_id={data.get('id')}")
+    # 只有真的 200 才算验证通过；失败时不能把 verified 置 True，
+    # 否则上层会以为账号可用，后面绑卡才发现是未验证号。
+    if ar.status == 200:
+        result["verified"] = True
+        log(f"验证通过 account_id={data.get('id')}")
+    else:
+        result["verified"] = False
+        result.setdefault("error", f"验证失败 HTTP {ar.status}: {aj.get('message')}")
+        log(f"验证未通过 HTTP {ar.status}")
+
+    # --- 3.5 验证后停顿再取会话 ---
+    _sleep_stage(settings, "login", "验证→首次登录")
 
     # --- 4. 确认会话（拿不到就登录）---
     pr = reg.profile()
@@ -1065,6 +1334,7 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
 
     # --- 5. 需要入池时，顺手创建 API Key（Secret Key 只返回一次）---
     if settings.get("import_to_pool") and result.get("org_id"):
+        _sleep_stage(settings, "apikey", "登录→创建 API Key")
         ak, sk, kerr = create_api_key(http, result["org_id"])
         if sk:
             result["access_key"] = ak
@@ -1074,6 +1344,10 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
             result["api_key_error"] = kerr
             log(f"API Key 创建失败（不影响账号可用）: {kerr}")
 
+    if is_ads and hasattr(http, "ua") and getattr(http, "ua", ""):
+        # 记录 profile 里真实的 UA，供后端展示与对账
+        result.update({"ua": http.ua, "browser": "adspower", "ja3": ""})
+
     if profile is not None:
         # 记录实际使用的浏览器底座，复用会话时据此还原 TLS
         result["browser"] = profile.browser
@@ -1081,6 +1355,8 @@ def run_one(item: dict, settings: dict, emit_result: Callable[[dict], None]) -> 
         result["ua"] = profile.ua
         result["ja3"] = profile.ja3 or ""
         result["fp_impersonate"] = profile.impersonate
+    # 状态判定：is_verified 来自 /api/profile，是唯一可信来源。
+    # 验证环节失败时 verified=False，这里就不能报 verified。
     result["status"] = "verified" if result.get("is_verified") else "registered"
     return result
 
@@ -1112,10 +1388,12 @@ def cmd_job(job_path: str) -> int:
                    "error": f"{type(e).__name__}: {e}"}
         res["index"] = idx
         emit("item_done", **res)
-        # 条间隔，避免连续吃限流
+        # 条间隔：对数正态 + 偶发长休息（见 pace_between_accounts）
         if idx < len(items) - 1:
-            gap = float(settings.get("min_interval", 8)) + random.uniform(2, 6)
-            emit("log", message=f"下一条 {gap:.0f}s 后开始")
+            settings = dict(settings or {})
+            settings.setdefault("pace_median", float(settings.get("min_interval", 8)) * 10)
+            gap = pace_between_accounts(settings)
+            emit("log", message=f"下一条 {gap / 60:.1f} 分钟后开始（拟人节奏）")
             time.sleep(gap)
 
     if bridge is not None:
@@ -1149,9 +1427,13 @@ def cmd_batch(args: argparse.Namespace) -> int:
 
     settings = {
         "min_interval": args.min_interval,
+        "fast_mode": getattr(args, "fast_mode", False),
         "max_retries": args.max_retries,
         "verify_timeout": args.verify_timeout,
         "transport": args.transport,
+        "ads_api_key": getattr(args, "ads_api_key", "") or os.environ.get("ADS_API_KEY", ""),
+        "ads_profile_id": getattr(args, "ads_profile_id", ""),
+        "ads_headless": bool(getattr(args, "ads_headless", False)),
         "auto_verify": not args.no_verify,
     }
     proxies = []
@@ -1186,7 +1468,10 @@ def cmd_batch(args: argparse.Namespace) -> int:
             out.write(json.dumps(res, ensure_ascii=False) + "\n")
             out.flush()
         if i < len(items) - 1:
-            time.sleep(args.min_interval + random.uniform(2, 6))
+            _st = {"pace_median": args.min_interval * 10, "pace_sigma": 0.8,
+                   "long_break_p": 0.05, "long_break_median": 1500,
+                   "fast_mode": getattr(args, "fast_mode", False)}
+            time.sleep(pace_between_accounts(_st))
 
     if out:
         out.close()
@@ -1247,8 +1532,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--sys-proxy", default="127.0.0.1:10808",
                     help="本机系统代理（Clash 等），上游代理经它出网；留空表示不用")
     ap.add_argument("--bridge-port", type=int, default=17500, help="本地代理桥起始端口")
-    ap.add_argument("--transport", default="curl_cffi", choices=["curl_cffi", "urllib"])
-    ap.add_argument("--min-interval", type=float, default=8.0)
+    ap.add_argument("--transport", default="curl_cffi",
+                    choices=["curl_cffi", "urllib", "adspower"],
+                    help="adspower: 全流程跑在 AdsPower profile 内（同指纹/IP）")
+    ap.add_argument("--ads-api-key", default="", help="AdsPower API Key")
+    ap.add_argument("--ads-profile-id", default="", help="AdsPower profile ID")
+    ap.add_argument("--ads-headless", action="store_true", help="AdsPower 无头模式")
+    ap.add_argument("--min-interval", type=float, default=8.0,
+                    help="限流最小间隔（秒）；账号间实际等待按对数正态放大")
+    ap.add_argument("--fast-mode", action="store_true",
+                    help="关闭拟人停顿（仅用于调试，生产勿用）")
     ap.add_argument("--max-retries", type=int, default=6)
     ap.add_argument("--verify-timeout", type=float, default=240.0)
     ap.add_argument("--no-verify", action="store_true", help="只注册，不取信验证")

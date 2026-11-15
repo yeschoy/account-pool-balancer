@@ -81,3 +81,12 @@ pnpm-debug.log*
 # 运行时产物：卡台账含卡指纹，永不入库
 /tools/data/card_ledger.json
 /tools/__pycache__/
+
+# AdsPower 跨机接入：代码入库（/tools/* 默认忽略，需显式放行）
+!/tools/ads_transport.py
+!/tools/ads_provision.py
+!/tools/ads_remote.py
+!/tools/ads_tunnel_daemon.py
+!/tools/deploy_quota.py
+# profile 映射表含**明文代理凭据**（socks5://user:pass@host），永不入库
+/tools/data/ads_profiles.json
