@@ -2661,3 +2661,63 @@ items 变少，分不清跳过还是失败。现在返回 `skipped` 计数。
 | ids 精确性 | `quota-refresh` 带 1 个 id → items=0/skipped=1；不带 → skipped=4 |
 
 回退镜像：`account-pool-balancer:release-3b13bfe-20261115T125256Z`。
+
+## 当前部署：ALTapi 开放通用号池管理页（2026-11-15 15:09–15:10 UTC，2b83ee4）
+
+用户指出：左侧通用管理页（概览/账号/下游密钥/路由设置/请求日志/错误日志/详细日志）
+在 ALTapi 池下全被隐藏，看不到入池账号、不能禁用账号、不能配路由。
+
+### 先确认号池本身是通的
+
+用户在问「号池为什么没反应」，实测确认不是后端问题：
+
+| 检查项 | 结果 |
+|---|---|
+| altapi 账号 | 12 个全部入池 |
+| 余额读取 | 全部 **$10.00**，`source=session`，0 错误 |
+| 上游 `/v1/models` | 200，**49 个模型** |
+| balancer `/v1/models` | 200，首次 1.3s，缓存后 0.4ms |
+| **真实推理** | **200，0.87s**，`claude-haiku-5.5` 正常作答 |
+
+顺带确认用户最早的问题：**注册每号送 $10**（12 号 = $120），页面文案
+`$1 free trial` 是首页 demo 的说法，与真实赠送不一致。
+
+另外实测 `altapi.ai` 与 `api.tokenpower.ai` 两个域名的 `/api/status`、
+`/v1/models` 均返回 200，是同一套 new-api 的不同入口，现有 baseUrl 无需改。
+
+### 根因与改法
+
+`ALTAPI_PAGES` 之前只有 3 个专属页，没含 `PROXY_PAGES`。但 ALTapi **有自己的
+推理号池**，通用管理页本来就该全部适用——Deploy 用的就是
+`[...PROXY_PAGES, ...DR_PAGES]`。
+
+```
+ALTAPI_PAGES      = [...PROXY_PAGES, 'altreg', 'altsettings']
+ALTAPI_ONLY_PAGES = ['altreg', 'altsettings']   // 跨池拦截只看这两页
+```
+
+三处细节：
+
+- 侧栏 altapi 分组去掉重复的「ALTapi 概览」，分组名改「ALTapi 注册」
+- `go()` 的跨池拦截从 `ALTAPI_PAGES` 改成 `ALTAPI_ONLY_PAGES`：否则通用页会被
+  任何非 altapi 池打回 overview，**破坏其它 12 个池**
+- 侧栏 `own` 判断同样改用 `ALTAPI_ONLY_PAGES`，让通用页始终可见
+
+概览页插入 ALTapi 专属卡片（余额合计 / 候选情况），数据由
+`altPrefetchStatus()` 在切入 altapi 时预取。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-2b83ee4-20261115T150930Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 侧栏通用页 | 7 个全部在线（overview/accounts/keys/routing/requests/errors/details） |
+| altapi 分组 | ALTapi 注册机 / ALTapi 注册设置 |
+| `ALTAPI_PAGES` | `[...PROXY_PAGES, 'altreg', 'altsettings']` |
+| 账号管理 | `provider=altapi` 返回 12 个账号 |
+| **禁用账号实测** | `PUT /api/accounts/{id}` `{enabled:false}` → 读回 `False`；恢复 → `True` |
+| 后端零改动 | `/api/overview`、`/api/accounts`、`/api/settings`、`/api/logs/{kind}` 全部对 altapi 返回 200 |
+
+回退镜像：`account-pool-balancer:release-7e4252f-20261115T130242Z`。
