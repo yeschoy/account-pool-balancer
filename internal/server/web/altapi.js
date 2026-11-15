@@ -501,6 +501,8 @@ function altCollectSettings(includeProxies) {
 
 // ---------------------------------------------------------------- 自动补号
 
+// renderALTAuto 填充表单。**只应在进入页面/保存后调用**——定时刷新用
+// renderALTAutoStatus，否则会把用户正在敲的输入框改回已保存的值（每 5 秒一次）。
 function renderALTAuto(auto) {
   if (!auto) return;
   const st = auto.settings || {};
@@ -520,6 +522,13 @@ function renderALTAuto(auto) {
   val('alta-freq-max', Math.round((st.random_max_sec ?? 1200) / 60));
   val('alta-max', st.max_per_round ?? 5);
 
+  renderALTAutoStatus(auto);
+}
+
+// renderALTAutoStatus 只更新状态那一行文字，不碰任何表单控件。
+// 定时轮询调它，避免干扰正在编辑的参数。
+function renderALTAutoStatus(auto) {
+  if (!auto) return;
   const s = auto.status || {};
   const el = document.getElementById('alta-status');
   if (el) {
@@ -571,11 +580,15 @@ function startALTAutoPolling() {
   stopALTAutoPolling();
   altAutoTimer = setInterval(async () => {
     if (document.hidden || !isALTapi() || currentPage !== 'altsettings') return;
+    // 用户正在表单里操作时直接跳过：既省请求，也避免状态行在输入时闪动。
+    const form = document.getElementById('alta-form');
+    if (form && form.contains(document.activeElement)) return;
     try {
       const r = await altApi('/auto');
-      renderALTAuto(r);
+      // 只刷状态文字：表单控件由用户掌控，轮询不碰。
+      renderALTAutoStatus(r);
     } catch { /* 静默：状态刷新失败不该刷屏 */ }
-  }, 5000);
+  }, 10000);
 }
 function stopALTAutoPolling() {
   if (altAutoTimer) { clearInterval(altAutoTimer); altAutoTimer = null; }
@@ -691,7 +704,8 @@ function initALTPage() {
       await altApi('/auto/run', { method: 'POST', body: '{}' });
       toast('已触发一次检查，5 秒内刷新状态');
       setTimeout(async () => {
-        try { renderALTAuto(await altApi('/auto')); } catch { /* ignore */ }
+        // 只刷状态文字：立即检查不该覆盖用户还没保存的输入。
+        try { renderALTAutoStatus(await altApi('/auto')); } catch { /* ignore */ }
       }, 3000);
     } catch (e) {
       toast(e.message);
