@@ -277,6 +277,7 @@ func (m *altapiManager) runBatch(ids []string) {
 		"aff_code":         st.AffCode,
 		"proxy_pool":       proxies,
 		"pace_scale":       st.PaceScale,
+		"code_delay_sec":   st.CodeDelaySec,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

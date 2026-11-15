@@ -426,3 +426,32 @@ func TestHasSocksProxy(t *testing.T) {
 		}
 	}
 }
+
+// 收码后的停顿必须明显长于其它步骤，且可配置。
+//
+// 整条链路里最像机器人的瞬间是「验证码一到就提交注册」：脚本会立刻填。
+// 真人要切窗口、找信、复制、切回、粘贴，十几秒到一分多钟。
+func TestALTAPICodeDelaySettings(t *testing.T) {
+	st := altapisignupstore.DefaultSettings()
+	if st.CodeDelaySec != 0 {
+		t.Errorf("默认 code_delay_sec = %v, want 0（0 表示用注册机默认区间）", st.CodeDelaySec)
+	}
+	if st.PaceScale != 1.0 {
+		t.Errorf("默认 pace_scale = %v, want 1.0", st.PaceScale)
+	}
+
+	// 往返：存盘读回不能丢
+	s, err := altapisignupstore.Open(filepath.Join(t.TempDir(), "altapi-signup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.CodeDelaySec = 45
+	st.PaceScale = 1.5
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Settings()
+	if got.CodeDelaySec != 45 || got.PaceScale != 1.5 {
+		t.Fatalf("往返丢失: code_delay=%v pace=%v", got.CodeDelaySec, got.PaceScale)
+	}
+}

@@ -136,6 +136,10 @@ type Settings struct {
 	// PaceScale 步骤间停顿倍数：1.0 默认，0 关闭（不推荐，时序会像脚本），
 	// 2.0 更慢更稳。只影响单账号内部的核心步骤间隔，不影响账号之间的发码间隔。
 	PaceScale float64 `json:"pace_scale"`
+	// CodeDelaySec 收到验证码后停顿多久才提交注册（秒）。0 用默认 9~28s。
+	// 这是整条链路最像机器人的瞬间——脚本是「信一到就填」，真人要切窗口、
+	// 找信、复制、粘贴。设大一点更安全。
+	CodeDelaySec float64 `json:"code_delay_sec"`
 }
 
 // DefaultSettings 返回可用的默认值。
@@ -152,6 +156,7 @@ func DefaultSettings() Settings {
 		MaxAttempts:      2,
 		Workers:          2,
 		PaceScale:        1.0,
+		CodeDelaySec:     0, // 0 = 用注册机默认区间 9~28s
 	}
 }
 

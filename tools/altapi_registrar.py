@@ -57,7 +57,14 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_BASE = "https://altapi.ai"
 DEFAULT_SEND_GAP = 32.0          # 同邮箱 30s，留 2s 余量
 DEFAULT_VERIFY_TIMEOUT = 180.0
-DEFAULT_POLL = 4.0
+# 收件箱轮询间隔随机化：固定 4.0 秒会让所有账号呈现同一节拍，
+# 收信服务侧（以及任何观察流量的地方）一看就是脚本。
+POLL_LO, POLL_HI = 3.0, 9.0
+
+
+def poll_sleep() -> None:
+    """按随机间隔等下一次查信。"""
+    time.sleep(random.uniform(POLL_LO, POLL_HI))
 
 # ---------------------------------------------------------------------------
 # 步骤间节奏（human_pace）
@@ -74,10 +81,24 @@ DEFAULT_POLL = 4.0
 PACE_STEP = (2.0, 4.5)      # 相邻核心步骤之间的间隔
 PACE_AFTER_REGISTER = (3.0, 6.0)   # 注册成功后到登录前，用户通常会看一眼结果页
 PACE_AFTER_LOGIN = (1.5, 3.0)      # 登录后到读身份/建 Key，页面渲染需要时间
+# 收到验证码 → 提交注册。这是整条链路里最像机器人的瞬间：脚本是「信一到就
+# 立刻填」。真人要切窗口、找信、复制、切回、粘贴、再点提交，通常十几秒到
+# 一分多钟，且时长很分散。这个区间比其它步骤明显长，并且额外做一次长尾抽样。
+PACE_AFTER_CODE = (9.0, 28.0)
 
 
 # 当前 job 的节奏系数：1.0 = 默认，0 = 关闭（不推荐），2.0 = 更慢更稳。
 _pace_scale = 1.0
+# 收码后停顿下限，来自设置页 code_delay_sec；0 表示用默认区间。
+_code_delay_lo = 0.0
+
+
+def set_code_delay(lo: float) -> None:
+    global _code_delay_lo
+    try:
+        _code_delay_lo = max(0.0, float(lo))
+    except (TypeError, ValueError):
+        _code_delay_lo = 0.0
 
 
 def set_pace_scale(v: float) -> None:
@@ -87,6 +108,20 @@ def set_pace_scale(v: float) -> None:
         _pace_scale = max(0.0, float(v))
     except (TypeError, ValueError):
         _pace_scale = 1.0
+
+
+def pace_after_code() -> float:
+    """收码后的停顿：区间来自设置（code_delay_sec 为下限），否则用默认。
+
+    单独一个函数是为了让运维能在设置页把「等多久才填验证码」调到符合自己
+    业务观感的水平，而不用改代码。
+    """
+    lo, hi = PACE_AFTER_CODE
+    if _code_delay_lo > 0:
+        # 设置值作为中心，区间取 [0.7x, 1.5x]，保留随机性但不无限放大。
+        lo = max(1.0, _code_delay_lo * 0.7)
+        hi = max(lo + 1.0, _code_delay_lo * 1.5)
+    return pace((lo, hi))
 
 
 def pace(span: tuple[float, float], why: str = "") -> float:
@@ -554,15 +589,20 @@ class Registrar:
             code, source = box.latest_code(seen)
             if code:
                 break
-            time.sleep(DEFAULT_POLL)
+            poll_sleep()
         if not code:
             raise RuntimeError(f"mailbox_timeout: {int(deadline - time.time() + 0)}s 内没收到验证码")
         self.em.log(f"收到验证码 {code}（来源={source}）")
 
-        # 收到信 → 切到邮箱 → 复制验证码 → 切回页面 → 粘贴 → 提交。
-        # 这一段至少几秒；这里按 PACE_STEP 停顿，避免「信到即提交」。
-        self.em.update(detail="收到验证码，填写后提交注册")
-        pace(PACE_STEP)
+        # 收到信 → 切到邮箱 → 找信 → 复制验证码 → 切回页面 → 粘贴 → 提交。
+        # 真人这一步十几秒到一分多钟，且长度很分散；这里用 PACE_AFTER_CODE
+        # 的宽区间，并对一部分账号再追加一段长尾，避免所有账号都落在同一窄带。
+        wait = pace_after_code()
+        if random.random() < 0.25:
+            # 25% 的账号模拟"先干别的再回来"，额外多等 20~45 秒
+            wait += random.uniform(20.0, 45.0)
+        self.em.log(f"收到验证码，停顿 {wait:.0f}s 后填写（模拟人工操作）")
+        self.em.update(detail=f"收到验证码，{wait:.0f}s 后提交")
 
         try:
             self.register(email, username, password, code)
@@ -655,6 +695,7 @@ def run_job(path: str) -> int:
     gap = float(st.get("min_interval_sec") or DEFAULT_SEND_GAP)
     proxies = [p for p in (st.get("proxy_pool") or []) if p.strip()]
     set_pace_scale(st.get("pace_scale", 1.0))
+    set_code_delay(st.get("code_delay_sec", 0))
 
     rc = 0
     last_send = 0.0
