@@ -42,6 +42,7 @@ pnpm-debug.log*
 
 # Go 构建缓存（在仓库内构建时使用）
 /.gocache/
+/.gocache-tmp/
 /.gotmp/
 /.gomodcache/
 /.gopath/
@@ -78,6 +79,8 @@ pnpm-debug.log*
 !/tools/deploy_mailbox_time_test.py
 !/tools/data/
 !/tools/data/ua_pool.json
+# 注册机结果落盘（含邮箱/密码/会话），永不入库
+/accounts.jsonl
 # 运行时产物：卡台账含卡指纹，永不入库
 /tools/data/card_ledger.json
 /tools/__pycache__/
