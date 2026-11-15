@@ -48,6 +48,7 @@ const context = {
   stopPerchRegistrationPolling() {}, stopTHPolling() {}, stopMistralPolling() {},
   startX50Polling() {}, stopX50Polling() {},
   startALTPolling() {}, stopALTPolling() {},
+  startALTAutoPolling() {}, stopALTAutoPolling() {},
   startDeployPolling() {}, stopDeployPolling() {},
   toast(message) { throw new Error(message); },
 };

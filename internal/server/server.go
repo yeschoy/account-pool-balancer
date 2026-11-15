@@ -99,6 +99,10 @@ type Server struct {
 	deployMgrRef   *deployManager
 	// altapi 注册机：复用 mistralMu 保护懒初始化
 	altapiStoreRef *altapisignupstore.Store
+	altAuto        *altAutoManager
+	altAutoMu      sync.Mutex
+	altAutoRoot    context.Context
+	altAutoCancel  context.CancelFunc
 	altapiMgrRef   *altapiManager
 	// 50x AI 注册机：独立存储与并发预算，懒初始化。
 	// 后台注册必须活过发起它的 HTTP 请求，所以共享一个服务级根 context。
@@ -283,6 +287,8 @@ func New(dataDir string, opt Options) (*Server, error) {
 	if err := s.initPerchAuto(); err != nil {
 		return nil, fmt.Errorf("perch autosignup: %w", err)
 	}
+	// 自动补号：可选功能，初始化失败不阻断启动（默认关闭状态空转）。
+	s.initAltAuto()
 	return s, s.saveMetadata(true)
 }
 

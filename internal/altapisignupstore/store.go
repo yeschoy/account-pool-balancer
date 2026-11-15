@@ -140,6 +140,20 @@ type Settings struct {
 	// 这是整条链路最像机器人的瞬间——脚本是「信一到就填」，真人要切窗口、
 	// 找信、复制、粘贴。设大一点更安全。
 	CodeDelaySec float64 `json:"code_delay_sec"`
+	// Auto 自动补号配置。nil 表示用默认（关闭）。
+	Auto *AutoSettings `json:"auto,omitempty"`
+}
+
+// AutoSettings 是自动补号配置。与 server 包的 altAutoSettings 字段一致；
+// 放这里是为了跟着注册机配置一起落盘（同一个 JSON，不另开文件）。
+type AutoSettings struct {
+	Enabled          bool `json:"enabled"`
+	ThresholdEnabled bool `json:"threshold_enabled"`
+	MinAvailable     int  `json:"min_available"`
+	FrequencyEnabled bool `json:"frequency_enabled"`
+	RandomMinSec     int  `json:"random_min_sec"`
+	RandomMaxSec     int  `json:"random_max_sec"`
+	MaxPerRound      int  `json:"max_per_round"`
 }
 
 // DefaultSettings 返回可用的默认值。

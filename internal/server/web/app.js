@@ -305,6 +305,7 @@ function go(page) {
   if (currentPage === 'dreg' && page !== currentPage) stopDeployPolling();
   if (currentPage === 'x50reg' && page !== currentPage && typeof stopX50Polling === 'function') stopX50Polling();
   if (currentPage === 'altreg' && page !== currentPage && typeof stopALTPolling === 'function') stopALTPolling();
+  if (currentPage === 'altsettings' && page !== currentPage && typeof stopALTAutoPolling === 'function') stopALTAutoPolling();
   currentPage = page;
   history.replaceState(null, '', '#' + page);
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
@@ -314,6 +315,7 @@ function go(page) {
   if (page === 'dreg') startDeployPolling();
   if (page === 'x50reg') startX50Polling();
   if (page === 'altreg') startALTPolling();
+  if (page === 'altsettings') startALTAutoPolling();
   if (page === 'overview' || page === 'accounts' || page === 'thoverview') {
     refreshTimer = setInterval(() => { if (!document.hidden && !$('#modal').open) pages[currentPage]().catch(() => {}); }, 15000);
   }

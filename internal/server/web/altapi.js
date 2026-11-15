@@ -379,8 +379,12 @@ async function loadALTSettings() {
   const errEl = document.getElementById('alts-error');
   if (errEl) errEl.textContent = '';
   try {
-    const settings = await altApi('/settings');
+    const [settings, auto] = await Promise.all([
+      altApi('/settings'),
+      altApi('/auto').catch(() => null),
+    ]);
     altSettings = settings;
+    renderALTAuto(auto);
     const val = (id) => document.getElementById(id);
     const set = (id, v) => { const el = val(id); if (el != null) el.value = v; };
     set('alts-workers', settings.workers ?? 2);
@@ -437,6 +441,71 @@ function altCollectSettings(includeProxies) {
     if (text) out.proxy_pool = text.split('\n').map((s) => s.trim()).filter(Boolean);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- 自动补号
+
+function renderALTAuto(auto) {
+  if (!auto) return;
+  const st = auto.settings || {};
+  const on = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+  const val = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  on('alta-enabled', st.enabled);
+  on('alta-threshold-on', st.threshold_enabled);
+  val('alta-min', st.min_available ?? 5);
+  on('alta-freq-on', st.frequency_enabled);
+  val('alta-freq-min', st.random_min_sec ?? 600);
+  val('alta-freq-max', st.random_max_sec ?? 1200);
+  val('alta-max', st.max_per_round ?? 5);
+
+  const s = auto.status || {};
+  const el = document.getElementById('alta-status');
+  if (el) {
+    const bits = [];
+    if (!s.enabled) bits.push('未启用');
+    else {
+      bits.push(`可用 ${s.available ?? 0}/${s.poolTotal ?? 0}`);
+      if (s.importable) bits.push(`可导入 ${s.importable}`);
+      if (s.queued) bits.push(`待注册 ${s.queued}`);
+      if (s.registering) bits.push('注册中');
+      if (s.nextRunAt && new Date(s.nextRunAt) > new Date(0)) {
+        const d = new Date(s.nextRunAt);
+        if (d.getFullYear() > 2000) bits.push(`下次 ${d.toLocaleTimeString()}`);
+      }
+      if (s.lastAction) bits.push(s.lastAction);
+    }
+    el.textContent = bits.join(' · ');
+  }
+}
+
+function altCollectAuto() {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const c = (id) => document.getElementById(id)?.checked === true;
+  return {
+    enabled: c('alta-enabled'),
+    threshold_enabled: c('alta-threshold-on'),
+    min_available: Number(v('alta-min')) || 0,
+    frequency_enabled: c('alta-freq-on'),
+    random_min_sec: Number(v('alta-freq-min')) || 600,
+    random_max_sec: Number(v('alta-freq-max')) || 1200,
+    max_per_round: Number(v('alta-max')) || 5,
+  };
+}
+
+// 定时刷新自动补号状态（设置页可见时）
+let altAutoTimer = null;
+function startALTAutoPolling() {
+  stopALTAutoPolling();
+  altAutoTimer = setInterval(async () => {
+    if (document.hidden || !isALTapi() || currentPage !== 'altsettings') return;
+    try {
+      const r = await altApi('/auto');
+      renderALTAuto(r);
+    } catch { /* 静默：状态刷新失败不该刷屏 */ }
+  }, 5000);
+}
+function stopALTAutoPolling() {
+  if (altAutoTimer) { clearInterval(altAutoTimer); altAutoTimer = null; }
 }
 
 // ---------------------------------------------------------------- 绑定事件
@@ -510,6 +579,42 @@ function initALTPage() {
       toast(parts.join('，'));
       altSelected.clear();
       await loadALTRegistrations();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 自动补号：保存
+  document.getElementById('alta-save')?.addEventListener('click', async () => {
+    const err = document.getElementById('alta-error');
+    if (err) err.textContent = '';
+    const payload = altCollectAuto();
+    if (payload.random_max_sec < payload.random_min_sec) {
+      if (err) err.textContent = '随机上限不能小于下限';
+      return;
+    }
+    try {
+      await altApi('/auto', { method: 'PUT', body: JSON.stringify(payload) });
+      toast(payload.enabled ? '自动补号已开启' : '自动补号已关闭');
+      const r = await altApi('/auto');
+      renderALTAuto(r);
+    } catch (e) {
+      if (err) err.textContent = e.message;
+    }
+  });
+
+  // 自动补号：立即检查
+  document.getElementById('alta-run')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      await altApi('/auto/run', { method: 'POST', body: '{}' });
+      toast('已触发一次检查，5 秒内刷新状态');
+      setTimeout(async () => {
+        try { renderALTAuto(await altApi('/auto')); } catch { /* ignore */ }
+      }, 3000);
     } catch (e) {
       toast(e.message);
     } finally {
@@ -773,6 +878,8 @@ window.POOL_ALTAPI = {
   loadALTSettings,
   loadALTStatus,
   altPrefetchStatus,
+  startALTAutoPolling,
+  stopALTAutoPolling,
   loadALTLogs: () => loadALTRegistrations(),
   startALTPolling,
   stopALTPolling,

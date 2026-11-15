@@ -184,6 +184,32 @@ assert.ok(altSource.includes("altSwitchTab('imported')"), '导入成功后应跳
 const css2 = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
 assert.ok(css2.includes('.alt-tab.active'), 'CSS 缺少激活态样式');
 
+// 9.12) 自动补号设置
+for (const part of [
+  'id="alta-enabled"', 'id="alta-threshold-on"', 'id="alta-min"',
+  'id="alta-freq-on"', 'id="alta-freq-min"', 'id="alta-freq-max"',
+  'id="alta-max"', 'id="alta-save"', 'id="alta-run"', 'id="alta-status"',
+]) {
+  assert.ok(html.includes(part), '缺少自动补号设置项 ' + part);
+}
+assert.match(altSource, /function altCollectAuto\(\)/);
+assert.match(altSource, /altApi\('\/auto', \{ method: 'PUT'/);
+assert.match(altSource, /altApi\('\/auto\/run', \{ method: 'POST'/);
+assert.match(appSource, /if \(page === 'altsettings'\) startALTAutoPolling\(\)/);
+assert.match(appSource, /stopALTAutoPolling\(\)/);
+// 后端路由与设置字段
+const autoSrc = fs.readFileSync(path.join(__dirname, 'altapi_auto.go'), 'utf8');
+const regSrc = fs.readFileSync(path.join(__dirname, 'altapi_registration.go'), 'utf8');
+assert.ok(regSrc.includes('/api/altapi/auto'), '缺少自动补号路由');
+// 字段定义在存储层（跟着注册机设置一起落盘），校验在 server 侧
+const storeSrc = fs.readFileSync(path.join(__dirname, '../altapisignupstore/store.go'), 'utf8');
+for (const f of ['threshold_enabled', 'min_available', 'frequency_enabled', 'random_min_sec', 'random_max_sec', 'max_per_round']) {
+  assert.ok(storeSrc.includes(f), '存储层缺少字段 ' + f);
+}
+for (const f of ['validAltAutoSettings', 'altAutoReplenish', 'altAutoRegister', 'altAutoAvailability']) {
+  assert.ok(autoSrc.includes(f), '服务端缺少 ' + f);
+}
+
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
 assert.match(altSource, /s\.byStatus \|\| \{\}/);

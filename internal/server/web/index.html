@@ -724,6 +724,40 @@
           <p id="alts-error" class="error" role="status"></p>
         </form>
       </section>
+
+      <section class="panel mt">
+        <div class="head-row">
+          <h2>自动补号</h2>
+          <div class="row-actions">
+            <span id="alta-status" class="muted small"></span>
+            <button type="button" class="btn small" id="alta-run">立即检查</button>
+            <button type="button" class="btn primary small" id="alta-save">保存</button>
+          </div>
+        </div>
+        <p class="muted small">两种触发可各自开关。补号优先导入「已建 Key 但未入池」的候选（不消耗邮箱和 IP 信誉），不够才会发起新的注册批次；注册走同一套节奏控制、代理轮换与自动入池。</p>
+        <form id="alta-form" class="form-grid" autocomplete="off">
+          <label class="check"><input id="alta-enabled" type="checkbox">启用自动补号</label>
+          <span class="hint">总开关。关闭后下面两项都不生效。默认关闭——自动注册会真实消耗邮箱与出口 IP 信誉。</span>
+
+          <label class="check"><input id="alta-threshold-on" type="checkbox" checked>按阈值补号</label>
+          <label for="alta-min">最小可用账号数</label>
+          <input id="alta-min" type="number" min="0" max="10000" step="1" value="5">
+          <span class="hint">「可用」= 已启用且未被熔断的 altapi 账号。低于这个数就补到它为止。</span>
+
+          <label class="check"><input id="alta-freq-on" type="checkbox">按频率注册</label>
+          <label for="alta-freq-min">随机间隔下限（秒）</label>
+          <input id="alta-freq-min" type="number" min="60" max="86400" step="60" value="600">
+          <label for="alta-freq-max">随机间隔上限（秒）</label>
+          <input id="alta-freq-max" type="number" min="60" max="86400" step="60" value="1200">
+          <span class="hint">每次触发后重新随机，不用固定间隔——固定间隔本身就是脚本特征。</span>
+
+          <label for="alta-max">单轮最多注册</label>
+          <input id="alta-max" type="number" min="1" max="50" step="1" value="5">
+          <span class="hint">阈值算错时的保险，避免一口气跑几十个。</span>
+
+          <p id="alta-error" class="error" role="status"></p>
+        </form>
+      </section>
       <section class="panel mt">
         <h2>代理连通性测试</h2>
         <label for="alt-proxy-list">待测代理（每行一个）</label>
