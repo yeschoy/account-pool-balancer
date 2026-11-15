@@ -2452,3 +2452,63 @@ file 传给 Python。上限克制：单次注册本来 8–20 秒，多等 5–8
 | 候选数据 | 12 条完整保留 |
 
 回退镜像：`account-pool-balancer:release-a684eaf-20261115T113938Z`。
+
+## 当前部署：修 PySocks 全量失败（2026-11-15 12:10–12:12 UTC，18c905e）
+
+用户截图：12 条候选全失败，错误统一是
+「需要 PySocks 才能用 socks 代理: pip install PySocks」。
+
+### 根因
+
+镜像里 `/opt/altapi-signup` 装了 PySocks 且能 import，但设置里的
+`python_bin` 被存成 `"python3"`。原解析逻辑只在 `python_bin` **为空**时才
+探测 venv：
+
+```go
+py = st.PythonBin
+if py == "" { ... altapiDefaultPython() ... }
+```
+
+「注册机解释器」输入框的默认展示值就是 `python3`，用户点过一次保存就把它
+写进配置文件 → 永远走系统解释器 → 系统解释器没有 PySocks → 候选一旦绑了
+socks5 出口，`import socks` 阶段直接抛错，整批全灭。
+
+### 修法
+
+`resolveALTAPIPython()` 重新定义优先级：
+
+1. 设置里的**绝对路径**（用户明确指定）
+2. `ALTAPI_PYTHON` 环境变量
+3. 镜像内 `/opt/altapi-signup` venv（带 PySocks）
+4. 裸 `python3`
+
+**裸命令名不再算有效指定**——它只是默认展示值，不该压过装了依赖的 venv。
+
+顺带：
+- `runBatch` 启动前自检：池里有 socks 条目但解释器没 PySocks 时一次性记
+  日志并中止，不让用户等 12 条跑完才看明白
+- Python 侧报错带上 `sys.executable`，下次一眼看出走错哪个解释器
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-18c905e-20261115T121046Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 设置保持 `python_bin="python3"` | 不改配置也能正确解析到 venv（这正是修复点） |
+| PySocks 错误消失 | 用假出口测试，错误从「需要 PySocks」变成「站点 /api/status 无响应」，说明已走过 import 阶段 |
+| **真实代理探测** | 4 个 socks5 代理逐个 `--probe` 全部 `ok:true`，`system_name=TokenPower` |
+
+### 事故记录：测试覆盖了用户的代理池
+
+验证过程中我用 `POST /candidates/bulk` 带 `proxies:["socks5://127.0.0.1:9"]`
+造探测候选，触发了「显式 proxies 存成池子」的逻辑，把用户 4 个真实代理
+**覆盖成 1 个假代理**。已从 `backup-odb-core-20261115T121141Z.tar.gz` 完整
+恢复 4 个代理并核对。
+
+**教训**：「显式 proxies 顺手存池子」这个便利功能让测试请求带副作用。以后
+在生产上验证代理相关逻辑，不得通过 bulk 接口传 `proxies`，改用只读探测或
+隔离环境。
+
+回退镜像：`account-pool-balancer:release-e899481-20261115T115335Z`。
