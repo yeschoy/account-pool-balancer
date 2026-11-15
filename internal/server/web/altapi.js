@@ -273,6 +273,7 @@ async function loadALTSettings() {
     set('alts-max-retries', settings.max_retries ?? 2);
     set('alts-max-attempts', settings.max_attempts ?? 2);
     set('alts-verify-timeout', settings.verify_timeout_sec ?? 180);
+    set('alts-pace', settings.pace_scale ?? 1);
     set('alts-base-url', settings.base_url || 'https://altapi.ai');
     set('alts-python-bin', settings.python_bin || 'python3');
     set('alts-token-group', settings.token_group || 'default');
@@ -303,6 +304,7 @@ function altCollectSettings(includeProxies) {
     max_retries: Number(v('alts-max-retries')) || 0,
     max_attempts: Number(v('alts-max-attempts')) || 2,
     verify_timeout_sec: Number(v('alts-verify-timeout')) || 180,
+    pace_scale: Number(v('alts-pace')) >= 0 ? Number(v('alts-pace')) : 1,
     base_url: v('alts-base-url').trim() || 'https://altapi.ai',
     python_bin: v('alts-python-bin').trim() || 'python3',
     token_group: v('alts-token-group').trim() || 'default',

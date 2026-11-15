@@ -678,6 +678,10 @@
           <label for="alts-verify-timeout">等验证邮件上限（秒）</label>
           <input id="alts-verify-timeout" type="number" min="30" step="10" value="180">
 
+          <label for="alts-pace">步骤间停顿倍数（防注册机识别）</label>
+          <input id="alts-pace" type="number" min="0" max="5" step="0.1" value="1.0">
+          <span class="hint">核心步骤（提交注册 → 登录 → 读身份 → 建 Key）之间插入 <code>2–6 秒</code>的随机停顿，再乘这个倍数。1.0 为默认，2.0 更慢更稳，0 关闭（时序会像脚本，不推荐）。站点没有 Turnstile，风控主要看行为与频率。</span>
+
           <label for="alts-base-url">站点根地址</label>
           <input id="alts-base-url" value="https://altapi.ai" autocomplete="off">
           <span class="hint">不带 <code>/v1</code>。改错会导致全部注册在发码阶段失败。</span>

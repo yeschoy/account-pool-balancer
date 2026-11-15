@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"account-pool-balancer/internal/altapisignupstore"
 )
 
 // 批量导入必须真的把代理绑到候选上。
@@ -245,5 +247,94 @@ func TestALTAPIBulkImportWithoutPoolStaysDirect(t *testing.T) {
 		if c.Email == "f@mail.example.com" && c.ProxyURL != "" {
 			t.Errorf("proxy = %q, want direct (empty)", c.ProxyURL)
 		}
+	}
+}
+
+// 设置里开了 import_to_pool 时，候选建出 Key 就应自动进号池。
+//
+// 以前 import_to_pool 只被塞进 Python job file，Go 侧完全没有自动导入逻辑：
+// 用户勾着「注册成功后自动建 Key 并入池」，注册完列表里还是「未导入」，
+// 得再去点「全部导入号池」。
+func TestALTAPIAutoImportOnKeyCreated(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.store.Settings()
+	st.ImportToPool = true
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := m.store.Add(altapisignupstore.Candidate{
+		Email: "auto@mail.example.com", MailboxURL: "https://box.test/a?token=1",
+		Status: altapisignupstore.Queued,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟 Python 侧发出 item_done/key_created。
+	m.handleEvent(map[string]any{
+		"type":       "item_done",
+		"index":      float64(0),
+		"status":     string(altapisignupstore.KeyCreated),
+		"email":      "auto@mail.example.com",
+		"api_key":    "sk-test-auto-import-key-0000000000000000000000",
+		"session_cookie": "sess-abc",
+		"account_id": "777",
+		"token_id":   "42",
+		"group":      "vip",
+		"quota":      float64(500000),
+		"quota_per_unit": float64(500000),
+		"balance_usd":    float64(1),
+	}, []string{c.ID})
+
+	got, err := m.store.Get(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImportedAcctID == "" {
+		t.Fatal("开了 import_to_pool 但没有自动入池")
+	}
+	// 幂等：再来一次同样的 item_done 不能建出第二个账号。
+	before := len(s.cfg.Get().Accounts)
+	m.handleEvent(map[string]any{
+		"type": "item_done", "index": float64(0),
+		"status": string(altapisignupstore.KeyCreated), "email": "auto@mail.example.com",
+	}, []string{c.ID})
+	if after := len(s.cfg.Get().Accounts); after != before {
+		t.Fatalf("重复 item_done 又建了账号：%d -> %d", before, after)
+	}
+}
+
+// 关掉 import_to_pool 时不能自动入池。
+func TestALTAPIAutoImportDisabled(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.store.Settings()
+	st.ImportToPool = false
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := m.store.Add(altapisignupstore.Candidate{
+		Email: "no-auto@mail.example.com", Status: altapisignupstore.Queued,
+	})
+	m.handleEvent(map[string]any{
+		"type": "item_done", "index": float64(0),
+		"status": string(altapisignupstore.KeyCreated), "email": "no-auto@mail.example.com",
+		"api_key": "sk-test-no-auto-000000000000000000000000000",
+	}, []string{c.ID})
+	if got, _ := m.store.Get(c.ID); got.ImportedAcctID != "" {
+		t.Fatal("关掉了 import_to_pool 仍然自动入池")
 	}
 }

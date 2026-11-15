@@ -58,6 +58,49 @@ DEFAULT_BASE = "https://altapi.ai"
 DEFAULT_SEND_GAP = 32.0          # 同邮箱 30s，留 2s 余量
 DEFAULT_VERIFY_TIMEOUT = 180.0
 DEFAULT_POLL = 4.0
+
+# ---------------------------------------------------------------------------
+# 步骤间节奏（human_pace）
+#
+# 站点没有 Turnstile，靠行为与频率识别脚本。纯请求体层面没有任何挑战，但
+# 「提交注册」后 80ms 就登录、登录后 50ms 就读 /api/user/self、再 50ms 就建
+# Token —— 这个时序人类做不出来，是最容易被打标的地方。
+#
+# 每个核心步骤之间插一段范围随机的停顿，模拟真实用户在页面上的操作间隔：
+#   发码 → （等邮件，天然有间隔）→ 提交注册 → 登录 → 读身份 → 建 Key
+#
+# 上限不宜过大：注册一次本来 8~20 秒，多等 3~6 秒对吞吐影响有限，但对
+# 「像不像人」帮助明显。需要更快可把下面调到 0（不推荐）。
+PACE_STEP = (2.0, 4.5)      # 相邻核心步骤之间的间隔
+PACE_AFTER_REGISTER = (3.0, 6.0)   # 注册成功后到登录前，用户通常会看一眼结果页
+PACE_AFTER_LOGIN = (1.5, 3.0)      # 登录后到读身份/建 Key，页面渲染需要时间
+
+
+# 当前 job 的节奏系数：1.0 = 默认，0 = 关闭（不推荐），2.0 = 更慢更稳。
+_pace_scale = 1.0
+
+
+def set_pace_scale(v: float) -> None:
+    """从 job settings 的 pac_scale 设置节奏倍数。"""
+    global _pace_scale
+    try:
+        _pace_scale = max(0.0, float(v))
+    except (TypeError, ValueError):
+        _pace_scale = 1.0
+
+
+def pace(span: tuple[float, float], why: str = "") -> float:
+    """睡一段 span 内均匀随机的时间，返回实际睡了多久。
+
+    随机而不是固定值，避免所有账号出现完全一致的时间特征；再乘上
+    pace_scale（来自设置页），让运维能整体调快调慢。
+    """
+    lo, hi = span
+    if hi <= 0 or _pace_scale <= 0:
+        return 0.0
+    secs = random.uniform(lo, hi) * _pace_scale
+    time.sleep(secs)
+    return secs
 MAILBOX_API = "/api/messages"
 
 # 指纹：UA 必须与 sec-ch-ua / sec-ch-ua-platform / Accept-Language 自洽，
@@ -493,6 +536,8 @@ class Registrar:
         seen = box.baseline_ids()
 
         # 发码 + 等信（同邮箱 30s 限流，重试时由调用方控制间隔）
+        # 进注册页、填邮箱、点「发送验证码」——用户先看到 /register 页面才发码。
+        self.check_site()
         self.send_code(email)
         self.em.update(status="sent_code", detail="已发验证码，等待邮件")
         self.em.log(f"{email} 已发码")
@@ -508,6 +553,11 @@ class Registrar:
         if not code:
             raise RuntimeError(f"mailbox_timeout: {int(deadline - time.time() + 0)}s 内没收到验证码")
         self.em.log(f"收到验证码 {code}（来源={source}）")
+
+        # 收到信 → 切到邮箱 → 复制验证码 → 切回页面 → 粘贴 → 提交。
+        # 这一段至少几秒；这里按 PACE_STEP 停顿，避免「信到即提交」。
+        self.em.update(detail="收到验证码，填写后提交注册")
+        pace(PACE_STEP)
 
         try:
             self.register(email, username, password, code)
@@ -537,6 +587,7 @@ class Registrar:
                             unit: float, t0: float) -> bool:
         """Returns True when the account already existed and was finished."""
         self.check_site()
+        pace(PACE_STEP)
         r = self.http.post("/api/user/login?turnstile=", referer="/login",
                            body={"username": username, "password": password})
         d = (r.json() or {}) if r.text.strip() else {}
@@ -552,8 +603,12 @@ class Registrar:
     # -- 收尾：登录 -> 读身份 -> 建 Key ---------------------------------
     def finish(self, email: str, username: str, password: str,
                unit: float, t0: float) -> dict:
+        # 注册成功到登录：用户会先看结果页/或等跳转，不会立刻发登录请求。
+        pace(PACE_AFTER_REGISTER)
         info = self.login(username, password)
         uid = int(info.get("id") or 0)
+        # 登录后控制台要先渲染，才会读到用户信息。
+        pace(PACE_AFTER_LOGIN)
         me = self.self_info(uid) if uid else {}
         session = self.http.cookies.get("session", "")
         self.em.update(status="verified", account_id=str(uid), session_cookie=session,
@@ -565,6 +620,8 @@ class Registrar:
         self.em.log(f"登录成功 uid={uid} group={me.get('group')} "
                     f"余额=${float(me.get('quota') or 0)/unit:.2f}")
 
+        # 读身份 → 进 /console/token → 填表 → 建 Key
+        pace(PACE_STEP)
         key, tid = self.create_key(uid)
         self.em.log(f"已生成 API Key id={tid}")
         self.em.done("key_created", api_key=key, token_id=tid, account_id=str(uid),
@@ -592,6 +649,7 @@ def run_job(path: str) -> int:
     base = st.get("base_url") or DEFAULT_BASE
     gap = float(st.get("min_interval_sec") or DEFAULT_SEND_GAP)
     proxies = [p for p in (st.get("proxy_pool") or []) if p.strip()]
+    set_pace_scale(st.get("pace_scale", 1.0))
 
     rc = 0
     last_send = 0.0

@@ -133,6 +133,9 @@ type Settings struct {
 	MaxAttempts int `json:"max_attempts"`
 	// Workers 并发数（受代理池大小限制）
 	Workers int `json:"workers"`
+	// PaceScale 步骤间停顿倍数：1.0 默认，0 关闭（不推荐，时序会像脚本），
+	// 2.0 更慢更稳。只影响单账号内部的核心步骤间隔，不影响账号之间的发码间隔。
+	PaceScale float64 `json:"pace_scale"`
 }
 
 // DefaultSettings 返回可用的默认值。
@@ -148,6 +151,7 @@ func DefaultSettings() Settings {
 		BaseURL:          "https://altapi.ai",
 		MaxAttempts:      2,
 		Workers:          2,
+		PaceScale:        1.0,
 	}
 }
 

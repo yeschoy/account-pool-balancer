@@ -219,6 +219,7 @@ func (m *altapiManager) runBatch(ids []string) {
 		"token_name":       st.TokenName,
 		"aff_code":         st.AffCode,
 		"proxy_pool":       proxies,
+		"pace_scale":       st.PaceScale,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -390,8 +391,36 @@ func (m *altapiManager) handleEvent(ev map[string]any, ids []string) {
 		})
 		if typ == "item_done" {
 			m.addLog("item_done", email, fmt.Sprintf("状态=%v", ev["status"]))
+			// 自动入池：设置里开了 import_to_pool 时，注册出 Key 就立刻进号池，
+			// 不用再去列表里逐条点「导入号池」。失败只记日志，不影响注册结果。
+			if st, ok := ev["status"].(string); ok && st == string(altapisignupstore.KeyCreated) {
+				m.autoImport(id, email)
+			}
 		}
 	}
+}
+
+// autoImport 把一个刚建好 Key 的候选导入号池。
+//
+// 已导入的跳过（幂等）：批量重试可能让同一个候选再走一次 item_done，
+// 而 importALTAPICandidate 已经有 ImportedAcctID 守卫，这里只负责记日志。
+func (m *altapiManager) autoImport(id, email string) {
+	if !m.store.Settings().ImportToPool {
+		return
+	}
+	c, err := m.store.Get(id)
+	if err != nil {
+		return
+	}
+	if c.ImportedAcctID != "" {
+		return
+	}
+	acct, err := m.srv.importALTAPICandidate(c)
+	if err != nil {
+		m.addLog("import_failed", email, "自动入池失败："+err.Error())
+		return
+	}
+	m.addLog("imported", email, "已自动入池 "+acct.ID)
 }
 
 // ---------------------------------------------------------------- handlers
