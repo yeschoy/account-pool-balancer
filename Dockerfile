@@ -58,6 +58,14 @@ COPY tools/deploy_registrar.py tools/deploy_payment.py tools/fp_layer.py \
 COPY tools/data/ua_pool.json /usr/local/share/deploy-signup/data/ua_pool.json
 RUN chmod -R a+rX /usr/local/share/deploy-signup
 
+# ---- ALTapi 注册机（纯标准库；PySocks 可选，走 socks5 出口时才需要）----
+# 后端 scriptPaths() 在镜像里只认 /usr/local/share/altapi-signup/altapi_registrar.py；
+# 缺这一步时注册按钮会在「找不到 altapi_registrar.py」处直接失败。
+RUN python3 -m venv /opt/altapi-signup \
+    && /opt/altapi-signup/bin/pip install --no-cache-dir PySocks
+COPY tools/altapi_registrar.py /usr/local/share/altapi-signup/altapi_registrar.py
+RUN chmod -R a+rX /usr/local/share/altapi-signup
+
 # ---- Mistral 注册机 worker（含 Playwright）----
 RUN python3 -m venv /opt/mistral-signup \
     && /opt/mistral-signup/bin/pip install --no-cache-dir requests playwright

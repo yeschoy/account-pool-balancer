@@ -148,11 +148,26 @@ func (m *altapiManager) scriptPaths(st altapisignupstore.Settings) (script, py s
 	if py == "" {
 		if v := strings.TrimSpace(os.Getenv("ALTAPI_PYTHON")); v != "" {
 			py = v
+		} else if v := altapiDefaultPython(); v != "" {
+			py = v
 		} else {
 			py = "python3"
 		}
 	}
 	return script, py, nil
+}
+
+// altapiDefaultPython 返回镜像里带 PySocks 的解释器。
+//
+// 注册机是纯标准库实现，只有候选绑了 socks5 出口时才 import socks；用系统
+// python3 会在那条分支上抛 ModuleNotFoundError。Dockerfile 的
+// /opt/altapi-signup 是唯一装了依赖的 venv，所以优先用它，找不到再退回 python3。
+func altapiDefaultPython() string {
+	const venv = "/opt/altapi-signup/bin/python3"
+	if fi, err := os.Stat(venv); err == nil && !fi.IsDir() {
+		return venv
+	}
+	return ""
 }
 
 // jobFile is the JSON the registrar reads with --job-file.

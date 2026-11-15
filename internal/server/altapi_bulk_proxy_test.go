@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -78,6 +81,52 @@ func TestALTAPIBulkImportBindsProxies(t *testing.T) {
 		}
 		if c.Email == "a@mail.example.com" && c.ProxyURL != proxies[0] {
 			t.Errorf("existing binding was clobbered: %q", c.ProxyURL)
+		}
+	}
+}
+
+// scriptPaths 在镜像里必须找到打进去的注册机，并优先用装好 PySocks 的 venv。
+// 缺这一步时点「注册」只会得到「找不到 altapi_registrar.py」，而这个错误
+// 只在真正注册时才出现，前端接线测试发现不了。
+func TestALTAPIScriptPathsResolves(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// go test 的 cwd 是包目录（internal/server），而仓库根的 tools/ 在两级之上。
+	// 用 ALTAPI_REGISTRAR 显式指向真实脚本，验证解析与可读性这一层；
+	// 镜像内的 /usr/local/share/altapi-signup 分支由 Dockerfile 保证。
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	real := filepath.Join(repoRoot, "tools", "altapi_registrar.py")
+	t.Setenv("ALTAPI_REGISTRAR", real)
+	script, py, err := m.scriptPaths(m.store.Settings())
+	if err != nil {
+		t.Fatalf("scriptPaths: %v", err)
+	}
+	if script != real {
+		t.Errorf("script=%q, want %q", script, real)
+	}
+	if strings.TrimSpace(py) == "" {
+		t.Error("python interpreter is empty")
+	}
+	if fi, err := os.Stat(script); err != nil || fi.IsDir() {
+		t.Errorf("script %q not readable: %v", script, err)
+	}
+}
+
+// 环境变量优先级：ALTAPI_PYTHON > venv > python3。
+func TestALTAPIDefaultPythonFallsBack(t *testing.T) {
+	// 测试机上通常没有 /opt/altapi-signup，此时必须返回空串让调用方退回 python3，
+	// 而不是返回一个不存在的路径。
+	got := altapiDefaultPython()
+	if got != "" {
+		if _, err := os.Stat(got); err != nil {
+			t.Errorf("altapiDefaultPython returned missing path %q", got)
 		}
 	}
 }
