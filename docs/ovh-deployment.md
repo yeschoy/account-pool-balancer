@@ -3158,3 +3158,44 @@ API 层同样拒绝，无法绕过前端直接 PUT 两个模式。
 **另一个 agent 的改动**，未纳入本提交、未部署。
 
 回退镜像：`account-pool-balancer:release-c5e0c4a-20261115T203822Z`。
+
+## 当前部署：自动补号轮询不再覆盖编辑（2026-11-15 21:32–21:33 UTC，2356115）
+
+用户反馈：填完参数后页面「很快地刷新」，没法正常设置。
+
+### 根因
+
+`startALTAutoPolling` 每 5 秒拉一次 `/auto` 然后调 `renderALTAuto(r)`——
+而这个函数**既填表单也刷状态**，会把 `input.value` / `input.checked` 全部改回
+已保存的值。用户敲一半就被重置。
+
+### 改法
+
+把「填表单」和「刷状态」拆开：
+
+| 函数 | 职责 | 调用方 |
+|---|---|---|
+| `renderALTAuto` | 填表单 + 刷状态 | 进入页面、保存成功后 |
+| `renderALTAutoStatus` | **只刷状态那行文字** | 定时轮询、立即检查 |
+
+`renderALTAutoStatus` 内部零处 `.value =` / `.checked =`。
+
+两条加固：
+
+- 轮询间隔 5s → **10s**（状态行不需要 5 秒精度）
+- **焦点在表单内时跳过本次轮询**：省请求，也避免状态行在输入时闪动
+
+「立即检查」按钮同样改为只刷状态。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-2356115-20261115T213237Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 线上 JS | `renderALTAutoStatus(r)` 1 处、`form.contains(document.activeElement)` 在、间隔 `10000` 在 |
+| 状态函数 | 写 `value`/`checked` = **False** |
+| 回归测试 | 断言状态函数不碰表单、轮询不调表单版、间隔 10000、编辑跳过判断存在 |
+
+回退镜像：`account-pool-balancer:release-0010c20-20261115T205721Z`。
