@@ -71,6 +71,10 @@
 
 旧退出至首HTTP观测约3.55秒，非精确停机；构建和健康等待不计停机。镜像 `account-pool-balancer:release-2986f74-20261115T220442Z`；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261115T220442Z-2986f74`；完整备份 `/home/ubuntu/backups/account-pool-balancer/20261115T220442Z-x50-pool-2986f74`（data SHA256 `baf958cb0b4f3bddbcc02656ea36b176996e48df0aa2ab7402a54d1127e7238b`）；回退镜像 `account-pool-balancer:rollback-20261115T220442Z` 保留，回退不自动恢复旧data覆盖新写入。停止的断网预检容器 `account-pool-balancer-check-x50-20261115t220442z` 无持久tmpfs凭据；本地 `.tmp/x50-deploy/` 日志/浏览器回执已登记，清理需用户同意。后续仅补记录，不重新部署。
 
+### 上线后追加只读观察（2026-11-15 22:23 UTC）
+
+用户要求“观察有没有错误，有错误就修复”。核对部署前备份/上线以来日志，并连续观察UTC22:20:28–22:23:28（180秒、13次采样）：全程2986f74 healthy、零重启/无OOM，双NewAPI入口通过；17个自然请求全部成功（Deploy13、OpenCode Go2、OpenDesign1、River1），新增错误0。上线以来147个请求为127成功、18个Deploy上游500、2个客户端取消499；36条错误尝试属于18次最终失败，正文都是上游53字节JSON `Internal Server Error`，同类错误在部署前21:54:32已出现，最后22:08:55，后续自然流量已恢复。4个OpenDesign上游封禁、95个TokenHarbor会话失效/1个来源缺失均在部署前备份存在，未伪装清除或重注册。生产尚无50X推理账号，因此不能称已用自然流量完成50X上游业务验收。未确认本次代码回归，不改在线规则/账号/代理，不无故重启或重新部署；只补记录。详 `.trellis/tasks/x50-account-pool/validation.md`；脱敏汇总 `.tmp/x50-observe/` 已登记，清理需同意。
+
 ## 历史部署：模型列表分层缓存（2026-11-15 18:32 UTC，eada1fe）
 
 - 用户明确授权直接推送部署；`eada1fe6b95c969bfebe950b5dd7a1b480b46979` 已推送 master，从干净 Git 归档构建。线上基线 `0dc31ba`，业务差异仅模型列表缓存/失效与对应测试；复用已通过的全仓 normal/race/vet/build，不重复测试、不建 Trellis 任务。
