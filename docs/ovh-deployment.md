@@ -3065,3 +3065,38 @@ UI 加了一行说明（「只影响手动注册」），语义不用猜。
 | 单测 | TestALTAAutoForcesImportEvenWhenSwitchOff（manual 不入池 / auto 入池对照）、TestALTABatchOriginWiring（三个入口来源标注 + 守卫 + job 强制） |
 
 回退镜像：`account-pool-balancer:release-c6a9f00-20261115T192438Z`。
+
+## 当前部署：频率注册改按分钟（2026-11-15 20:38–20:39 UTC，c5e0c4a）
+
+用户要求「填 5 和 10，就是随机 5–10 分钟注册一个」。
+
+功能本身早有（`scheduleNextLocked` 用 `rand.Intn` 在区间内取随机秒数），但界面
+单位是**秒**（默认 600–1200），填「5」「10」会被当成 5 秒和 10 秒，与直觉不符。
+
+### 改法
+
+- 界面按**分钟**填、按分钟显示（下限 1、上限 1440）；存储仍是秒，后端不变
+- 渲染 `秒 / 60` 并四舍五入到整分钟，避免出现 9.9999
+- 提交 `分钟 × 60`
+- hint 补「与按阈值补号互不影响，可同时开」
+
+### 补齐此前未覆盖的边界测试
+
+| 测试 | 守什么 |
+|---|---|
+| TestALTAAutoScheduleIsRandomWithinRange | 50 次抽样全在 [300,600]，且至少 10 个不同值（验证真随机） |
+| TestALTAAutoScheduleEqualBounds | 上下限相等退化为固定值 —— `rand.Intn(0)` 会 panic |
+| TestALTAAutoScheduleInvertedBounds | 上限 < 下限按上限处理，不 panic |
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-c5e0c4a-20261115T203822Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 前端文案 | 「随机间隔下限（分钟）」已在页面 |
+| 隔离实测 | PUT 300/600 → 读回 5/10 分钟 → 触发后 `nextRunAt` 距当时 **9.4 分钟** |
+| 线上当前值 | 总开关开、阈值开(15)、**频率关**、区间 10–20 分钟 |
+
+回退镜像：`account-pool-balancer:release-aee0206-20261115T202136Z`。
