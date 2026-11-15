@@ -198,9 +198,13 @@ func (s *Server) apiALTAPIQuotaRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]item, 0, len(list))
 	var total float64
-	var known int
+	var known, skipped int
 	for _, c := range list {
+		// 没有会话也没有 Key 的候选读不到任何额度：余额只在 /api/* 控制面可读，
+		// 而控制面要求 session。计入 skipped 而不是当作失败，前端才能说清
+		// 「有几个是因为没凭据跳过」。
 		if c.SessionCookie == "" && c.APIKey == "" {
+			skipped++
 			continue
 		}
 		res := altapiFetchQuota(ctx, origin, c.SessionCookie, c.APIKey, c.AccountID, c.ProxyURL)
@@ -227,6 +231,7 @@ func (s *Server) apiALTAPIQuotaRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items": out, "totalBalanceUsd": round2(total), "known": known,
+		"skipped": skipped,
 	})
 }
 

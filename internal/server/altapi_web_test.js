@@ -83,7 +83,7 @@ for (const re of [/r\.email/g, /r\.error/g, /l\.message/g, /r\.proxy_url/g]) {
 const unescaped = [...altSource.matchAll(/<td[^>]*>\$\{([^}]*)\}<\/td>/g)]
   .map((m) => m[1])
   .filter((expr) => !expr.includes('altEsc') && !expr.includes('altMoney') && !expr.includes('altKeyCell') && !expr.includes('altProxyCell')
-    && !expr.includes('altBadge') && !expr.includes('actions')
+    && !expr.includes('altBadge') && !expr.includes('actions') && !expr.includes('altCandidateBalance')
     // 下面三类不来自上游文本：时间格式化结果、本地拼好的片段、布尔开关渲染的常量标记。
     && !expr.includes('toLocaleTimeString()') && !expr.includes('note') && !expr.includes('r.enabled'));
 assert.deepEqual(unescaped, [], '存在未转义的单元格插值');
@@ -100,6 +100,28 @@ assert.match(altSource, /alt-log-close/);
 
 // 9.6) 导入时必须回退到已保存的代理池，否则用户在设置页存好代理后导入仍是直连。
 assert.ok(altSource.includes('proxyPool'), '导入结果应回报本次使用的代理池大小');
+
+// 9.7) 刷新余额必须读后端真实字段（items/known/skipped），
+//     早期读的是 refreshed/failed，提示永远是「已刷新 0 个」。
+assert.ok(!/r\.refreshed/.test(altSource), '不能读不存在的 r.refreshed');
+assert.match(altSource, /const items = r\.items \|\| \[\]/);
+assert.match(altSource, /r\.totalBalanceUsd/);
+assert.match(altSource, /r\.skipped/);
+// 后端要回 skipped，前端才能区分「没凭据跳过」和「刷新失败」。
+const quotaSrc = fs.readFileSync(path.join(__dirname, 'altapi_quota.go'), 'utf8');
+assert.match(quotaSrc, /"skipped":\s*skipped/);
+assert.match(quotaSrc, /skipped\+\+/);
+
+// 9.8) 每个账号下都要能展示额度：候选行与号池行各有渲染函数，
+//      且无凭据时明确说缺什么，不能只显示一个「未知」。
+assert.match(altSource, /function altCandidateBalance/);
+assert.match(altSource, /缺会话/);
+assert.match(altSource, /quota_checked_at/);
+assert.match(altSource, /used_quota/);
+assert.ok(altSource.includes('altCandidateBalance(r)'), '候选表余额列必须用 altCandidateBalance');
+for (const col of ['邮箱','状态','余额','Key / 会话','代理','UID','说明','操作']) {
+  assert.ok(html.includes('<th>' + col + '</th>'), '候选表缺少列：' + col);
+}
 
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。

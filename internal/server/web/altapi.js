@@ -74,6 +74,24 @@ function altMoney(v) {
   return `<span class="small">$${n.toFixed(2)}</span>`;
 }
 
+// 候选行的余额：数字 + 读取时间 + 来源。没有凭据时明确说缺什么。
+function altCandidateBalance(r) {
+  const money = altMoney(r.balance_usd);
+  if (r.balance_usd == null) {
+    if (!r.session_cookie) {
+      return `${money}<br><span class="muted small" title="余额只在 /api/* 控制面可读，需要登录得到的 session cookie">缺会话</span>`;
+    }
+    return `${money}<br><span class="muted small">未读取</span>`;
+  }
+  const at = r.quota_checked_at && !String(r.quota_checked_at).startsWith('0001')
+    ? new Date(r.quota_checked_at).toLocaleTimeString()
+    : '';
+  const used = r.used_quota != null && r.quota_per_unit
+    ? ` · 已用 $${(r.used_quota / r.quota_per_unit).toFixed(2)}`
+    : '';
+  return `${money}${at ? `<br><span class="muted small">${at}${used}</span>` : ''}`;
+}
+
 function altProxyCell(r) {
   if (!r.proxy_url) return '<span class="muted">直连</span>';
   const label = String(r.proxy_url).split('@').pop();
@@ -122,7 +140,8 @@ async function loadALTStatus() {
         <td class="small">${altEsc(r.name || r.email || r.id)}</td>
         <td>${altEsc(r.group || '—')}</td>
         <td>${r.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge muted">停用</span>'}</td>
-        <td>${altMoney(r.balanceUsd)}</td>
+        <td>${altMoney(r.balanceUsd)}${r.balanceSource && r.balanceSource !== 'session'
+          ? `<br><span class="muted small" title="${altEsc(r.readHint || '')}">${altEsc(r.balanceSource)}</span>` : ''}</td>
         <td class="small">$${(r.usedUsd || 0).toFixed(2)}</td>
         <td class="small">${altEsc(r.requests || 0)}</td>
         <td>${r.lastError ? `<span class="error small">${altEsc(r.lastError)}</span>` : '<span class="muted">—</span>'}</td>
@@ -178,7 +197,7 @@ function renderALTRows(rows) {
       r.api_key ? `<button type="button" class="btn small" data-alt-key="${altEsc(r.id)}">复制 Key</button>` : '',
       (r.status === 'key_created' && !r.imported_account_id)
         ? `<button type="button" class="btn small" data-alt-import="${altEsc(r.id)}">导入号池</button>` : '',
-      r.session_cookie
+      (r.session_cookie || r.api_key)
         ? `<button type="button" class="btn small" data-alt-quota="${altEsc(r.id)}">刷余额</button>` : '',
       busy
         ? `<button type="button" class="btn small" data-alt-cancel="${altEsc(r.id)}">取消</button>`
@@ -187,7 +206,7 @@ function renderALTRows(rows) {
     return `<tr>
       <td class="small">${altEsc(r.email)}</td>
       <td>${altBadge(r.status)}</td>
-      <td>${altMoney(r.balance_usd)}</td>
+      <td>${altCandidateBalance(r)}</td>
       <td>${altKeyCell(r)}</td>
       <td>${altProxyCell(r)}</td>
       <td class="small">${altEsc(r.account_id || '—')}</td>
@@ -456,7 +475,20 @@ function initALTPage() {
     btn.disabled = true;
     try {
       const r = await altApi('/quota-refresh', { method: 'POST', body: '{}' });
-      toast(`已刷新 ${r.refreshed ?? 0} 个，失败 ${r.failed ?? 0} 个`);
+      // 后端返回 items/totalBalanceUsd/known，不是 refreshed/failed。
+      const items = r.items || [];
+      const ok = items.filter((x) => x.ok).length;
+      const bad = items.length - ok;
+      const skipped = r.skipped || 0;
+      if (!items.length) {
+        toast(skipped
+          ? `没有可刷新的账号：${skipped} 个候选还没有会话或 Key`
+          : '没有可刷新的账号');
+      } else {
+        const total = r.totalBalanceUsd != null ? `，合计 $${Number(r.totalBalanceUsd).toFixed(2)}` : '';
+        toast(`已刷新 ${ok} 个${bad ? `，失败 ${bad} 个` : ''}${total}`
+          + (skipped ? `；${skipped} 个无凭据跳过` : ''));
+      }
       await loadALTRegistrations();
     } catch (e) {
       toast(e.message);
@@ -502,8 +534,12 @@ function initALTPage() {
         toast('已导入号池');
         await loadALTRegistrations();
       } else if (altQuota) {
-        await altApi(`/candidates/${encodeURIComponent(altQuota)}/quota`, { method: 'POST', body: '{}' });
-        toast('已刷新余额');
+        const r = await altApi(`/candidates/${encodeURIComponent(altQuota)}/quota`, { method: 'POST', body: '{}' });
+        if (r.ok && r.balanceUsd != null) {
+          toast(`余额 $${Number(r.balanceUsd).toFixed(2)}`);
+        } else {
+          toast(r.error || r.readHint || '读不到余额（需要有效会话）');
+        }
         await loadALTRegistrations();
       } else if (altCancel) {
         await altApi(`/candidates/${encodeURIComponent(altCancel)}/cancel`, { method: 'POST', body: '{}' });
