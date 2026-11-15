@@ -2823,3 +2823,64 @@ altBadge(r.imported_account_id ? 'imported' : r.status)
 | 筛选逻辑 | 4 条样本（2 入池 / 2 待处理）：pending→2、imported→2、all→4 |
 
 回退镜像：`account-pool-balancer:release-7c57304-20261115T154856Z`。
+
+## 当前部署：ALTapi 自动补号（2026-11-15 17:25–17:30 UTC，447cfc7 + 0dc31ba）
+
+用户要求：池子数量不够阈值时自动注册并入池；支持按随机几分钟的频率注册；
+两者都可选。
+
+### 两种触发，各自独立开关
+
+| 触发 | 条件 | 默认 |
+|---|---|---|
+| 阈值补号 | 可用账号 < MinAvailable 时补到阈值 | 开（但总开关关） |
+| 频率注册 | 每 RandomMin~RandomMax 秒注册一个 | 关 |
+
+**总开关默认关闭**：自动注册真实消耗邮箱与出口 IP 信誉，必须人工打开。
+
+### 关键设计：补号成本有优先级
+
+`altAutoReplenish` 先导入「已建 Key 但未入池」的候选（零成本，不消耗邮箱和
+IP 信誉），不够才发起新的注册批次。注册复用已有 `runBatch`，所以节奏控制、
+代理轮换、收码停顿、自动入池全部沿用，不另写一套。
+
+### 随机而非固定间隔
+
+每次触发后重新 `rand.Intn` 取 `[min,max]`。固定间隔本身就是脚本特征——
+与此前把收码轮询从固定 4s 改成随机是同一个理由。
+
+### 实现要点
+
+- `internal/server/altapi_auto.go`：`altAutoManager` 只负责「何时发起」，
+  与 `altapiManager`（管一批怎么跑完）分离
+- 主循环挂服务级 context（`altAutoCtx`），不继承 `r.Context()`
+- 5 秒 tick；有批次在跑时不再发起（`altapiBusy` 用 `m.seq` 非阻塞探测）
+- `MaxPerRound` 是阈值算错时的保险
+- 没有可注册候选时记「缺库存」而非报错，循环继续
+- 设置存 `altapisignupstore.Settings.Auto`，跟注册机配置同一 JSON 落盘
+
+API：`GET|PUT /api/altapi/auto`、`GET /api/altapi/auto/status`、
+`POST /api/altapi/auto/run`。
+
+### 部署后修复的一个缺陷（0dc31ba）
+
+线上首查发现「可用 0/0」：`!Enabled` 时 `altAutoCheck` 在统计前就 return，
+导致 `available/poolTotal/importable/queued` 永远是 0，用户既看不到现状也
+没有依据判断该不该打开。
+
+改为**关闭时照常统计、只跳过触发**，`lastAction` 显示「未启用」。候选计数
+抽成 `altAutoCountCandidates()` 与触发路径共用口径。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-0dc31ba-20261115T173008Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| **线上状态（关闭）** | `可用=12/12 · 可导入=0 · 待注册=0 · 动作=未启用` |
+| 前端设置项 | `alta-enabled` / `alta-min` / `alta-freq-min` / `alta-save` 等 10 个 |
+| 隔离实测 | 开阈值补号(3) → 可用 0 低于阈值 → 自动导入有 Key 的候选 → `imported=alt-1309083fde84af14`，号池 1 个 |
+| 单测 | 8 条全过（默认关闭、6 组非法值、往返、拒绝非法不改数据、可用性统计、优先导入、缺库存不报错、关闭时仍报告） |
+
+回退镜像：`account-pool-balancer:release-4cbb112-20261115T165917Z`。
