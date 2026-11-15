@@ -455,3 +455,118 @@ func TestALTAPICodeDelaySettings(t *testing.T) {
 		t.Fatalf("往返丢失: code_delay=%v pace=%v", got.CodeDelaySec, got.PaceScale)
 	}
 }
+
+// 批量「分配代理」：只给未注册且直连的候选补出口。
+//
+// 已注册的账号出口已定，换 IP 会让上游看到「同一账号换地区登录」，风险更高，
+// 必须走单条 PATCH 显式改。
+func TestALTAPIAssignProxySkipsRegistered(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.store.Settings()
+	st.ProxyPool = []string{"socks5://u:p@10.0.0.1:1080", "socks5://u:p@10.0.0.2:1080"}
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(email string, status altapisignupstore.Status, proxy string) altapisignupstore.Candidate {
+		c, err := m.store.Add(altapisignupstore.Candidate{
+			Email: email, MailboxURL: "https://box.test/x?token=1",
+			Status: status, ProxyURL: proxy,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	queued := mk("q@mail.example.com", altapisignupstore.Queued, "")
+	failed := mk("f@mail.example.com", altapisignupstore.Failed, "")
+	hasProxy := mk("h@mail.example.com", altapisignupstore.Queued, "socks5://keep@1.1.1.1:1")
+	registered := mk("r@mail.example.com", altapisignupstore.Registered, "")
+	keyed := mk("k@mail.example.com", altapisignupstore.KeyCreated, "")
+
+	rec := httptest.NewRecorder()
+	s.apiALTAPIAssignProxy(rec, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/candidates/assign-proxy", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Assigned, Kept, Skipped, PoolSize int
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Assigned != 2 || out.Kept != 1 || out.Skipped != 2 || out.PoolSize != 2 {
+		t.Fatalf("assigned=%d kept=%d skipped=%d pool=%d, want 2/1/2/2",
+			out.Assigned, out.Kept, out.Skipped, out.PoolSize)
+	}
+
+	get := func(id string) altapisignupstore.Candidate {
+		c, _ := m.store.Get(id)
+		return c
+	}
+	if get(queued.ID).ProxyURL == "" || get(failed.ID).ProxyURL == "" {
+		t.Error("未注册的候选应该被分配代理")
+	}
+	if got := get(hasProxy.ID).ProxyURL; got != "socks5://keep@1.1.1.1:1" {
+		t.Errorf("已有代理被覆盖: %q", got)
+	}
+	if get(registered.ID).ProxyURL != "" {
+		t.Error("已注册的候选不该被分配代理")
+	}
+	if get(keyed.ID).ProxyURL != "" {
+		t.Error("已建 Key 的候选不该被分配代理")
+	}
+
+	// 池子为空时必须明确报错，不能静默什么都不做。
+	st.ProxyPool = nil
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	rec2 := httptest.NewRecorder()
+	s.apiALTAPIAssignProxy(rec2, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/candidates/assign-proxy", strings.NewReader(`{}`)))
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("空池应返回 400，实际 %d", rec2.Code)
+	}
+}
+
+// 选中 ids 时只处理这几条。
+func TestALTAPIAssignProxyHonoursIDs(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.store.Settings()
+	st.ProxyPool = []string{"socks5://u:p@10.0.0.1:1080"}
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := m.store.Add(altapisignupstore.Candidate{Email: "a@mail.example.com", Status: altapisignupstore.Queued})
+	b, _ := m.store.Add(altapisignupstore.Candidate{Email: "b@mail.example.com", Status: altapisignupstore.Queued})
+
+	body, _ := json.Marshal(map[string]any{"ids": []string{a.ID}})
+	rec := httptest.NewRecorder()
+	s.apiALTAPIAssignProxy(rec, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/candidates/assign-proxy", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	ga, _ := m.store.Get(a.ID)
+	gb, _ := m.store.Get(b.ID)
+	if ga.ProxyURL == "" {
+		t.Error("选中的候选应被分配")
+	}
+	if gb.ProxyURL != "" {
+		t.Error("未选中的候选不该被动")
+	}
+}

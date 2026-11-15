@@ -25,6 +25,8 @@ let altRows = [];
 let altSettings = null;
 // altLogSeen 记录已渲染过的日志条数，用于收起态的数字角标（未读条数）。
 let altLogSeen = 0;
+// 选中的候选 id。批量按钮只作用于它；为空时按按钮各自的"全部"语义执行。
+const altSelected = new Set();
 
 // ---------------------------------------------------------------- helpers
 
@@ -203,7 +205,9 @@ function renderALTRows(rows) {
         ? `<button type="button" class="btn small" data-alt-cancel="${altEsc(r.id)}">取消</button>`
         : `<button type="button" class="btn small ghost" data-alt-del="${altEsc(r.id)}">删除</button>`,
     ].filter(Boolean).join(' ');
-    return `<tr>
+    const checked = altSelected.has(r.id);
+    return `<tr${checked ? ' class="row-selected"' : ''}>
+      <td class="col-check"><input type="checkbox" data-alt-pick="${altEsc(r.id)}"${checked ? ' checked' : ''}></td>
       <td class="small">${altEsc(r.email)}</td>
       <td>${altBadge(r.status)}</td>
       <td>${altCandidateBalance(r)}</td>
@@ -214,6 +218,24 @@ function renderALTRows(rows) {
       <td class="row-actions">${actions}</td>
     </tr>`;
   }).join('');
+}
+
+// 顶部按钮共用的目标集合：有勾选就只用勾选的，否则传 undefined 让后端走"全部"。
+function altTargetIDs() {
+  return altSelected.size ? [...altSelected] : undefined;
+}
+
+function syncALTSelHint() {
+  const el = document.getElementById('alt-sel-hint');
+  const all = document.getElementById('alt-check-all');
+  if (el) {
+    el.textContent = altSelected.size ? `已选 ${altSelected.size} 个` : '';
+  }
+  if (all) {
+    const ids = altRows.map((r) => r.id);
+    all.checked = ids.length > 0 && ids.every((id) => altSelected.has(id));
+    all.indeterminate = altSelected.size > 0 && !all.checked;
+  }
 }
 
 function renderALTStatus(s) {
@@ -373,6 +395,48 @@ function initALTPage() {
   });
   document.getElementById('alt-log-close')?.addEventListener('click', () => setLogExpanded(false));
 
+  // 全选 / 反选
+  document.getElementById('alt-check-all')?.addEventListener('change', (ev) => {
+    const on = ev.currentTarget.checked;
+    altSelected.clear();
+    if (on) altRows.forEach((r) => altSelected.add(r.id));
+    renderALTRows(altRows);
+  });
+
+  // 行内勾选（事件委托，渲染后不用重绑）
+  document.getElementById('alt-rows')?.addEventListener('change', (ev) => {
+    const box = ev.target.closest('input[data-alt-pick]');
+    if (!box) return;
+    const id = box.dataset.altPick;
+    if (box.checked) altSelected.add(id); else altSelected.delete(id);
+    syncALTSelHint();
+    const tr = box.closest('tr');
+    if (tr) tr.classList.toggle('row-selected', box.checked);
+  });
+
+  // 分配代理：给未注册且直连的候选补出口
+  document.getElementById('alt-assign-proxy')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      const ids = altTargetIDs();
+      const r = await altApi('/candidates/assign-proxy', {
+        method: 'POST', body: JSON.stringify(ids ? { ids } : {}),
+      });
+      const parts = [`分配 ${r.assigned ?? 0} 个`];
+      if (r.kept) parts.push(`已有代理保留 ${r.kept} 个`);
+      if (r.skipped) parts.push(`已注册跳过 ${r.skipped} 个`);
+      parts.push(`池内 ${r.poolSize ?? 0} 个代理`);
+      toast(parts.join('，'));
+      altSelected.clear();
+      await loadALTRegistrations();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // 概览刷新
   document.getElementById('alt-overview-refresh')?.addEventListener('click', () => {
     loadALTStatus().catch((e) => toast(e.message));
@@ -445,7 +509,10 @@ function initALTPage() {
     const btn = ev.currentTarget;
     btn.disabled = true;
     try {
-      const r = await altApi('/candidates/bulk-register', { method: 'POST', body: '{"all":true}' });
+      const ids = altTargetIDs();
+      const r = await altApi('/candidates/bulk-register', {
+        method: 'POST', body: JSON.stringify(ids ? { ids } : { all: true }),
+      });
       toast(r.queued ? `已排队 ${r.queued} 个` : (r.message || '没有可注册的候选'));
       startALTPolling();
       await loadALTRegistrations();
@@ -461,8 +528,14 @@ function initALTPage() {
     const btn = ev.currentTarget;
     btn.disabled = true;
     try {
-      const r = await altApi('/candidates/import-all', { method: 'POST', body: '{}' });
-      toast(`已导入 ${r.imported ?? 0} 个，跳过 ${r.skipped ?? 0} 个`);
+      const ids = altTargetIDs();
+      const r = await altApi('/candidates/import-all', {
+        method: 'POST', body: JSON.stringify(ids ? { ids } : {}),
+      });
+      const failed = r.failed || [];
+      toast(`已导入 ${r.imported ?? 0} 个，跳过 ${r.skipped ?? 0} 个`
+        + (failed.length ? `，失败 ${failed.length} 个：${failed[0]}` : ''));
+      altSelected.clear();
       await loadALTRegistrations();
     } catch (e) {
       toast(e.message);
@@ -476,7 +549,10 @@ function initALTPage() {
     const btn = ev.currentTarget;
     btn.disabled = true;
     try {
-      const r = await altApi('/quota-refresh', { method: 'POST', body: '{}' });
+      const ids = altTargetIDs();
+      const r = await altApi('/quota-refresh', {
+        method: 'POST', body: JSON.stringify(ids ? { ids } : {}),
+      });
       // 后端返回 items/totalBalanceUsd/known，不是 refreshed/failed。
       const items = r.items || [];
       const ok = items.filter((x) => x.ok).length;
@@ -491,6 +567,7 @@ function initALTPage() {
         toast(`已刷新 ${ok} 个${bad ? `，失败 ${bad} 个` : ''}${total}`
           + (skipped ? `；${skipped} 个无凭据跳过` : ''));
       }
+      altSelected.clear();
       await loadALTRegistrations();
     } catch (e) {
       toast(e.message);

@@ -123,6 +123,28 @@ for (const col of ['邮箱','状态','余额','Key / 会话','代理','UID','说
   assert.ok(html.includes('<th>' + col + '</th>'), '候选表缺少列：' + col);
 }
 
+// 9.9) 多选与批量按钮
+for (const part of ['id="alt-check-all"', 'id="alt-assign-proxy"', 'id="alt-sel-hint"']) {
+  assert.ok(html.includes(part), '缺少 ' + part);
+}
+assert.ok(html.includes('<th class="col-check">'), '表头缺少勾选列');
+assert.ok(altSource.includes('const altSelected = new Set()'));
+assert.match(altSource, /function altTargetIDs\(\)/);
+assert.match(altSource, /altSelected\.size \? \[\.\.\.altSelected\] : undefined/);
+// 四个动作都要带上选中集
+for (const act of ['/candidates/assign-proxy', '/quota-refresh', '/candidates/import-all', '/candidates/bulk-register']) {
+  const idx = altSource.indexOf(`'${act}'`);
+  assert.ok(idx > 0, '前端没调用 ' + act);
+  const around = altSource.slice(Math.max(0, idx - 300), idx + 300);
+  assert.ok(around.includes('ids'), act + ' 没有带选中 ids');
+}
+// 分配代理成功后要清空选择
+assert.match(altSource, /altSelected\.clear\(\)/);
+// CSS 有勾选列
+const css = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
+assert.ok(css.includes('.table .col-check'), 'CSS 缺少勾选列样式');
+assert.ok(css.includes('row-selected'), 'CSS 缺少选中行样式');
+
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
 assert.match(altSource, /s\.byStatus \|\| \{\}/);

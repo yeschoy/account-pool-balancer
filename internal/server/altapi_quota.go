@@ -181,7 +181,22 @@ func (s *Server) apiALTAPIQuotaRefresh(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	list := m.store.List()
+	// ids 为空表示全部；传了只刷选中项（前端多选后点「刷新额度」）。
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	want := map[string]bool{}
+	for _, id := range in.IDs {
+		want[id] = true
+	}
+	var list []altapisignupstore.Candidate
+	for _, c := range m.store.List() {
+		if len(want) > 0 && !want[c.ID] {
+			continue
+		}
+		list = append(list, c)
+	}
 	st := m.store.Settings()
 	origin := config.ALTAPIOrigin(st.BaseURL + "/v1")
 	ctx, cancel := context.WithTimeout(r.Context(),

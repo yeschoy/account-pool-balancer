@@ -576,9 +576,11 @@
       <header class="page-head">
         <h1>ALTapi 注册机</h1>
         <div class="actions">
+          <span id="alt-sel-hint" class="muted small"></span>
           <button type="button" class="btn" id="alt-refresh">刷新</button>
-          <button type="button" class="btn" id="alt-quota-refresh">刷新余额</button>
-          <button type="button" class="btn" id="alt-import-all">全部导入号池</button>
+          <button type="button" class="btn" id="alt-assign-proxy">分配代理</button>
+          <button type="button" class="btn" id="alt-quota-refresh">刷新额度</button>
+          <button type="button" class="btn" id="alt-import-all">导入号池</button>
           <button type="button" class="btn" id="alt-export">导出已完成</button>
           <button type="button" class="btn primary" id="alt-bulk-run">批量注册</button>
         </div>
@@ -621,7 +623,10 @@
           </div>
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>邮箱</th><th>状态</th><th>余额</th><th>Key / 会话</th><th>代理</th><th>UID</th><th>说明</th><th>操作</th></tr></thead>
+              <thead><tr>
+                <th class="col-check"><input type="checkbox" id="alt-check-all" title="全选当前列表"></th>
+                <th>邮箱</th><th>状态</th><th>余额</th><th>Key / 会话</th><th>代理</th><th>UID</th><th>说明</th><th>操作</th>
+              </tr></thead>
               <tbody id="alt-rows"></tbody>
             </table>
           </div>

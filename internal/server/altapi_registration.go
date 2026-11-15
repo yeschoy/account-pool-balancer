@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -56,6 +57,7 @@ func (s *Server) registerALTAPI(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/altapi/candidates/{id}/quota", s.apiALTAPICandidateQuota)
 	a("POST /api/altapi/quota-refresh", s.apiALTAPIQuotaRefresh)
 	a("POST /api/altapi/proxy-test", s.apiALTAPIProxyTest)
+	a("POST /api/altapi/candidates/assign-proxy", s.apiALTAPIAssignProxy)
 	a("GET /api/altapi/settings", s.apiALTAPISettings)
 	a("PUT /api/altapi/settings", s.apiALTAPISaveSettings)
 	a("GET /api/altapi/logs", s.apiALTAPILogs)
@@ -774,8 +776,20 @@ func (s *Server) apiALTAPIImportAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// ids 为空表示「全部可导入的」；传了就给选中项用同一套校验。
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	want := map[string]bool{}
+	for _, id := range in.IDs {
+		want[id] = true
+	}
 	imported, failed := 0, []string{}
 	for _, c := range m.store.List() {
+		if len(want) > 0 && !want[c.ID] {
+			continue
+		}
 		if c.APIKey == "" || c.ImportedAcctID != "" {
 			continue
 		}
@@ -972,3 +986,98 @@ func (s *Server) apiALTAPIStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+
+// apiALTAPIAssignProxy 给没有代理的候选分配代理池里的出口。
+//
+// 解决的问题：候选批量导入后可能因为多种原因仍是直连（导入时池子还没配好、
+// 或者池子是后来才加的）。逐个 PATCH 改太慢，这里一次补齐。
+//
+// 只处理「未注册」（queued/failed/cancelled）且 proxy_url 为空的候选：
+// 已注册的账号出口已定，换 IP 会让上游看到「同一账号换地区登录」，风险更高，
+// 必须走单条 PATCH 显式改。
+func (s *Server) apiALTAPIAssignProxy(w http.ResponseWriter, r *http.Request) {
+	m, err := s.altapiMgr()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var in struct {
+		IDs []string `json:"ids"` // 空表示全部符合条件的
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	want := map[string]bool{}
+	for _, id := range in.IDs {
+		want[id] = true
+	}
+
+	pool := m.store.Settings().ProxyPool
+	if len(pool) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "代理池是空的，先在「注册设置」里粘贴代理并保存",
+		})
+		return
+	}
+
+	// 按创建时间固定排序，保证同一组数据每次分配结果一致。
+	rows := m.store.List()
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CreatedAt.Before(rows[j].CreatedAt) })
+
+	// 轮询游标接着已有的分配往下走，避免每次都从池首开始（会让前几个代理
+	// 承担的候选数明显多于后面）。
+	n := countAltapiProxyUse(rows, pool)
+
+	assigned, kept, skipped := 0, 0, 0
+	for _, c := range rows {
+		if len(want) > 0 && !want[c.ID] {
+			continue
+		}
+		// 已注册/已登录/已建 Key 的不动：换出口会被上游视为换地区登录。
+		if !altapiCanAssignProxy(c) {
+			skipped++
+			continue
+		}
+		if strings.TrimSpace(c.ProxyURL) != "" {
+			kept++
+			continue
+		}
+		next := pool[n%len(pool)]
+		n++
+		if _, err := m.store.Update(c.ID, func(x *altapisignupstore.Candidate) error {
+			x.ProxyURL = next
+			return nil
+		}); err != nil {
+			continue
+		}
+		assigned++
+	}
+	m.addLog("proxy_assign", "", fmt.Sprintf(
+		"分配 %d 个，保留 %d 个，跳过 %d 个（已注册或不可改；池内 %d 个代理）",
+		assigned, kept, skipped, len(pool)))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"assigned": assigned, "kept": kept, "skipped": skipped, "poolSize": len(pool),
+	})
+}
+
+// altapiCanAssignProxy 判断候选是否还能换出口：只有还没注册成功的才行。
+func altapiCanAssignProxy(c altapisignupstore.Candidate) bool {
+	switch c.Status {
+	case altapisignupstore.Queued, altapisignupstore.Failed, altapisignupstore.Cancelled:
+		return true
+	}
+	return false
+}
+
+// countAltapiProxyUse 数一下现有绑定里每个代理已经承担了多少候选，
+// 作为轮询起点，让分配尽量均匀。
+func countAltapiProxyUse(rows []altapisignupstore.Candidate, pool []string) int {
+	used := 0
+	for _, c := range rows {
+		for _, p := range pool {
+			if c.ProxyURL == p {
+				used++
+				break
+			}
+		}
+	}
+	return used
+}
