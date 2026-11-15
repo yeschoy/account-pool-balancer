@@ -58,6 +58,7 @@ func (s *Server) registerALTAPI(mux *http.ServeMux, a func(string, http.HandlerF
 	a("POST /api/altapi/quota-refresh", s.apiALTAPIQuotaRefresh)
 	a("POST /api/altapi/proxy-test", s.apiALTAPIProxyTest)
 	a("POST /api/altapi/candidates/assign-proxy", s.apiALTAPIAssignProxy)
+	a("POST /api/altapi/return-to-registrar", s.apiALTAPIReturnToRegistrar)
 	a("GET /api/altapi/settings", s.apiALTAPISettings)
 	a("PUT /api/altapi/settings", s.apiALTAPISaveSettings)
 	a("GET /api/altapi/logs", s.apiALTAPILogs)
@@ -1080,4 +1081,120 @@ func countAltapiProxyUse(rows []altapisignupstore.Candidate, pool []string) int 
 		}
 	}
 	return used
+}
+
+// apiALTAPIReturnToRegistrar 把已经入池的账号退回注册机候选列表。
+//
+// 用途：账号在号池里但需要重新跑一遍注册链路（改密码、重新建 Key、换出口后
+// 重登等）。账号 ID 是 "alt-<candidateID>"，所以能反查到源候选：
+//
+//   - 源候选存在 → 清掉 ImportedAcctID 让它重新可导入，状态回到 failed
+//     （failed 是"可重试"的语义，比保留 key_created 更准确：它现在确实不可用）
+//   - 源候选不存在（手工添加的账号）→ 用账号的 email/key 造一条候选
+//
+// 账号本身**不删**：调用方可能只是想重跑；确认要移除请自己删账号。
+// 但会把它停用，避免退回后同一时间有两个来源指向同一 Key。
+func (s *Server) apiALTAPIReturnToRegistrar(w http.ResponseWriter, r *http.Request) {
+	m, err := s.altapiMgr()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(in.IDs) == 0 {
+		http.Error(w, "ids 不能为空", http.StatusBadRequest)
+		return
+	}
+
+	cfg := s.cfg.Get()
+	byID := map[string]config.Account{}
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderALTAPI {
+			byID[a.ID] = a
+		}
+	}
+
+	returned, created, failed := 0, 0, []string{}
+	for _, id := range in.IDs {
+		acct, ok := byID[id]
+		if !ok {
+			failed = append(failed, id+": 不是 altapi 账号")
+			continue
+		}
+		candID := strings.TrimPrefix(id, "alt-")
+		if candID == id {
+			candID = "" // ID 不是 alt-<candidate> 形态
+		}
+
+		var cand altapisignupstore.Candidate
+		var exists bool
+		if candID != "" {
+			if c, err := m.store.Get(candID); err == nil {
+				cand, exists = c, true
+			}
+		}
+		if !exists {
+			if strings.TrimSpace(acct.Email) == "" {
+				// 没有 email 的账号造不出候选（email 是候选的主键语义），
+				// 如实报错而不是静默跳过。
+				failed = append(failed, id+": 账号没有 email，无法生成候选；请手工添加")
+				continue
+			}
+			// 手工账号：造一条候选，把已知凭据带过去，免得重新要人填。
+			c, err := m.store.Add(altapisignupstore.Candidate{
+				Email:         acct.Email,
+				Username:      acct.Name,
+				MailboxURL:    "",
+				Status:        altapisignupstore.Failed,
+				Error:         "由号池账号退回，缺接码地址",
+				APIKey:        acct.RuntimeKey,
+				SessionCookie: acct.ControlKey,
+				AccountID:     acct.UserID,
+				Detail:        "从号池退回",
+			})
+			if err != nil {
+				failed = append(failed, id+": "+err.Error())
+				continue
+			}
+			cand, exists = c, true
+			created++
+		} else {
+			if _, err := m.store.Update(cand.ID, func(c *altapisignupstore.Candidate) error {
+				c.ImportedAcctID = ""
+				c.Status = altapisignupstore.Failed
+				c.Error = "已从号池退回，等待重跑"
+				c.Detail = "从号池退回"
+				return nil
+			}); err != nil {
+				failed = append(failed, id+": "+err.Error())
+				continue
+			}
+		}
+
+		// 停用账号：避免退回后同一 Key 同时被号池调度和注册机重跑。
+		if acct.Enabled {
+			_, _ = s.cfg.Update(-1, func(cfg *config.Config) error {
+				for i := range cfg.Accounts {
+					if cfg.Accounts[i].ID == id {
+						cfg.Accounts[i].Enabled = false
+						cfg.Accounts[i].Note = strings.TrimSpace(cfg.Accounts[i].Note + "；已退回注册机")
+						break
+					}
+				}
+				return nil
+			})
+		}
+		m.addLog("returned", acct.Email, "已退回注册机候选 "+cand.ID)
+		returned++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"returned": returned, "created": created, "failed": failed,
+	})
 }

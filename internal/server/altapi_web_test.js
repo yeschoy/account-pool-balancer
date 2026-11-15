@@ -153,6 +153,16 @@ const css = fs.readFileSync(path.join(__dirname, 'web/app.css'), 'utf8');
 assert.ok(css.includes('.table .col-check'), 'CSS 缺少勾选列样式');
 assert.ok(css.includes('row-selected'), 'CSS 缺少选中行样式');
 
+// 9.10) 已入池状态与退回注册机
+assert.ok(altSource.includes("imported: '已入池'"), '缺少「已入池」状态文案');
+assert.match(altSource, /r\.imported_account_id \? 'imported' : r\.status/,  '已入池应优先于 key_created 显示');
+assert.ok(html.includes('data-oc-batch="alt-return"'), '账号页缺少「退回 ALTapi 注册机」按钮');
+assert.ok(appSource.includes("[data-oc-batch=\"alt-return\"]"), '按钮显隐规则缺失');
+assert.ok(appSource.includes("classList.toggle('hidden', !isALTapi())"), '按钮未按 altapi 池显隐');
+assert.match(appSource, /\/api\/altapi\/return-to-registrar/);
+// altapi 也必须有勾选框与批量栏，否则选不中账号就退不回
+assert.match(appSource, /const managedKeyPool = \(\) =>[^;]*isALTapi\(\)/);
+
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
 assert.match(altSource, /s\.byStatus \|\| \{\}/);

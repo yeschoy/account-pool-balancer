@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"account-pool-balancer/internal/altapisignupstore"
+	"account-pool-balancer/internal/config"
 )
 
 // 批量导入必须真的把代理绑到候选上。
@@ -568,5 +569,161 @@ func TestALTAPIAssignProxyHonoursIDs(t *testing.T) {
 	}
 	if gb.ProxyURL != "" {
 		t.Error("未选中的候选不该被动")
+	}
+}
+
+// 已入池的账号可以退回注册机重新跑。
+//
+// 账号 ID 是 "alt-<candidateID>"，所以能反查源候选；退回时清掉 ImportedAcctID
+// 让候选重新可导入，并把账号停用，避免同一 Key 同时被号池调度和注册机重跑。
+func TestALTAPIReturnToRegistrar(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 造候选 + 入池
+	c, err := m.store.Add(altapisignupstore.Candidate{
+		Email: "ret@mail.example.com", MailboxURL: "https://box.test/r?token=1",
+		Status: altapisignupstore.KeyCreated,
+		APIKey: "sk-ret-test-000000000000000000000000000000",
+		SessionCookie: "sess-ret", AccountID: "900",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct, err := s.importALTAPICandidate(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct.ID != "alt-"+c.ID {
+		t.Fatalf("账号 ID = %q, want alt-%s（退回依赖这个映射）", acct.ID, c.ID)
+	}
+	got, _ := m.store.Get(c.ID)
+	if got.ImportedAcctID == "" {
+		t.Fatal("导入后候选应带 imported_account_id")
+	}
+
+	body, _ := json.Marshal(map[string]any{"ids": []string{acct.ID}})
+	rec := httptest.NewRecorder()
+	s.apiALTAPIReturnToRegistrar(rec, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/return-to-registrar", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Returned int      `json:"returned"`
+		Created  int      `json:"created"`
+		Failed   []string `json:"failed"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Returned != 1 || len(out.Failed) != 0 {
+		t.Fatalf("returned=%d failed=%v", out.Returned, out.Failed)
+	}
+
+	// 候选：清空入池标记，状态回到 failed（可重试）
+	back, _ := m.store.Get(c.ID)
+	if back.ImportedAcctID != "" {
+		t.Errorf("退回后 imported_account_id 应清空，实际 %q", back.ImportedAcctID)
+	}
+	if back.Status != altapisignupstore.Failed {
+		t.Errorf("退回后状态 = %q, want failed（可重试）", back.Status)
+	}
+	// 账号：保留但停用
+	var live *config.Account
+	for _, a := range s.cfg.Get().Accounts {
+		if a.ID == acct.ID {
+			x := a
+			live = &x
+		}
+	}
+	if live == nil {
+		t.Fatal("退回不应删除账号")
+	}
+	if live.Enabled {
+		t.Error("退回后账号应停用，避免同一 Key 双路调度")
+	}
+}
+
+// 手工添加的账号（没有源候选）退回时应新建一条候选。
+func TestALTAPIReturnToRegistrarCreatesCandidate(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 账号 ID 不是 alt-<候选> 形态：视作手工账号
+	_, err = s.cfg.Update(-1, func(cfg *config.Config) error {
+		cfg.Accounts = append(cfg.Accounts, config.Account{
+			ID: "manual-1", Provider: config.ProviderALTAPI, Name: "manual",
+			Email: "manual@mail.example.com", Enabled: true,
+			RuntimeKey: "sk-manual", Group: config.GroupForProvider(config.ProviderALTAPI),
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"ids": []string{"manual-1"}})
+	rec := httptest.NewRecorder()
+	s.apiALTAPIReturnToRegistrar(rec, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/return-to-registrar", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Returned int `json:"returned"`
+		Created  int `json:"created"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out.Returned != 1 || out.Created != 1 {
+		t.Fatalf("returned=%d created=%d, want 1/1", out.Returned, out.Created)
+	}
+	found := false
+	for _, c := range m.store.List() {
+		if c.Email == "manual@mail.example.com" && c.APIKey == "sk-manual" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("没有为手工账号建出候选")
+	}
+}
+
+// 非 altapi 账号、空 ids 要明确拒绝。
+func TestALTAPIReturnToRegistrarGuards(t *testing.T) {
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	s.apiALTAPIReturnToRegistrar(rec, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/return-to-registrar", strings.NewReader(`{"ids":[]}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("空 ids 应 400，实际 %d", rec.Code)
+	}
+
+	body, _ := json.Marshal(map[string]any{"ids": []string{"not-exist"}})
+	rec2 := httptest.NewRecorder()
+	s.apiALTAPIReturnToRegistrar(rec2, httptest.NewRequest(http.MethodPost,
+		"/api/altapi/return-to-registrar", strings.NewReader(string(body))))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec2.Code)
+	}
+	var out struct {
+		Returned int      `json:"returned"`
+		Failed   []string `json:"failed"`
+	}
+	_ = json.Unmarshal(rec2.Body.Bytes(), &out)
+	if out.Returned != 0 || len(out.Failed) != 1 {
+		t.Errorf("不存在的账号应记入 failed，实际 returned=%d failed=%v", out.Returned, out.Failed)
 	}
 }

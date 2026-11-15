@@ -42,6 +42,9 @@ const ALT_STATUS_CLASS = {
   registered: 'warn',
   verified: 'warn',
   key_created: 'ok',
+  // imported 是派生状态：候选的 imported_account_id 非空即为已入池。
+  // 它比 key_created 更进一步（Key 存在 ≠ 已进号池可被调度）。
+  imported: 'ok',
   failed: 'bad',
   cancelled: 'muted',
 };
@@ -53,6 +56,7 @@ const ALT_STATUS_TEXT = {
   registered: '已注册',
   verified: '已登录',
   key_created: '已建 Key',
+  imported: '已入池',
   failed: '失败',
   cancelled: '已取消',
 };
@@ -235,7 +239,7 @@ function renderALTRows(rows) {
     return `<tr${checked ? ' class="row-selected"' : ''}>
       <td class="col-check"><input type="checkbox" data-alt-pick="${altEsc(r.id)}"${checked ? ' checked' : ''}></td>
       <td class="small">${altEsc(r.email)}</td>
-      <td>${altBadge(r.status)}</td>
+      <td>${altBadge(r.imported_account_id ? 'imported' : r.status)}</td>
       <td>${altCandidateBalance(r)}</td>
       <td>${altKeyCell(r)}</td>
       <td>${altProxyCell(r)}</td>

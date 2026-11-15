@@ -29,7 +29,8 @@ const isDeploy = () => pool === 'deploy';
 const isX50 = () => pool === 'x50';
 // ALTapi.ai（TokenPower / new-api 定制分支）：注册机 + 号池管理（altapi.js）
 const isALTapi = () => pool === 'altapi';
-const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio() || isDeploy();
+// ALTapi 有自己的推理号池（runtimeKey 可管理、账号可启停），一并纳入。
+const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio() || isDeploy() || isALTapi();
 const keyNeedsProvider = () => isOllama() || managedKeyPool();
 const RT_HINT = { opendesign: 'sk-amr-…', river: 'rv_…', ollama: 'ollama.com/settings/keys 签发的 key 原样粘贴',
   deploy: 'Deploy Secret Key（原样粘贴，不是 access_key）', mistral: 'Mistral API Key（原样粘贴，支持 mstrl_…）', tokenharbor: 'thk_live_…（Token Harbor API Key）', modelstudio: 'sk-sp-…（Token Plan）或 sk-…（按量付费），完整粘贴', modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
@@ -363,6 +364,8 @@ function renderPoolTabs() {
   $('#oc-batch').classList.toggle('hidden', !managedKeyPool());
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
   $('#oc-batch [data-oc-batch="keys"]').classList.toggle('hidden', !isTokenHarbor());
+  // 退回注册机只对 ALTapi 有意义（它的账号是注册机产的，能反查源候选）
+  $('#oc-batch [data-oc-batch="alt-return"]').classList.toggle('hidden', !isALTapi());
   // the last two columns of the account table mean different things per pool
   const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', modelstudio: '套餐与额度', deploy: '额度与模型发现', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
     wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', deploy: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
@@ -811,6 +814,31 @@ $('#oc-batch').addEventListener('click', async (ev) => {
     button.disabled = true;
     try { await showStoredAPIKeys(selected.map((a) => ({ name: a.name || a.id, path: `/api/accounts/${encodeURIComponent(a.id)}/keys` }))); }
     finally { button.disabled = false; }
+    return;
+  }
+  if (action === 'alt-return') {
+    if (!isALTapi()) return;
+    const body = `<p>把选中的 ${selected.length} 个账号退回 ALTapi 注册机？</p>
+      <ul class="muted small">
+        <li>账号<strong>不会被删除</strong>，但会被<strong>停用</strong>，避免同一 Key 同时被号池调度和注册机重跑。</li>
+        <li>源候选的状态会回到「失败」并清空入池标记，可以在注册机页重跑。</li>
+        <li>手工添加（无源候选）的账号会新建一条候选，缺接码地址需补齐。</li>
+      </ul>`;
+    if (await modal({ title: '退回注册机', body, buttons: [{ label: '取消', value: 'cancel' }, { label: '退回', value: 'ok', primary: true }] }) !== 'ok') return;
+    button.disabled = true;
+    try {
+      const r = await api('POST', '/api/altapi/return-to-registrar', { ids: selected.map((a) => a.id) });
+      $('#oc-batch-result').textContent = `退回 ${r.returned || 0} 个（新建候选 ${r.created || 0} 个）`
+        + (r.failed && r.failed.length ? `；失败：${r.failed.join('；')}` : '');
+      toast(`已退回 ${r.returned || 0} 个到 ALTapi 注册机`);
+      ocSelected.clear();
+      await loadAccounts();
+      if (r.returned) go('altreg');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      button.disabled = false;
+    }
     return;
   }
   if (action === 'delete' && await modal({ title: '批量删除', body: `<p>删除选中的 ${selected.length} 个账号及其凭证？不能撤销；状态续传将失效。</p>`, buttons: [{ label: '取消', value: 'cancel' }, { label: '删除', value: 'delete', danger: true }] }) !== 'delete') return;
