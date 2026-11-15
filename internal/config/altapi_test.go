@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // altapi.ai is an opaque-key pool: the key has no provider prefix, so the
 // declaration must win and must be accepted as a legitimate provider.
@@ -65,6 +68,56 @@ func TestALTAPIRefusesFundingScope(t *testing.T) {
 	c.ALTAPIErrorRules[0].Scope = "funding"
 	if err := c.normalizeALTAPI(); err == nil {
 		t.Fatal("funding scope accepted")
+	}
+}
+
+func TestALTAPIIndependentRouting(t *testing.T) {
+	c := Default()
+	c.Routing.Sticky = false
+	c.Routing.SessionHeaders = []string{"X-Global-Session"}
+	before := c.Clone()
+	got := c.ForProvider(ProviderALTAPI)
+	if !reflect.DeepEqual(got.Routing, c.ALTAPI.EffectiveRouting()) || !reflect.DeepEqual(got.Quota, c.ALTAPI.EffectiveQuota()) || !reflect.DeepEqual(got.Pricing, c.ALTAPI.EffectivePricing()) {
+		t.Fatal("ALTAPI defaults inherited unrelated global settings")
+	}
+	r := c.ALTAPI.EffectiveRouting()
+	r.Sticky, r.OnBindingBusy, r.ExplicitTTLSec = true, "reject", 180
+	r.SessionHeaders = []string{"X-Altapi-Session"}
+	q := c.ALTAPI.EffectiveQuota()
+	q.IntervalSec = 120
+	c.ALTAPI.Routing, c.ALTAPI.Quota = &r, &q
+	got = c.ForProvider(ProviderALTAPI)
+	if !reflect.DeepEqual(got.Routing, r) || got.Quota != q || !reflect.DeepEqual(c.Routing, before.Routing) || c.Quota != before.Quota {
+		t.Fatal("ALTAPI overrides ignored or mutated shared settings")
+	}
+}
+
+func TestALTAPIValidatesIndependentRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Routing)
+	}{
+		{"busy", func(r *Routing) { r.OnBindingBusy = "invalid" }},
+		{"ttl", func(r *Routing) { r.ExplicitTTLSec = -1 }},
+		{"header", func(r *Routing) { r.SessionHeaders = []string{"invalid header"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			r := c.ALTAPI.EffectiveRouting()
+			tc.change(&r)
+			c.ALTAPI.Routing = &r
+			if err := c.Normalize(); err == nil {
+				t.Fatal("invalid ALTAPI routing was accepted")
+			}
+		})
+	}
+	c := Default()
+	c.ALTAPI.Routing = &Routing{Strategy: "least-connections", Sticky: true}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.ALTAPI.Routing.ExplicitTTLSec == 0 || c.ALTAPI.Routing.OnBindingBusy == "" {
+		t.Fatal("ALTAPI partial routing defaults were not normalized")
 	}
 }
 

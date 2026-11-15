@@ -159,9 +159,13 @@ func (s *Server) identity(cfg *config.Config, group string, h http.Header, body 
 }
 
 func (s *Server) mistralIdentity(cfg *config.Config, group string, h http.Header, body map[string]any) Identity {
-	// A reusable cache prefix is not necessarily a conversation. First use
-	// the existing true-session precedence without a cache hint or fallback;
-	// then retain body-cache > cache-header > message-HMAC as the fallback.
+	return s.sessionFirstIdentity(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"}, mistralClaudeUserSession)
+}
+
+// A reusable cache prefix is not necessarily a conversation. Prefer true
+// sessions; only use body-cache > cache-header > message-HMAC without one.
+// Keep the legacy identity order unchanged for other providers.
+func (s *Server) sessionFirstIdentity(cfg *config.Config, group string, h http.Header, body map[string]any, hints []string, claudeSession func(string) string) Identity {
 	local := *cfg
 	local.Routing.FallbackHash = false
 	sessionBody := body
@@ -173,10 +177,10 @@ func (s *Server) mistralIdentity(cfg *config.Config, group string, h http.Header
 			}
 		}
 	}
-	if id := s.identityWithFallbackHeaders(&local, group, h, sessionBody, nil, mistralClaudeUserSession); id.Fingerprint != "" {
+	if id := s.identityWithFallbackHeaders(&local, group, h, sessionBody, nil, claudeSession); id.Fingerprint != "" {
 		return id
 	}
-	return s.identityWithFallbackHeaders(cfg, group, h, body, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"}, mistralClaudeUserSession)
+	return s.identityWithFallbackHeaders(cfg, group, h, body, hints, claudeSession)
 }
 
 func (s *Server) identityWithFallbackHeaders(cfg *config.Config, group string, h http.Header, body map[string]any, hints []string, claudeSession func(string) string) Identity {

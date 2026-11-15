@@ -3,6 +3,7 @@
 **Before adding or completing any provider, read [Provider onboarding gates](provider-onboarding.md).** Account/quota/routing/rules/logs/test/UI persistence and isolation are mandatory, not optional follow-up work.
 
 Read [Deploy pool contracts](deploy.md) before changing its opaque-Key/provider boundary, independent settings/pricing, public catalog vs inference authorization, 405/429 rules, native Chat/privacy or unknown-balance projection.
+Read [ALTAPI session and settings isolation](altapi.md) before changing its independent routing/config validation, real-session vs cache identity priority, downstream-Key scope or busy/TTL binding semantics.
 Read [OpenDesign diagnostics contracts](opendesign.md) before changing its
 quota reads, error evidence, refresh API or account status projections.
 Read [OpenCode integration contracts](opencode.md) before modifying config,

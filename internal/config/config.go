@@ -1886,13 +1886,13 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing, c.ALTAPI.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
-		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing, nested.Deploy.Routing = nil, nil, nil, nil
+		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing, nested.Deploy.Routing, nested.ALTAPI.Routing = nil, nil, nil, nil, nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)

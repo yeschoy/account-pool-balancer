@@ -189,6 +189,11 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 func (c *Config) ForProvider(provider string) *Config {
 	var r *Routing
 	switch provider {
+	case ProviderALTAPI:
+		out := *c
+		out.Routing, out.Quota = c.ALTAPI.EffectiveRouting(), c.ALTAPI.EffectiveQuota()
+		out.Pricing = c.ALTAPI.EffectivePricing()
+		return &out
 	case ProviderDeploy:
 		out := *c
 		out.Routing, out.Quota = c.Deploy.EffectiveRouting(), c.Deploy.EffectiveQuota()

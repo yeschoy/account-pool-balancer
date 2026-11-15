@@ -281,6 +281,31 @@ python3 tools/altapi_registrar.py --probe
 - 价格表只是估算，上游账单才是权威。
 - `group`（default/vip）的模型覆盖不同，同一个模型可能一组的号能调另一组不能。
 
+## 会话粘性（本地代码修复）
+
+发现并修复三个接线问题：
+
+1. `Config.ForProvider("altapi")` 原先没有 ALTAPI 分支，实际推理与设置读取走的是全局路由；保存 ALTAPI 设置还会连带改写全局路由、额度、价格、日志和 OpenCode 设置。现在独立读取并保存 `altapi.routing/quota/pricing`，不再覆盖其他池。
+2. 通用身份识别把正文 `prompt_cache_key` 放在真实会话前面，导致缓存键变化时同一会话丢绑定、相同缓存键的不同会话挤到一起。ALTAPI 现在先读取真实会话；没有真实会话时才以正文缓存键、`X-Prompt-Cache-Key` / `Prompt-Cache-Key`、消息 HMAC 依次兜底。原有自定义头、父会话、Claude `metadata.user_id` 等识别规则保留。
+3. 原先指纹只有分组作用域；现在纳入下游 Key ID。同一分组里不同调用方即使传相同会话 ID，也不会共用绑定；这不表示它们绝不能被调度到同一个账号。
+
+独立路由已接入完整校验，包括忙时策略、自定义会话头和 TTL。显式绑定命中时滑动续期；到期后重新选号。`sticky=false` 仍允许识别会话，但不建立/命中普通粘性绑定。
+
+### 忙时和恢复边界
+
+- `reject`：忙时按配置等待，超出等待预算返回 429，不跳到其他账号。
+- `overflow` / `wait-overflow`：允许临时分流，但不把临时账号覆盖为原会话的新 owner。
+- owner 冷却/禁用等不可用时，普通会话可以重新选号；一次请求是否重试仍由既有错误/重试规则和已输出边界决定，不因本次修复放宽。
+- 普通会话绑定仍是有 TTL、容量限制的内存状态，服务重启或 LRU 淘汰后需要重建。本次没有新增持久化，也没有改 busy 策略的默认值。
+- 这只是 Balancer 选号粘性，不是 ALTAPI 上游内部渠道粘性或模型缓存命中的保证；没有真实 session 时的缓存键/消息指纹也不能证明是同一对话。ALTAPI 的服务端 Responses 续接能力未在本轮验收，不能当成严格续接保障。
+- 旧版本保存 ALTAPI 设置可能已经改动全局值，本次不会自动猜测、回滚历史配置；如需修正线上值，应单独核对并授权。
+
+回归覆盖：独立默认/参数校验、设置 GET/PUT/磁盘重载与跨池隔离、非法保存回滚、会话优先于缓存、缓存头兜底、父子会话、下游 Key 隔离、滑动 TTL/到期、三种忙时策略、可恢复失败换号及后续绑定、并发首请求唯一 owner。测试使用本地 Mock，不代表已部署或已完成真实上游验收。
+
+```bash
+go test ./internal/config ./internal/server -run 'TestALTAPI(IndependentRouting|ValidatesIndependentRouting|Sticky)' -count=1
+```
+
 ## 跨语言规则一致性
 
 `normalize_uid` 与 `session_value` 在 Go（`internal/newapiconsole`）和 Python

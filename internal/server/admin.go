@@ -1445,17 +1445,20 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	prov := providerOf(providerParam(r)) // which pool's rules this save replaces
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
-		if prov != config.ProviderDeploy {
+		// Independent opaque-key pools must not overwrite shared/other-pool
+		// settings even when the console submits a full settings document.
+		independent := prov == config.ProviderDeploy || prov == config.ProviderALTAPI
+		if !independent {
 			c.Upstream, c.Logs = in.Upstream, in.Logs
 			c.Pricing = in.Pricing
 		}
-		if prov != config.ProviderMistral && prov != config.ProviderModelStudio && prov != config.ProviderDeploy {
+		if prov != config.ProviderMistral && prov != config.ProviderModelStudio && !independent {
 			c.Quota = in.Quota
 		}
-		if !config.StrictResponses(prov) && prov != config.ProviderMistral && prov != config.ProviderModelStudio && prov != config.ProviderDeploy {
+		if !config.StrictResponses(prov) && prov != config.ProviderMistral && prov != config.ProviderModelStudio && !independent {
 			c.Routing = in.Routing
 		}
-		if in.OpenCode != nil && prov != config.ProviderDeploy {
+		if in.OpenCode != nil && !independent {
 			c.OpenCode = *in.OpenCode
 		}
 		if in.TokenHarbor != nil && prov == config.ProviderTokenHarbor {

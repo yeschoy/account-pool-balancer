@@ -716,7 +716,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
 	identityScope := ck.Group
-	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral || rec.Provider == config.ProviderDeploy {
+	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral || rec.Provider == config.ProviderDeploy || rec.Provider == config.ProviderALTAPI {
 		identityScope += "\x00" + ck.ID
 	}
 	var ident Identity
@@ -732,6 +732,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	} else if rec.Provider == config.ProviderMistral {
 		ident = s.mistralIdentity(cfg, identityScope, r.Header, obj)
 		rec.ClientFamily = goClientFamily(r.Header, obj)
+	} else if rec.Provider == config.ProviderALTAPI {
+		ident = s.sessionFirstIdentity(cfg, identityScope, r.Header, obj, []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"}, claudeUserSession)
 	} else {
 		ident = s.identity(cfg, identityScope, r.Header, obj)
 	}
