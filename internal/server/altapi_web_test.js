@@ -210,6 +210,24 @@ for (const f of ['validAltAutoSettings', 'altAutoReplenish', 'altAutoRegister', 
   assert.ok(autoSrc.includes(f), '服务端缺少 ' + f);
 }
 
+// 9.13) 概览卡片必须能脱离「读取中…」
+// 之前 altPrefetchStatus 只写了缓存却不重绘，loadOverview 同步拼 cards 时
+// 缓存还是 null，卡片永远停在占位文案。
+assert.match(altSource, /function syncALTOverviewCards\(\)/);
+assert.match(altSource, /placeholder\.insertAdjacentHTML\('afterend', html\)/);
+assert.match(altSource, /placeholder\.remove\(\)/);
+assert.ok(altSource.includes('await altFetchStatus();'), '预取后必须重绘');
+// app.js 在拼完 cards 后要触发预取
+assert.match(appSource, /if \(isALTapi\(\) && window\.POOL_ALTAPI\) window\.POOL_ALTAPI\.altPrefetchStatus\(\)/);
+// 节流与去重：不能每次概览刷新都真打一次
+assert.match(altSource, /async function altFetchStatus\(\{ maxAgeMs = 5000 \} = \{\}\)/);
+assert.match(altSource, /if \(altStatusInflight\) return altStatusInflight/);
+// 后端 /status 只能读快照，不许在这条路径上打上游
+const statusSrc = fs.readFileSync(path.join(__dirname, 'altapi_registration.go'), 'utf8')
+  .match(/func \(s \*Server\) apiALTAPIStatus[\s\S]*?\n\}/)[0];
+assert.ok(statusSrc.includes('s.quota.Get(a.ID)'), '/status 应读配额快照');
+assert.ok(!/altapiFetchQuota/.test(statusSrc), '/status 不能逐账号读上游余额');
+
 // 10) 池状态 chips：字段名必须和后端 Summary 的 json tag 一致（camelCase）。
 //     Summary 用的是 byStatus/withKey/balanceUnknown，写成 snake_case 会让计数永远显示 0。
 assert.match(altSource, /s\.byStatus \|\| \{\}/);

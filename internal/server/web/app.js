@@ -470,6 +470,9 @@ async function loadOverview() {
     ...(isMistral() && o.mistralBufferLimitBytes ? [['本地字节预算', (o.mistralBufferedBytes / 1048576).toFixed(1) + ' / ' + (o.mistralBufferLimitBytes / 1048576).toFixed(0) + ' MiB', `日志排队 ${(Number(o.logQueuedBytes || 0) / 1048576).toFixed(1)} MiB · ${num(o.logQueueLength || 0)} 条 · 累计丢弃 ${num(o.logsDropped || 0)}；不等于进程RSS`]] : []),
   ];
   $('#ov-cards').innerHTML = cards.map(([l, v, s]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
+  // ALTapi 的卡片需要异步取快照：先渲染占位，拿到数据后由 syncALTOverviewCards
+  // 就地替换。loadOverview 是同步拼 cards 的，不能在这里 await。
+  if (isALTapi() && window.POOL_ALTAPI) window.POOL_ALTAPI.altPrefetchStatus();
   const models = Object.entries(o.stats.models || {}).sort((a, b) => b[1].r - a[1].r);
   $('#ov-models tbody').innerHTML = models.map(([name, b]) => {
     const done = b.r - b.c;

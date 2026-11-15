@@ -146,28 +146,84 @@ function altKeyCell(r) {
 // ---------------------------------------------------------------- 概览
 
 // altLastStatus 缓存最近一次 /api/altapi/status，供通用「概览」页同步渲染卡片。
+//
+// 这个接口是**纯内存快照**（实测 0.3ms），它读的是配额轮询器已经抓好的结果，
+// 不会为了渲染卡片去逐账号请求上游。所以概览页刷新一次是安全的。
 let altLastStatus = null;
+// 节流：概览页 15 秒刷新一次，注册机页 3 秒轮询一次，两边都会碰 /status。
+// 后端虽然只是读内存快照（0.3ms），但没必要重复打；5 秒内复用上一次结果。
+let altStatusAt = 0;
+let altStatusInflight = null;
 
-// altPrefetchStatus 在进入 altapi 池时预取一次，让「概览」页首屏就有数据。
+// altFetchStatus 带节流与去重的状态拉取。
+async function altFetchStatus({ maxAgeMs = 5000 } = {}) {
+  const now = Date.now();
+  if (altLastStatus && now - altStatusAt < maxAgeMs) return altLastStatus;
+  if (altStatusInflight) return altStatusInflight; // 已有请求在飞，复用同一个
+  altStatusInflight = (async () => {
+    try {
+      const r = await altApi('/status');
+      altLastStatus = r;
+      altStatusAt = Date.now();
+      return r;
+    } catch {
+      return null;
+    } finally {
+      altStatusInflight = null;
+    }
+  })();
+  return altStatusInflight;
+}
+
+// altPrefetchStatus 拉一次状态并渲染卡片。
+//
+// 注意：loadOverview() 是同步拼 cards 的，不能 await。所以这里不能只是"预取"——
+// 拉回来之后还必须**主动把卡片重绘一遍**，否则首屏永远停在"读取中…"。
 async function altPrefetchStatus() {
-  try {
-    altLastStatus = await altApi('/status');
-  } catch {
-    altLastStatus = null;
-  }
+  await altFetchStatus();
+  syncALTOverviewCards();
+}
+
+// syncALTOverviewCards 把卡片写进概览页。——loadOverview 拼完 cards 后调用，
+// 预取回来后再调用一次，覆盖掉首屏的占位内容。
+function syncALTOverviewCards() {
+  if (!isALTapi()) return;
+  const host = document.getElementById('ov-cards');
+  if (!host) return;
+  const cards = altOverviewCards();
+  // 找到并替换占位卡片（按 label 前缀匹配，避免重建整页导致其它卡片闪烁）
+  const nodes = [...host.children];
+  const placeholder = nodes.find((n) => (n.textContent || '').includes('ALTapi 号池'));
+  if (!placeholder) return;
+  const html = cards.map(([l, v, sub]) =>
+    `<div class="card"><div class="label">${altEsc(l)}</div><div class="value">${altEsc(v)}</div><div class="sub">${altEsc(sub)}</div></div>`
+  ).join('');
+  placeholder.insertAdjacentHTML('afterend', html);
+  placeholder.remove();
 }
 
 // altOverviewCards 返回概览页要插的卡片（与 loadOverview 的 cards 同构）。
+//
+// 数据来自后端已算好的快照，不再对每个账号发请求：线上 13 个账号时
+// /api/altapi/status 仍是 0.3ms，逐账号读余额的代价关在配额轮询器里。
 function altOverviewCards() {
   const s = altLastStatus;
-  if (!s) return [['ALTapi 号池', '读取中…', '刷新后可看到余额合计']];
+  if (!s) {
+    return [
+      ['ALTapi 号池', '读取中…', '正在拉取号池快照（纯内存，不逐账号请求）'],
+    ];
+  }
   const c = s.candidates || {};
   const pool = s.pool || {};
+  const failed = (c.byStatus || {}).failed || 0;
+  const unknown = pool.balanceUnknown || 0;
+  const sub = unknown
+    ? `已读 ${pool.withBalance || 0} / 共 ${pool.count || 0} 个账号 · ${unknown} 个余额未知（缺会话）`
+    : `已读 ${pool.withBalance || 0} / 共 ${pool.count || 0} 个账号`;
   return [
-    ['ALTapi 余额合计', `$${(pool.totalBalanceUsd || 0).toFixed(2)}`,
-      `已读 ${pool.withBalance || 0} 个 / 共 ${pool.count || 0} 个账号`],
+    ['ALTapi 余额合计', `$${(pool.totalBalanceUsd || 0).toFixed(2)}`, sub],
     ['ALTapi 候选', `${c.total || 0} 个`,
-      `已建 Key ${c.withKey || 0} · 已入池 ${c.imported || 0} · 失败 ${(c.byStatus || {}).failed || 0}`],
+      `已建 Key ${c.withKey || 0} · 已入池 ${c.imported || 0}${failed ? ` · 失败 ${failed}` : ''}`],
   ];
 }
 
@@ -176,7 +232,7 @@ async function loadALTStatus() {
   const host = document.getElementById('alt-overview-cards');
   const tb = document.getElementById('alt-overview-rows');
   try {
-    const s = await altApi('/status');
+    const s = await altFetchStatus({ maxAgeMs: 0 });
     const c = s.candidates || {};
     const pool = s.pool || {};
     const by = c.byStatus || {};
@@ -878,6 +934,7 @@ window.POOL_ALTAPI = {
   loadALTSettings,
   loadALTStatus,
   altPrefetchStatus,
+  syncALTOverviewCards,
   startALTAutoPolling,
   stopALTAutoPolling,
   loadALTLogs: () => loadALTRegistrations(),
