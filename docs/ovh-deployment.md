@@ -2175,3 +2175,32 @@ Chrome 建不了用户数据目录。修复：`mkdir -p /home/odb && chown 1000:
 - 镜像：`account-pool-balancer:release-e6b958a-20261113T231500Z`
 - 上次镜像：`release-5261d07-20261113T224500Z`
 - 切换 15:18:16；healthy ≤3s
+
+## 当前部署：50X 导入已完成账号接口（2026-11-15 07:40 UTC，aadb089）
+
+- 镜像 `account-pool-balancer:release-aadb089-20261115T073730Z`，release 目录
+  `account-pool-balancer-releases/20261115T073730Z-aadb089`（`git archive` 干净快照，
+  非旧工作树）。
+- 构建 38 秒；数据备份 `data/backup/pre-x50-import-20261115T073906Z.tar.gz`（72MB）。
+- 切换只覆盖 image（`-f docker-compose.yml -f deploy-image.override.json`），
+  网络、卷、端口、healthcheck 均未改。
+- 验收：容器 healthy；`ai-internal` 别名仍是 `account-pool-balancer account-pool-balancer opendesign-balancer`；
+  从 `new-api` 容器（无 curl，用 wget）分别确认
+  `http://account-pool-balancer:8790/healthz` 与 `http://opendesign-balancer:8790/healthz`
+  均 200；宿主机 200。
+- 公网 `https://ods.yeschoy.io/healthz` 本次请求超时，未作为通过依据，也未改 WAF。
+
+### 50X 账号导入
+
+新增 `POST /api/x50/candidates/import-completed`，登记控制台之外注册好的账号，
+不重跑注册（重跑会给同一账号签第二把 Key）。先 dryRun 再应用：
+
+- dryRun：would_add=6, skip=0
+- apply：added=6, skipped=0
+- 落库 `data/x50-signup.json`（0600）。导入后 total=99 / keyed=94（含此前已存在的账号）。
+- 6 个账号状态 `keyed`、balance 100.000000000、保留会话；显式 `/key` 读取
+  与源记录逐条一致 6/6；列表响应不含明文 Key。
+- 临时脚本（含凭据载荷）在宿主机与容器内均已删除。
+
+边界：50X 目前只有注册机，没有推理路由，故这批账号在号池里是存档，
+不参与下游调度。宿主机与公网验收时间点见上；本次未重新部署文档改动。
