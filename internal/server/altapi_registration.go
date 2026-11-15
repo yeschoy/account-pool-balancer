@@ -237,8 +237,20 @@ type altapiJobItem struct {
 	ProxyURL   string `json:"proxy_url,omitempty"`
 }
 
+// batchOrigin 说明这一批是「谁」发起的。
+//
+// 手动注册时 import_to_pool 是用户的意图开关：他可能想先看结果再决定入池。
+// 自动补号不一样——它的存在意义就是补号，注册成功的号不入池等于没补。
+// 所以自动发起的批次必须强制入池，不能被手动那个开关关掉。
+type batchOrigin string
+
+const (
+	originManual batchOrigin = "manual"
+	originAuto   batchOrigin = "auto"
+)
+
 // runBatch registers the given candidate ids in one subprocess.
-func (m *altapiManager) runBatch(ids []string) {
+func (m *altapiManager) runBatch(ids []string, origin batchOrigin) {
 	if len(ids) == 0 {
 		return
 	}
@@ -271,6 +283,13 @@ func (m *altapiManager) runBatch(ids []string) {
 		}
 	}
 
+	// 自动补号强制入池：Python 侧也按这个值决定建完 Key 后的收尾提示。
+	// 手动注册才尊重用户的 import_to_pool 开关。
+	importToPool := st.ImportToPool
+	if origin == originAuto {
+		importToPool = true
+	}
+
 	job := altapiJobFile{Items: []altapiJobItem{}}
 	job.Settings = map[string]any{
 		"base_url":         st.BaseURL,
@@ -278,7 +297,7 @@ func (m *altapiManager) runBatch(ids []string) {
 		"max_retries":      st.MaxRetries,
 		"verify_timeout_sec": st.VerifyTimeoutSec,
 		"auto_verify":      st.AutoVerify,
-		"import_to_pool":   st.ImportToPool,
+		"import_to_pool":   importToPool,
 		"token_group":      st.TokenGroup,
 		"token_name":       st.TokenName,
 		"aff_code":         st.AffCode,
@@ -367,7 +386,7 @@ func (m *altapiManager) runBatch(ids []string) {
 		if json.Unmarshal([]byte(line), &ev) != nil {
 			continue
 		}
-		m.handleEvent(ev, valid)
+		m.handleEvent(ev, valid, origin)
 	}
 	_ = cmd.Wait()
 
@@ -386,7 +405,7 @@ func (m *altapiManager) runBatch(ids []string) {
 	m.addLog("done", "", "批次结束")
 }
 
-func (m *altapiManager) handleEvent(ev map[string]any, ids []string) {
+func (m *altapiManager) handleEvent(ev map[string]any, ids []string, origin batchOrigin) {
 	typ, _ := ev["type"].(string)
 	email, _ := ev["email"].(string)
 	switch typ {
@@ -459,7 +478,7 @@ func (m *altapiManager) handleEvent(ev map[string]any, ids []string) {
 			// 自动入池：设置里开了 import_to_pool 时，注册出 Key 就立刻进号池，
 			// 不用再去列表里逐条点「导入号池」。失败只记日志，不影响注册结果。
 			if st, ok := ev["status"].(string); ok && st == string(altapisignupstore.KeyCreated) {
-				m.autoImport(id, email)
+				m.autoImport(id, email, origin)
 			}
 		}
 	}
@@ -469,8 +488,10 @@ func (m *altapiManager) handleEvent(ev map[string]any, ids []string) {
 //
 // 已导入的跳过（幂等）：批量重试可能让同一个候选再走一次 item_done，
 // 而 importALTAPICandidate 已经有 ImportedAcctID 守卫，这里只负责记日志。
-func (m *altapiManager) autoImport(id, email string) {
-	if !m.store.Settings().ImportToPool {
+func (m *altapiManager) autoImport(id, email string, origin batchOrigin) {
+	// import_to_pool 只约束手动注册。自动补号一律入池：补了号不进号池，
+	// 可用数还是不够，下一轮会再补，等于无限消耗邮箱与出口 IP。
+	if origin != originAuto && !m.store.Settings().ImportToPool {
 		return
 	}
 	c, err := m.store.Get(id)
@@ -700,7 +721,7 @@ func (s *Server) apiALTAPICandidateRegister(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	id := r.PathValue("id")
-	go m.runBatch([]string{id})
+	go m.runBatch([]string{id}, originManual)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": 1})
 }
 
@@ -724,7 +745,7 @@ func (s *Server) apiALTAPIBulkRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	go m.runBatch(ids)
+	go m.runBatch(ids, originManual)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": len(ids)})
 }
 

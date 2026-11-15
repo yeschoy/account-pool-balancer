@@ -292,7 +292,7 @@ func TestALTAPIAutoImportOnKeyCreated(t *testing.T) {
 		"quota":      float64(500000),
 		"quota_per_unit": float64(500000),
 		"balance_usd":    float64(1),
-	}, []string{c.ID})
+	}, []string{c.ID}, originManual)
 
 	got, err := m.store.Get(c.ID)
 	if err != nil {
@@ -306,7 +306,7 @@ func TestALTAPIAutoImportOnKeyCreated(t *testing.T) {
 	m.handleEvent(map[string]any{
 		"type": "item_done", "index": float64(0),
 		"status": string(altapisignupstore.KeyCreated), "email": "auto@mail.example.com",
-	}, []string{c.ID})
+	}, []string{c.ID}, originManual)
 	if after := len(s.cfg.Get().Accounts); after != before {
 		t.Fatalf("重复 item_done 又建了账号：%d -> %d", before, after)
 	}
@@ -334,7 +334,7 @@ func TestALTAPIAutoImportDisabled(t *testing.T) {
 		"type": "item_done", "index": float64(0),
 		"status": string(altapisignupstore.KeyCreated), "email": "no-auto@mail.example.com",
 		"api_key": "sk-test-no-auto-000000000000000000000000000",
-	}, []string{c.ID})
+	}, []string{c.ID}, originManual)
 	if got, _ := m.store.Get(c.ID); got.ImportedAcctID != "" {
 		t.Fatal("关掉了 import_to_pool 仍然自动入池")
 	}

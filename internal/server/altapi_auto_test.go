@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,4 +224,84 @@ func TestALTAAutoStatusReportedWhenDisabled(t *testing.T) {
 	if v.LastCheck.IsZero() {
 		t.Error("LastCheck 应被更新")
 	}
+}
+
+// 自动补号发起的注册必须强制入池，不受 import_to_pool 开关约束。
+//
+// 手动注册时这个开关是用户意图（可能想先看结果再决定入池）；自动补号不同——
+// 补了号不进号池，可用数还是不够，下一轮会再补，等于无限消耗邮箱与出口 IP。
+func TestALTAAutoForcesImportEvenWhenSwitchOff(t *testing.T) {
+	s := altAutoTestServer(t)
+	m, err := s.altapiMgr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 关掉手动开关
+	st := m.store.Settings()
+	st.ImportToPool = false
+	if err := m.store.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(email string) altapisignupstore.Candidate {
+		c, err := m.store.Add(altapisignupstore.Candidate{
+			Email: email, Status: altapisignupstore.Queued,
+			APIKey: "sk-forced-import-0000000000000000000000000", SessionCookie: "sess",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	manual := mk("manual@mail.example.com")
+	auto := mk("auto@mail.example.com")
+
+	// 手动来源：开关关着，不该入池
+	m.autoImport(manual.ID, manual.Email, originManual)
+	if got, _ := m.store.Get(manual.ID); got.ImportedAcctID != "" {
+		t.Error("手动注册在开关关闭时不该自动入池")
+	}
+
+	// 自动来源：开关关着也必须入池
+	m.autoImport(auto.ID, auto.Email, originAuto)
+	if got, _ := m.store.Get(auto.ID); got.ImportedAcctID == "" {
+		t.Error("自动补号必须强制入池，不受 import_to_pool 开关约束")
+	}
+}
+
+// runBatch 的来源必须一路传到 autoImport：三个入口各自标注正确。
+func TestALTABatchOriginWiring(t *testing.T) {
+	regSrc := readServerFile(t, "altapi_registration.go")
+	// 两个手动入口
+	if c := strings.Count(regSrc, "go m.runBatch(ids, originManual)"); c != 1 {
+		t.Errorf("批量注册入口应标 originManual，实际 %d 处", c)
+	}
+	if c := strings.Count(regSrc, "go m.runBatch([]string{id}, originManual)"); c != 1 {
+		t.Errorf("单条注册入口应标 originManual，实际 %d 处", c)
+	}
+	if c := strings.Count(regSrc, "go m.runBatch(ids, originAuto)"); c != 0 {
+		t.Error("registration.go 不该出现自动来源")
+	}
+	autoSrc := readServerFile(t, "altapi_auto.go")
+	if !strings.Contains(autoSrc, "go m.runBatch(ids, originAuto)") {
+		t.Error("自动补号入口应标 originAuto")
+	}
+	// autoImport 的守卫必须先放行 auto
+	if !strings.Contains(regSrc, "if origin != originAuto && !m.store.Settings().ImportToPool") {
+		t.Error("autoImport 守卫应让 originAuto 跳过开关检查")
+	}
+	// Python job 也要强制
+	if !strings.Contains(regSrc, "if origin == originAuto {") || !strings.Contains(regSrc, "importToPool = true") {
+		t.Error("job settings 里应对 originAuto 强制 import_to_pool=true")
+	}
+}
+
+// readServerFile 读同目录下的源码文件，用于结构性断言。
+func readServerFile(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(".", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

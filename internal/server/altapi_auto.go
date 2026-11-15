@@ -370,7 +370,8 @@ func (s *Server) altAutoRegister(ctx context.Context, n int, reason string) {
 	m.addLog("auto", "", reason+"：自动发起注册 "+itoa(len(ids))+" 个")
 	s.altAuto.note("发起注册 " + itoa(len(ids)) + " 个")
 	// runBatch 内部有 seq 串行保护，且挂在服务级 context 上。
-	go m.runBatch(ids)
+	// 自动发起的批次强制入池（originAuto），不受 import_to_pool 开关约束。
+	go m.runBatch(ids, originAuto)
 }
 
 // note 记录最近一次动作，供前端展示。

@@ -716,6 +716,7 @@
 
           <label class="check"><input id="alts-auto-verify" type="checkbox" checked>收码后自动验证</label>
           <label class="check"><input id="alts-import-to-pool" type="checkbox" checked>注册成功后自动建 Key 并入池</label>
+          <span class="hint">只影响<strong>手动注册</strong>。自动补号发起的注册一律强制入池——补号的目的就是补进号池，不入池等于没补，下一轮还会再补，白白消耗邮箱和出口 IP。</span>
 
           <label for="alts-proxies">代理池（每行一个，顺序即轮询顺序）</label>
           <textarea id="alts-proxies" rows="8" spellcheck="false" placeholder="socks5://user:pass@host:port"></textarea>
