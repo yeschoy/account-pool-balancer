@@ -176,7 +176,21 @@ func (s *Server) altAutoCheck(ctx context.Context) {
 	now := time.Now()
 	a.status.LastCheck = now
 	if !st.Enabled {
+		// 关闭时仍然统计池子现状：用户要靠这个数判断「该不该开」。
+		// 之前这里直接 return，导致 total/available 永远是 0，看起来像功能坏了。
 		a.status.Running = false
+		a.mu.Unlock()
+		cfg := s.cfg.Get()
+		available, total := s.altAutoAvailability(cfg)
+		importable, queued := s.altAutoCountCandidates()
+		a.mu.Lock()
+		a.status.Available = available
+		a.status.PoolTotal = total
+		a.status.Importable = importable
+		a.status.Queued = queued
+		if a.status.LastAction == "" || a.status.LastAction == "等待首次检查" {
+			a.status.LastAction = "未启用"
+		}
 		a.mu.Unlock()
 		return
 	}
@@ -193,24 +207,13 @@ func (s *Server) altAutoCheck(ctx context.Context) {
 	cfg := s.cfg.Get()
 	available, total := s.altAutoAvailability(cfg)
 
-	m, err := s.altapiMgr()
-	if err != nil {
+	if _, err := s.altapiMgr(); err != nil {
 		a.mu.Lock()
 		a.status.LastError = err.Error()
 		a.mu.Unlock()
 		return
 	}
-	importable, queued := 0, 0
-	for _, c := range m.store.List() {
-		if c.APIKey != "" && c.ImportedAcctID == "" {
-			importable++
-		}
-		if c.Status == altapisignupstore.Queued || c.Status == altapisignupstore.Failed {
-			if c.MailboxURL != "" {
-				queued++
-			}
-		}
-	}
+	importable, queued := s.altAutoCountCandidates()
 
 	a.mu.Lock()
 	a.status.Available = available
@@ -247,6 +250,30 @@ func (s *Server) altAutoCheck(ctx context.Context) {
 		a.scheduleNextLocked()
 	}
 	a.mu.Unlock()
+}
+
+// altAutoCountCandidates 数「可导入」与「可注册」的候选。
+//
+// 可导入 = 已有 API Key 且未入池（零成本补号来源）。
+// 可注册 = 有接码地址且状态可重试。
+func (s *Server) altAutoCountCandidates() (importable, queued int) {
+	m, err := s.altapiMgr()
+	if err != nil {
+		return 0, 0
+	}
+	for _, c := range m.store.List() {
+		if c.APIKey != "" && c.ImportedAcctID == "" {
+			importable++
+		}
+		if c.MailboxURL == "" || c.ImportedAcctID != "" {
+			continue
+		}
+		switch c.Status {
+		case altapisignupstore.Queued, altapisignupstore.Failed, altapisignupstore.Cancelled:
+			queued++
+		}
+	}
+	return importable, queued
 }
 
 // scheduleNextLocked 重新随机下一次频率注册的时间。调用方持锁。

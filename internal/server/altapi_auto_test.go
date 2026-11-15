@@ -184,3 +184,42 @@ func TestALTAAutoRegisterNoCandidatesIsNotError(t *testing.T) {
 	s.altAutoRegister(t.Context(), 2, "按频率")
 	time.Sleep(50 * time.Millisecond)
 }
+
+// 关闭状态下也要统计池子现状。
+//
+// 之前 !Enabled 时直接 return，total/available 永远是 0，页面上看起来像
+// 功能坏了，用户也没有依据判断"该不该开"。
+func TestALTAAutoStatusReportedWhenDisabled(t *testing.T) {
+	s := altAutoTestServer(t)
+	if s.altAuto == nil {
+		t.Fatal("自动补号管理器未初始化")
+	}
+	_, err := s.cfg.Update(-1, func(cfg *config.Config) error {
+		cfg.Accounts = append(cfg.Accounts,
+			config.Account{ID: "alt-x", Provider: config.ProviderALTAPI, Name: "x",
+				Enabled: true, RuntimeKey: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				Group: config.GroupForProvider(config.ProviderALTAPI)},
+		)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.altAuto.mu.Lock()
+	s.altAuto.settings = defaultAltAutoSettings() // Enabled=false
+	s.altAuto.mu.Unlock()
+
+	s.altAutoCheck(t.Context())
+
+	v := s.altAutoView()
+	if v.Enabled {
+		t.Fatal("默认应关闭")
+	}
+	if v.PoolTotal != 1 || v.Available != 1 {
+		t.Errorf("关闭时也要报告池子现状，实际 total=%d available=%d", v.PoolTotal, v.Available)
+	}
+	if v.LastCheck.IsZero() {
+		t.Error("LastCheck 应被更新")
+	}
+}
