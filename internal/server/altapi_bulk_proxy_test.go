@@ -338,3 +338,91 @@ func TestALTAPIAutoImportDisabled(t *testing.T) {
 		t.Fatal("关掉了 import_to_pool 仍然自动入池")
 	}
 }
+
+// 注册机解释器的解析优先级。
+//
+// 线上真实事故：设置页的 python_bin 默认值就是 "python3"，用户点过一次保存
+// 就把它写进配置文件，于是永远走系统解释器；而系统解释器没装 PySocks，
+// 候选一旦绑了 socks5 出口就在第一批全部失败（12 条候选全报「需要 PySocks」）。
+// 裸命令名不能压过镜像里装好依赖的 venv。
+func TestResolveALTAPIPython(t *testing.T) {
+	venv := altapiDefaultPython() // 测试机上通常为空
+
+	cases := []struct {
+		name    string
+		setting string
+		env     string
+		want    func(got string) bool
+	}{
+		{
+			name:    "空设置走默认",
+			setting: "",
+			want:    func(got string) bool { return got != "" },
+		},
+		{
+			name:    "裸 python3 不能让 venv 失效",
+			setting: "python3",
+			want: func(got string) bool {
+				if venv == "" {
+					return got == "python3" // 没有 venv 时只能退回
+				}
+				return got == venv
+			},
+		},
+		{
+			name:    "绝对路径用户指定最高优先级",
+			setting: "/custom/bin/python3",
+			want:    func(got string) bool { return got == "/custom/bin/python3" },
+		},
+		{
+			name:    "非绝对但用户确实写了",
+			setting: "python3.11",
+			want: func(got string) bool {
+				if venv != "" {
+					return got == venv // venv 优先，它才有依赖
+				}
+				return got == "python3.11"
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveALTAPIPython(tc.setting)
+			if !tc.want(got) {
+				t.Errorf("resolveALTAPIPython(%q) = %q", tc.setting, got)
+			}
+		})
+	}
+
+	// 环境变量优先级：高于裸名，低于绝对路径。
+	t.Setenv("ALTAPI_PYTHON", "/env/bin/python")
+	if got := resolveALTAPIPython("python3"); got != "/env/bin/python" {
+		t.Errorf("ALTAPI_PYTHON 未生效: %q", got)
+	}
+	if got := resolveALTAPIPython("/abs/bin/python"); got != "/abs/bin/python" {
+		t.Errorf("绝对路径应压过环境变量: %q", got)
+	}
+}
+
+// hasSocksProxy 只认 socks* 前缀（含 socks4/socks5/socks5h），http 代理不算。
+func TestHasSocksProxy(t *testing.T) {
+	yes := [][]any{
+		{"socks5://u:p@1.2.3.4:1080"},
+		{"http://a:1", "SOCKS5H://b:2"},
+		{"socks4://c:3"},
+	}
+	no := [][]any{
+		{},
+		{"http://a:1", "https://b:2"},
+	}
+	for _, xs := range yes {
+		if !hasSocksProxy(xs) {
+			t.Errorf("hasSocksProxy(%v) = false, want true", xs)
+		}
+	}
+	for _, xs := range no {
+		if hasSocksProxy(xs) {
+			t.Errorf("hasSocksProxy(%v) = true, want false", xs)
+		}
+	}
+}

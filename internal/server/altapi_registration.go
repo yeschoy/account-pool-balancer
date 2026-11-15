@@ -144,17 +144,63 @@ func (m *altapiManager) scriptPaths(st altapisignupstore.Settings) (script, py s
 	if script == "" {
 		return "", "", fmt.Errorf("找不到 altapi_registrar.py（已查 %d 个位置）", len(candidates))
 	}
-	py = strings.TrimSpace(st.PythonBin)
-	if py == "" {
-		if v := strings.TrimSpace(os.Getenv("ALTAPI_PYTHON")); v != "" {
-			py = v
-		} else if v := altapiDefaultPython(); v != "" {
-			py = v
-		} else {
-			py = "python3"
+	py = resolveALTAPIPython(st.PythonBin)
+	return script, py, nil
+}
+
+// hasSocksProxy 判断代理池里是否有 socks 协议条目。
+func hasSocksProxy(proxies []any) bool {
+	for _, p := range proxies {
+		s, _ := p.(string)
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "socks") {
+			return true
 		}
 	}
-	return script, py, nil
+	return false
+}
+
+// checkSocksSupport 用同一个解释器试 import socks。
+func (m *altapiManager) checkSocksSupport(py string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, py, "-c", "import socks").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if i := strings.LastIndex(msg, "ModuleNotFoundError"); i >= 0 {
+		msg = strings.TrimSpace(msg[i:])
+	}
+	return fmt.Errorf("代理池有 socks 条目，但解释器 %s 没有 PySocks（%s）；"+
+		"把「注册机解释器」留空以使用镜像内 venv，或改装好依赖的解释器", py, msg)
+}
+
+// resolveALTAPIPython 决定用哪个解释器跑注册机。
+//
+// 优先级：
+//   1. 设置里写的**绝对路径**（用户明确指定，尊重它）
+//   2. ALTAPI_PYTHON 环境变量
+//   3. 镜像里的 /opt/altapi-signup venv（带 PySocks）
+//   4. 裸 "python3"
+//
+// 「裸命令名」不算有效指定：设置页的默认值就是 "python3"，用户点过一次保存
+// 就会把它写进配置文件，于是永远走系统解释器——而系统解释器没装 PySocks，
+// 候选一旦绑了 socks5 出口就在 import 阶段全量失败（线上真实踩到：
+// 12 条候选全是「需要 PySocks 才能用 socks 代理」）。
+func resolveALTAPIPython(setting string) string {
+	if p := strings.TrimSpace(setting); p != "" && filepath.IsAbs(p) {
+		return p
+	}
+	if v := strings.TrimSpace(os.Getenv("ALTAPI_PYTHON")); v != "" {
+		return v
+	}
+	if v := altapiDefaultPython(); v != "" {
+		return v
+	}
+	if p := strings.TrimSpace(setting); p != "" {
+		return p // 非绝对路径但用户确实写了，如 "python3.11"
+	}
+	return "python3"
 }
 
 // altapiDefaultPython 返回镜像里带 PySocks 的解释器。
@@ -201,13 +247,24 @@ func (m *altapiManager) runBatch(ids []string) {
 		return
 	}
 
-	job := altapiJobFile{Items: []altapiJobItem{}}
 	proxies := make([]any, 0, len(st.ProxyPool))
 	for _, p := range st.ProxyPool {
 		if strings.TrimSpace(p) != "" {
 			proxies = append(proxies, p)
 		}
 	}
+
+	// 启动前自检：池子里有 socks 代理而解释器没装 PySocks 时，整批会在第一条
+	// 就全量失败（线上踩过：12 条候选全报「需要 PySocks」）。这里先探一次，
+	// 一次性把原因写进日志并中止，而不是让用户等 12 条跑完才看明白。
+	if hasSocksProxy(proxies) {
+		if err := m.checkSocksSupport(py); err != nil {
+			m.addLog("error", "", err.Error())
+			return
+		}
+	}
+
+	job := altapiJobFile{Items: []altapiJobItem{}}
 	job.Settings = map[string]any{
 		"base_url":         st.BaseURL,
 		"min_interval_sec": st.MinIntervalSec,

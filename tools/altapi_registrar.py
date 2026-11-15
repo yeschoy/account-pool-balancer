@@ -197,7 +197,12 @@ def _opener(proxy: str | None):
             socket.socket = socks.socksocket
             return urllib.request.build_opener(urllib.request.ProxyHandler({}))
         except ImportError:
-            raise RuntimeError("需要 PySocks 才能用 socks 代理: pip install PySocks")
+            # 这条错误在部署里出现过全量失败：镜像 venv 装了 PySocks，但设置里
+            # python_bin 被写成裸 "python3"，于是走了系统解释器。把实际用的
+            # 解释器打出来，下次一眼能看出走错了哪个。
+            raise RuntimeError(
+                f"socks 代理需要 PySocks，但当前解释器 {sys.executable} 没装；"
+                f"检查设置页「注册机解释器」是否指向装好依赖的 venv（或留空用镜像默认）")
     return urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
 
