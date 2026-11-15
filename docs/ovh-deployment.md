@@ -2892,3 +2892,49 @@ API：`GET|PUT /api/altapi/auto`、`GET /api/altapi/auto/status`、
 | 单测 | 8 条全过（默认关闭、6 组非法值、往返、拒绝非法不改数据、可用性统计、优先导入、缺库存不报错、关闭时仍报告） |
 
 回退镜像：`account-pool-balancer:release-4cbb112-20261115T165917Z`。
+
+## 当前部署：修概览页「ALTapi 号池」卡片读取中（2026-11-15 19:06 UTC，a76832a）
+
+用户截图：ALTapi 概览页的「ALTapi 号池」卡片一直显示「读取中… / 刷新后可看到余额合计」。
+
+### 根因（纯前端渲染时序）
+
+`loadOverview()` 是**同步**拼 cards 的，里面直接调 `altOverviewCards()`；但数据
+来自异步的 `altPrefetchStatus()`。两者没有交接：
+
+- `altPrefetchStatus` 拿到数据只写了 `altLastStatus`，**没有任何重绘**
+- `loadOverview` 拼 cards 时 `altLastStatus` 必然是 null → 占位文案
+- 之后也没有第二次渲染，所以永远停在「读取中…」
+
+### 修法
+
+1. `altPrefetchStatus` 拉完数据后调 `syncALTOverviewCards()`，就地替换占位卡片
+   （按 label 前缀找到占位节点，`insertAdjacentHTML` + `remove`，不重建整页，
+   避免其它卡片闪烁）
+2. `loadOverview` 拼完 cards 后主动触发预取
+3. 卡片文案补「N 个余额未知（缺会话）」，让未知不再是黑盒
+
+### 性能核实（用户特别要求不要逐账号批量读）
+
+| 检查 | 结果 |
+|---|---|
+| `/api/altapi/status` 实现 | 只读 `s.quota.Get(a.ID)` 内存快照，**无任何上游请求** |
+| 实测延迟 | 0.0003–0.0005s（13 个账号时同样是亚毫秒） |
+| 逐账号读余额的代价 | 关在配额轮询器里（默认 60s 一轮、并发 2） |
+| 前端保护 | `altFetchStatus()` 5 秒节流 + inflight 去重，概览 15s 刷新与注册机
+  3s 轮询共用同一请求 |
+
+并把「不许在这条路径上打上游」写成断言：`/status` 源码里必须出现
+`s.quota.Get(a.ID)`、不得出现 `altapiFetchQuota`。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-a76832a-20261115T190633Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 前端新代码 | `altapi.js` 含 `syncALTOverviewCards`（4 处）、`app.js` 含 `altPrefetchStatus`（2 处） |
+| 线上数据 | `status` 200 / 0.5ms；卡片应显示 **余额合计 $129.98 · 已读 13/13**、**候选 86 个 · Key 13 · 入池 13** |
+
+回退镜像：`account-pool-balancer:release-0dc31ba-20261115T173008Z`。
