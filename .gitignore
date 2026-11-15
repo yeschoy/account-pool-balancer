@@ -40,12 +40,6 @@ pnpm-debug.log*
 /artifacts/
 /.tmp-tokenharbor/
 
-# Go 构建缓存（在仓库内构建时使用）
-/.gocache/
-/.gocache-tmp/
-/.gotmp/
-/.gomodcache/
-/.gopath/
 
 # 分析产物（gocache、反编译/逆向中间产物）
 /.analysis/
@@ -99,3 +93,64 @@ _runs/
 
 # built binary
 /x50reg
+
+# ---------------------------------------------------------------------------
+# 构建产物与本地缓存：一律不入库，需要时重新构建/生成
+#
+# 上面的逐目录规则（/tools/perch-register/__pycache__/ 等）是历史补丁，
+# 只能覆盖当时那几个目录；在 internal/、tools/th-register/ 等位置生成的缓存
+# 会漏网。下面这组是通用兜底，不依赖目录。
+# ---------------------------------------------------------------------------
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# Go
+/.gocache/
+/.gocache-tmp/
+/.gotmp/
+/.gomodcache/
+/.gopath/
+*.test
+*.out
+/coverage.out
+/coverage.html
+
+# 本地直接 go build 出来的可执行文件
+/dsh
+/odb
+/odb-*
+/*-test
+/x50reg
+!/cmd/**
+
+# JS（构建时重新 install）
+.pnpm-debug.log*
+.yarn/
+.eslintcache
+.vite/
+/dist/
+/build/
+/.next/
+/.nuxt/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+.zed/

@@ -24,3 +24,27 @@ tools/mistral/signup/data
 tools/mistral/signup/accounts.txt
 tools/mistral/**/__pycache__
 tools/mistral/capture
+
+# 通用兜底：上面的逐目录规则只能覆盖当时那几个目录，下面按模式覆盖全部位置。
+# 构建时重新生成/重新 install 即可，不该进构建上下文（也避免 COPY . . 把缓存带进镜像层）。
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/*.egg-info
+**/*.test
+**/coverage.out
+**/coverage.html
+**/dist
+**/build
+**/.vite
+**/.next
+**/.nuxt
+**/.DS_Store
+**/Thumbs.db
+**/.idea
+**/.vscode
+**/*.swp
