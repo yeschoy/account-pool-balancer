@@ -2777,3 +2777,49 @@ altBadge(r.imported_account_id ? 'imported' : r.status)
 | 隔离端到端 | 入池 → 退回：`{"returned":1}`，候选 `status=failed / imported=(空) / detail=从号池退回`，账号 `enabled=False` 保留 |
 
 回退镜像：`account-pool-balancer:release-2b83ee4-20261115T150930Z`。
+
+## 当前部署：候选列表筛选标签页（2026-11-15 16:59 UTC，4cbb112）
+
+用户指出：已入池的候选应默认不展示，在候选标题旁加「已入池」标签，点它才展开。
+
+（上一轮我误以为用户没看到「已入池」徽章，实际徽章线上一直正常显示——
+用户要的是**筛选**，不是徽章。）
+
+### 为什么
+
+已入池的候选已进号池可被调度，混在待办列表里会让「还有多少要处理」看不出来：
+线上 12 条全入池后，候选表看起来仍是 12 条待办，误导。
+
+### 实现
+
+候选标题右侧三个标签页，各带实时计数：
+
+| 标签 | 内容 | 默认 |
+|---|---|---|
+| 待处理 | `imported_account_id` 为空 | ✅ |
+| 已入池 | `imported_account_id` 非空 | |
+| 全部 | 不过滤 | |
+
+选择状态存 `localStorage`（`odb-alt-tab`），刷新后不跳回「待处理」。
+
+四个边界处理：
+
+- **全选只选当前可见行**：在「待处理」下全选不该把已入池的也勾上
+- **切标签清空选择**：避免批量操作误伤看不见的行
+- **导入号池成功后自动跳「已入池」**：否则用户以为没生效
+- **空态按标签给不同提示**：已入池页为空时说明「注册成功并导入后会显示在这里」
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 运行镜像 | `account-pool-balancer:release-4cbb112-20261115T165917Z` |
+| Docker 健康 | `healthy`，`RestartCount=0` |
+| 双内网入口 | 均 `{"ok":true}` |
+| 三个标签 | `data-alt-tab` pending/imported/all 全部在页面 |
+| 默认激活 | `class="alt-tab active" data-alt-tab="pending"` |
+| CSS | `alt-tab` 相关规则 5 条 |
+| 资源版本 | `app.js?v=73916ca235` / `altapi.js?v=73916ca235`（旧 `1bc0f23d7a`） |
+| 筛选逻辑 | 4 条样本（2 入池 / 2 待处理）：pending→2、imported→2、all→4 |
+
+回退镜像：`account-pool-balancer:release-7c57304-20261115T154856Z`。
