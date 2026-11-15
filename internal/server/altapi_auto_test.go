@@ -305,3 +305,74 @@ func readServerFile(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+// 频率注册必须每次重新随机，且落在 [min, max] 闭区间内。
+//
+// 用户要求「填 5 和 10，就是随机 5–10 分钟注册一个」。这里用秒级小值验证
+// 分布，避免测试真的等几分钟。
+func TestALTAAutoScheduleIsRandomWithinRange(t *testing.T) {
+	s := altAutoTestServer(t)
+	if s.altAuto == nil {
+		t.Fatal("自动补号管理器未初始化")
+	}
+	a := s.altAuto
+	a.mu.Lock()
+	a.settings = altAutoSettings{
+		Enabled: true, ThresholdEnabled: false, MinAvailable: 5,
+		FrequencyEnabled: true, RandomMinSec: 300, RandomMaxSec: 600, MaxPerRound: 1,
+	}
+	a.mu.Unlock()
+
+	var lo, hi time.Time
+	seen := map[int]bool{}
+	for i := 0; i < 50; i++ {
+		a.mu.Lock()
+		before := time.Now()
+		a.scheduleNextLocked()
+		delta := int(a.notBefore.Sub(before).Seconds())
+		a.mu.Unlock()
+
+		if delta < 300 || delta > 601 { // 闭区间，容许一秒的取整误差
+			t.Fatalf("第 %d 次间隔 %ds 越界，应在 300..600", i, delta)
+		}
+		seen[delta] = true
+		if lo.IsZero() || delta < int(lo.Sub(before).Seconds()) {
+			lo = before.Add(time.Duration(delta) * time.Second)
+		}
+		if delta > int(hi.Sub(hi).Seconds()) {
+			hi = before.Add(time.Duration(delta) * time.Second)
+		}
+	}
+	// 50 次抽样至少应出现 10 个不同值，否则说明不是真随机
+	if len(seen) < 10 {
+		t.Errorf("抽样 50 次只有 %d 个不同值，随机性不足", len(seen))
+	}
+}
+
+// 上下限相等时退化为固定值，且不 panic（rand.Intn(0) 会 panic）。
+func TestALTAAutoScheduleEqualBounds(t *testing.T) {
+	s := altAutoTestServer(t)
+	a := s.altAuto
+	a.mu.Lock()
+	a.settings = altAutoSettings{RandomMinSec: 120, RandomMaxSec: 120, MaxPerRound: 1}
+	a.scheduleNextLocked()
+	delta := int(time.Until(a.notBefore).Seconds())
+	a.mu.Unlock()
+	if delta < 118 || delta > 121 {
+		t.Errorf("等上下限应得到 120s，实际 %ds", delta)
+	}
+}
+
+// 上限小于下限时按上限处理，不能 panic。
+func TestALTAAutoScheduleInvertedBounds(t *testing.T) {
+	s := altAutoTestServer(t)
+	a := s.altAuto
+	a.mu.Lock()
+	a.settings = altAutoSettings{RandomMinSec: 600, RandomMaxSec: 300, MaxPerRound: 1}
+	a.scheduleNextLocked() // 不应 panic
+	delta := int(time.Until(a.notBefore).Seconds())
+	a.mu.Unlock()
+	if delta < 598 || delta > 601 {
+		t.Errorf("倒置区间应退化为下限 600s，实际 %ds", delta)
+	}
+}

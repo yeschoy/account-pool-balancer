@@ -510,8 +510,9 @@ function renderALTAuto(auto) {
   on('alta-threshold-on', st.threshold_enabled);
   val('alta-min', st.min_available ?? 5);
   on('alta-freq-on', st.frequency_enabled);
-  val('alta-freq-min', st.random_min_sec ?? 600);
-  val('alta-freq-max', st.random_max_sec ?? 1200);
+  // 存储单位是秒，界面按分钟填。四舍五入到整分钟，避免出现 9.9999 这种值。
+  val('alta-freq-min', Math.round((st.random_min_sec ?? 600) / 60));
+  val('alta-freq-max', Math.round((st.random_max_sec ?? 1200) / 60));
   val('alta-max', st.max_per_round ?? 5);
 
   const s = auto.status || {};
@@ -542,8 +543,9 @@ function altCollectAuto() {
     threshold_enabled: c('alta-threshold-on'),
     min_available: Number(v('alta-min')) || 0,
     frequency_enabled: c('alta-freq-on'),
-    random_min_sec: Number(v('alta-freq-min')) || 600,
-    random_max_sec: Number(v('alta-freq-max')) || 1200,
+    // 界面按分钟填，后端按秒存。
+    random_min_sec: (Number(v('alta-freq-min')) || 5) * 60,
+    random_max_sec: (Number(v('alta-freq-max')) || 10) * 60,
     max_per_round: Number(v('alta-max')) || 5,
   };
 }
