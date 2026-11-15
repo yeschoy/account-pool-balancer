@@ -12,6 +12,9 @@ tokenharbor-signup.json
 !/tools/perch-register/
 /tools/perch-register/__pycache__/
 /tools/perch-register/.venv/
+# altapi 注册机：无内置凭据，凭据全部来自 job file（.gitignore 已挡 /data/）
+!/tools/altapi_registrar.py
+!/tools/test_altapi_registrar.py
 # Mistral 注册机（已清理明文凭据后才入库）
 !/tools/mistral/
 /tools/mistral/capture/

@@ -1,0 +1,48 @@
+{
+  "_comment": "Shared by internal/newapiconsole/console_test.go (embed) and tools/test_altapi_registrar.py (json.load). Both sides must agree exactly; a rule change that updates only one language fails that language's test.",
+  "_measured": "altapi.ai 2026-11-15: New-Api-User absent -> 401 未提供 New-Api-User; '-1' -> 401 与登录用户不匹配; real uid -> 200",
+
+  "normalize_uid": [
+    {"in": "241",       "out": "241",  "why": "a real uid"},
+    {"in": "0241",      "out": "241",  "why": "leading zeros are not part of the id"},
+    {"in": "1",         "out": "1",    "why": "the smallest valid id"},
+    {"in": "999999999", "out": "999999999", "why": "a large but valid id"},
+
+    {"in": "",          "out": "",     "why": "no uid known yet"},
+    {"in": "-1",        "out": "",     "why": "the anonymous sentinel must never be sent as a uid"},
+    {"in": "0",         "out": "",     "why": "zero is not a user id"},
+    {"in": "000",       "out": "",     "why": "nor is any number of zeros"},
+    {"in": "abc",       "out": "",     "why": "not a number"},
+    {"in": "24a",       "out": "",     "why": "partially numeric"},
+    {"in": "2.41",      "out": "",     "why": "not an integer"},
+    {"in": "2e3",       "out": "",     "why": "not an integer"},
+    {"in": "241\n",     "out": "",     "why": "a trailing newline is header injection, and is what a terminal copy carries"},
+    {"in": " 241",      "out": "",     "why": "leading space is refused, never trimmed"},
+    {"in": "241 ",      "out": "",     "why": "trailing space is refused, never trimmed"},
+    {"in": "2\n41",     "out": "",     "why": "an embedded newline is header injection"},
+    {"in": "2\r41",     "out": "",     "why": "carriage return is header injection"},
+    {"in": "2\t41",     "out": "",     "why": "tab is refused too"}
+  ],
+
+  "session_value": [
+    {"in": "abc123",                              "out": "abc123",  "why": "a bare value, the common case"},
+    {"in": "session=abc123",                      "out": "abc123",  "why": "a name=value pair"},
+    {"in": "other=x; session=abc123; more=y",     "out": "abc123",  "why": "a whole cookie string pasted from DevTools"},
+    {"in": "session=abc123; other=x",             "out": "abc123",  "why": "session first"},
+    {"in": "  session=abc123  ",                  "out": "abc123",  "why": "surrounding space on a cookie string is trimmed"},
+
+    {"in": "",                                    "out": "",        "why": "nothing stored"},
+    {"in": "   ",                                 "out": "",        "why": "blank"},
+    {"in": "has spaces here",                     "out": "",        "why": "a malformed Cookie header fails closed with an opaque 401"},
+    {"in": "nope=1; x=2",                         "out": "",        "why": "no session pair present"},
+    {"in": "mysession=abc",                       "out": "",        "why": "name must be exactly 'session'"}
+  ],
+
+  "balance_usd": [
+    {"quota": 5000000, "unit": 500000, "out": 10,       "why": "a fresh altapi account shows $10.00"},
+    {"quota": 0,       "unit": 500000, "out": 0,        "why": "an emptied wallet is a real zero"},
+    {"quota": 4992102, "unit": 500000, "out": 9.9842,   "why": "measured on uid 242 after two requests"},
+    {"quota": 7898,    "unit": 500000, "out": 0.0158,   "why": "the same account's spent figure"},
+    {"quota": 5000000, "unit": 0,      "out": 10,       "why": "a missing divisor falls back to the measured 500000"}
+  ]
+}
