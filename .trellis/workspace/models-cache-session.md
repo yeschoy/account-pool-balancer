@@ -21,4 +21,7 @@
 - 本地Apple M4纯缓存命中基准（每档2次、200ms）：1/1000/10000账号约56–62ns/op，0B/op、0allocs/op。只验证内存路径不随账号数增长，不声称完整HTTP延迟、真实上游、生产容量或上线验收。
 
 ## 产物与边界
-`.analysis/models-cache/` 保存本地测试/竞态/vet/build/基准日志及Mock构建二进制，已在项目 `_tmp_artifacts.md` 登记且被Git忽略，需用户同意才清理。Trellis记录保留并与业务改动一起提交。无前端或线上设置变更，无真实推理请求，无部署。
+`.analysis/models-cache/` 保存本地测试/竞态/vet/build/基准日志及Mock构建二进制，已在项目 `_tmp_artifacts.md` 登记且被Git忽略，需用户同意才清理。Trellis记录保留并与业务改动一起提交。开发阶段无前端或线上设置变更、无真实推理请求。
+
+## 后续授权部署
+用户明确要求直接推送部署。`eada1fe` 已推送master并于UTC2026-11-15 18:32:45.835上线验收通过：Docker healthy/0重启、双NewAPI内网入口成功、232账号/186TH注册及配置保留，7静态资源hash匹配。复用已有rollout、不重复测试/新建任务或主动发模型/推理请求、不改线上设置。正式release/备份/回退镜像保留；阶段时间与路径见 `docs/ovh-deployment.md`；临时回执为 `.analysis/models-cache/deployment.log`。验收后立即反馈，补文档不再部署。

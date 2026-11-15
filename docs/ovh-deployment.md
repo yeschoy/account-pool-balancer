@@ -38,7 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：绑卡日志带金额与真实余额（2026-11-13 21:20 UTC，fc69aa6）
+## 当前部署：模型列表分层缓存（2026-11-15 18:32 UTC，eada1fe）
+
+- 用户明确授权直接推送部署；`eada1fe6b95c969bfebe950b5dd7a1b480b46979` 已推送 master，从干净 Git 归档构建。线上基线 `0dc31ba`，业务差异仅模型列表缓存/失效与对应测试；复用已通过的全仓 normal/race/vet/build，不重复测试、不建 Trellis 任务。
+- 复用既有 rollout 引擎，沿线上 Compose 只覆盖 image，保留 UID1000:1000、环境、挂载、端口、网络兼容别名、Healthcheck 和原资源参数；未在旧工作树构建、未更改线上配置或功能开关。无持久化格式变化，不额外复制凭据做断网预检。
+- **18:32:45.835 UTC 验收通过并立即反馈**：运行目标 revision，Docker healthy/零重启，NewAPI 分别到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 成功，7 个本机静态资源与提交源码 SHA256 一致；232 账号、186 条 TokenHarbor 注册记录、routingSecret 和配置保留。未主动发生产推理或模型目录扇出，不把入口验收冒充模型接口生产性能验证；本轮未另做公网浏览器验收。
+- 时间（UTC）：构建 **18:32:00.940–18:32:08.229**；旧退出 **18:32:08.409**；完整一致备份 **18:32:08.689–18:32:15.056**（gzip/SHA256通过）；切换请求 **18:32:15.056**、新启动 **18:32:15.330**、首HTTP **18:32:16.449**、Docker healthy **18:32:45.692**、双内网 **18:32:45.830**。旧退出到首HTTP观测约8.04秒，非精确停机；构建/健康等待不算停机。
+- 镜像 `account-pool-balancer:release-eada1fe-20261115T183146Z`；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261115T183146Z-eada1fe`；完整备份 `/home/ubuntu/backups/account-pool-balancer/20261115T183146Z-models-cache-eada1fe`（SHA256 `ae4db57932b7b88cd8c2ea7a7653d400896921343cefe8ffea43dff434096eef`）；回退镜像 `account-pool-balancer:rollback-20261115T183146Z` 保留。回退不自动恢复旧 data 覆盖新写入。部署回执 `.analysis/models-cache/deployment.log` 已登记 `_tmp_artifacts.md`，经同意再清理；Trellis/正式备份保留。后续只补记录，不再次部署。
+
+## 历史部署：绑卡日志带金额与真实余额（2026-11-13 21:20 UTC，fc69aa6）
 
 - 用户看到 `04:52:25 bind_ok 绑卡成功` 一条日志，问"是不是绑卡和充值都成功、咋没有日志"。
 - **核对结论：两条都成功**。实读 `GET /api/organization/{org}/credit`：`bought 5.00`（20:52:23Z）+ `purchase_promo 100.00`（20:52:25Z）+ `initial 1.00` = **106.00**；`payment_methods` 为 `MasterCard ****7132 active=true`。时间戳与截图 `04:52:25` 同一次操作。
