@@ -142,25 +142,37 @@ MAILBOX_API = "/api/messages"
 # 否则 CF 能靠这一组矛盾把多个账号关联到同一脚本。
 FP_PROFILES = [
     {
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        # impersonate 决定 TLS/HTTP2 指纹（ClientHello 的 cipher 顺序、曲线、
+        # 扩展集合、GREASE、ALPN），这些是站点第一眼看到的东西，UA 只能排第二。
+        # UA 与 impersonate 必须同版本：Chrome 141 的 UA 配 Chrome 136 的
+        # ClientHello 是自相矛盾的指纹。
+        "impersonate": "chrome",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
         "ch_ua": '"Google Chrome";v="141", "Chromium";v="141", "Not?A_Brand";v="24"',
         "platform": '"Windows"',
         "lang": "en-US,en;q=0.9",
+        "gpc": True,
     },
     {
-        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "impersonate": "chrome",
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
         "ch_ua": '"Chromium";v="142", "Google Chrome";v="142", "Not?A_Brand";v="99"',
         "platform": '"macOS"',
         "lang": "en-US,en;q=0.9",
+        "gpc": True,
     },
     {
-        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        "impersonate": "chrome",
+        "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
         "ch_ua": '"Google Chrome";v="143", "Chromium";v="143", "Not?A_Brand";v="24"',
         "platform": '"Linux"',
         "lang": "en-GB,en;q=0.9",
+        "gpc": True,
     },
 ]
-
 
 # --------------------------------------------------------------------------
 # 事件输出
@@ -210,7 +222,83 @@ class Reply:
         return self.status in (403, 429, 503) or not self.text.strip()
 
 
-def _opener(proxy: str | None):
+class Transport:
+    """把「发一个请求」和「指纹由谁决定」分开。
+
+    实测 2026-11-16（同一代理出口、同一时刻）：
+        Python urllib + 完美 Chrome UA/CH 头  → 连接被 Cloudflare 直接断开
+        curl_cffi impersonate=chrome          → HTTP/3 200
+    说明 UA 和 sec-ch-ua 再怎么对，也救不了 TLS 层。Python 走的是系统
+    LibreSSL，ClientHello 的 cipher 顺序、曲线、扩展集合、GREASE 全和
+    BoringSSL 不同 —— 这就是 JA3/JA4 的原料，是站点第一眼看到的东西。
+
+    所以传输层**默认必须**用 curl_cffi；urllib 只在装了库的降级路径上，
+    并且必须把降级说出来，否则会以「UA 明明是对的却被拦」的形式误导排查。
+    """
+
+    def __init__(self, proxy: str | None, impersonate: str = "chrome"):
+        self.proxy = proxy
+        self.impersonate = impersonate
+        self.mode = ""
+        self._cffi = None
+        self._urllib = None
+        self._init()
+
+    def _init(self) -> None:
+        try:
+            from curl_cffi import requests as cr  # noqa: F401
+            self._cffi = cr
+            self.mode = "curl_cffi/" + self.impersonate
+            return
+        except ImportError:
+            pass
+        self._urllib = _urllib_opener(self.proxy)
+        self.mode = "urllib/LibreSSL"
+
+    @property
+    def tls_is_browserlike(self) -> bool:
+        return self._cffi is not None
+
+    # 导航形态的残留头，必须在 XHR 场景里摘掉
+    _NAV_ONLY = ("sec-fetch-user", "upgrade-insecure-requests", "priority")
+
+    def request(self, method: str, url: str, headers: dict,
+                body: bytes | None, timeout: float):
+        """返回 (status, text, set_cookies)。"""
+        proxies = {}
+        if self.proxy:
+            proxies = {"http": self.proxy, "https": self.proxy}
+        # curl_cffi 的 impersonate 默认套用「顶层导航」形态：
+        #   Sec-Fetch-Dest: document / Mode: navigate / Site: none
+        #   Sec-Fetch-User: ?1 / Upgrade-Insecure-Requests: 1 / Priority
+        # 我们的每个请求都是页面内的 XHR，真实浏览器此时发的是
+        #   Dest: empty / Mode: cors / Site: same-origin，且没有后三个。
+        # 带着导航头等于自报「我不是页面加载的请求」。
+        # 用 None 才能真的摘掉（空串会退化成去掉头部值但仍保留该头）。
+        if self._cffi is not None:
+            send = dict(headers)
+            for k in self._NAV_ONLY:
+                send[k] = None
+            try:
+                r = self._cffi.request(
+                    method, url, headers=send, data=body,
+                    impersonate=self.impersonate, proxies=proxies or None,
+                    timeout=timeout, allow_redirects=False,
+                    verify=True,
+                )
+            except TypeError:
+                # 老版本 curl_cffi 不认 allow_redirects 之外的部分参数
+                r = self._cffi.request(method, url, headers=send, data=body,
+                                       impersonate=self.impersonate,
+                                       proxies=proxies or None, timeout=timeout)
+            cookies = []
+            for k, v in (r.cookies.items() if hasattr(r, "cookies") else []):
+                cookies.append(f"{k}={v}")
+            return r.status_code, r.text, cookies
+        return _urllib_request(self._urllib, method, url, headers, body, timeout)
+
+
+def _urllib_opener(proxy: str | None):
     if not proxy:
         # 明确不读环境代理，避免宿主 Clash 把流量带走导致出口不可控
         return urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -242,11 +330,24 @@ def _opener(proxy: str | None):
         urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
 
 
+def _urllib_request(opener, method, url, headers, body, timeout):
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace"), \
+                   list(r.headers.get_all("Set-Cookie") or [])
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace"), \
+               list(e.headers.get_all("Set-Cookie") or [])
+    except Exception as e:
+        return 0, f"__transport__ {e}", []
+
+
 class HTTP:
     def __init__(self, base: str, fp: dict, proxy: str | None = None):
         self.base = base.rstrip("/")
         self.fp = fp
-        self.opener = _opener(proxy)
+        self.transport = Transport(proxy, impersonate=fp.get("impersonate", "chrome"))
         self.cookies: dict[str, str] = {}
         # uid is the logged-in user id. new-api requires New-Api-User to equal
         # it: "-1" answers 401 "与登录用户不匹配" and a missing header answers
@@ -268,10 +369,17 @@ class HTTP:
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
+            # Accept-Encoding 由传输层决定（curl_cffi 发 gzip, deflate, br, zstd；
+            # urllib 只能发 identity）。在这里手写会与实际编码能力矛盾：
+            # 声称支持 br 却解不开，响应体直接坏掉。
             "New-Api-User": normalize_uid(self.uid) or "-1",
             "Origin": self.base,
             "Referer": self.base + referer,
         }
+        # 真实 Chrome 的 XHR 还带这几个；缺了它们，头部集合比浏览器「瘦」，
+        # 是和 TLS 指纹独立的第二道可识别特征。
+        if self.fp.get("gpc"):
+            h["sec-gpc"] = "1"
         if self.cookies:
             h["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         if extra:
@@ -292,18 +400,14 @@ class HTTP:
         if body is not None:
             data = json.dumps(body).encode()
             extra["Content-Type"] = "application/json"
-        req = urllib.request.Request(self.base + path, data=data, method=method,
-                                     headers=self.headers(referer, extra))
-        try:
-            with self.opener.open(req, timeout=timeout) as r:
-                self._absorb(r.headers)
-                return Reply(r.status, r.read().decode("utf-8", "replace"),
-                             dict(r.headers))
-        except urllib.error.HTTPError as e:
-            self._absorb(e.headers)
-            return Reply(e.code, e.read().decode("utf-8", "replace"), dict(e.headers))
-        except Exception as e:
-            return Reply(0, f"__transport__ {e}", {})
+        status, text, set_cookies = self.transport.request(
+            method, self.base + path, self.headers(referer, extra), data, timeout)
+        for raw in set_cookies:
+            pair = raw.split(";", 1)[0]
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                self.cookies[k.strip()] = v.strip()
+        return Reply(status, text, {})
 
     def get(self, path: str, **kw) -> Reply:
         return self.call("GET", path, **kw)
@@ -330,18 +434,19 @@ class Mailbox:
         self.base = f"{u.scheme}://{u.netloc}"
         self.token = (q.get("token") or [""])[0]
         self.alias = urllib.parse.unquote(u.path.rsplit("/", 1)[-1])
-        self.opener = _opener(proxy)
+        # 收码站不是 Cloudflare 保护的目标，用哪个栈都行；但统一走 Transport
+        # 可以少一份代理/超时实现，也避免 socks monkey-patch 重复生效。
+        self.transport = Transport(proxy, impersonate="chrome")
 
     def _fetch(self, rng: str = "latest") -> list[dict]:
         q = urllib.parse.urlencode(
             {"alias_email": self.alias, "token": self.token, "range": rng})
-        req = urllib.request.Request(
-            f"{self.base}{MAILBOX_API}?{q}",
-            headers={"Accept": "application/json",
-                     "User-Agent": FP_PROFILES[0]["ua"]})
+        status, text, _ = self.transport.request(
+            "GET", f"{self.base}{MAILBOX_API}?{q}",
+            {"Accept": "application/json", "User-Agent": FP_PROFILES[0]["ua"]},
+            None, 30)
         try:
-            with self.opener.open(req, timeout=30) as r:
-                d = json.loads(r.read().decode())
+            d = json.loads(text)
         except Exception:
             return []
         if not d.get("ok"):
@@ -737,14 +842,12 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.probe_proxy:
-        op = _opener(args.proxy)
-        try:
-            with op.open("https://api.ipify.org?format=json", timeout=20) as r:
-                print(r.read().decode())
-            return 0
-        except Exception as e:
-            print(json.dumps({"ok": False, "error": str(e)}))
-            return 1
+        tp = Transport(args.proxy, impersonate="chrome")
+        status, text, _ = tp.request("GET", "https://api.ipify.org?format=json",
+                                     {"Accept": "application/json"}, None, 20)
+        print(json.dumps({"ok": status == 200, "transport": tp.mode,
+                          "body": text[:200]}, ensure_ascii=False))
+        return 0 if status == 200 else 1
 
     if args.probe:
         h = HTTP(args.base, FP_PROFILES[0], args.proxy)

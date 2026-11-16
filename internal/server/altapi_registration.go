@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sort"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -185,10 +185,10 @@ func (m *altapiManager) checkSocksSupport(py string) error {
 // resolveALTAPIPython 决定用哪个解释器跑注册机。
 //
 // 优先级：
-//   1. 设置里写的**绝对路径**（用户明确指定，尊重它）
-//   2. ALTAPI_PYTHON 环境变量
-//   3. 镜像里的 /opt/altapi-signup venv（带 PySocks）
-//   4. 裸 "python3"
+//  1. 设置里写的**绝对路径**（用户明确指定，尊重它）
+//  2. ALTAPI_PYTHON 环境变量
+//  3. 镜像里的 /opt/altapi-signup venv（带 PySocks）
+//  4. 裸 "python3"
 //
 // 「裸命令名」不算有效指定：设置页的默认值就是 "python3"，用户点过一次保存
 // 就会把它写进配置文件，于是永远走系统解释器——而系统解释器没装 PySocks，
@@ -225,8 +225,8 @@ func altapiDefaultPython() string {
 
 // jobFile is the JSON the registrar reads with --job-file.
 type altapiJobFile struct {
-	Settings map[string]any     `json:"settings"`
-	Items    []altapiJobItem    `json:"items"`
+	Settings map[string]any  `json:"settings"`
+	Items    []altapiJobItem `json:"items"`
 }
 type altapiJobItem struct {
 	Index      int    `json:"index"`
@@ -292,18 +292,18 @@ func (m *altapiManager) runBatch(ids []string, origin batchOrigin) {
 
 	job := altapiJobFile{Items: []altapiJobItem{}}
 	job.Settings = map[string]any{
-		"base_url":         st.BaseURL,
-		"min_interval_sec": st.MinIntervalSec,
-		"max_retries":      st.MaxRetries,
+		"base_url":           st.BaseURL,
+		"min_interval_sec":   st.MinIntervalSec,
+		"max_retries":        st.MaxRetries,
 		"verify_timeout_sec": st.VerifyTimeoutSec,
-		"auto_verify":      st.AutoVerify,
-		"import_to_pool":   importToPool,
-		"token_group":      st.TokenGroup,
-		"token_name":       st.TokenName,
-		"aff_code":         st.AffCode,
-		"proxy_pool":       proxies,
-		"pace_scale":       st.PaceScale,
-		"code_delay_sec":   st.CodeDelaySec,
+		"auto_verify":        st.AutoVerify,
+		"import_to_pool":     importToPool,
+		"token_group":        st.TokenGroup,
+		"token_name":         st.TokenName,
+		"aff_code":           st.AffCode,
+		"proxy_pool":         proxies,
+		"pace_scale":         st.PaceScale,
+		"code_delay_sec":     st.CodeDelaySec,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -949,19 +949,19 @@ func (s *Server) apiALTAPIStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Get()
 
 	type poolRow struct {
-		ID         string  `json:"id"`
-		Name       string  `json:"name"`
-		Email      string  `json:"email"`
-		Group      string  `json:"group"`
-		Enabled    bool    `json:"enabled"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+		Group   string `json:"group"`
+		Enabled bool   `json:"enabled"`
 		// BalanceUSD is nil when the balance was not read: JSON null says
 		// "unknown", where 0 would read as an empty account.
 		BalanceUSD *float64 `json:"balanceUsd"`
 		BalanceSrc string   `json:"balanceSource"`
-		ReadHint   string  `json:"readHint,omitempty"`
-		UsedUSD    float64 `json:"usedUsd"`
-		Requests   int64   `json:"requests"`
-		LastError  string  `json:"lastError,omitempty"`
+		ReadHint   string   `json:"readHint,omitempty"`
+		UsedUSD    float64  `json:"usedUsd"`
+		Requests   int64    `json:"requests"`
+		LastError  string   `json:"lastError,omitempty"`
 	}
 	var rows []poolRow
 	var totalBalance float64
@@ -997,11 +997,11 @@ func (s *Server) apiALTAPIStatus(w http.ResponseWriter, r *http.Request) {
 		"candidates": sum,
 		"signup":     map[string]any{"logs": len(m.Logs())},
 		"pool": map[string]any{
-			"accounts":       rows,
-			"count":          len(rows),
+			"accounts":        rows,
+			"count":           len(rows),
 			"totalBalanceUsd": round2(totalBalance),
-			"withBalance":    withBalance,
-			"balanceUnknown": unknown,
+			"withBalance":     withBalance,
+			"balanceUnknown":  unknown,
 		},
 		"rules": map[string]any{
 			"error": len(cfg.ALTAPIErrorRules),

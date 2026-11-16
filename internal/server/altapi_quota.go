@@ -48,19 +48,19 @@ const ALTAPIUIDRequired = "该账号缺 uid：altapi 的 /api/user/self 要求 N
 
 // altapiQuotaResult 是一次余额查询的结果。Balance 为 nil 表示未知，不是 0。
 type altapiQuotaResult struct {
-	OK           bool     `json:"ok"`
-	UserID       string   `json:"userId,omitempty"`
-	Username     string   `json:"username,omitempty"`
-	Group        string   `json:"group,omitempty"`
-	Quota        float64  `json:"quota"`
-	UsedQuota    float64  `json:"usedQuota"`
-	RequestCount int64    `json:"requestCount"`
-	QuotaPerUnit float64  `json:"quotaPerUnit"`
-	BalanceUSD   *float64 `json:"balanceUsd"`
-	UsedUSD      *float64 `json:"usedUsd"`
-	Source       string   `json:"source"` // session | key | none
-	Error        string   `json:"error,omitempty"`
-	Hint         string   `json:"hint,omitempty"`
+	OK           bool      `json:"ok"`
+	UserID       string    `json:"userId,omitempty"`
+	Username     string    `json:"username,omitempty"`
+	Group        string    `json:"group,omitempty"`
+	Quota        float64   `json:"quota"`
+	UsedQuota    float64   `json:"usedQuota"`
+	RequestCount int64     `json:"requestCount"`
+	QuotaPerUnit float64   `json:"quotaPerUnit"`
+	BalanceUSD   *float64  `json:"balanceUsd"`
+	UsedUSD      *float64  `json:"usedUsd"`
+	Source       string    `json:"source"` // session | key | none
+	Error        string    `json:"error,omitempty"`
+	Hint         string    `json:"hint,omitempty"`
 	CheckedAt    time.Time `json:"checkedAt"`
 }
 
@@ -204,12 +204,12 @@ func (s *Server) apiALTAPIQuotaRefresh(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	type item struct {
-		ID       string   `json:"id"`
-		Email    string   `json:"email"`
-		OK       bool     `json:"ok"`
-		Balance  *float64 `json:"balanceUsd"`
-		Source   string   `json:"source"`
-		Error    string   `json:"error,omitempty"`
+		ID      string   `json:"id"`
+		Email   string   `json:"email"`
+		OK      bool     `json:"ok"`
+		Balance *float64 `json:"balanceUsd"`
+		Source  string   `json:"source"`
+		Error   string   `json:"error,omitempty"`
 	}
 	out := make([]item, 0, len(list))
 	var total float64
@@ -276,4 +276,3 @@ func (s *Server) apiALTAPIProxyTest(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode == 200, "body": string(body)})
 }
-

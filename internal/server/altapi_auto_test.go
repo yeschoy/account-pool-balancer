@@ -2,10 +2,10 @@ package server
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,9 +47,9 @@ func TestALTAAutoSettingsValidation(t *testing.T) {
 		{MinAvailable: -1, RandomMinSec: 600, RandomMaxSec: 1200, MaxPerRound: 5},
 		{MinAvailable: 5, RandomMinSec: 60, RandomMaxSec: 1200, MaxPerRound: 0},
 		{MinAvailable: 5, RandomMinSec: 60, RandomMaxSec: 1200, MaxPerRound: 51},
-		{MinAvailable: 5, RandomMinSec: 30, RandomMaxSec: 1200, MaxPerRound: 5},   // 下限太小
-		{MinAvailable: 5, RandomMinSec: 1200, RandomMaxSec: 600, MaxPerRound: 5},  // 上限 < 下限
-		{MinAvailable: 5, RandomMinSec: 60, RandomMaxSec: 99999, MaxPerRound: 5},  // 上限太大
+		{MinAvailable: 5, RandomMinSec: 30, RandomMaxSec: 1200, MaxPerRound: 5},  // 下限太小
+		{MinAvailable: 5, RandomMinSec: 1200, RandomMaxSec: 600, MaxPerRound: 5}, // 上限 < 下限
+		{MinAvailable: 5, RandomMinSec: 60, RandomMaxSec: 99999, MaxPerRound: 5}, // 上限太大
 	}
 	for i, b := range bad {
 		if err := validAltAutoSettings(b); err == nil {

@@ -58,11 +58,17 @@ COPY tools/deploy_registrar.py tools/deploy_payment.py tools/fp_layer.py \
 COPY tools/data/ua_pool.json /usr/local/share/deploy-signup/data/ua_pool.json
 RUN chmod -R a+rX /usr/local/share/deploy-signup
 
-# ---- ALTapi 注册机（纯标准库；PySocks 可选，走 socks5 出口时才需要）----
+# ---- ALTapi 注册机（curl_cffi + PySocks）----
 # 后端 scriptPaths() 在镜像里只认 /usr/local/share/altapi-signup/altapi_registrar.py；
 # 缺这一步时注册按钮会在「找不到 altapi_registrar.py」处直接失败。
+#
+# curl_cffi 不是可选项：实测 2026-11-16，同一代理出口下
+#   Python 标准库(LibreSSL) + 完美 Chrome UA  → Cloudflare 直接断连
+#   curl_cffi(impersonate=chrome)            → HTTP/3 200
+# 标准库的 ClientHello（cipher 顺序/曲线/扩展/GREASE）与 BoringSSL 不同，
+# 这是 JA3/JA4 的原料，UA 再怎么对也补不上。缺了它注册机会在发码前就被拦。
 RUN python3 -m venv /opt/altapi-signup \
-    && /opt/altapi-signup/bin/pip install --no-cache-dir PySocks
+    && /opt/altapi-signup/bin/pip install --no-cache-dir curl_cffi PySocks
 COPY tools/altapi_registrar.py /usr/local/share/altapi-signup/altapi_registrar.py
 RUN chmod -R a+rX /usr/local/share/altapi-signup
 

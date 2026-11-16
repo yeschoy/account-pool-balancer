@@ -280,16 +280,16 @@ func TestALTAPIAutoImportOnKeyCreated(t *testing.T) {
 	}
 	// 模拟 Python 侧发出 item_done/key_created。
 	m.handleEvent(map[string]any{
-		"type":       "item_done",
-		"index":      float64(0),
-		"status":     string(altapisignupstore.KeyCreated),
-		"email":      "auto@mail.example.com",
-		"api_key":    "sk-test-auto-import-key-0000000000000000000000",
+		"type":           "item_done",
+		"index":          float64(0),
+		"status":         string(altapisignupstore.KeyCreated),
+		"email":          "auto@mail.example.com",
+		"api_key":        "sk-test-auto-import-key-0000000000000000000000",
 		"session_cookie": "sess-abc",
-		"account_id": "777",
-		"token_id":   "42",
-		"group":      "vip",
-		"quota":      float64(500000),
+		"account_id":     "777",
+		"token_id":       "42",
+		"group":          "vip",
+		"quota":          float64(500000),
 		"quota_per_unit": float64(500000),
 		"balance_usd":    float64(1),
 	}, []string{c.ID}, originManual)
@@ -589,8 +589,8 @@ func TestALTAPIReturnToRegistrar(t *testing.T) {
 	// 造候选 + 入池
 	c, err := m.store.Add(altapisignupstore.Candidate{
 		Email: "ret@mail.example.com", MailboxURL: "https://box.test/r?token=1",
-		Status: altapisignupstore.KeyCreated,
-		APIKey: "sk-ret-test-000000000000000000000000000000",
+		Status:        altapisignupstore.KeyCreated,
+		APIKey:        "sk-ret-test-000000000000000000000000000000",
 		SessionCookie: "sess-ret", AccountID: "900",
 	})
 	if err != nil {

@@ -403,3 +403,103 @@ internal/server/web/index.html
 
 - 未部署（按约定部署需单独走预检 → 构建 → 备份切换 → 验收，且需你确认）。
 - 未提交 git。
+
+## 指纹泄露面分析（2026-11-16 实测）
+
+用「本地回显服务器 + 真实 Chrome 157」建立基准，逐维度对比注册机的实际出网特征。
+**结论按危害排序**。
+
+### 1. TLS 指纹：唯一的决定性因素（已修）
+
+同一代理出口、同一时刻的对照实验：
+
+| 客户端 | 结果 |
+|---|---|
+| Python `urllib` + 完整 Chrome UA/`sec-ch-ua` | **连接被 Cloudflare 直接断开** |
+| `curl_cffi` `impersonate=chrome` | **HTTP/3 200** |
+
+决定性证据是「只改 UA 不改 TLS」那组：UA 和 client hints 全部伪造正确，
+仍然被断。说明判据在 TLS 层，`User-Agent` 完全不参与。
+
+原因是 Python 用系统 LibreSSL：ClientHello 的 cipher 顺序、支持曲线、扩展集合、
+GREASE 全和 Chrome 的 BoringSSL 不同——这就是 JA3/JA4 的原料，是站点第一眼看到的东西。
+
+修复：`Transport` 默认走 `curl_cffi`；`urllib` 只在没装库时降级，且
+`tls_is_browserlike=False` 可被上层查询，不再静默降级。
+
+**这同时暴露了一个部署缺陷**：Dockerfile 里 altapi 的 venv 只装了 PySocks，
+注释还写着「纯标准库」。OVH 上线后会立刻退回被拦的那条路径。已改为
+`curl_cffi PySocks`。
+
+### 2. 头部集合：XHR 形态被伪装成导航（已修）
+
+`curl_cffi` 的 `impersonate` 默认套用**顶层导航**形态：
+
+| 头 | 默认（错） | XHR 实际 |
+|---|---|---|
+| `Sec-Fetch-Dest` | `document` | `empty` |
+| `Sec-Fetch-Mode` | `navigate` | `cors` |
+| `Sec-Fetch-Site` | `none` | `same-origin` |
+| `Sec-Fetch-User` | `?1` | 不存在 |
+| `Upgrade-Insecure-Requests` | `1` | 不存在 |
+| `Priority` | `u=0, i` | 不存在 |
+
+带着导航头等于自报「我不是页面内请求」。注意**必须用 `None` 才能摘掉**，
+空串会退化成「去掉值但保留头」。
+
+另发现原实现缺 `Accept-Encoding`：urllib 只能发 `identity`，真实 Chrome 发
+`gzip, deflate, br, zstd`。这个头不能手写——声称支持 `br` 却解不开会让响应体坏掉，
+必须由传输层按实际编码能力决定。
+
+### 3. IP 关联：4 个出口是同一 /24（未修，需换池）
+
+```
+51.222.52.200 / .201 / .202 / .203
+```
+
+同一 /24、同一 ASN，Cloudflare 侧还落在同一 colo（实测 `cf-ray` 全是 `YYZ`）。
+按 IP 轮换对多账号**几乎没有去关联效果**——站点可以按 /24 或 ASN 聚合。
+
+建议：出口按 /24 分散，或至少跨 ASN。这是当前号池最大的关联风险。
+
+### 4. 用户名字符串生成模式（未修）
+
+对比两批账号：
+
+| 特征 | 我生成的(10) | 另一批(13) |
+|---|---|---|
+| 保留短横 | 6 | 3 |
+| 含下划线 | 3 | 6 |
+| 首字符为数字 | 0 | 4 |
+
+我的 `username_from_email()` 是「去点号后截断」，另一批是「保留原名」。两套都
+可被分离；但单个账号内部看不出异常，只有横向对比全体才显现。若要减弱，应从
+邮箱本地部分的样式继承随机性，而不是统一套一个清洗函数。
+
+### 5. 时序：已处理
+
+抓包中人工操作间隔中位 0.97s、1–20s 占 19%；注册机已实现：
+- 查信轮询 `POLL_LO..POLL_HI = 3..9s` 随机（原固定 4.0s 是明显机器节拍）
+- 核心步骤间 `PACE_STEP 2.0–4.5s`、注册后 `3–6s`、登录后 `1.5–3s`
+- **收码后 `9–28s` 长尾**：脚本是「信到就填」，真人要切窗、找信、复制、粘贴，
+  这是整条链路最像机器人的瞬间，所以给了明显更长的区间
+- `pace_scale` 可从设置页整体调快慢
+
+### 6. 未构成泄露的项
+
+- `New-Api-User: -1` 在未登录阶段是浏览器同样会发的值，不是异常。
+- `Origin`/`Referer` 与站点同源，与真实页面一致。
+- Cookie 只有 `session`，无额外追踪位。
+
+### 复现方法
+
+```bash
+# 回显服务器看服务器侧真实收到的头
+python3 -c 'import http.server,json;...' # 见本次分析脚本
+
+# 对照：LibreSSL 被拦 vs curl_cffi 通过（同一代理）
+python3 - <<'PY'
+# urllib 版本 -> Remote end closed connection without response
+# curl_cffi 版本 -> 200 h3
+PY
+```

@@ -31,19 +31,19 @@ type altAutoSettings = altapisignupstore.AutoSettings
 
 // altAutoStatus 是自动补号的可观测状态，给前端展示。
 type altAutoStatus struct {
-	Enabled      bool      `json:"enabled"`
-	Running      bool      `json:"running"`
-	Available    int       `json:"available"`
-	PoolTotal    int       `json:"poolTotal"`
-	Importable   int       `json:"importable"`   // 有 Key 未入池的候选数
-	Queued       int       `json:"queued"`       // 待注册候选数
-	NextRunAt    time.Time `json:"nextRunAt"`
-	NextReason   string    `json:"nextReason"`
-	LastCheck    time.Time `json:"lastCheck"`
-	LastAction   string    `json:"lastAction"`
-	LastError    string    `json:"lastError"`
-	Registering  bool      `json:"registering"`
-	RoundCount   int       `json:"roundCount"`   // 本次进程内触发次数
+	Enabled     bool      `json:"enabled"`
+	Running     bool      `json:"running"`
+	Available   int       `json:"available"`
+	PoolTotal   int       `json:"poolTotal"`
+	Importable  int       `json:"importable"` // 有 Key 未入池的候选数
+	Queued      int       `json:"queued"`     // 待注册候选数
+	NextRunAt   time.Time `json:"nextRunAt"`
+	NextReason  string    `json:"nextReason"`
+	LastCheck   time.Time `json:"lastCheck"`
+	LastAction  string    `json:"lastAction"`
+	LastError   string    `json:"lastError"`
+	Registering bool      `json:"registering"`
+	RoundCount  int       `json:"roundCount"` // 本次进程内触发次数
 }
 
 // altAutoManager 持有自动补号的运行时状态。
