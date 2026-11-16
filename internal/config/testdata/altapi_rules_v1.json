@@ -1,0 +1,274 @@
+{
+  "errors": [
+    {
+      "id": "altapi-token-invalid",
+      "scope": "account",
+      "action": "hard-quarantine",
+      "when": {
+        "bodyContains": [
+          "Invalid token",
+          "access token 无效",
+          "无效的令牌",
+          "令牌已过期",
+          "Token has expired",
+          "该令牌无权访问"
+        ]
+      },
+      "note": "Key 无效/被禁用/已过期（实测 HTTP 200 + success:false）：硬隔离，需重新生成 Key 或确认账号未封"
+    },
+    {
+      "id": "altapi-user-banned",
+      "scope": "account",
+      "action": "hard-quarantine",
+      "when": {
+        "bodyContains": [
+          "该用户已被封禁",
+          "用户已被禁用",
+          "user has been banned",
+          "account is banned",
+          "已被封号"
+        ]
+      },
+      "note": "账号被封禁，需人工处理"
+    },
+    {
+      "id": "altapi-model-not-support",
+      "scope": "model",
+      "action": "cooldown",
+      "when": {
+        "bodyContains": [
+          "MODEL_NOT_SUPPORT",
+          "no deployment node exists",
+          "无可用渠道",
+          "没有可用渠道"
+        ]
+      },
+      "reset": {
+        "fallback": "30m",
+        "max": "6h"
+      },
+      "downstreamStatus": 404,
+      "note": "该账号当前分组下此模型无部署节点（模型列表里有也不代表能调）：只冷却本号×模型，换号继续；不判封号"
+    },
+    {
+      "id": "altapi-model-unknown",
+      "scope": "model",
+      "action": "ignore",
+      "when": {
+        "bodyContains": [
+          "is not a valid model",
+          "model_not_found",
+          "模型不存在"
+        ]
+      },
+      "downstreamStatus": 404,
+      "note": "模型 ID 本身不存在：不扣健康分，也不换号（换号必然再失败）"
+    },
+    {
+      "id": "altapi-insufficient-quota",
+      "scope": "account",
+      "action": "cooldown",
+      "when": {
+        "bodyContains": [
+          "额度不足",
+          "余额不足",
+          "insufficient_user_quota",
+          "insufficient quota",
+          "预扣费额度失败",
+          "insufficient_balance",
+          "insufficient credits",
+          "用户额度不足"
+        ]
+      },
+      "reset": {
+        "fallback": "10m",
+        "max": "6h",
+        "escalate": true
+      },
+      "refreshQuota": true,
+      "downstreamStatus": 503,
+      "note": "钱包余额不够付这次调用：冷却并立即刷新真实余额（quota/quota_per_unit）；连续命中冷却翻倍，成功一次清零"
+    },
+    {
+      "id": "altapi-model-forbidden",
+      "scope": "model",
+      "action": "cooldown",
+      "when": {
+        "statuses": [
+          403
+        ],
+        "bodyContains": [
+          "无权限使用该模型",
+          "not allow to use this model",
+          "分组无权限",
+          "model_forbidden"
+        ]
+      },
+      "reset": {
+        "fallback": "5m"
+      },
+      "downstreamStatus": 403,
+      "note": "当前分组无权使用该模型：冷却本号×模型并换号；不推断为封禁"
+    },
+    {
+      "id": "altapi-rate-limit",
+      "scope": "account",
+      "action": "cooldown",
+      "when": {
+        "statuses": [
+          429
+        ],
+        "bodyContains": [
+          "请求过于频繁",
+          "too many requests",
+          "rate limit",
+          "rate_limit"
+        ]
+      },
+      "reset": {
+        "header": "Retry-After",
+        "format": "retry-after",
+        "fallback": "60s",
+        "max": "15m"
+      },
+      "downstreamStatus": 429,
+      "note": "限流：同账号多把 Key 共享限额，换 Key 绕不过去；遵守 Retry-After"
+    },
+    {
+      "id": "altapi-cf-block",
+      "scope": "account",
+      "action": "cooldown",
+      "when": {
+        "statuses": [
+          429,
+          403
+        ],
+        "headers": {
+          "CF-Ray": ""
+        }
+      },
+      "reset": {
+        "header": "Retry-After",
+        "format": "retry-after",
+        "fallback": "30s",
+        "max": "10m"
+      },
+      "downstreamStatus": 503,
+      "note": "Cloudflare 边缘限速（同 IP 突发，实测空响应 429）：短冷却后换出口，勿频繁重试"
+    },
+    {
+      "id": "altapi-upstream-error",
+      "scope": "account",
+      "action": "cooldown",
+      "when": {
+        "bodyContains": [
+          "当前分组上游负载已饱和",
+          "上游负载已饱和",
+          "upstream connect error",
+          "no available channel",
+          "bad response status code"
+        ]
+      },
+      "reset": {
+        "header": "Retry-After",
+        "format": "retry-after",
+        "fallback": "5s",
+        "max": "2m"
+      },
+      "downstreamStatus": 502,
+      "note": "altapi 上游故障或渠道饱和：短冷却换号；不是封禁也不是余额耗尽"
+    },
+    {
+      "id": "altapi-bad-request",
+      "scope": "model",
+      "action": "ignore",
+      "when": {
+        "statuses": [
+          400
+        ],
+        "bodyContains": [
+          "invalid_request_error",
+          "messages",
+          "max_tokens",
+          "缺少必要参数",
+          "参数错误"
+        ]
+      },
+      "downstreamStatus": 400,
+      "note": "请求参数错误：不扣健康分、不换号"
+    },
+    {
+      "id": "altapi-server-error",
+      "scope": "account",
+      "action": "cooldown",
+      "when": {
+        "statuses": [
+          500,
+          502,
+          503,
+          504
+        ]
+      },
+      "reset": {
+        "header": "Retry-After",
+        "format": "retry-after",
+        "fallback": "5s",
+        "max": "1m"
+      },
+      "note": "服务端错误：短暂冷却，仅在未输出时可重试"
+    }
+  ],
+  "retries": [
+    {
+      "id": "altapi-token-stop",
+      "decision": "stop",
+      "when": {
+        "bodyContains": [
+          "Invalid token",
+          "access token 无效",
+          "该令牌无权访问"
+        ]
+      },
+      "note": "Key 失效是账号自身属性，换号只会用同一把坏 Key 再撞一次，先停下"
+    },
+    {
+      "id": "altapi-bad-request-stop",
+      "decision": "stop",
+      "when": {
+        "statuses": [
+          400,
+          413,
+          422
+        ],
+        "bodyContains": [
+          "invalid_request_error",
+          "缺少必要参数",
+          "参数错误"
+        ]
+      },
+      "note": "调用方参数错误：换号必然再失败，停止"
+    },
+    {
+      "id": "altapi-model-unknown-stop",
+      "decision": "stop",
+      "when": {
+        "bodyContains": [
+          "is not a valid model",
+          "model_not_found",
+          "模型不存在"
+        ]
+      },
+      "note": "模型 ID 不存在：停止，不遍历号池"
+    },
+    {
+      "id": "altapi-rate-stop",
+      "decision": "stop",
+      "when": {
+        "statuses": [
+          429
+        ]
+      },
+      "note": "同一账号多 Key 共享限额，同 IP 共享 CF 限速：默认不靠换号绕过，客户端按 Retry-After 等待"
+    }
+  ]
+}

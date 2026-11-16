@@ -1237,9 +1237,9 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 			res.accountScoped = true
 		}
 		// Legacy pools let account cooldown/quarantine override a stop rule.
-		// Deploy applies the cooldown but honors explicit stop rules (e.g.
-		// organization/IP rate limits must not trigger key rotation).
-		if retry != nil && (config.NativeChatOnly(acct.Provider) || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
+		// Native-chat pools and ALTAPI apply health actions but honor an
+		// explicit stop: a rate limit/challenge must not trigger key rotation.
+		if retry != nil && (config.NativeChatOnly(acct.Provider) || acct.Provider == config.ProviderALTAPI || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
 			ev.switchAccount = false
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"

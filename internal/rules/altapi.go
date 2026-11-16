@@ -12,8 +12,10 @@ package rules
 //	      "type":"upstream_error","param":"","code":"MODEL_NOT_SUPPORT"}}
 //	200 {"message":"无权进行此操作，access token 无效","success":false}
 //
-// new-api answers 200 for a large share of refusals, which is why every rule
-// below matches body text or body code, never status alone.
+// new-api answers 200 for many refusals, so specific business rules match
+// body text instead of relying on status alone. Status fallbacks still cover
+// documented 429/5xx responses, including empty bodies.
+// Official examples: https://altapi.ai/docs (Error Code Reference).
 //
 // Key facts that shape these rules:
 //   - One wallet backs every model (`quota` on /api/user/self). Exhausting it
@@ -34,10 +36,7 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 		// The key itself is rejected. altapi returns this with HTTP 200, so a
 		// status-only rule would silently pass it through as a success.
 		{ID: "altapi-token-invalid", Scope: ScopeAccount, Action: ActionHardQuarantine,
-			When: Match{BodyContains: []string{
-				"Invalid token", "access token 无效", "无效的令牌", "令牌已过期",
-				"Token has expired", "该令牌无权访问",
-			}},
+			When: altapiInvalidTokenMatch(),
 			Note: "Key 无效/被禁用/已过期（实测 HTTP 200 + success:false）：硬隔离，需重新生成 Key 或确认账号未封"},
 
 		{ID: "altapi-user-banned", Scope: ScopeAccount, Action: ActionHardQuarantine,
@@ -62,7 +61,17 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 			When: Match{BodyContains: []string{"MODEL_NOT_SUPPORT", "no deployment node exists",
 				"无可用渠道", "没有可用渠道"}},
 			Reset: &Reset{Fallback: "30m", Max: "6h"},
-			Note: "该账号当前分组下此模型无部署节点（模型列表里有也不代表能调）：只冷却本号×模型，换号继续；不判封号"},
+			Note:  "该账号当前分组下此模型无部署节点（模型列表里有也不代表能调）：只冷却本号×模型，换号继续；不判封号"},
+
+		// The official example deliberately combines missing model and denied
+		// model access. It is not proof that the ID is invalid for every key:
+		// keep it model-scoped, ahead of generic invalid_request_error/CF rules.
+		// Do not bind it to 403: new-api also wraps business refusals in 200/400.
+		{ID: "altapi-model-forbidden", Scope: ScopeModel, Action: ActionCooldown, DownstreamStatus: 403,
+			When: Match{BodyContains: []string{"无权限使用该模型", "not allow to use this model", "分组无权限", "model_forbidden",
+				"The model does not exist or you do not have access to it"}},
+			Reset: &Reset{Fallback: "5m"},
+			Note:  "当前 Key/分组无权使用模型或模型不可用：只冷却本号×模型并换号；不推断全池模型不存在或账号封禁"},
 
 		// The caller asked for a model nobody serves. Not an account fault:
 		// retrying another account wastes quota on a guaranteed failure.
@@ -81,29 +90,21 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 				"用户额度不足",
 			}},
 			Reset: &Reset{Fallback: "10m", Max: "6h", Escalate: true},
-			Note: "钱包余额不够付这次调用：冷却并立即刷新真实余额（quota/quota_per_unit）；连续命中冷却翻倍，成功一次清零"},
+			Note:  "钱包余额不够付这次调用：冷却并立即刷新真实余额（quota/quota_per_unit）；连续命中冷却翻倍，成功一次清零"},
 
-		// Group has no access to the model (vip vs default). Recoverable:
-		// the group can change, and another account's group may differ.
-		{ID: "altapi-model-forbidden", Scope: ScopeModel, Action: ActionCooldown, DownstreamStatus: 403,
-			When: Match{Statuses: []int{403},
-				BodyContains: []string{"无权限使用该模型", "not allow to use this model", "分组无权限", "model_forbidden"}},
-			Reset: &Reset{Fallback: "5m"},
-			Note: "当前分组无权使用该模型：冷却本号×模型并换号；不推断为封禁"},
-
-		// new-api's own rate limiter, per token or per user.
-		{ID: "altapi-rate-limit", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 429,
-			When: Match{Statuses: []int{429},
-				BodyContains: []string{"请求过于频繁", "too many requests", "rate limit", "rate_limit"}},
-			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "60s", Max: "15m"},
-			Note: "限流：同账号多把 Key 共享限额，换 Key 绕不过去；遵守 Retry-After"},
-
-		// Cloudflare edge throttling (measured on the console: empty 429 body
-		// while logging in rapidly). Per-IP, not per-account.
+		// CF-Ray is also present on ordinary origin responses. Only a positive
+		// challenge signal distinguishes the edge from an upstream refusal.
 		{ID: "altapi-cf-block", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
-			When: Match{Statuses: []int{429, 403}, Headers: map[string]string{"CF-Ray": ""}},
+			When:  altapiCFChallengeMatch(),
 			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "30s", Max: "10m"},
-			Note: "Cloudflare 边缘限速（同 IP 突发，实测空响应 429）：短冷却后换出口，勿频繁重试"},
+			Note:  "明确 Cf-Mitigated: challenge 的边缘挑战：短冷却并停止本次换号；仅有 CF-Ray 不判封禁"},
+
+		// Catch every documented 429, including an empty body. No automatic
+		// replay: the retry rule stops this request after applying the cooldown.
+		{ID: "altapi-rate-limit", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 429,
+			When:  Match{Statuses: []int{429}},
+			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "60s", Max: "15m", Escalate: true},
+			Note:  "限流：遵守 Retry-After；无有效提示时连续命中退避翻倍（60秒至15分钟），成功清零；停止本次换号，由客户端稍后重试"},
 
 		// Upstream provider failed on altapi's side. Not this account's fault,
 		// but the request cannot be served by it right now.
@@ -114,7 +115,7 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 			When: Match{BodyContains: []string{"当前分组上游负载已饱和", "上游负载已饱和",
 				"upstream connect error", "no available channel", "bad response status code"}},
 			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "5s", Max: "2m"},
-			Note: "altapi 上游故障或渠道饱和：短冷却换号；不是封禁也不是余额耗尽"},
+			Note:  "altapi 上游故障或渠道饱和：短冷却换号；不是封禁也不是余额耗尽"},
 
 		// The request itself is malformed. Never rotate accounts on this.
 		{ID: "altapi-bad-request", Scope: ScopeModel, Action: ActionIgnore, DownstreamStatus: 400,
@@ -127,7 +128,7 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 		{ID: "altapi-server-error", Scope: ScopeAccount, Action: ActionCooldown,
 			When:  Match{Statuses: []int{500, 502, 503, 504}},
 			Reset: &Reset{Header: "Retry-After", Format: "retry-after", Fallback: "5s", Max: "1m"},
-			Note: "服务端错误：短暂冷却，仅在未输出时可重试"},
+			Note:  "服务端错误：短暂冷却，仅在未输出时可重试"},
 	}
 }
 
@@ -135,11 +136,14 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 func DefaultALTAPIRetryRules() []RetryRule {
 	return []RetryRule{
 		{ID: "altapi-token-stop", Decision: DecisionStop,
-			When: Match{BodyContains: []string{"Invalid token", "access token 无效", "该令牌无权访问"}},
-			Note: "Key 失效是账号自身属性，换号只会用同一把坏 Key 再撞一次，先停下"},
+			When: altapiInvalidTokenMatch(),
+			Note: "Key 失效：隔离当前账号后停止本次请求，核对或更换 Key；不覆盖显式 stop"},
+		// invalid_request_error alone also describes model access errors.
+		// Genuine generic 400s already stop via the ignore error rule; only
+		// concrete parameter failures belong in this explicit stop matcher.
 		{ID: "altapi-bad-request-stop", Decision: DecisionStop,
 			When: Match{Statuses: []int{400, 413, 422},
-				BodyContains: []string{"invalid_request_error", "缺少必要参数", "参数错误"}},
+				BodyContains: []string{"messages", "max_tokens", "缺少必要参数", "参数错误", "invalid JSON", "missing required"}},
 			Note: "调用方参数错误：换号必然再失败，停止"},
 		{ID: "altapi-model-unknown-stop", Decision: DecisionStop,
 			When: Match{BodyContains: []string{"is not a valid model", "model_not_found", "模型不存在"}},
@@ -147,5 +151,20 @@ func DefaultALTAPIRetryRules() []RetryRule {
 		{ID: "altapi-rate-stop", Decision: DecisionStop,
 			When: Match{Statuses: []int{429}},
 			Note: "同一账号多 Key 共享限额，同 IP 共享 CF 限速：默认不靠换号绕过，客户端按 Retry-After 等待"},
+		{ID: "altapi-cf-stop", Decision: DecisionStop,
+			When: altapiCFChallengeMatch(),
+			Note: "明确的 Cloudflare 挑战停止本次请求，不跨账号或出口重放"},
 	}
+}
+
+func altapiInvalidTokenMatch() Match {
+	return Match{BodyContains: []string{
+		"Invalid token", "access token 无效", "无效的令牌", "令牌已过期",
+		"Token has expired", "该令牌无权访问",
+		"Invalid API key", "invalid_api_key", "authentication_error",
+	}}
+}
+
+func altapiCFChallengeMatch() Match {
+	return Match{Statuses: []int{429, 403}, Headers: map[string]string{"Cf-Mitigated": "challenge"}}
 }

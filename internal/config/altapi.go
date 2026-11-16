@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -127,10 +129,14 @@ func (c *Config) normalizeALTAPI() error {
 			return fmt.Errorf("altapi: %w", err)
 		}
 	}
-	if c.ALTAPIErrorRules == nil {
+	// Match only the complete, untouched factory tables shipped in 4cc0593.
+	// Hash canonical typed JSON (not input file bytes), so whitespace does
+	// not matter; notes/order/disabled/empty/operator additions all do.
+	// The frozen tables live in testdata/altapi_rules_v1.json for regression.
+	if c.ALTAPIErrorRules == nil || isShippedALTAPIRules(c.ALTAPIErrorRules, "c4f56f1ddd539472a5c603b9c419aec9cf69e0fbee8b2ae99291cdc78b9c2fac") {
 		c.ALTAPIErrorRules = rules.DefaultALTAPIErrorRules()
 	}
-	if c.ALTAPIRetryRules == nil {
+	if c.ALTAPIRetryRules == nil || isShippedALTAPIRules(c.ALTAPIRetryRules, "bd87479ec4430cc57a7da083a311f054bc39844cad32d6bcc0bfe1ef7a8a90ac") {
 		c.ALTAPIRetryRules = rules.DefaultALTAPIRetryRules()
 	}
 	for _, rule := range c.ALTAPIErrorRules {
@@ -147,4 +153,9 @@ func (c *Config) normalizeALTAPI() error {
 		return fmt.Errorf("altapi: %w", err)
 	}
 	return nil
+}
+
+func isShippedALTAPIRules(rs any, checksum string) bool {
+	b, err := json.Marshal(rs)
+	return err == nil && fmt.Sprintf("%x", sha256.Sum256(b)) == checksum
 }
