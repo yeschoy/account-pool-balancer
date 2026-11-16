@@ -38,7 +38,17 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：ALTapi 注册机 curl_cffi TLS 指纹（2026-11-16 13:43 UTC，82d072b）
+## 当前部署：ALTapi 注册机 SOCKS 远端解析修复（2026-11-16 13:52 UTC，4b28ede）
+
+- `82d072b` 上线后用户首次点注册（候选 `sawmill.gapes.8i@…`，代理 `51.222.52.202:1080`）即报 `Failed to perform, curl: (35) BoringSSL SSL_connect: Connection closed abruptly … altapi.ai:443`。根因不是 TLS 指纹：`socks5://` 在 libcurl 语义里**本地解析 DNS**，代理按裸 IP 连 Cloudflare 被掐；urllib/PySocks 路径同样 `rdns=False`。Go 侧 SOCKS 拨号器一直远端解析，所以下午 101 个账号推理探测全通、只有注册机出事（同一现象下午探测脚本也踩过，`socks5h` 即通）。
+- 线上容器内同一代理 A/B（凭据仅远端读取）：镜像内旧脚本 `--probe` 复现 curl 35；修复后脚本 `--probe` 200（TokenPower / `quota_per_unit=500000`），`--probe-proxy` 出口 `51.222.52.202`、transport `curl_cffi/chrome`。
+- 修法 `4b28ede`：`remote_dns_proxy()` 把 `socks5://→socks5h://`、`socks4://→socks4a://`，curl_cffi 与 urllib 两条路径统一走它，配置里的代理 URL 不用改；`test_altapi_registrar.py` 增 7 条用例（35/35）；`docs/altapi-pool.md` 补 1b 节。Dockerfile 未变。
+- 预检：容器内无注册机进程；干净 `git archive 4b28ede` 到 `/home/ubuntu/project/account-pool-balancer-releases/20261116T135115Z-4b28ede`（799 文件，注册机 SHA256 `fb0b58f9…` 本地/远端/镜像内三处一致）。
+- 构建 **13:51:36.014–13:52:10.357**（34s），镜像 `account-pool-balancer:release-4b28ede-20261116T135115Z`（ID `sha256:1edb0eb2d291a41073001017abcb2aa83836ecb2febf34629279e11b6a876021`，revision 已设）；离线 1000:1000 验证 venv `curl_cffi 0.17.0`。备份 **13:52:11.467–13:52:13.310** `/home/ubuntu/backups/account-pool-balancer/20261116T135115Z-altapi-socks5h-4b28ede/data.tgz`（135 条目，SHA256 `7de19ea2c7252cc6370d73fdbf461d9a6d4f1847f8a199be7622614acc64cbde`）。旧镜像 `rollback-20261116T135115Z`（即 82d072b）。
+- 切换 **13:52:13.519–13:52:14.065**，**13:52:44.210 healthy**。验收 13:52:44：revision `4b28ede…`、restarts=0、OOM=false、user 1000:1000、Healthcheck 在；别名含 `opendesign-balancer`，`new-api` 容器到两别名 `/healthz` 均 `{"ok":true}`，宿主机 200；容器内注册机 SHA256 一致；config 321 账号（altapi 101）、revision 6118、7 个 `*-signup.json` 在。
+- **边界**：验证到的是 `--probe` 只读请求经同一代理通过 TLS 与 Cloudflare，**还没有用新镜像在线上跑完一次真实注册**（发码→填码→拿 Key）。候选 `sawmill.gapes.8i` 仍是失败态，需在控制台点「重试」。
+
+## 部署：ALTapi 注册机 curl_cffi TLS 指纹（2026-11-16 13:43 UTC，82d072b）
 
 - 用户先要求检测 altapi 号池封号情况：在 OVH 远端内存读 `/data/config.json` 的 101 个 `provider=altapi` 账号，每个账号走自己的代理真实发一次 `claude-sonnet-5` 推理（`max_tokens=5`）并用 session 读 `/api/user/self`。**101/101 推理 200、`status=1`、无封禁/Key 失效/额度不足**，余额合计 $998.10（最低 $4.99）。探测脚本第一轮 89 个代理账号全 000，是 curl `socks5://` 本地解析 DNS 导致 TLS 被掐断，改 `socks5h://` 后全通；Go 的 SOCKS 拨号器本就远端解析，线上推理不受影响。脚本已从服务器删除，凭据未回显未落盘。
 - 随后用户要求提交推送并部署工作区遗留的 altapi 改动（`82d072b`）：注册机传输层改 `curl_cffi impersonate=chrome`（实测同一代理出口 urllib+完整 Chrome UA 被 Cloudflare 断连、curl_cffi 200）、XHR 摘掉导航头、Dockerfile 的 `/opt/altapi-signup` venv 增装 `curl_cffi`（原只装 PySocks，上线会静默退回被拦路径）、`docs/altapi-pool.md` 指纹分析；6 个 Go 文件仅 gofmt。本地 `go build`/`go vet`/altapi 相关 Go 测试/`test_altapi_registrar.py` 28 条全过，diff 无凭据。
