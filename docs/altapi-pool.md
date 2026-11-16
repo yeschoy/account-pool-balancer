@@ -143,7 +143,7 @@ ALTAPI 执行层明确保留 `stop` 优先级：仍应用冷却/硬隔离，但�
 
 2026-11-16 修复依据：[官方 Docs 的 Error Code Reference / Common Error Examples](https://altapi.ai/docs)。`internal/server/altapi_error_policy_test.go` 通过本地 HTTP Mock 验证规则→执行层→调度器及日志、设置保存/重载和已输出流不重放；`internal/config/altapi_rules_migration_test.go` 使用冻结的旧默认表验证迁移与自定义保护。旧实现通过 Go overlay 重跑时能复现对应失败，不能只用纯匹配测试代表实际 stop 已生效。
 
-本节描述本地实现与 Mock 验证；**不表示已提交、已部署或已对真实上游复验**。这轮没有修改线上配置或发真实推理。
+规则修复已在提交 `aa9e9fb` 上线（2026-11-16 19:08 UTC），线上管理API已核验11条错误规则/5条重试规则生效，双内网及公网入口验收通过，详见 [OVH部署记录](ovh-deployment.md)。未主动制造真实上游错误或发推理；错误/重试行为验证仍为本地Mock，不冒充真实故障复验。
 
 ## 注册机
 

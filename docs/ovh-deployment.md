@@ -38,7 +38,27 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：ALTapi 注册机 SOCKS 远端解析修复（2026-11-16 13:52 UTC，4b28ede）
+## 当前部署：ALTAPI 官方错误规则与 stop 优先级修复（2026-11-16 19:08 UTC，aa9e9fb）
+
+- 用户授权提交、推送、部署并清理本轮临时材料。业务提交 **`aa9e9fbd8e74f62bc61be0ba68463ad2f86a477c`** 已推送 master；仅7个规则/配置/执行层与回归文件，未夹带其他会话未提交的逆向报告及注册说明。复用已通过的全量 normal/race/vet/build 与重点链路竞态10轮，不重复全量测试、不新建 Trellis 任务。
+- 覆盖官方 `Invalid API key provided` / `authentication_error`、模型不存在或无权限混合文案；429包括空正文冷却后停止，fallback连续命中60秒起翻倍至15分钟；明确 `Cf-Mitigated: challenge` 才命中CF规则，不再只凭 `CF-Ray`。ALTAPI显式stop优先于冷却/隔离后的换号动作，其他池优先级不变；只升级完整未改的历史出厂规则，自定义/禁用/清空列表保留。
+- 一次预检确认原4b28ede healthy/零重启、仅odb进程、磁盘余量311.92GiB、双NewAPI内网入口可达。从干净 `git archive aa9e9fb` 提取803文件并核验全部SHA256，在正式release目录构建；未使用旧工作树构建。沿线上Compose全部配置只叠加image，保留UID1000:1000、bind mount、端口、环境、Healthcheck、资源及 `ai-internal` 两个兼容别名。
+- **19:08:36.816 UTC核心验收通过并立即反馈**：Docker healthy/0重启，无OOM；目标revision正确；NewAPI分别到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均成功。329账号、186条TH注册核心记录、其他注册库、routingSecret和18个原隔离均保留，配置文件完整字节未变、运行参数未变。
+- 管理API只读核验实际生效的 **11条错误规则/5条重试规则**，Key官方文案、CF挑战头和空429兜底均正确，revision6144；这次迁移在加载时作用于内存，未调用设置PUT，磁盘旧默认表在下次正常保存前仍可保留。管理员凭据仅取自远端既有环境、未回显或落本地，会话已退出。**未制造线上401/429、未发真实推理、未改采集/注册/代理或其他池设置**；失败行为由本地HTTP+Pool回归证明，不冒充真实上游故障复验。
+- **19:09:25.376 UTC公网验收**：真实未登录浏览器登录页可见；`/healthz` 与8个HTML引用的带版本查询串静态资源全部200，SHA256逐项等于部署提交；独立复核仍healthy/0重启/无OOM。详细回执已保存在远端正式备份目录 `deploy.json`。
+
+| 阶段 | UTC 2026-11-16 |
+|---|---|
+| 构建 | 19:07:55.383–19:08:02.958（7.58秒） |
+| 旧退出 / 完整备份 | 19:08:03.194 / 19:08:03.586–19:08:05.672 |
+| 切换请求 / 新启动 | 19:08:05.672 / 19:08:06.096 |
+| 首HTTP / Docker healthy | 19:08:07.220 / 19:08:36.462 |
+| 双内网入口 / 核心验收 | 19:08:36.700 / 19:08:36.816 |
+| 公网验收 | 19:09:25.376 |
+
+旧退出至首HTTP观测约4.03秒，不作为精确停机；构建和健康等待不计停机。镜像 `account-pool-balancer:release-aa9e9fb-20261116T190735Z`（ID `sha256:abf34d347500de8aae51583381986aece498257968b00a35f276075b91d0340f`）；正式源码 `/home/ubuntu/project/account-pool-balancer-releases/20261116T190735Z-aa9e9fb`；完整备份 `/home/ubuntu/backups/account-pool-balancer/20261116T190735Z-altapi-error-rules-aa9e9fb/data.tar.gz`（SHA256 `890c8b3e2c7285bf1ba8a8a7c3e98475e01b1d3468a885382bf844668fcc6f7e`）；回退镜像 `account-pool-balancer:rollback-20261116T190735Z`保留。回退不自动用旧data覆盖新写入。本地本轮审计/修复/部署临时材料按用户授权清理，其他会话材料、业务文档、Trellis与远端正式release/备份/回退镜像保留；后续仅补记录不重建。
+
+## 部署：ALTapi 注册机 SOCKS 远端解析修复（2026-11-16 13:52 UTC，4b28ede）
 
 - `82d072b` 上线后用户首次点注册（候选 `sawmill.gapes.8i@…`，代理 `51.222.52.202:1080`）即报 `Failed to perform, curl: (35) BoringSSL SSL_connect: Connection closed abruptly … altapi.ai:443`。根因不是 TLS 指纹：`socks5://` 在 libcurl 语义里**本地解析 DNS**，代理按裸 IP 连 Cloudflare 被掐；urllib/PySocks 路径同样 `rdns=False`。Go 侧 SOCKS 拨号器一直远端解析，所以下午 101 个账号推理探测全通、只有注册机出事（同一现象下午探测脚本也踩过，`socks5h` 即通）。
 - 线上容器内同一代理 A/B（凭据仅远端读取）：镜像内旧脚本 `--probe` 复现 curl 35；修复后脚本 `--probe` 200（TokenPower / `quota_per_unit=500000`），`--probe-proxy` 出口 `51.222.52.202`、transport `curl_cffi/chrome`。
