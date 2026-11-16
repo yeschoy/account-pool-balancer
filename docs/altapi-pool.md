@@ -92,7 +92,7 @@ GET /dashboard/billing/usage    Authorization: Bearer <key>
 `baseUrl` 必须以 `/v1` 结尾（控制面 `/api/*` 在同源，由 `ALTAPIOrigin()` 推导）。
 `quotaPerUnit` 必填区间 1..1e9。
 
-### /v1/models 固定目录后台刷新（本地代码已接入，尚未部署）
+### /v1/models 固定目录后台刷新（已部署 374fe20，2026-11-16）
 
 - ALTAPI服务启动时在后台读取一次，之后固定**每小时**扫描所有启用账号，按分组合并/去重目录并生成不可变JSON。推理接口、Key权限和原生模型ID不变。
 - 下游 `/v1/models` 先鉴权、再读取所属分组快照；**请求本身不遍历账号、不合并/过滤JSON、不发上游请求**，包括冷启动未就绪时。未就绪仍返回 `502 models_unavailable`，不会让首个请求承担全池扫描。
@@ -101,19 +101,19 @@ GET /dashboard/billing/usage    Authorization: Bearer <key>
 - 原 `routing.modelsCacheSec` 不再控制ALTAPI列表，设置页隐藏此无效项并显示固定每小时说明；其他号池不变。账号自身的模型权限同步/额度轮询仍按原设置执行，与发布列表是独立用途。
 - 后台任务挂在服务ctx，取消会中止HTTP/账号循环，服务退出等待结束。纯内存缓存不落盘。
 
-### 低余额自动停用（本地代码已接入，尚未部署）
+### 低余额自动停用（已部署并开启 $0.50，2026-11-16）
 
 入口：**ALTapi → 路由设置 → ALTapi 低余额停用**。
 
 - `altapi.lowBalanceDisable`：独立开关，默认 `false`（不改变现有调度）。
-- `altapi.minBalanceUsd`：最低余额，USD，允许 0..1e9，支持小数；按用户要求，新建配置及表单缺省预填 **0.50**（低于 $0.50 停用，等于 $0.50 可用），开关仍默认关闭。已有配置值不被覆盖，包括显式设置的0；线上尚未设置或部署。
+- `altapi.minBalanceUsd`：最低余额，USD，允许 0..1e9，支持小数；按用户要求，新建配置及表单缺省预填 **0.50**（低于 $0.50 停用，等于 $0.50 可用），开关仍默认关闭。已有配置值不被覆盖，包括显式设置的0；本次用户授权部署后，通过管理API将线上开关开启、阈值设为 **0.50**，GET与磁盘一致，其他配置/自动补号开关保留。
 - 开启后，只将**成功读取、新鲜且属于当前 session/UID/推理Key/Base/代理的真实余额严格低于阈值**的账号排除调度，状态 `low-balance`（低余额停用）。金额等于阈值仍可用；阈值0不会排除恰好0余额。
 - 不改账号的手动 `enabled`，不施加冷却或隔离；刷新余额达到阈值、降低阈值或关闭开关后自动恢复资格，但不解除手动禁用/隔离。已在途请求不取消，已有会话下一次调度同样受阈值约束。
 - 真实余额需要有效 session cookie + UID，沿用本池额度轮询及号池账号的手动刷新。读取失败/未知/过期/凭据已变更不当作0、不据此停用；旧无来源快照必须先成功刷新才参与判断。关闭额度轮询后快照仍会过期，不是永久禁用。
 - 账号列表/ALTapi概览显示低余额停用；选号预览、实际选号和自动补号的可用数使用同一余额条件。此设置不会自动开启注册或补号，但**若原先已经开启阈值补号，低余额账号不再计入可用数，可能触发原有补号流程**。
 - `GET|PUT /api/settings?provider=altapi` 投影并保存此设置；缺省字段保留旧值，非法金额拒绝且不改变内存或磁盘。只写本池，不影响其他池。与上游指定余额不足错误的“仅本次换号”规则独立。
 
-本地验证：配置边界、真实HTTP Mock余额刷新/历史保留/来源隔离/重启快照/不可变读数、阈值调度/粘性恢复/预览/自动补号计数、设置GET/PUT与磁盘重载/非法回滚/跨池隔离、前端加载编辑提交。相关测试为 `internal/{config/altapi_test.go,quota/altapi_balance_threshold_test.go,pool/altapi_balance_test.go,server/altapi_balance_settings_test.go,server/altapi_web_test.js}`。未设置线上阈值、未执行真实上游验收。
+本地验证：配置边界、真实HTTP Mock余额刷新/历史保留/来源隔离/重启快照/不可变读数、阈值调度/粘性恢复/预览/自动补号计数、设置GET/PUT与磁盘重载/非法回滚/跨池隔离、前端加载编辑提交。相关测试为 `internal/{config/altapi_test.go,quota/altapi_balance_threshold_test.go,pool/altapi_balance_test.go,server/altapi_balance_settings_test.go,server/altapi_web_test.js}`。线上374fe20已通过健康/双NewAPI内网入口/公网资源hash与管理API落盘验收；阈值已开启为0.50，指定余额不足规则已投影为switch-account（12条错误/5条重试）。未主动制造上游错误、发真实推理或人为扣减余额验证，不将配置验收当成真实上游故障复验。
 
 ## 号池账号
 
