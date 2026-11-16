@@ -23,7 +23,20 @@ REGISTRAR = HERE / "altapi_registrar.py"
 
 # 只有这两条规则在 Python 里有对应实现：余额换算只发生在 Go 端，
 # 所以 balance_usd 只由 Go 测试校验，这里跳过（不是遗漏）。
-WANTED = ("normalize_uid", "session_value")
+WANTED = ("normalize_uid", "session_value", "remote_dns_proxy")
+
+# remote_dns_proxy 只有 Python 一份（Go 的 SOCKS 拨号器天然远端解析，无需转换），
+# 用例直接写在这里。背景：socks5:// 让 libcurl 本地解析 DNS，代理按裸 IP 连
+# altapi.ai 会被 Cloudflare 掐断 TLS（curl 35），线上注册机 2026-11-16 实际踩过。
+PROXY_CASES = [
+    ("socks5://u:p@51.222.52.202:1080", "socks5h://u:p@51.222.52.202:1080", "socks5 必须改远端解析"),
+    ("SOCKS5://u:p@h:1080", "socks5h://u:p@h:1080", "scheme 大小写不敏感"),
+    ("socks5h://u:p@h:1080", "socks5h://u:p@h:1080", "已是远端解析，原样"),
+    ("socks4://h:1080", "socks4a://h:1080", "socks4 → socks4a"),
+    ("socks4a://h:1080", "socks4a://h:1080", "已是 socks4a，原样"),
+    ("http://u:p@h:3128", "http://u:p@h:3128", "http 代理不动"),
+    ("  socks5://h:1080 \n", "socks5h://h:1080", "去首尾空白"),
+]
 
 
 def load_functions() -> dict:
@@ -59,6 +72,12 @@ def main() -> int:
         if got != tc["out"]:
             failures.append(
                 f"session_value({tc['in']!r}) = {got!r}, want {tc['out']!r}  [{tc['why']}]")
+
+    for raw, want, why in PROXY_CASES:
+        checked += 1
+        got = fn["remote_dns_proxy"](raw)
+        if got != want:
+            failures.append(f"remote_dns_proxy({raw!r}) = {got!r}, want {want!r}  [{why}]")
 
     if failures:
         print("FAIL: Python 与共享用例表不一致", file=sys.stderr)

@@ -267,7 +267,8 @@ class Transport:
         """返回 (status, text, set_cookies)。"""
         proxies = {}
         if self.proxy:
-            proxies = {"http": self.proxy, "https": self.proxy}
+            p = remote_dns_proxy(self.proxy)
+            proxies = {"http": p, "https": p}
         # curl_cffi 的 impersonate 默认套用「顶层导航」形态：
         #   Sec-Fetch-Dest: document / Mode: navigate / Site: none
         #   Sec-Fetch-User: ?1 / Upgrade-Insecure-Requests: 1 / Priority
@@ -298,6 +299,27 @@ class Transport:
         return _urllib_request(self._urllib, method, url, headers, body, timeout)
 
 
+def remote_dns_proxy(proxy: str) -> str:
+    """把 SOCKS 代理 URL 规范成「由代理远端解析域名」的形态。
+
+    socks5:// 在 libcurl/PySocks 语义里是**本地**解析 DNS，再让代理去连 IP。
+    对 altapi.ai 这种 Cloudflare 前置的站点，实测（2026-11-16，同一代理）：
+        socks5://   → curl (35) SSL_connect: Connection closed abruptly
+        socks5h://  → 200
+    代理按裸 IP 连出去的 TLS 会话被 CF 直接掐断。Go 侧 balancer 的 SOCKS
+    拨号器一直是把主机名交给代理解析，所以线上推理没问题；注册机必须和它
+    一致，否则同一个代理在推理里能用、在注册里报 TLS 错，排查会被带偏。
+    http/https 代理不受影响，原样返回。
+    """
+    p = proxy.strip()
+    low = p.lower()
+    if low.startswith("socks5://"):
+        return "socks5h://" + p[len("socks5://"):]
+    if low.startswith("socks4://"):
+        return "socks4a://" + p[len("socks4://"):]
+    return p
+
+
 def _urllib_opener(proxy: str | None):
     if not proxy:
         # 明确不读环境代理，避免宿主 Clash 把流量带走导致出口不可控
@@ -308,8 +330,9 @@ def _urllib_opener(proxy: str | None):
             import socket
             from urllib.parse import urlparse
 
-            u = urlparse(proxy)
+            u = urlparse(remote_dns_proxy(proxy))
             scheme = socks.SOCKS5 if (u.scheme or "").startswith("socks5") else socks.SOCKS4
+            # 经 remote_dns_proxy 之后 socks 一律远端解析，见该函数说明
             rdns = (u.scheme or "") in ("socks5h", "socks4a")
             socks.set_default_proxy(
                 scheme, u.hostname, u.port or 1080,

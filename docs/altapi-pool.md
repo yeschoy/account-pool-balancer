@@ -109,14 +109,14 @@ altapi 有一半拒绝发生在 **HTTP 200** 上，所以规则主要靠正文�
 
 | 上游结果 | 处理 | 说明 |
 |---|---|---|
-| `Invalid token` / `access token 无效` | 硬隔离 | 实测 HTTP 200 + success:false；Key 自身坏了 |
+| `Invalid token` / `access token 无效` / `Invalid API key provided` / `authentication_error` | 硬隔离 + 停止本次请求 | 同时覆盖历史 HTTP 200 信封与官方无效 Key 示例 |
 | 该用户已被封禁 | 硬隔离 | 需人工 |
 | `MODEL_NOT_SUPPORT` + `no deployment node` | 本号×模型冷却 30m | 列表里有这模型不代表能调（DeepSeek-V3.2 / GLM-4.6 实测） |
 | 模型 ID 不存在 | ignore + 不换号 | 换号必然再失败 |
 | `额度不足` / `insufficient_user_quota` | 账号冷却 + 立即刷新余额 | 连续命中翻倍（10m→6h），成功清零 |
-| 403 分组无权限 | 本号×模型冷却 5m | 换号继续，不判封禁 |
-| 429 | 账号冷却，遵守 Retry-After | 同账号多 Key 共享限额 |
-| 429/403 + `CF-Ray` | 短冷却 30s | Cloudflare 同 IP 突发，非上游限流 |
+| 分组/模型无权限，包括官方 `The model does not exist or you do not have access to it` | 本号×模型冷却 5m | 正文优先，兼容 200/400/403；不直接推断全池模型不存在或账号封禁 |
+| 429（包括空正文） | 账号冷却 + 停止本次请求 | 优先 Retry-After；无有效提示时连续命中按 60s 起翻倍，最高 15m，成功清零；默认冷却上限同样约束 Retry-After |
+| 429/403 + `Cf-Mitigated: challenge` | 短冷却 30s + 停止本次请求 | `CF-Ray` 仅表示经过 Cloudflare，不能单独作为拦截证据 |
 | `上游负载已饱和` | 账号冷却 5s | altapi 自己的渠道故障 |
 | 400 参数错误 | ignore | 不扣健康分、不换号 |
 | 500/502/503/504 | 短冷却 | 仅在未输出时可重试 |
@@ -129,10 +129,21 @@ altapi 有一半拒绝发生在 **HTTP 200** 上，所以规则主要靠正文�
 
 | 决策 | 条件 | 理由 |
 |---|---|---|
-| stop | Key 失效 | 换号只会拿同一把坏 Key 再撞一次 |
-| stop | 400/413/422 参数错误 | 换号必然再失败 |
-| stop | 模型 ID 不存在 | 不遍历号池 |
-| stop | 429 | 多 Key 共享限额 + 同 IP 共享 CF 限速，换号绕不过 |
+| stop | Key 失效 | 先隔离当前账号，再终止本次请求，核对或更换 Key |
+| stop | 400/413/422 明确参数错误 | 换号必然再失败；不再仅凭 `invalid_request_error` 类型认定参数错误 |
+| stop | 模型 ID 明确不存在 | 不遍历号池；官方“模型不存在或无权限”混合文案走上述模型冷却规则 |
+| stop | 429 | 冷却当前账号后终止，客户端按 Retry-After 等待；不是在本次请求中立即换号或后台自动重试 |
+| stop | 明确的 Cloudflare challenge | 不跨账号或出口重放同一次挑战 |
+
+ALTAPI 执行层明确保留 `stop` 优先级：仍应用冷却/硬隔离，但不能再被这些健康动作覆盖为换号；自定义 stop 同样生效。其他历史号池的重试优先级不变，已经向客户端输出的流仍禁止重放。
+
+### 旧规则兼容与验证边界
+
+配置加载/保存时，只升级与 `4cc0593` 出厂版本**完整一致**的旧错误/重试列表（分别判断）。修改过的正文、顺序、备注、disabled、冷却值、自定义条目以及显式空列表一律保留，不按 ID 强行覆盖。新默认仍为 11 条错误规则，重试规则新增 challenge stop 后为 5 条。
+
+2026-11-16 修复依据：[官方 Docs 的 Error Code Reference / Common Error Examples](https://altapi.ai/docs)。`internal/server/altapi_error_policy_test.go` 通过本地 HTTP Mock 验证规则→执行层→调度器及日志、设置保存/重载和已输出流不重放；`internal/config/altapi_rules_migration_test.go` 使用冻结的旧默认表验证迁移与自定义保护。旧实现通过 Go overlay 重跑时能复现对应失败，不能只用纯匹配测试代表实际 stop 已生效。
+
+本节描述本地实现与 Mock 验证；**不表示已提交、已部署或已对真实上游复验**。这轮没有修改线上配置或发真实推理。
 
 ## 注册机
 
@@ -430,6 +441,21 @@ GREASE 全和 Chrome 的 BoringSSL 不同——这就是 JA3/JA4 的原料，是
 **这同时暴露了一个部署缺陷**：Dockerfile 里 altapi 的 venv 只装了 PySocks，
 注释还写着「纯标准库」。OVH 上线后会立刻退回被拦的那条路径。已改为
 `curl_cffi PySocks`。
+
+### 1b. SOCKS 代理必须远端解析（上线首跑踩坑，已修）
+
+`82d072b` 上线后第一次注册就报 `curl: (35) BoringSSL SSL_connect: Connection closed abruptly`。
+原因不是 TLS 指纹，而是 **`socks5://` 在 libcurl 语义里是本地解析 DNS**，代理按裸 IP 去连
+`altapi.ai:443`，Cloudflare 对这种会话直接掐断。同一代理 A/B（线上容器内）：
+
+| 代理写法 | `--probe /api/status` |
+|---|---|
+| `socks5://…`（配置原样） | curl (35) 连接被掐 |
+| `socks5h://…`（代理远端解析） | 200，出口 IP 正确 |
+
+Go 侧 balancer 的 SOCKS 拨号器一直把主机名交给代理解析，所以 101 个账号的推理探测全通，
+只有注册机出事。修法：`remote_dns_proxy()` 把 `socks5://`→`socks5h://`、`socks4://`→`socks4a://`，
+curl_cffi 与 urllib/PySocks（`rdns=True`）两条路径统一走它；配置里的代理 URL 不用改。
 
 ### 2. 头部集合：XHR 形态被伪装成导航（已修）
 
