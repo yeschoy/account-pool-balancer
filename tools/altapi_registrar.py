@@ -554,11 +554,26 @@ def gen_password(n: int = 16) -> str:
 
 
 def username_from_email(email: str) -> str:
-    """站点要求 3–20 位；保留字母数字下划线短横。"""
+    """从邮箱本地部分派生用户名，**尽量保留原形态**。
+
+    站点要求 3–20 位，只禁掉真正非法的字符。
+
+    为什么要保留点号：2026-11-17 对 OVH 上 109 个 altapi 账号做横向统计，
+    站内用户名含点号的占 6/109、首字符为数字的占 8/109；而「去掉点号后
+    截断」这一种清洗方式会产出 0/10 点号、0/10 数字开头 —— 把这批号和
+    全体摆在一起，生成器的边界立刻显形。保持邮箱原貌比统一清洗更接近
+    真实用户的随手填写。
+
+    只在真的非法时才兜底，且兜底也延续原前缀而不是整个替换。
+    """
     local = email.split("@")[0].lower()
-    u = re.sub(r"[^a-z0-9_-]", "", local)
+    # iCloud 的 Hide-My-Email 形如 shellac-visitor.3；把 @ 之外的非法字符剔掉，
+    # 但保留 . - _ 与数字前缀
+    u = re.sub(r"[^a-z0-9._-]", "", local)
+    u = re.sub(r"[._-]{2,}", lambda m: m.group(0)[0], u)   # 折叠重复分隔符
+    u = u.strip("._-")
     if len(u) < 3:
-        u = "u" + u + "".join(random.choices(string.digits, k=6))
+        u = (u or "u") + "".join(random.choices(string.digits, k=6))
     return u[:20]
 
 
@@ -826,13 +841,23 @@ def run_job(path: str) -> int:
     set_code_delay(st.get("code_delay_sec", 0))
 
     rc = 0
+    # 批次稀释区间：由设置项 batch_gap_sec 给出中心值，区间取 [0.7x, 1.5x]
+    batch_gap = float(st.get("batch_gap_sec") or 0)
     last_send = 0.0
+    first = True
     for it in items:
         idx = int(it.get("index") or 0)
         email = it.get("email") or ""
         em = Emitter(idx, email)
         proxy = it.get("proxy_url") or (proxies[idx % len(proxies)] if proxies else None)
         fp = FP_PROFILES[idx % len(FP_PROFILES)]
+        # 批次稀释：账号之间拉开距离，避免 uid 连成一段
+        if not first and batch_gap > 0:
+            lo, hi = max(1.0, batch_gap * 0.7), max(2.0, batch_gap * 1.5)
+            d = random.uniform(lo, hi)
+            em.log(f"批次稀释：等待 {d:.0f}s 再注册下一个（避免 uid 连号）")
+            time.sleep(d)
+        first = False
         # 同邮箱发码间隔：批次内也守住 30s
         wait = gap - (time.time() - last_send)
         if last_send and wait > 0:

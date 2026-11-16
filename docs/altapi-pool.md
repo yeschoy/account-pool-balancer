@@ -219,7 +219,10 @@ python3 tools/altapi_registrar.py --email a@b.c --mailbox 'https://...' --proxy 
 ### 注册链路（5 步）
 
 1. `GET /api/status` — 确认 `turnstile_check=false`
-2. `GET /api/verification?email=&turnstile=` — 发码（Resend，**按邮箱 30s 限流**）
+2. `GET /api/verification?email=&turnstile=` — 发码（Resend）。
+   **限频按 IP 不按邮箱**（2026-11-17 实测修正）：窗口内放行 2 次，第 3 次起 429
+   "发送过于频繁，请等待 N 秒"，冷却约 24 秒且倒计时递减；换邮箱照样被限。
+   轻度轮询（8s 一次）不会推高冷却，突发连打才会进冷却
 3. `GET <mida>/api/messages?alias_email=&token=&range=latest` — 取码
 4. `POST /api/user/register?turnstile=` — 注册
 5. `POST /api/user/login` → `GET /api/user/self` → `POST /api/token/` → `POST /api/token/{id}/key`
@@ -342,6 +345,27 @@ python3 tools/altapi_registrar.py --probe
 ```bash
 go test ./internal/config ./internal/server -run 'TestALTAPI(IndependentRouting|ValidatesIndependentRouting|Sticky)' -count=1
 ```
+
+## 站点判定机制（第二轮逆向，2026-11-17）
+
+完整报告见 [altapi-reverse-analysis.md](altapi-reverse-analysis.md)。要点：
+
+**站点只看三样东西**（前端 7.2MB bundle 实测无任何指纹采集 API）：
+
+| 判定层 | 判据 | 我们的状态 |
+|---|---|---|
+| Cloudflare 边缘 | UA 黑名单（`Python-urllib` 被拦，其他全放行）+ TLS 指纹（LibreSSL 断连） | ✅ 已修 |
+| 业务层 | IP（限频、同 /24 聚合）、邮箱有效性 | ⚠️ IP 同 /24 |
+| 数据层 | **uid 自增连续性** | 🔴 241–250 完全连号 |
+
+**最致命的一项**：uid 241–250 是连续 10 个，全站 241–356 区间唯一断点在 250→258。
+SQL 一条就能看出「这段时间没有真实用户」。uid 由站点分配，无法伪装，
+只能靠降低注册密度让真实用户插进来稀释。
+
+**不构成威胁**（实测，不必投入）：
+- 浏览器指纹：`navigator.webdriver` / WebGL / Canvas / AudioContext 全部 0 次
+- Turnstile：服务端完全不校验（空 token、不带参数都能发码）
+- 验证码爆破：15 次错误零锁定（但 16^6 空间不实用）
 
 ## 跨语言规则一致性
 

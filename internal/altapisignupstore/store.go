@@ -133,6 +133,13 @@ type Settings struct {
 	MaxAttempts int `json:"max_attempts"`
 	// Workers 并发数（受代理池大小限制）
 	Workers int `json:"workers"`
+	// BatchGapSec 批次稀释：相邻账号之间额外等待的秒数（0.7x~1.5x 随机）。
+	//
+	// uid 是站点自增主键，无法伪造。实测 2026-11-17：OVH 上 109 个账号的
+	// uid 覆盖 241–356，全站唯一断点在 250→258，说明我们那批是连续一段、
+	// 中间没有真实用户。拉开注册间隔是唯一能让真实用户插进来的办法。
+	// 0 = 不稀释；生产建议 300–900。
+	BatchGapSec float64 `json:"batch_gap_sec"`
 	// PaceScale 步骤间停顿倍数：1.0 默认，0 关闭（不推荐，时序会像脚本），
 	// 2.0 更慢更稳。只影响单账号内部的核心步骤间隔，不影响账号之间的发码间隔。
 	PaceScale float64 `json:"pace_scale"`

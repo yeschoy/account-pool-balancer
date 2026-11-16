@@ -304,6 +304,9 @@ func (m *altapiManager) runBatch(ids []string, origin batchOrigin) {
 		"proxy_pool":         proxies,
 		"pace_scale":         st.PaceScale,
 		"code_delay_sec":     st.CodeDelaySec,
+		// 批次稀释：uid 是站点自增主键无法伪造，只能拉开间隔让真实用户
+		// 插进号段（实测我们那批 241–250 是全站唯一连续段）。
+		"batch_gap_sec":      st.BatchGapSec,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
