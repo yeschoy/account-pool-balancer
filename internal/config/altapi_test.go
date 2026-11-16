@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -28,6 +29,29 @@ func TestALTAPIProviderRegistration(t *testing.T) {
 	}
 	if ValidRuntimeKeyFor(ProviderALTAPI, "short") {
 		t.Fatal("a 5-char key was accepted")
+	}
+}
+
+func TestALTAPILowBalanceThresholdValidation(t *testing.T) {
+	if c := Default(); c.ALTAPI.LowBalanceDisable || c.ALTAPI.MinBalanceUSD != 0.5 {
+		t.Fatal("threshold must default off with $0.50 preset")
+	}
+	for _, value := range []float64{-1, math.NaN(), math.Inf(1), 1e9 + 1} {
+		c := Default()
+		c.ALTAPI.MinBalanceUSD = value
+		if c.Normalize() == nil {
+			t.Fatalf("accepted invalid threshold %v", value)
+		}
+	}
+	for _, value := range []float64{0, 0.0001, 0.5, 2.5, 1e9} {
+		c := Default()
+		c.ALTAPI.LowBalanceDisable, c.ALTAPI.MinBalanceUSD = true, value
+		if err := c.Normalize(); err != nil {
+			t.Fatal(err)
+		}
+		if c.ForProvider(ProviderALTAPI).ALTAPI.MinBalanceUSD != value {
+			t.Fatal("provider view lost threshold")
+		}
 	}
 }
 

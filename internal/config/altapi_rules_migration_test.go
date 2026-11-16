@@ -13,7 +13,12 @@ import (
 // rule tables. Notes, ordering, disabled flags and explicit empty lists count.
 func shippedALTAPIRules(t *testing.T) ([]rules.ErrorRule, []rules.RetryRule) {
 	t.Helper()
-	b, err := os.ReadFile("testdata/altapi_rules_v1.json")
+	return frozenALTAPIRules(t, "v1")
+}
+
+func frozenALTAPIRules(t *testing.T, version string) ([]rules.ErrorRule, []rules.RetryRule) {
+	t.Helper()
+	b, err := os.ReadFile("testdata/altapi_rules_" + version + ".json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,11 +33,14 @@ func shippedALTAPIRules(t *testing.T) ([]rules.ErrorRule, []rules.RetryRule) {
 }
 
 func TestALTAPIRulesUpgradeFactoryDefaults(t *testing.T) {
-	for _, version := range []string{"shipped", "nil", "current"} {
+	for _, version := range []string{"shipped", "v2", "nil", "current"} {
 		t.Run(version, func(t *testing.T) {
 			c := Default()
 			if version == "shipped" {
 				c.ALTAPIErrorRules, c.ALTAPIRetryRules = shippedALTAPIRules(t)
+			}
+			if version == "v2" {
+				c.ALTAPIErrorRules, c.ALTAPIRetryRules = frozenALTAPIRules(t, "v2")
 			}
 			if version == "nil" {
 				c.ALTAPIErrorRules, c.ALTAPIRetryRules = nil, nil
@@ -67,6 +75,38 @@ func TestALTAPIRulesUpgradeFactoryDefaults(t *testing.T) {
 			}
 			if !reflect.DeepEqual(c.ALTAPIErrorRules, restored.ALTAPIErrorRules) || !reflect.DeepEqual(c.ALTAPIRetryRules, restored.ALTAPIRetryRules) {
 				t.Fatal("round-trip changed rules")
+			}
+		})
+	}
+}
+
+func TestALTAPIQuotaSwitchPreservesCustomizedV2(t *testing.T) {
+	for _, mutation := range []string{"note", "order", "disabled", "reset", "body", "append", "empty"} {
+		t.Run(mutation, func(t *testing.T) {
+			c := Default()
+			c.ALTAPIErrorRules, c.ALTAPIRetryRules = frozenALTAPIRules(t, "v2")
+			switch mutation {
+			case "note":
+				c.ALTAPIErrorRules[5].Note = "operator quota note"
+			case "order":
+				c.ALTAPIErrorRules[4], c.ALTAPIErrorRules[5] = c.ALTAPIErrorRules[5], c.ALTAPIErrorRules[4]
+			case "disabled":
+				c.ALTAPIErrorRules[5].Disabled = true
+			case "reset":
+				c.ALTAPIErrorRules[5].Reset.Fallback = "3m"
+			case "body":
+				c.ALTAPIErrorRules[5].When.BodyContains = []string{"operator quota"}
+			case "append":
+				c.ALTAPIErrorRules = append(c.ALTAPIErrorRules, rules.ErrorRule{ID: "operator", Scope: rules.ScopeAccount, Action: rules.ActionIgnore, When: rules.Match{Statuses: []int{418}}})
+			case "empty":
+				c.ALTAPIErrorRules = []rules.ErrorRule{}
+			}
+			before := c.Clone()
+			if err := c.Normalize(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(c.ALTAPIErrorRules, before.ALTAPIErrorRules) {
+				t.Fatal("overwrote customized v2 errors")
 			}
 		})
 	}

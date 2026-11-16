@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +50,8 @@ type ALTAPIState struct {
 	UsedUSD    float64 `json:"usedUsd"`
 	// Source is "session" (real balance) or "key" (spent only).
 	Source string `json:"source"`
+	// BalanceSource binds a successful console balance to its exact credentials.
+	BalanceSource string `json:"balanceSource,omitempty"`
 	// Role 1 = normal user, 100 = admin/root in new-api.
 	Role     int64  `json:"role,omitempty"`
 	Status   int64  `json:"status,omitempty"`
@@ -61,6 +64,25 @@ const altapiBalanceStale = 30 * time.Minute
 
 // altapiUserAgent is the console's own UA shape; some CF rules key on it.
 const altapiUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+
+// FreshALTAPIBalance trusts only a successful, current console read from the
+// same session/uid/key/base/proxy. Historical/unknown values never gate routing.
+func (s *Snapshot) FreshALTAPIBalance(cfg *config.Config, a config.Account, now time.Time) bool {
+	if s == nil || s.ALTAPI == nil || s.ALTAPI.Source != "session" || a.ControlKey == "" ||
+		s.ALTAPI.BalanceSource != ResponseBindingSource(cfg, a) || s.LastError != "" ||
+		math.IsNaN(s.ALTAPI.BalanceUSD) || math.IsInf(s.ALTAPI.BalanceUSD, 0) {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, s.ALTAPI.ReadAt)
+	stale := time.Duration(cfg.ALTAPI.EffectiveQuota().StaleSec) * time.Second
+	return err == nil && !at.IsZero() && !at.After(now) && now.Sub(at) < stale
+}
+
+// ALTAPILowBalance is the shared scheduler/status/auto-replenishment gate.
+func (s *Snapshot) ALTAPILowBalance(cfg *config.Config, a config.Account, now time.Time) bool {
+	return a.Provider == config.ProviderALTAPI && cfg.ALTAPI.LowBalanceDisable &&
+		s.FreshALTAPIBalance(cfg, a, now) && s.ALTAPI.BalanceUSD < cfg.ALTAPI.MinBalanceUSD
+}
 
 func (s *Snapshot) ALTAPIDiagnosis(now time.Time) *ALTAPIState {
 	if s == nil || s.ALTAPI == nil {
@@ -81,11 +103,11 @@ func (s *Snapshot) ALTAPIDiagnosis(now time.Time) *ALTAPIState {
 
 type altapiStatus struct {
 	Data struct {
-		QuotaPerUnit     float64 `json:"quota_per_unit"`
-		DisplayInCurrency bool   `json:"display_in_currency"`
-		QuotaDisplayType string  `json:"quota_display_type"`
-		TurnstileCheck   bool    `json:"turnstile_check"`
-		SystemName       string  `json:"system_name"`
+		QuotaPerUnit      float64 `json:"quota_per_unit"`
+		DisplayInCurrency bool    `json:"display_in_currency"`
+		QuotaDisplayType  string  `json:"quota_display_type"`
+		TurnstileCheck    bool    `json:"turnstile_check"`
+		SystemName        string  `json:"system_name"`
 	} `json:"data"`
 }
 
@@ -116,10 +138,16 @@ func (p *Poller) fetchALTAPI(ctx context.Context, cfg *config.Config, a config.A
 	p.mu.Lock()
 	s := p.snaps[a.ID].clone()
 	p.mu.Unlock()
+	source := ResponseBindingSource(cfg, a)
+	if s != nil && ((s.CatalogSource != "" && s.CatalogSource != source) ||
+		(s.ALTAPI != nil && (s.ALTAPI.Source == "session" || s.ALTAPI.BalanceSource != "") && s.ALTAPI.BalanceSource != source)) {
+		s = nil // the old console credentials cannot supply this account's balance
+	}
 	now := time.Now()
 	if s == nil {
 		s = &Snapshot{}
 	}
+	s.CatalogSource = source
 	if s.ALTAPI == nil {
 		s.ALTAPI = &ALTAPIState{Source: "none"}
 	}
@@ -223,17 +251,18 @@ func altapiReadConsole(ctx context.Context, cfg *config.Config, a config.Account
 	}
 
 	out := &ALTAPIState{
-		UserID:       self.ID,
-		Username:     self.Username,
-		Group:        self.Group,
-		Quota:        self.Quota,
-		UsedQuota:    self.UsedQuota,
-		RequestCount: self.RequestCount,
-		QuotaPerUnit: unit,
-		Source:       "session",
-		Role:         self.Role,
-		Status:       self.Status,
-		ReadAt:       time.Now().Format(time.RFC3339),
+		BalanceSource: ResponseBindingSource(cfg, a),
+		UserID:        self.ID,
+		Username:      self.Username,
+		Group:         self.Group,
+		Quota:         self.Quota,
+		UsedQuota:     self.UsedQuota,
+		RequestCount:  self.RequestCount,
+		QuotaPerUnit:  unit,
+		Source:        "session",
+		Role:          self.Role,
+		Status:        self.Status,
+		ReadAt:        time.Now().Format(time.RFC3339),
 	}
 	out.BalanceUSD = newapiconsole.BalanceUSD(out.Quota, unit)
 	out.UsedUSD = newapiconsole.BalanceUSD(out.UsedQuota, unit)

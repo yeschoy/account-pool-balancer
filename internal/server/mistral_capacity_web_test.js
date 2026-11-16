@@ -16,7 +16,7 @@ const calls = [];
 const rendered = {};
 const c = {
   $: node, $$: () => [], pool: 'mistral', settingsCache: null, errRules: [], retRules: [], priceRows: [], POOL_LABEL: { mistral: 'Mistral' },
-  isMistral() { return c.pool === 'mistral'; }, isDeploy() { return false; }, isX50() { return false; }, isModelStudio() { return false; }, isTokenHarbor() { return false; }, isOpenCode() { return false; },
+  isMistral() { return c.pool === 'mistral'; }, isALTapi() { return false; }, isDeploy() { return false; }, isX50() { return false; }, isModelStudio() { return false; }, isTokenHarbor() { return false; }, isOpenCode() { return false; },
   withPool(p) { return p + '?provider=' + c.pool; }, clone: structuredClone, esc: String, renderRules() {}, renderPrices() {}, readPricing() { return { models: [] }; }, toast() {},
   api: async (method, url, body) => {
     calls.push({ method, url, body: body && structuredClone(body) });
@@ -65,6 +65,7 @@ vm.runInContext(source.slice(source.indexOf('async function loadSettings()'), so
   await handler();
   save = calls.find(x => x.method === 'PUT');
   assert.ok(!('mistral' in save.body));
+  assert.ok(!('altapi' in save.body));
   assert.ok(!c.routeFields().some(f => f[0] === 'directMaxConns'));
   assert.match(html, /id="mistral-binding-capacity"[^>]*max="1000000"/);
   assert.match(html, /不是每账号会话数或请求并发/);

@@ -305,7 +305,7 @@ func (a *altAutoManager) scheduleNextLocked() {
 
 // altAutoAvailability 数号池里可用与总数。
 //
-// 可用 = enabled，且池子没有把它隔离/熔断（禁用、登录失效、硬熔断都算不可用）。
+// 可用 = enabled，且未硬隔离/未因低余额阈值停用；其他历史统计口径保持。
 func (s *Server) altAutoAvailability(cfg *config.Config) (available, total int) {
 	views := s.pool.Views(cfg)
 	for _, acc := range cfg.Accounts {
@@ -317,6 +317,9 @@ func (s *Server) altAutoAvailability(cfg *config.Config) (available, total int) 
 			continue
 		}
 		if v, ok := views[acc.ID]; ok && v.State != nil && v.State.HardQuarantined {
+			continue
+		}
+		if s.quota.View(acc.ID).ALTAPILowBalance(cfg, acc, time.Now()) {
 			continue
 		}
 		available++

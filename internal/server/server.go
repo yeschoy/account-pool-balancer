@@ -77,6 +77,14 @@ type Server struct {
 		inflight map[modelsKey]*modelsCall
 	}
 
+	altapiModels struct {
+		sync.Mutex
+		groups   map[string]*altapiModelsGroup
+		revision int64
+		wake     chan struct{}
+		scanMu   sync.Mutex // only the background writer rebuilds catalogues
+	}
+
 	admin   *adminAuth
 	devices *deviceFlows
 	// openAuth only rate-limits failed import-key authentications.
@@ -288,6 +296,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 			return nil, err
 		}
 	}
+	s.reconcileALTAPIModels(store.Get())
 	store.OnChange = s.onConfigChange
 	if err := s.initPerch(); err != nil {
 		return nil, fmt.Errorf("perch: %w", err)
@@ -302,6 +311,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
+	s.reconcileALTAPIModels(next)
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
 	s.pruneNativeChatTransports(old, next)
@@ -436,6 +446,8 @@ func (s *Server) saveCounters(force bool) error {
 
 // Run starts the background loops until ctx ends, then flushes state.
 func (s *Server) Run(ctx context.Context) {
+	modelsDone := make(chan struct{})
+	go func() { defer close(modelsDone); s.runALTAPIModels(ctx) }()
 	quotaDone := make(chan struct{})
 	go func() { defer close(quotaDone); s.quota.Run(ctx) }()
 	s.RunPerch(ctx)
@@ -450,6 +462,7 @@ func (s *Server) Run(ctx context.Context) {
 		case <-ctx.Done():
 			s.drainRequests() // cancel inference, release leases, then persist and close logs
 			<-quotaDone
+			<-modelsDone
 			<-autoDone
 			if err := s.saveCounters(true); err != nil {
 				log.Printf("save counters: %v", err)

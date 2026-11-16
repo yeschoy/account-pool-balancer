@@ -458,6 +458,9 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
+	if a.Provider == config.ProviderALTAPI && snap.ALTAPILowBalance(cfg, a, now) {
+		return "low-balance"
+	}
 	if (a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider)) && snap != nil && snap.CatalogSource != quota.ResponseBindingSource(cfg, a) {
 		snap = nil // a changed key/base/proxy cannot reuse old permissions
 	}

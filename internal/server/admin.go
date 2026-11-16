@@ -388,7 +388,7 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				}
 			}
 		}
-		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil || q.Mistral != nil || q.X50 != nil) {
+		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil || q.Mistral != nil || q.X50 != nil || q.ALTAPI != nil) {
 			v.Quota = q
 			switch a.Provider {
 			case config.ProviderOpenDesign:
@@ -413,6 +413,8 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 					q.Mistral = nil
 				}
 				v.QuotaFresh = q.FreshMistral(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
+			case config.ProviderALTAPI:
+				v.QuotaFresh = q.FreshALTAPIBalance(cfg, a, now)
 			case config.ProviderX50:
 				v.QuotaFresh = q.FreshX50(now, time.Duration(cfg.X50.EffectiveQuota().StaleSec)*time.Second)
 			case config.ProviderDeploy:
@@ -1426,10 +1428,12 @@ type settingsDoc struct {
 // divisor lives here because a fork could change quota_per_unit; the live
 // /api/status value still wins per read.
 type altapiSettings struct {
-	BaseURL      string   `json:"baseUrl"`
-	QuotaPerUnit *float64 `json:"quotaPerUnit,omitempty"`
-	ModelSyncSec *int     `json:"modelSyncSec,omitempty"`
-	DetailLog    *bool    `json:"detailLog,omitempty"`
+	BaseURL           string   `json:"baseUrl"`
+	QuotaPerUnit      *float64 `json:"quotaPerUnit,omitempty"`
+	ModelSyncSec      *int     `json:"modelSyncSec,omitempty"`
+	DetailLog         *bool    `json:"detailLog,omitempty"`
+	LowBalanceDisable *bool    `json:"lowBalanceDisable,omitempty"`
+	MinBalanceUSD     *float64 `json:"minBalanceUsd,omitempty"`
 }
 
 type deploySettings struct {
@@ -1478,7 +1482,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		defaultPrices = config.DefaultDeployPricing().Models
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
+		"settings":   settingsDoc{X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
@@ -1584,6 +1588,12 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				if in.ALTAPI.DetailLog != nil {
 					c.ALTAPI.DetailLog = *in.ALTAPI.DetailLog
+				}
+				if in.ALTAPI.LowBalanceDisable != nil {
+					c.ALTAPI.LowBalanceDisable = *in.ALTAPI.LowBalanceDisable
+				}
+				if in.ALTAPI.MinBalanceUSD != nil {
+					c.ALTAPI.MinBalanceUSD = *in.ALTAPI.MinBalanceUSD
 				}
 			}
 			c.ALTAPI.Routing, c.ALTAPI.Quota, c.ALTAPI.Pricing = &in.Routing, &in.Quota, &in.Pricing

@@ -40,8 +40,8 @@ func (s *Server) resetModels() {
 func (s *Server) invalidateAccountModels(id string) {
 	cfg := s.cfg.Get()
 	a, ok := cfg.Account(id)
-	if !ok {
-		return
+	if !ok || a.Provider == config.ProviderALTAPI {
+		return // ALTAPI listings are refreshed only by their service-owned worker.
 	}
 	s.models.Lock()
 	defer s.models.Unlock()
@@ -66,6 +66,9 @@ func (s *Server) invalidateAccountModels(id string) {
 }
 
 func (s *Server) publishedModels(ctx context.Context, cfg *config.Config, group string) []byte {
+	if cfg.GroupPool(group) == config.ProviderALTAPI {
+		return s.readALTAPIModels(cfg, group)
+	}
 	key := modelsKey{provider: cfg.GroupPool(group), group: group, published: true}
 	return s.cachedModels(ctx, cfg, key, func(ctx context.Context) modelsEntry {
 		entry := s.upstreamModels(ctx, cfg, group)

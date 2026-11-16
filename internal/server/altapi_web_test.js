@@ -17,6 +17,60 @@ const altSource = fs.readFileSync(path.join(__dirname, 'web/altapi.js'), 'utf8')
 // 1) 经典脚本共享全局词法作用域：单文件语法检查会漏掉重复声明冲突。
 new vm.Script(appSource + '\n' + altSource);
 
+// 独立换号动作必须能显示/编辑，不能回退成 cooldown 或产生默认冷却。
+{
+  const context = vm.createContext({ esc: (v) => String(v) });
+  vm.runInContext(appSource.slice(appSource.indexOf('const SCOPES ='), appSource.indexOf('function renderRules()')), context);
+  assert.equal(vm.runInContext("ACTIONS['switch-account']", context), '仅换号（不冷却、不扣分）');
+  const rendered = vm.runInContext("errActionHTML({ action: 'switch-account', scope: 'account' })", context);
+  assert.ok(rendered.includes('仅换号'));
+  assert.ok(!rendered.includes('默认') && !rendered.includes('冷却'));
+}
+
+// 低余额停用字段必须可见、可加载、可提交，且只写 ALTAPI。
+{
+  for (const id of ['altapi-balance-settings', 'altapi-low-balance-disable', 'altapi-min-balance']) assert.ok(html.includes(`id="${id}"`), '缺少 ' + id);
+  assert.ok(html.includes('未知、过期或读取失败不当作0'));
+  assert.ok(appSource.includes("'low-balance': ['余额低于阈值，已停用调度'"));
+  const elements = new Map();
+  const context = vm.createContext({
+    $: (selector) => { if (!elements.has(selector)) elements.set(selector, { classList: { toggle() {} } }); return elements.get(selector); },
+    isALTapi: () => true,
+    s: { altapi: { lowBalanceDisable: true, minBalanceUsd: 2.5 } },
+    body: {},
+  });
+  const load = appSource.slice(appSource.indexOf("  $('#altapi-balance-settings').classList"), appSource.indexOf("  $('#x50-pool-settings').classList"));
+  vm.runInContext(load, context);
+  assert.equal(elements.get('#altapi-low-balance-disable').checked, true);
+  assert.equal(elements.get('#altapi-min-balance').value, 2.5);
+  context.s = { altapi: { lowBalanceDisable: false, minBalanceUsd: 0 } };
+  vm.runInContext(load, context);
+  assert.equal(elements.get('#altapi-min-balance').value, 0, '保留显式0，不能误用默认值');
+  context.s = { altapi: { lowBalanceDisable: true } };
+  vm.runInContext(load, context);
+  assert.equal(elements.get('#altapi-min-balance').value, 0.5, '缺省阈值按用户要求预填$0.50');
+  assert.match(html, /id="altapi-min-balance"[^>]*value="0\.5"/);
+  elements.get('#altapi-min-balance').value = '0.5';
+  const save = appSource.split('\n').find((line) => line.includes('if (isALTapi()) body.altapi ='));
+  assert.ok(save, '缺少 ALTAPI 保存字段');
+  vm.runInContext(save, context);
+  assert.equal(context.body.altapi.minBalanceUsd, 0.5);
+  assert.equal(context.body.altapi.lowBalanceDisable, true);
+  context.body = {};
+  context.isALTapi = () => false;
+  vm.runInContext(save, context);
+  assert.equal(context.body.altapi, undefined, '别池保存不能携带 ALTAPI 阈值');
+}
+
+// ALTAPI 固定每小时后台刷新，不显示一个实际不生效的请求缓存TTL。
+{
+  const context = vm.createContext({ pool: 'altapi' });
+  vm.runInContext(appSource.slice(appSource.indexOf('const STRATEGY_HINTS'), appSource.indexOf('// ---- error / retry rules')) + '\nglobalThis.fields = routingFields();', context);
+  assert.ok(!context.fields.some((f) => f[0] === 'modelsCacheSec'));
+  assert.ok(context.fields.some((f) => f[0] === 'ignoreCatalog'));
+  assert.ok(html.includes('之后每小时刷新一次'));
+}
+
 // 2) 顶部标签唯一。
 assert.equal([...html.matchAll(/data-pool="altapi" role="tab"/g)].length, 1, '重复的 ALTapi 号池标签');
 assert.match(html, /data-pool="altapi" role="tab">ALTapi/);

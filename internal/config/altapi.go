@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 
@@ -39,10 +40,13 @@ type ALTAPI struct {
 	ModelSyncSec int             `json:"modelSyncSec"`
 	DetailLog    bool            `json:"detailLog"`
 	Pricing      *pricing.Config `json:"pricing,omitempty"`
+	// LowBalanceDisable gates scheduling, never the manually managed Enabled flag.
+	LowBalanceDisable bool    `json:"lowBalanceDisable"`
+	MinBalanceUSD     float64 `json:"minBalanceUsd"`
 }
 
 func DefaultALTAPI() ALTAPI {
-	return ALTAPI{BaseURL: ALTAPIDefaultBase, QuotaPerUnit: 500000, ModelSyncSec: 600}
+	return ALTAPI{BaseURL: ALTAPIDefaultBase, QuotaPerUnit: 500000, ModelSyncSec: 600, MinBalanceUSD: 0.5}
 }
 
 // Cache the immutable baseline once, like Deploy: Default builds every
@@ -110,6 +114,9 @@ func (c *Config) normalizeALTAPI() error {
 		!strings.HasSuffix(u.Path, "/v1") {
 		return fmt.Errorf("altapi.baseUrl must be an HTTP(S) API root ending in /v1 without credentials, query or fragment")
 	}
+	if math.IsNaN(a.MinBalanceUSD) || math.IsInf(a.MinBalanceUSD, 0) || a.MinBalanceUSD < 0 || a.MinBalanceUSD > 1e9 {
+		return fmt.Errorf("altapi.minBalanceUsd must be finite and 0..1e9 USD")
+	}
 	if a.QuotaPerUnit == 0 {
 		a.QuotaPerUnit = 500000
 	}
@@ -129,11 +136,14 @@ func (c *Config) normalizeALTAPI() error {
 			return fmt.Errorf("altapi: %w", err)
 		}
 	}
-	// Match only the complete, untouched factory tables shipped in 4cc0593.
+	// Match only the complete, untouched factory tables shipped in 4cc0593
+	// and aa9e9fb.
 	// Hash canonical typed JSON (not input file bytes), so whitespace does
 	// not matter; notes/order/disabled/empty/operator additions all do.
-	// The frozen tables live in testdata/altapi_rules_v1.json for regression.
-	if c.ALTAPIErrorRules == nil || isShippedALTAPIRules(c.ALTAPIErrorRules, "c4f56f1ddd539472a5c603b9c419aec9cf69e0fbee8b2ae99291cdc78b9c2fac") {
+	// The frozen tables live in testdata/altapi_rules_v{1,2}.json for regression.
+	if c.ALTAPIErrorRules == nil ||
+		isShippedALTAPIRules(c.ALTAPIErrorRules, "c4f56f1ddd539472a5c603b9c419aec9cf69e0fbee8b2ae99291cdc78b9c2fac") ||
+		isShippedALTAPIRules(c.ALTAPIErrorRules, "eff59fc1de9443003c746505036c3ea126b2ae1315c81d26696ba480c30f49f1") {
 		c.ALTAPIErrorRules = rules.DefaultALTAPIErrorRules()
 	}
 	if c.ALTAPIRetryRules == nil || isShippedALTAPIRules(c.ALTAPIRetryRules, "bd87479ec4430cc57a7da083a311f054bc39844cad32d6bcc0bfe1ef7a8a90ac") {

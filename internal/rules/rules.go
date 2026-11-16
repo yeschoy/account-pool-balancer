@@ -24,7 +24,10 @@ const (
 	// refused means the 套餐模型额度 and wallet are (all 套餐模型 on it).
 	ScopeFunding = "funding"
 
-	ActionIgnore         = "ignore"
+	ActionIgnore = "ignore"
+	// ActionSwitchAccount skips the failed account only within this request,
+	// without changing its health, cooldown or quarantine state.
+	ActionSwitchAccount  = "switch-account"
 	ActionDegrade        = "degrade"
 	ActionCooldown       = "cooldown"
 	ActionHardQuarantine = "hard-quarantine"
@@ -395,7 +398,7 @@ func ValidateErrorRules(rs []ErrorRule) error {
 			return fmt.Errorf("errorRules[%s]: funding scope cannot hard-quarantine", r.ID)
 		}
 		switch r.Action {
-		case ActionIgnore, ActionDegrade, ActionHardQuarantine:
+		case ActionIgnore, ActionSwitchAccount, ActionDegrade, ActionHardQuarantine:
 		case ActionCooldown:
 			if r.Reset == nil {
 				return fmt.Errorf("errorRules[%s]: cooldown needs reset", r.ID)

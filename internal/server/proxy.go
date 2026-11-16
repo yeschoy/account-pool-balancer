@@ -1162,6 +1162,10 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 			switch rule.Action {
 			case rules.ActionIgnore:
 				sample, el.HealthAction = false, "none"
+			case rules.ActionSwitchAccount:
+				sample, el.HealthAction = false, "none"
+				ev.switchAccount = true
+				res.accountScoped = rule.Scope == rules.ScopeAccount
 			case rules.ActionCooldown:
 				if acct.Provider == config.ProviderMistral && rule.ID == "mistral-tier-not-allowed" && rule.Scope == rules.ScopeModel {
 					// A model's subscription qualification says nothing about
@@ -2460,6 +2464,9 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 	// every enabled account, servable this second or not: a cooling-down
 	// account's models are still models this pool offers once it is back
 	for _, a := range cfg.Accounts {
+		if ctx.Err() != nil {
+			return nil
+		}
 		if a.Group != group || !a.Enabled {
 			continue
 		}

@@ -79,9 +79,18 @@ func DefaultALTAPIErrorRules() []ErrorRule {
 			When: Match{BodyContains: []string{"is not a valid model", "model_not_found", "模型不存在"}},
 			Note: "模型 ID 本身不存在：不扣健康分，也不换号（换号必然再失败）"},
 
-		// Money. One wallet per account, so a funding refusal really does
-		// apply to every model; still scoped to account (ScopeFunding is
-		// rejected at config time for pools without a proven shared source).
+		// The operator-selected balance refusal includes an explicit reason
+		// and request id. Match that reason with boundaries, not generic
+		// quota/balance wording. Only exclude this account for this request;
+		// do not infer that every later request will fail, cool the account,
+		// penalize its health or trigger an extra quota refresh.
+		{ID: "altapi-user-quota-switch", Scope: ScopeAccount, Action: ActionSwitchAccount, DownstreamStatus: 503,
+			When: Match{BodyContains: []string{
+				": insufficient_user_quota (request id:", ": insufficient user quota (request id:",
+			}},
+			Note: "指定余额不足（insufficient user quota + request id）：仅本次请求换号，不冷却、不隔离、不扣健康分、不额外刷新额度"},
+
+		// Other funding refusals retain their existing account cooldown.
 		{ID: "altapi-insufficient-quota", Scope: ScopeAccount, Action: ActionCooldown,
 			RefreshQuota: true, DownstreamStatus: 503,
 			When: Match{BodyContains: []string{

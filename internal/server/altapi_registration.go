@@ -947,8 +947,10 @@ func (s *Server) apiALTAPIStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Pool side: accounts, balance read from snapshots, and the rule counts.
 	cfg := s.cfg.Get()
+	views := s.pool.Views(cfg)
 
 	type poolRow struct {
+		Status  string `json:"status"`
 		ID      string `json:"id"`
 		Name    string `json:"name"`
 		Email   string `json:"email"`
@@ -970,7 +972,7 @@ func (s *Server) apiALTAPIStatus(w http.ResponseWriter, r *http.Request) {
 		if a.Provider != config.ProviderALTAPI {
 			continue
 		}
-		row := poolRow{ID: a.ID, Name: a.Name, Email: a.Email, Group: a.Group, Enabled: a.Enabled}
+		row := poolRow{ID: a.ID, Name: a.Name, Email: a.Email, Group: a.Group, Enabled: a.Enabled, Status: views[a.ID].Status}
 		if snap := s.quota.Get(a.ID); snap != nil {
 			if d := snap.ALTAPIDiagnosis(time.Now()); d != nil {
 				row.BalanceSrc = d.Source

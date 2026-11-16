@@ -256,7 +256,7 @@ async function loadALTStatus() {
       tb.innerHTML = rows.length ? rows.map((r) => `<tr>
         <td class="small">${altEsc(r.name || r.email || r.id)}</td>
         <td>${altEsc(r.group || '—')}</td>
-        <td>${r.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge muted">停用</span>'}</td>
+        <td>${r.status === 'low-balance' ? '<span class="badge warn">低余额停用</span>' : r.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge muted">停用</span>'}</td>
         <td>${altMoney(r.balanceUsd)}${r.balanceSource && r.balanceSource !== 'session'
           ? `<br><span class="muted small" title="${altEsc(r.readHint || '')}">${altEsc(r.balanceSource)}</span>` : ''}</td>
         <td class="small">$${(r.usedUsd || 0).toFixed(2)}</td>

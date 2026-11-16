@@ -319,6 +319,10 @@ func (s *Snapshot) clone() *Snapshot {
 		return nil
 	}
 	c := *s
+	if s.ALTAPI != nil {
+		a := *s.ALTAPI
+		c.ALTAPI = &a
+	}
 	if s.OpenDesign != nil {
 		o := *s.OpenDesign
 		c.OpenDesign = &o
@@ -1393,6 +1397,14 @@ func (p *Poller) store(id string, s *Snapshot) { // an account deleted while it 
 		cfg := p.Cfg()
 		a, ok := cfg.Account(id)
 		if !ok || ResponseBindingSource(cfg, a) != s.CatalogSource {
+			p.mu.Unlock()
+			return
+		}
+	}
+	if s.ALTAPI != nil && s.ALTAPI.BalanceSource != "" {
+		cfg := p.Cfg()
+		a, ok := cfg.Account(id)
+		if !ok || a.Provider != config.ProviderALTAPI || ResponseBindingSource(cfg, a) != s.ALTAPI.BalanceSource {
 			p.mu.Unlock()
 			return
 		}

@@ -272,6 +272,27 @@ func TestALTAPIModelNotSupportIsModelScoped(t *testing.T) {
 	t.Fatal("altapi-model-not-support rule missing")
 }
 
+func TestALTAPIUserQuotaMatchesOnlyExactCode(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"error":{"message":"用户余额不足, 需要 $6.669924: insufficient_user_quota (request id: mock)","type":"new_api_error"}}`, "altapi-user-quota-switch"},
+		{`{"error":{"message":"用户钱包余额不足, 需要 $6.669924: insufficient user quota (request id: mock)","type":"new_api_error"}}`, "altapi-user-quota-switch"},
+		{`{"error":{"message":"insufficient_user_quota"}}`, "altapi-insufficient-quota"},
+		{`{"error":{"message":"用户额度不足, 剩余额度: $0"}}`, "altapi-insufficient-quota"},
+		{`{"error":{"message":"insufficient quota"}}`, "altapi-insufficient-quota"},
+		{`{"error":{"message":"insufficient_balance"}}`, "altapi-insufficient-quota"},
+		{`{"error":{"message":"用户余额不足, insufficient_user_quotas"}}`, "altapi-insufficient-quota"},
+		{`{"error":{"message":"用户余额不足, not_insufficient_user_quota"}}`, "altapi-insufficient-quota"},
+	} {
+		r := MatchError(DefaultALTAPIErrorRules(), 403, tc.body, nil)
+		if r == nil || r.ID != tc.want {
+			t.Fatalf("body=%s rule=%+v, want %s", tc.body, r, tc.want)
+		}
+		if tc.want == "altapi-user-quota-switch" && (r.Action != "switch-account" || r.Reset != nil || r.RefreshQuota || r.DownstreamStatus != 503) {
+			t.Fatalf("precise quota rule mutates account state: %+v", r)
+		}
+	}
+}
+
 // An empty quota must refresh the real balance right away instead of guessing.
 func TestALTAPIInsufficientQuotaRefreshesBalance(t *testing.T) {
 	for _, r := range DefaultALTAPIErrorRules() {

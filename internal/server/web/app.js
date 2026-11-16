@@ -529,7 +529,7 @@ async function loadOverview() {
 }
 
 // ---- accounts ----
-const STATUS = { 'wallet-overage-enabled': ['官网钱包续费已开启，暂停调度', 'warn'], 'plan-unknown': ['套餐未知/过期', 'warn'], 'quota-unknown': ['周用量未知/过期', 'warn'], 'catalog-pending': ['等待模型同步', 'warn'], 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
+const STATUS = { 'low-balance': ['余额低于阈值，已停用调度', 'warn'], 'wallet-overage-enabled': ['官网钱包续费已开启，暂停调度', 'warn'], 'plan-unknown': ['套餐未知/过期', 'warn'], 'quota-unknown': ['周用量未知/过期', 'warn'], 'catalog-pending': ['等待模型同步', 'warn'], 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
 const statusLabel = (s) => (STATUS[s] || [s])[0];
 const statusClass = (s) => (STATUS[s] || ['', ''])[1];
 
@@ -1381,7 +1381,7 @@ const MISTRAL_CONNECTION_FIELDS = [
   ['directMaxConns', '直连每Host连接上限', 'int', '1–100000，本池独立Transport实际生效；HTTP2连接数不等于流并发'],
   ['proxyMaxConns', '固定代理每Host连接上限', 'int', '1–10000，仍走账号固定代理；变更只关闭旧空闲连接，不中断在途'],
 ];
-const routingFields = () => (isDeploy() || isX50()) ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare'].includes(k)).map((f) => f[0] === 'ignoreCatalog' ? ['ignoreCatalog', '忽略目录模型过滤', 'bool', '目录只是模型发现，不证明本 Key 推理授权；关闭时按新鲜目录排除未列出的模型'] : f[0] === 'sticky' ? ['sticky', '会话粘性', 'bool', '尽量复用同一账号，不保证上游缓存命中'] : f).concat(MISTRAL_CONNECTION_FIELDS) : pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback').concat(MISTRAL_CONNECTION_FIELDS) : ROUTING_FIELDS;
+const routingFields = () => pool === 'altapi' ? ROUTING_FIELDS.filter(([k]) => k !== 'modelsCacheSec') : (isDeploy() || isX50()) ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare'].includes(k)).map((f) => f[0] === 'ignoreCatalog' ? ['ignoreCatalog', '忽略目录模型过滤', 'bool', '目录只是模型发现，不证明本 Key 推理授权；关闭时按新鲜目录排除未列出的模型'] : f[0] === 'sticky' ? ['sticky', '会话粘性', 'bool', '尽量复用同一账号，不保证上游缓存命中'] : f).concat(MISTRAL_CONNECTION_FIELDS) : pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback').concat(MISTRAL_CONNECTION_FIELDS) : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1425,7 +1425,7 @@ function readForm(fields, prefix, base) {
 const clone = (v) => JSON.parse(JSON.stringify(v));
 let errRules = [], retRules = [];
 const SCOPES = { account: '整个账号', model: '账号 × 模型', funding: '同一付费来源的所有模型' };
-const ACTIONS = { ignore: '忽略（不扣分、不换号）', degrade: '仅降级（扣健康分）', cooldown: '冷却', 'hard-quarantine': '隔离（需人工处理）' };
+const ACTIONS = { ignore: '忽略（不扣分、不换号）', 'switch-account': '仅换号（不冷却、不扣分）', degrade: '仅降级（扣健康分）', cooldown: '冷却', 'hard-quarantine': '隔离（需人工处理）' };
 const RESET_FORMATS = { '': '不读响应头', 'retry-after': 'Retry-After（秒数或日期）', 'unix-seconds': 'Unix 秒时间戳', 'unix-milliseconds': 'Unix 毫秒时间戳', duration: '时长（如 30s）' };
 const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
 const matchSummary = (w) => {
@@ -1437,7 +1437,7 @@ const matchSummary = (w) => {
   return parts.length ? parts.map((x) => `<div>${esc(x)}</div>`).join('') : '<span class="muted">（无条件，不会命中）</span>';
 };
 function errActionHTML(r) {
-  const act = { ignore: ['忽略', ''], degrade: ['仅降级', 'warn'], cooldown: ['冷却', 'warn'], 'hard-quarantine': ['隔离', 'bad'] }[r.action] || [r.action, ''];
+  const act = { ignore: ['忽略', ''], 'switch-account': ['仅换号', ''], degrade: ['仅降级', 'warn'], cooldown: ['冷却', 'warn'], 'hard-quarantine': ['隔离', 'bad'] }[r.action] || [r.action, ''];
   let sub = SCOPES[r.scope] || r.scope;
   if (r.action === 'cooldown' && r.reset) sub += `，默认 ${r.reset.fallback}${r.reset.max ? '，最长 ' + r.reset.max : ''}${r.reset.escalate ? '，连续命中翻倍' : ''}`;
   if (r.refreshQuota) sub += '，并刷新额度';
@@ -1578,6 +1578,9 @@ async function loadSettings() {
   settingsCache = loaded;
   const s = settingsCache.settings;
   if (isDeploy() || isX50()) settingsCache.strategies = settingsCache.strategies.filter((x) => !['smart','pace','least-used'].includes(x) || x === s.routing.strategy);
+  $('#altapi-balance-settings').classList.toggle('hidden', !isALTapi());
+  $('#altapi-low-balance-disable').checked = s.altapi?.lowBalanceDisable === true;
+  $('#altapi-min-balance').value = s.altapi?.minBalanceUsd ?? 0.5;
   $('#x50-pool-settings').classList.toggle('hidden', !isX50());
   $('#x50-pool-base').value = s.x50?.baseUrl || 'https://api.ai.50x.energy/v1';
   $('#x50-pool-sync').value = s.x50?.modelSyncSec ?? 600;
@@ -1641,6 +1644,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };
   if (isX50()) body.x50 = { baseUrl: $('#x50-pool-base').value.trim(), modelSyncSec: Number($('#x50-pool-sync').value), detailLog: $('#x50-pool-detail').checked, requestLog: $('#x50-pool-requests').checked, errorLog: $('#x50-pool-errors').checked };
   if (isDeploy()) body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked };
   if (isModelStudio()) body.modelStudio = { region: $('#ms-region').value, modelSyncSec: Number($('#ms-sync').value), detailLog: $('#ms-detail-log').checked, planOverrides: (s.modelStudio && s.modelStudio.planOverrides) || {} };
