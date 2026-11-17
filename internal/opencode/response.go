@@ -21,21 +21,32 @@ type Reply struct {
 	Usage           Tokens
 }
 
-func number(v any) int64 { n, _ := v.(float64); return int64(n) }
+func number(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+		f, _ := n.Float64()
+		return int64(f)
+	}
+	return 0
+}
 func usageOf(p Protocol, m object) Tokens {
 	u := Tokens{}
 	in, out := "input_tokens", "output_tokens"
 	if p == Chat {
 		in, out = "prompt_tokens", "completion_tokens"
 	}
-	_, hasIn := m[in].(float64)
-	_, hasOut := m[out].(float64)
+	hasIn, hasOut := numeric(m[in]), numeric(m[out])
 	u.Known = hasIn && hasOut
 	if p == Messages {
 		u.Cached = number(m["cache_read_input_tokens"])
 		u.CacheWrite = number(m["cache_creation_input_tokens"])
-		_, u.CachedKnown = m["cache_read_input_tokens"].(float64)
-		_, u.CacheWriteKnown = m["cache_creation_input_tokens"].(float64)
+		u.CachedKnown = numeric(m["cache_read_input_tokens"])
+		u.CacheWriteKnown = numeric(m["cache_creation_input_tokens"])
 		u.Input = number(m["input_tokens"]) + u.Cached + u.CacheWrite
 		u.Output = number(m["output_tokens"])
 	} else {
@@ -49,14 +60,14 @@ func usageOf(p Protocol, m object) Tokens {
 		}
 		u.Cached = number(detail["cached_tokens"])
 		u.CacheWrite = number(detail["cache_creation_tokens"])
-		_, u.CachedKnown = detail["cached_tokens"].(float64)
-		_, u.CacheWriteKnown = detail["cache_creation_tokens"].(float64)
+		u.CachedKnown = numeric(detail["cached_tokens"])
+		u.CacheWriteKnown = numeric(detail["cache_creation_tokens"])
 		od := obj(m["output_tokens_details"])
 		if p == Chat {
 			od = obj(m["completion_tokens_details"])
 		}
 		u.Reasoning = number(od["reasoning_tokens"])
-		_, u.ReasoningKnown = od["reasoning_tokens"].(float64)
+		u.ReasoningKnown = numeric(od["reasoning_tokens"])
 	}
 	return u
 }
@@ -96,7 +107,7 @@ func (u Tokens) Encode(p Protocol) object {
 }
 func DecodeReply(p Protocol, b []byte) (*Reply, error) {
 	var m object
-	if json.Unmarshal(b, &m) != nil || m == nil {
+	if decodeJSON(b, &m) != nil || m == nil {
 		return nil, errors.New("invalid upstream response JSON")
 	}
 	r := &Reply{ID: str(m["id"]), Model: str(m["model"]), Usage: usageOf(p, obj(m["usage"]))}

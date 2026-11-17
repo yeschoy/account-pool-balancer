@@ -59,7 +59,7 @@ func GroupForProvider(provider string) string {
 		return PerchGroup
 	case ProviderTokenHarbor:
 		return TokenHarborGroup
-	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI, ProviderX50:
+	case ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderFactory, ProviderALTAPI, ProviderX50:
 		return provider
 	}
 	return DefaultGroup
@@ -136,13 +136,15 @@ const (
 )
 
 // Providers are the pools Validate accepts.
-var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderALTAPI, ProviderX50}
+var Providers = []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderPerch, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo, ProviderMistral, ProviderModelStudio, ProviderDeploy, ProviderFactory, ProviderALTAPI, ProviderX50}
 
 // ProviderForKey infers the provider from a runtime key's prefix. It returns
 // "" for a key whose prefix identifies no provider (an ollama.com API key or a
 // key of a self-hosted Ollama): such an account must name its provider.
 func ProviderForKey(key string) string {
 	switch {
+	case strings.HasPrefix(key, FactoryKeyPrefix):
+		return ProviderFactory
 	case strings.HasPrefix(key, "sk-50x-"):
 		return ProviderX50
 	case strings.HasPrefix(key, MistralKeyPrefix):
@@ -183,6 +185,9 @@ func ModalTokenIncomplete(key string) bool {
 
 // ValidRuntimeKeyFor reports whether key may be provider's runtime key.
 func ValidRuntimeKeyFor(provider, key string) bool {
+	if strings.HasPrefix(key, FactoryKeyPrefix) && provider != ProviderFactory {
+		return false
+	}
 	if strings.HasPrefix(key, "sk-50x-") && provider != ProviderX50 {
 		return false
 	}
@@ -190,6 +195,8 @@ func ValidRuntimeKeyFor(provider, key string) bool {
 		return false
 	}
 	switch provider {
+	case ProviderFactory:
+		return strings.HasPrefix(key, FactoryKeyPrefix) && len(key) > 10 && openCodeTokenRe.MatchString(key)
 	case ProviderRiver:
 		return strings.HasPrefix(key, RiverKeyPrefix)
 	case ProviderX50:
@@ -243,11 +250,11 @@ func KnownProvider(p string) bool {
 func ResolveProvider(declared, key string) string {
 	// OpenCode credentials are opaque and can overlap sk-/other prefixes.
 	// Only an explicit declaration selects a tier; never infer it from a key.
-	if IsOpenCode(declared) || declared == ProviderMistral || declared == ProviderDeploy || declared == ProviderALTAPI {
+	if IsOpenCode(declared) || declared == ProviderMistral || declared == ProviderDeploy || declared == ProviderFactory || declared == ProviderALTAPI {
 		return declared
 	}
 	switch inferred := ProviderForKey(key); inferred {
-	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral, ProviderModelStudio, ProviderX50:
+	case ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderMistral, ProviderModelStudio, ProviderX50, ProviderFactory:
 		return inferred
 	}
 	if declared == "" {
@@ -320,6 +327,8 @@ func (c *Config) hasModelStudioPool() bool {
 // runtimeKeyError is the hint for a key its declared provider can't accept.
 func runtimeKeyError(provider string) string {
 	switch provider {
+	case ProviderFactory:
+		return "Factory runtime key must be a complete fk- API key without whitespace"
 	case ProviderOpenCodeZen, ProviderOpenCodeGo:
 		return "OpenCode runtime key must be an 8..512 character ASCII API token without whitespace"
 	case ProviderX50:
@@ -368,6 +377,8 @@ func (c *Config) RulesFor(provider string) ([]rules.ErrorRule, []rules.RetryRule
 		return c.TokenHarborErrorRules, c.TokenHarborRetryRules
 	case ProviderX50:
 		return c.X50ErrorRules, c.X50RetryRules
+	case ProviderFactory:
+		return c.FactoryErrorRules, c.FactoryRetryRules
 	case ProviderDeploy:
 		return c.DeployErrorRules, c.DeployRetryRules
 	case ProviderALTAPI:
@@ -403,6 +414,8 @@ func DefaultErrorRulesFor(provider string) []rules.ErrorRule {
 		return rules.DefaultTokenHarborErrorRules()
 	case ProviderX50:
 		return rules.DefaultX50ErrorRules()
+	case ProviderFactory:
+		return rules.DefaultFactoryErrorRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployErrorRules()
 	case ProviderALTAPI:
@@ -437,6 +450,8 @@ func DefaultRetryRulesFor(provider string) []rules.RetryRule {
 		return rules.DefaultTokenHarborRetryRules()
 	case ProviderX50:
 		return rules.DefaultX50RetryRules()
+	case ProviderFactory:
+		return rules.DefaultFactoryRetryRules()
 	case ProviderDeploy:
 		return rules.DefaultDeployRetryRules()
 	case ProviderALTAPI:
@@ -553,6 +568,11 @@ func (c *Config) RuntimeBase(a Account) string {
 			return c.X50.BaseURL
 		}
 		return X50DefaultBase
+	case ProviderFactory:
+		if c.Factory.BaseURL != "" {
+			return c.Factory.BaseURL
+		}
+		return FactoryDefaultBase
 	case ProviderDeploy:
 		if c.Deploy.BaseURL != "" {
 			return c.Deploy.BaseURL
@@ -1062,16 +1082,17 @@ func DefaultPerch() Perch {
 }
 
 type Config struct {
-	index      *configIndex // immutable derived lookups; excluded from JSON/Clone
-	Version    int          `json:"version"`
-	Revision   int64        `json:"revision"`
-	Upstream   Upstream     `json:"upstream"`
-	Admin      Admin        `json:"admin"`
-	ClientKeys []ClientKey  `json:"clientKeys"`
-	ImportKeys []ImportKey  `json:"importKeys"`
-	Accounts   []Account    `json:"accounts"`
-	Routing    Routing      `json:"routing"`
-	Quota      Quota        `json:"quota"`
+	index        *configIndex    // immutable derived lookups; excluded from JSON/Clone
+	PoolSwitches map[string]bool `json:"poolSwitches,omitempty"`
+	Version      int             `json:"version"`
+	Revision     int64           `json:"revision"`
+	Upstream     Upstream        `json:"upstream"`
+	Admin        Admin           `json:"admin"`
+	ClientKeys   []ClientKey     `json:"clientKeys"`
+	ImportKeys   []ImportKey     `json:"importKeys"`
+	Accounts     []Account       `json:"accounts"`
+	Routing      Routing         `json:"routing"`
+	Quota        Quota           `json:"quota"`
 	// ErrorRules / RetryRules are the OpenDesign pool's; River and Ollama
 	// have their own.
 	ErrorRules       []rules.ErrorRule `json:"errorRules"`
@@ -1102,6 +1123,9 @@ type Config struct {
 	X50                   X50               `json:"x50"`
 	X50ErrorRules         []rules.ErrorRule `json:"x50ErrorRules"`
 	X50RetryRules         []rules.RetryRule `json:"x50RetryRules"`
+	Factory               Factory           `json:"factory"`
+	FactoryErrorRules     []rules.ErrorRule `json:"factoryErrorRules"`
+	FactoryRetryRules     []rules.RetryRule `json:"factoryRetryRules"`
 	Deploy                Deploy            `json:"deploy"`
 	ALTAPI                ALTAPI            `json:"altapi"`
 	DeployErrorRules      []rules.ErrorRule `json:"deployErrorRules"`
@@ -1160,6 +1184,9 @@ func Default() *Config {
 		X50:                   DefaultX50(),
 		X50ErrorRules:         rules.DefaultX50ErrorRules(),
 		X50RetryRules:         rules.DefaultX50RetryRules(),
+		Factory:               DefaultFactory(),
+		FactoryErrorRules:     rules.DefaultFactoryErrorRules(),
+		FactoryRetryRules:     rules.DefaultFactoryRetryRules(),
 		Deploy:                DefaultDeploy(),
 		DeployErrorRules:      rules.DefaultDeployErrorRules(),
 		DeployRetryRules:      rules.DefaultDeployRetryRules(),
@@ -1429,6 +1456,9 @@ func (c *Config) DirectEgressAccounts() int {
 }
 func (c *Config) Normalize() error {
 	c.index = nil // validation must inspect current mutable groups/credentials
+	if err := c.normalizePoolSwitches(); err != nil {
+		return err
+	}
 	d := Default()
 	if c.Version == 0 {
 		c.Version = 1
@@ -1562,6 +1592,9 @@ func (c *Config) Normalize() error {
 	if err := c.normalizeX50(); err != nil {
 		return err
 	}
+	if err := c.normalizeFactory(); err != nil {
+		return err
+	}
 	if err := c.normalizeDeploy(); err != nil {
 		return err
 	}
@@ -1664,6 +1697,9 @@ func (c *Config) Normalize() error {
 		// the key's prefix settles the provider when it names one, so a
 		// swapped key can never leave a stale provider behind; otherwise the
 		// stored provider stands (an Ollama key carries no prefix)
+		if strings.HasPrefix(a.RuntimeKey, FactoryKeyPrefix) && a.Provider != "" && a.Provider != ProviderFactory {
+			return fmt.Errorf("accounts[%s]: Factory key cannot belong to another provider", a.ID)
+		}
 		if strings.HasPrefix(a.RuntimeKey, "sk-50x-") && a.Provider != "" && a.Provider != ProviderX50 {
 			return fmt.Errorf("accounts[%s]: 50X key cannot belong to another provider", a.ID)
 		}
@@ -1723,7 +1759,7 @@ func (c *Config) Normalize() error {
 		if !groupRe.MatchString(a.Group) {
 			return fmt.Errorf("accounts[%s]: invalid group", a.ID)
 		}
-		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup || a.Provider == ProviderDeploy || a.Group == ProviderDeploy || a.Provider == ProviderX50 || a.Group == ProviderX50 {
+		if IsOpenCode(a.Provider) || a.Provider == ProviderMistral || a.Group == MistralGroup || a.Provider == ProviderDeploy || a.Group == ProviderDeploy || a.Provider == ProviderFactory || a.Group == ProviderFactory || a.Provider == ProviderX50 || a.Group == ProviderX50 {
 			for _, p := range Providers {
 				if p != a.Provider && GroupForProvider(p) == a.Group {
 					return fmt.Errorf("accounts[%s]: provider requires its own group", a.ID)
@@ -1921,13 +1957,14 @@ func (c *Config) Normalize() error {
 	if err := c.Pricing.Normalize(); err != nil {
 		return err
 	}
-	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing, c.ALTAPI.Routing, c.X50.Routing} {
+	for _, r := range []*Routing{c.OpenCode.ZenRouting, c.OpenCode.GoRouting, c.TokenHarbor.Routing, c.Mistral.Routing, c.ModelStudio.Routing, c.Deploy.Routing, c.Factory.Routing, c.ALTAPI.Routing, c.X50.Routing} {
 		if r == nil {
 			continue
 		}
 		nested := c.Clone()
 		nested.OpenCode.ZenRouting, nested.OpenCode.GoRouting = nil, nil
 		nested.TokenHarbor.Routing, nested.Mistral.Routing, nested.ModelStudio.Routing, nested.Deploy.Routing, nested.ALTAPI.Routing, nested.X50.Routing = nil, nil, nil, nil, nil, nil
+		nested.Factory.Routing = nil
 		nested.Routing = *r
 		if err := nested.Normalize(); err != nil {
 			return fmt.Errorf("provider routing: %w", err)

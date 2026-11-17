@@ -216,7 +216,7 @@ func (s *Server) apiMistralCandidateRegister(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "already running"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(s.poolWorkContext("mistral"), 15*time.Minute)
 	m.running[id] = cancel
 	m.mu.Unlock()
 
@@ -364,6 +364,11 @@ func mistralPythonPath() string {
 }
 
 func (s *Server) runMistralWorker(ctx context.Context, c mistralsignupstore.Candidate, skipRegister bool, proxyIndex int) (mistralWorkerResult, error) {
+	ctx, cancel := s.poolJobContext(ctx, "mistral")
+	defer cancel()
+	if ctx.Err() != nil {
+		return mistralWorkerResult{}, errors.New("Mistral pool disabled")
+	}
 	var out mistralWorkerResult
 
 	payload := map[string]any{

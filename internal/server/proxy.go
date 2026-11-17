@@ -23,6 +23,7 @@ import (
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/egressid"
+	"account-pool-balancer/internal/factory"
 	"account-pool-balancer/internal/opencode"
 	"account-pool-balancer/internal/pool"
 	"account-pool-balancer/internal/quota"
@@ -54,59 +55,60 @@ type workflowDecision struct {
 }
 
 type requestLog struct {
-	failureDetails      map[int]bool // bounded by attempts; not serialized
-	TS                  time.Time    `json:"ts"`
-	RequestID           string       `json:"requestId"`
-	ClientKeyID         string       `json:"clientKeyId,omitempty"`
-	ClientKeyName       string       `json:"clientKeyName,omitempty"`
-	Group               string       `json:"group,omitempty"`
-	Provider            string       `json:"provider,omitempty"`
-	Path                string       `json:"path"`
-	InboundProtocol     string       `json:"inboundProtocol"`
-	Protocol            string       `json:"protocol"`
-	Model               string       `json:"model"`
-	Stream              bool         `json:"stream"`
-	AccountID           string       `json:"accountId,omitempty"`
-	AccountName         string       `json:"accountName,omitempty"`
-	Proxy               string       `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
-	SelectionReason     string       `json:"selectionReason,omitempty"`
-	Selector            string       `json:"selector"`
-	Overflow            bool         `json:"overflow"`
-	Switched            bool         `json:"switched"`
-	ClientFamily        string       `json:"clientFamily,omitempty"`
-	CacheHintSource     string       `json:"cacheHintSource,omitempty"`
-	CacheAffinityResult string       `json:"cacheAffinityResult,omitempty"`
-	CacheControl        bool         `json:"cacheControl,omitempty"`
-	EgressStatus        string       `json:"egressStatus,omitempty"`
-	EgressIP            string       `json:"egressIp,omitempty"`
-	SessionSource       string       `json:"sessionSource"`
-	AffinityKeyType     string       `json:"affinityKeyType"`
-	AffinityConfidence  string       `json:"affinityConfidence"`
-	BindingResult       string       `json:"bindingResult"`
-	Status              int          `json:"status"`
-	Result              string       `json:"result"`
-	UpstreamStatus      *int         `json:"upstreamStatus"`
-	ErrorCategory       string       `json:"errorCategory,omitempty"`
-	BlockedBy           string       `json:"blockedBy,omitempty"`
-	RetryAfter          *int         `json:"retryAfter,omitempty"`
-	DurationMs          int64        `json:"durationMs"`
-	UseTimeSec          *int64       `json:"useTimeSec,omitempty"`
-	AverageTPS          *float64     `json:"averageTps,omitempty"`
-	TTFTMs              *int64       `json:"ttftMs"`
-	UpstreamDurationMs  *int64       `json:"upstreamDurationMs,omitempty"`
-	UpstreamOutputMs    *int64       `json:"upstreamOutputMs,omitempty"`
-	UpstreamTPS         *float64     `json:"upstreamTps,omitempty"`
-	UpstreamTPSBasis    string       `json:"upstreamTpsBasis,omitempty"`
-	InputTokens         *int64       `json:"inputTokens"`
-	OutputTokens        *int64       `json:"outputTokens"`
-	CachedTokens        *int64       `json:"cachedTokens"`
-	CacheCreationTokens *int64       `json:"cacheCreationTokens,omitempty"`
-	ReasoningTokens     *int64       `json:"reasoningTokens,omitempty"`
-	CacheHit            *bool        `json:"cacheHit"`
-	CacheRate           *float64     `json:"cacheRate"`      // cached share of the prompt, 0..1
-	Cost                *float64     `json:"cost,omitempty"` // in Currency, from the price table
-	Currency            string       `json:"currency,omitempty"`
-	UpstreamRequestID   string       `json:"upstreamRequestId,omitempty"` // provider trace of the upstream response that was delivered
+	factoryPlan         *factoryRequestPlan // private per-request wire adapters; never persisted
+	failureDetails      map[int]bool        // bounded by attempts; not serialized
+	TS                  time.Time           `json:"ts"`
+	RequestID           string              `json:"requestId"`
+	ClientKeyID         string              `json:"clientKeyId,omitempty"`
+	ClientKeyName       string              `json:"clientKeyName,omitempty"`
+	Group               string              `json:"group,omitempty"`
+	Provider            string              `json:"provider,omitempty"`
+	Path                string              `json:"path"`
+	InboundProtocol     string              `json:"inboundProtocol"`
+	Protocol            string              `json:"protocol"`
+	Model               string              `json:"model"`
+	Stream              bool                `json:"stream"`
+	AccountID           string              `json:"accountId,omitempty"`
+	AccountName         string              `json:"accountName,omitempty"`
+	Proxy               string              `json:"proxy,omitempty"` // egress label: proxy host:port or "direct"
+	SelectionReason     string              `json:"selectionReason,omitempty"`
+	Selector            string              `json:"selector"`
+	Overflow            bool                `json:"overflow"`
+	Switched            bool                `json:"switched"`
+	ClientFamily        string              `json:"clientFamily,omitempty"`
+	CacheHintSource     string              `json:"cacheHintSource,omitempty"`
+	CacheAffinityResult string              `json:"cacheAffinityResult,omitempty"`
+	CacheControl        bool                `json:"cacheControl,omitempty"`
+	EgressStatus        string              `json:"egressStatus,omitempty"`
+	EgressIP            string              `json:"egressIp,omitempty"`
+	SessionSource       string              `json:"sessionSource"`
+	AffinityKeyType     string              `json:"affinityKeyType"`
+	AffinityConfidence  string              `json:"affinityConfidence"`
+	BindingResult       string              `json:"bindingResult"`
+	Status              int                 `json:"status"`
+	Result              string              `json:"result"`
+	UpstreamStatus      *int                `json:"upstreamStatus"`
+	ErrorCategory       string              `json:"errorCategory,omitempty"`
+	BlockedBy           string              `json:"blockedBy,omitempty"`
+	RetryAfter          *int                `json:"retryAfter,omitempty"`
+	DurationMs          int64               `json:"durationMs"`
+	UseTimeSec          *int64              `json:"useTimeSec,omitempty"`
+	AverageTPS          *float64            `json:"averageTps,omitempty"`
+	TTFTMs              *int64              `json:"ttftMs"`
+	UpstreamDurationMs  *int64              `json:"upstreamDurationMs,omitempty"`
+	UpstreamOutputMs    *int64              `json:"upstreamOutputMs,omitempty"`
+	UpstreamTPS         *float64            `json:"upstreamTps,omitempty"`
+	UpstreamTPSBasis    string              `json:"upstreamTpsBasis,omitempty"`
+	InputTokens         *int64              `json:"inputTokens"`
+	OutputTokens        *int64              `json:"outputTokens"`
+	CachedTokens        *int64              `json:"cachedTokens"`
+	CacheCreationTokens *int64              `json:"cacheCreationTokens,omitempty"`
+	ReasoningTokens     *int64              `json:"reasoningTokens,omitempty"`
+	CacheHit            *bool               `json:"cacheHit"`
+	CacheRate           *float64            `json:"cacheRate"`      // cached share of the prompt, 0..1
+	Cost                *float64            `json:"cost,omitempty"` // in Currency, from the price table
+	Currency            string              `json:"currency,omitempty"`
+	UpstreamRequestID   string              `json:"upstreamRequestId,omitempty"` // provider trace of the upstream response that was delivered
 	// Conversations is how many distinct accounts this request tried while a
 	// conversation fingerprint was present. It stays 1 while every attempt
 	// remained on one account, and only exceeds 1 when a failover handed one
@@ -359,6 +361,8 @@ func poolPathOK(provider, path string) bool {
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/responses/input_tokens" || path == "/v1/fim/completions" || path == "/v1/embeddings"
 	case config.ProviderTokenHarbor:
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
+	case config.ProviderFactory:
+		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
 	case config.ProviderDeploy, config.ProviderX50:
 		return path == "/v1/chat/completions" // GET /models is handled before this POST-only gate.
 	case config.ProviderModelStudio:
@@ -477,7 +481,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok && !unpricedWrites {
 			cost, rec.Cost, rec.Currency = c, &c, cur
 		}
-		if (rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor || config.NativeChatOnly(rec.Provider)) && result == "failed" && len(rec.Attempts) == 0 && (rec.Provider != config.ProviderX50 || cfg.X50.ErrorsEnabled()) {
+		if (rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor || config.NativeGateway(rec.Provider)) && result == "failed" && len(rec.Attempts) == 0 && (rec.Provider != config.ProviderX50 || cfg.X50.ErrorsEnabled()) {
 			s.logs.Append("errors", rec.TS, errorLog{TS: rec.TS, RequestID: rid, Provider: rec.Provider, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, AccountID: rec.AccountID, AccountName: rec.AccountName, Model: rec.Model, Status: status, Category: rec.ErrorCategory, Terminal: "local_block", Origin: "local", Egress: rec.Proxy, Reason: rec.Provider + " gateway blocked " + rec.ErrorCategory, MatchedBy: "gateway", HealthAction: "none", RetryDecision: "stop"})
 		}
 		if rec.cacheAudit != nil {
@@ -486,7 +490,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if rec.Provider != config.ProviderX50 || cfg.X50.RequestsEnabled() {
 			s.logs.Append("requests", rec.TS, rec)
 		}
-		if cw != nil && detailEnabled && ((rec.Provider != config.ProviderTokenHarbor && !config.NativeChatOnly(rec.Provider)) || result != "failed" || len(rec.failureDetails) == 0) {
+		if cw != nil && detailEnabled && ((rec.Provider != config.ProviderTokenHarbor && !config.NativeGateway(rec.Provider)) || result != "failed" || len(rec.failureDetails) == 0) {
 			max := cw.max
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
 				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
@@ -509,7 +513,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
 				capturedBody = goPrivateBody(reqBody)
 			}
-			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
+			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
 				d.RequestHeaders = maskHeaders(cfg, thPrivateHeaders(reqHeader))
 				for _, name := range cfg.Routing.SessionHeaders {
 					for key := range d.RequestHeaders {
@@ -529,7 +533,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			respBody, cut := cw.body()
 			if rec.Provider == config.ProviderOpenCodeGo {
 				respBody = goPrivateBody(respBody)
-			} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
+			} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
 				respBody = thPrivateBody(respBody, detailIdentities)
 			}
 			d.ResponseBody, _ = maskBody(cfg, respBody, len(respBody))
@@ -566,8 +570,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if rec.Provider == config.ProviderMistral {
 		rec.ClientRequestHeaders, rec.ClientSessionHeaderStatus, rec.ClientRequestHeadersTruncated = mistralClientRequestHeaders(cfg, r.Header)
 	}
-	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
-		if rec.Provider == config.ProviderX50 {
+	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
+		if rec.Provider == config.ProviderFactory {
+			detailEnabled = cfg.Factory.DetailLog
+		} else if rec.Provider == config.ProviderX50 {
 			detailEnabled = cfg.X50.DetailLog
 		} else if rec.Provider == config.ProviderDeploy {
 			detailEnabled = cfg.Deploy.DetailLog
@@ -594,6 +600,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			cw.max = limit
 		}
+	}
+	if !cfg.PoolEnabled(rec.Provider) {
+		rec.ErrorCategory = "provider-disabled"
+		writeLocalError(w, proto, 503, "api_error", "pool_disabled", "this account pool is disabled", 0)
+		finish(503, "failed")
+		return
 	}
 	if rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor {
 		rec.ClientFamily = goClientFamily(r.Header, nil)
@@ -649,9 +661,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		finish(499, "client_cancelled")
 		return
 	}
-	obj, err := parseRoutingBodyWithHistory(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider), rec.Provider != config.ProviderMistral)
+	obj, err := parseRoutingBodyWithHistory(body, rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider), rec.Provider != config.ProviderMistral)
 	if err != nil {
-		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
+		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
 			redactionObject, _ := parseRequestBody(body) // identity removal only; never used for admission
 			detailIdentities = thIdentityValues(r.Header, redactionObject, cfg.Routing.SessionHeaders)
 			if rec.Provider == config.ProviderMistral {
@@ -660,14 +672,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.ErrorCategory = "request"
 		message := "request body must be a JSON object"
-		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
+		if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
 			message = "request body must be valid JSON with at most one lowercase model field"
 		}
 		writeLocalError(w, proto, http.StatusBadRequest, "invalid_request_error", "invalid_json", message, 0)
 		finish(http.StatusBadRequest, "failed")
 		return
 	}
-	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) {
+	if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
 		detailIdentities = thIdentityValues(r.Header, obj, cfg.Routing.SessionHeaders)
 		if rec.Provider == config.ProviderMistral {
 			detailIdentities = append(detailIdentities, mistralClaudeIdentityValues(obj)...)
@@ -693,6 +705,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		body = prepared
 	}
 	rec.Model, _ = obj["model"].(string)
+	if rec.Provider == config.ProviderFactory {
+		rec.factoryPlan, err = prepareFactory(cfg, r.URL.Path, body)
+		if err != nil {
+			rec.ErrorCategory = "request"
+			writeLocalError(w, proto, 400, "invalid_request_error", "factory_model_protocol", err.Error(), 0)
+			finish(400, "failed")
+			return
+		}
+		rec.Model = rec.factoryPlan.model
+	}
 	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
 		rec.ErrorCategory = "request"
 		writeLocalError(w, proto, 400, "invalid_request_error", "invalid_model", "TokenHarbor requires an explicit nonempty model for Pass enforcement", 0)
@@ -716,11 +738,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.Stream, _ = obj["stream"].(bool)
-	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && rec.Provider != config.ProviderOllama && !config.NativeChatOnly(rec.Provider) {
+	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && rec.Provider != config.ProviderOllama && !config.NativeGateway(rec.Provider) {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
 	identityScope := ck.Group
-	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral || config.NativeChatOnly(rec.Provider) || rec.Provider == config.ProviderALTAPI {
+	if config.StrictResponses(rec.Provider) || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) || rec.Provider == config.ProviderALTAPI {
 		identityScope += "\x00" + ck.ID
 	}
 	var ident Identity
@@ -730,7 +752,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		ident.UpstreamSession = s.goUpstreamSession(cfg, identityScope, r.Header, obj, ident)
 		rec.ClientFamily = goClientFamily(r.Header, obj)
 		rec.CacheControl = bytes.Contains(body, []byte(`"cache_control"`))
-	} else if rec.Provider == config.ProviderTokenHarbor {
+	} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderFactory {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
 		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
 	} else if rec.Provider == config.ProviderMistral {
@@ -816,6 +838,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	strippedTools := 0
 	maxAttempts := rootCfg.ForProvider(keyPool(rootCfg, ck)).Routing.MaxAccounts
 	for i := 0; i < maxAttempts; i++ {
+		if !s.cfg.Get().PoolEnabled(rec.Provider) {
+			if last != nil {
+				break
+			}
+			rec.ErrorCategory = "provider-disabled"
+			writeLocalError(w, proto, 503, "api_error", "pool_disabled", "this account pool is disabled", 0)
+			finish(503, "failed")
+			return
+		}
 		wait := time.Duration(cfg.Routing.ConcurrencyWaitMs) * time.Millisecond
 		maxWaiters := 0
 		if rec.Provider == config.ProviderMistral {
@@ -831,7 +862,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			Group: routeGroup, Model: rec.Model, RequestID: rid,
 			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit", ClientKeyID: ck.ID,
 			Excluded: excluded, Wait: wait, MaxWaiters: maxWaiters,
-			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider),
+			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider) && (rec.Provider != config.ProviderFactory || stateful),
 		})
 		if err != nil {
 			if r.Context().Err() != nil {
@@ -887,6 +918,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		d := lease.Decision
 		acct := lease.Account
+		if !s.cfg.Get().PoolEnabled(acct.Provider) {
+			lease.Release()
+			if last != nil {
+				break
+			}
+			rec.ErrorCategory = "provider-disabled"
+			writeLocalError(w, proto, 503, "api_error", "pool_disabled", "this account pool was disabled while waiting", 0)
+			finish(503, "failed")
+			return
+		}
 		if config.IsOpenCode(acct.Provider) {
 			rec.Provider = acct.Provider
 			rec.Selector = cfg.Routing.Strategy
@@ -926,7 +967,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if rec.Provider == config.ProviderMistral && len(rec.upstreamIdentities) > 0 {
 			res.privateIdentities = rec.upstreamIdentities
 		}
-		if (rec.Provider == config.ProviderTokenHarbor || config.NativeChatOnly(rec.Provider)) && (res.kind == outFailed || res.result == "failed") {
+		if (rec.Provider == config.ProviderTokenHarbor || config.NativeGateway(rec.Provider)) && (res.kind == outFailed || res.result == "failed") {
 			s.thFailureDetail(cfg, rec, r, body, res, i)
 		}
 		lease.Release()
@@ -973,7 +1014,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		att.Action, att.RuleID = ev.action, ev.ruleID
 		rec.Attempts = append(rec.Attempts, att)
 		last = res
-		if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && !config.NativeChatOnly(rec.Provider) && res.status == http.StatusBadRequest && strippedTools < 3 {
+		if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && !config.NativeGateway(rec.Provider) && res.status == http.StatusBadRequest && strippedTools < 3 {
 			// the upstream refuses a hosted tool (e.g. web_search) on this route:
 			// drop that tool type and ask the same account again
 			if nb, ok := stripUnsupportedTool(body, res.body); ok {
@@ -1069,7 +1110,7 @@ type evaluation struct {
 func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string, res *attemptResult, rid string, idx int, keyID, keyName string) evaluation {
 	now := time.Now()
 	reasonBody := res.body
-	if acct.Provider == config.ProviderTokenHarbor || acct.Provider == config.ProviderMistral || config.NativeChatOnly(acct.Provider) {
+	if acct.Provider == config.ProviderTokenHarbor || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider) {
 		reasonBody, _ = thBodyPreview(reasonBody, res.privateIdentities, 16<<10)
 	}
 	reason, truncated := errorReason(cfg, reasonBody, res.contentType)
@@ -1108,6 +1149,12 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	switch res.terminal {
 	case "upstream_http", "upstream_envelope":
 		st := res.status
+		if acct.Provider == config.ProviderFactory && factoryPolicyRefused(st, res.body, res.header) {
+			res.downstreamStatus, res.ruleID, res.category = 403, "factory-policy", "policy"
+			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = "factory-policy", rules.ActionIgnore, "none", "provider-policy", "stop", "policy"
+			s.logs.Append("errors", el.TS, el)
+			return ev
+		}
 		if acct.Provider == config.ProviderTokenHarbor && rules.IsTokenHarborSpendConfirmation(st, redacted) {
 			res.ruleID, res.category = "tokenharbor-spend-confirmation", "spend-confirmation"
 			el.RuleID, el.RuleAction, el.HealthAction, el.MatchedBy, el.RetryDecision, el.Category = res.ruleID, rules.ActionIgnore, "none", "provider-policy", "stop", res.category
@@ -1243,7 +1290,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		// Legacy pools let account cooldown/quarantine override a stop rule.
 		// Native-chat pools and ALTAPI apply health actions but honor an
 		// explicit stop: a rate limit/challenge must not trigger key rotation.
-		if retry != nil && (config.NativeChatOnly(acct.Provider) || acct.Provider == config.ProviderALTAPI || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
+		if retry != nil && (config.NativeGateway(acct.Provider) || acct.Provider == config.ProviderALTAPI || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
 			ev.switchAccount = false
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"
@@ -1251,14 +1298,14 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 	case "compatibility", "egress", "policy_pause", "incomplete_stream", "resource_limit":
 		sample, el.HealthAction = false, "none"
 	case "timeout":
-		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeChatOnly(acct.Provider) {
+		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider) {
 			ev.switchAccount = !res.sent.Load()
 			sample, el.HealthAction = false, "none"
 		}
 	case "proxy", "network":
 		// never sent: another account can take it without double billing
 		ev.switchAccount = !res.sent.Load()
-		if (config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeChatOnly(acct.Provider)) && res.category == "proxy" {
+		if (config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider)) && res.category == "proxy" {
 			sample, el.HealthAction = false, "none"
 		}
 	}
@@ -1494,12 +1541,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return res
 		}
 	}
+	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil {
+		ocFrom, ocTo, body = rec.factoryPlan.from, rec.factoryPlan.to, rec.factoryPlan.body
+	}
 	var sentOnce sync.Once
 	markSent := func() { sentOnce.Do(func() { res.sent.Store(true); lease.MarkSent() }) }
 	trace := &httptrace.ClientTrace{WroteHeaders: func() {
 		// Partial body writes are uncertain too: once headers left the socket,
 		// OpenCode must not replay a network failure on another account.
-		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeChatOnly(acct.Provider) {
+		if config.StrictResponses(acct.Provider) || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider) {
 			markSent()
 		}
 	}, WroteRequest: func(i httptrace.WroteRequestInfo) {
@@ -1534,7 +1584,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// the caller names a model by the pool's public name (a base model when
 	// several accounts serve it under their own ids); this account may only
 	// know it by one of its own, so translate before sending
-	if acct.Provider != config.ProviderTokenHarbor && acct.Provider != config.ProviderMistral && !config.NativeChatOnly(acct.Provider) {
+	if acct.Provider != config.ProviderTokenHarbor && acct.Provider != config.ProviderMistral && !config.NativeGateway(acct.Provider) {
 		body = s.upstreamBody(cfg, acct.ID, rec.Model, body)
 	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(actx, trace), http.MethodPost, target, bytes.NewReader(body))
@@ -1548,7 +1598,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// which is a stronger signal than an honest library name. Only a browser
 	// User-Agent is completed this way: Codex, Claude Code and OpenCode send
 	// their own product strings and must keep them untouched.
-	if acct.Provider != config.ProviderOllama {
+	if acct.Provider != config.ProviderOllama && acct.Provider != config.ProviderFactory {
 		completeBrowserHints(req.Header)
 	}
 	if acct.Provider == config.ProviderTokenHarbor {
@@ -1566,6 +1616,40 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		if ocTo == opencode.Messages {
 			req.Header.Del("Authorization")
 			req.Header.Set("X-Api-Key", acct.RuntimeKey)
+			if req.Header.Get("Anthropic-Version") == "" {
+				req.Header.Set("Anthropic-Version", "2023-06-01")
+			}
+		}
+	case config.ProviderFactory:
+		m, _ := cfg.Factory.Model(rec.Model)
+		for name := range req.Header {
+			lower := strings.ToLower(name)
+			if strings.HasPrefix(lower, "x-factory-") || strings.HasPrefix(lower, "x-provider-routing-") {
+				req.Header.Del(name)
+			}
+		}
+		req.Header.Set("X-Api-Provider", m.Upstream)
+		req.Header.Del("X-Factory-Org-Id")
+		req.Header.Del("X-Factory-Client")
+		req.Header.Del("X-Client-Version")
+		req.Header.Set("User-Agent", "account-pool-balancer/factory-gateway")
+		if ocTo == opencode.Messages {
+			if rec.factoryPlan != nil && rec.factoryPlan.beta {
+				betas := strings.Split(req.Header.Get("Anthropic-Beta"), ",")
+				found := false
+				for _, beta := range betas {
+					if strings.TrimSpace(beta) == factoryFastBeta {
+						found = true
+					}
+				}
+				if !found {
+					value := strings.TrimSpace(req.Header.Get("Anthropic-Beta"))
+					if value != "" {
+						value += ","
+					}
+					req.Header.Set("Anthropic-Beta", value+factoryFastBeta)
+				}
+			}
 			if req.Header.Get("Anthropic-Version") == "" {
 				req.Header.Set("Anthropic-Version", "2023-06-01")
 			}
@@ -1640,7 +1724,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 
 	var client *http.Client
-	if acct.Provider == config.ProviderMistral {
+	if acct.Provider == config.ProviderFactory {
+		client = s.factoryHTTPClient(cfg, acct.ProxyURL)
+	} else if acct.Provider == config.ProviderMistral {
 		client = s.mistralHTTPClient(cfg, acct.ProxyURL)
 	} else if acct.Provider == config.ProviderX50 {
 		client = s.x50HTTPClient(cfg, acct.ProxyURL)
@@ -1709,6 +1795,25 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		res.kind, res.status, res.body, res.terminal, res.category = outFailed, resp.StatusCode, b, "upstream_http", "upstream"
 		return res
 	}
+	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil && len(rec.factoryPlan.tools) > 0 {
+		resp.Header.Del("Content-Length")
+		resp.Header.Del("Content-Encoding")
+		if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+			resp.Body = factory.UnwrapStream(resp.Body, rec.factoryPlan.tools)
+		} else if strings.Contains(strings.ToLower(ct), "json") {
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
+			if readErr != nil || len(raw) > 16<<20 {
+				return factoryAdaptationFailure(res)
+			}
+			adapted, adaptErr := factory.UnwrapReply(raw, rec.factoryPlan.tools)
+			if adaptErr != nil {
+				return factoryAdaptationFailure(res)
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(adapted))
+		} else {
+			return factoryAdaptationFailure(res)
+		}
+	}
 	if ocTo != "" && ocFrom != ocTo {
 		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
 		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
@@ -1743,6 +1848,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		return res
 	}
 	var m map[string]any
+	if acct.Provider == config.ProviderFactory && !factoryCompletionValid(b, r.URL.Path) {
+		res.kind, res.status, res.body, res.terminal, res.category = outFailed, 502, []byte(`{"error":{"message":"Factory returned an invalid or incomplete native response"}}`), "compatibility", "compatibility"
+		return res
+	}
 	if json.Unmarshal(b, &m) == nil && m != nil {
 		if isEnvelopeError(m) {
 			res.kind, res.status, res.body, res.terminal, res.category = outFailed, errorStatus(m, b), b, "upstream_envelope", "upstream"
@@ -2027,7 +2136,7 @@ type evMsg struct {
 
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
 	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string, audit *cacheAuditAttempt) *attemptResult {
-	mistralResponses := lease.Account.Provider == config.ProviderMistral && r.URL.Path == "/v1/responses"
+	mistralResponses := (lease.Account.Provider == config.ProviderMistral || lease.Account.Provider == config.ProviderFactory) && r.URL.Path == "/v1/responses"
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
 	done := make(chan struct{})
@@ -2070,10 +2179,16 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 	}()
 	readFailure := func(err error) *attemptResult {
+		if lease.Account.Provider == config.ProviderFactory && errors.Is(err, factory.ErrToolAdaptation) {
+			return factoryAdaptationFailure(res)
+		}
 		if mistral && (errors.Is(err, errMistralBufferLimit) || errors.Is(err, errEventTooLarge)) {
 			return mistralResourceFailure(res)
 		}
-		if mistralResponses && err == io.EOF && r.Context().Err() == nil && !timedOut.Load() {
+		if err == io.EOF && r.Context().Err() == nil && !timedOut.Load() && mistralResponses {
+			if lease.Account.Provider == config.ProviderFactory {
+				return factoryResponsesTruncated(res)
+			}
 			return mistralResponsesTruncated(res)
 		}
 		res.kind = outFailed
@@ -2148,7 +2263,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	}
 	scan := func(event string, data []byte) {
 		audit.captureUsage(data)
-		if !hasUsage(data) && !(isResponses && event == "response.created") && !bytes.Contains(data, []byte(`"response.created"`)) {
+		if !hasUsage(data) && !(isResponses && (event == "response.created" || event == "response.completed")) && !bytes.Contains(data, []byte(`"response.created"`)) {
 			return
 		}
 		var m map[string]any
@@ -2157,7 +2272,12 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 		scanUsage(m, &res.usage)
 		if isResponses {
-			if t, _ := m["type"].(string); t == "response.created" || event == "response.created" {
+			t, _ := m["type"].(string)
+			bind := t == "response.created" || event == "response.created"
+			if lease.Account.Provider == config.ProviderFactory {
+				bind = t == "response.completed" || event == "response.completed"
+			}
+			if bind {
 				if rr, ok := m["response"].(map[string]any); ok {
 					if id, _ := rr["id"].(string); id != "" {
 						s.pool.BindWithSession(cfg, s.responseFingerprint(group, id), lease.Account.ID, res.upstreamSession)
@@ -2185,6 +2305,9 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			return clientGone()
 		}
 		failure := mistralResponsesTruncated(&attemptResult{})
+		if lease.Account.Provider == config.ProviderFactory {
+			failure = factoryResponsesTruncated(&attemptResult{})
+		}
 		if !write(append(append([]byte("\n\nevent: error\ndata: "), failure.body...), '\n', '\n')) {
 			return clientGone()
 		}
@@ -2195,7 +2318,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		res.evaluated = true // transport incompleteness is not a bad credential
 		return res
 	}
-	deployStream := config.NativeChatOnly(lease.Account.Provider)
+	deployStream := config.NativeGateway(lease.Account.Provider) && !mistralResponses
 	incompleteDeploy := func() *attemptResult {
 		res.result, res.terminal, res.category = "failed", "incomplete_stream", "incomplete_stream"
 		if !res.evaluated && res.goRecord != nil {
@@ -2310,6 +2433,14 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				return res
 			}
 			if m.err != nil {
+				if lease.Account.Provider == config.ProviderFactory && errors.Is(m.err, factory.ErrToolAdaptation) {
+					failure := factoryAdaptationFailure(&attemptResult{})
+					if !write(append(append([]byte("\n\nevent: error\ndata: "), failure.body...), '\n', '\n')) {
+						return clientGone()
+					}
+					res.result, res.terminal, res.category, res.evaluated = "failed", "compatibility", "compatibility", true
+					return res // committed output: never replay or report a completed tool
+				}
 				if mistral && (errors.Is(m.err, errMistralBufferLimit) || errors.Is(m.err, errEventTooLarge)) {
 					failure := mistralResourceFailure(&attemptResult{})
 					if !write(append(append([]byte("\n\nevent: error\ndata: "), failure.body...), '\n', '\n')) {
@@ -2362,6 +2493,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	ck, ok := s.authClient(cfg, r)
 	if !ok {
 		writeLocalError(w, "openai", http.StatusUnauthorized, "authentication_error", "invalid_api_key", "invalid API key", 0)
+		return
+	}
+	if !cfg.PoolEnabled(keyPool(cfg, ck)) {
+		writeLocalError(w, "openai", 503, "api_error", "pool_disabled", "this account pool is disabled", 0)
 		return
 	}
 	cfg = cfg.ForProvider(keyPool(cfg, ck))
@@ -2443,6 +2578,12 @@ func (s *Server) filterModels(cfg *config.Config, group string, entry modelsEntr
 // what it can't see. Which account actually serves a model is decided per
 // request by the pool's own per-account catalogue, not here.
 func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group string) []byte {
+	if !s.cfg.Get().PoolEnabled(cfg.GroupPool(group)) {
+		return nil
+	}
+	if cfg.GroupPool(group) == config.ProviderFactory {
+		return factoryModels(cfg, group)
+	}
 	if cfg.GroupPool(group) == config.ProviderTokenHarbor {
 		return s.thModels(cfg, group)
 	}

@@ -10,11 +10,13 @@ let settingsCache = null;
 let currentPage = 'overview';
 let refreshTimer = null;
 // the pool tab on top: every list, overview and log shows one pool only
-const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'perch', 'opencode-zen', 'opencode-go', 'x50', 'telnyx', 'altapi'];
+const POOLS = ['opendesign', 'river', 'ollama', 'modal', 'mistral', 'tokenharbor', 'modelstudio', 'deploy', 'factory', 'perch', 'opencode-zen', 'opencode-go', 'x50', 'telnyx', 'altapi'];
 let pool = POOLS.includes(localStorage.getItem('odb-pool')) ? localStorage.getItem('odb-pool') : 'opendesign';
-const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI', telnyx: 'Telnyx', altapi: 'ALTapi' };
+let poolStates = {};
+const poolEnabled = (provider) => poolStates[provider] !== false;
+const POOL_LABEL = { opendesign: 'OpenDesign', river: 'River', ollama: 'Ollama', modal: 'Modal', mistral: 'Mistral', tokenharbor: 'Token Harbor', modelstudio: '百炼 Model Studio', deploy: 'Deploy', factory: 'Factory AI', perch: 'Perch', 'opencode-zen': 'OpenCode Zen', 'opencode-go': 'OpenCode Go', x50: '50X AI', telnyx: 'Telnyx', altapi: 'ALTapi' };
 // the default group of each pool, and what its keys look like
-const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50', telnyx: 'telnyx', altapi: 'altapi' };
+const POOL_GROUP = { opendesign: 'default', river: 'river', ollama: 'ollama', modal: 'modal', mistral: 'mistral', tokenharbor: 'tokenharbor', modelstudio: 'modelstudio', deploy: 'deploy', factory: 'factory', perch: 'perch', 'opencode-zen': 'opencode-zen', 'opencode-go': 'opencode-go', x50: 'x50', telnyx: 'telnyx', altapi: 'altapi' };
 const defaultGroup = () => POOL_GROUP[pool] || 'default';
 const isOllama = () => pool === 'ollama';
 const isOpenDesign = () => pool === 'opendesign';
@@ -25,16 +27,17 @@ const isTokenHarbor = () => pool === 'tokenharbor';
 const isMistral = () => pool === 'mistral';
 const isModelStudio = () => pool === 'modelstudio';
 const isDeploy = () => pool === 'deploy';
+const isFactory = () => pool === 'factory';
 // 50X AI 目前只提供注册机；没有可调用的推理号池入口。
 const isX50 = () => pool === 'x50';
 const isTelnyx = () => pool === 'telnyx';
 // ALTapi.ai（TokenPower / new-api 定制分支）：注册机 + 号池管理（altapi.js）
 const isALTapi = () => pool === 'altapi';
 // ALTapi 有自己的推理号池（runtimeKey 可管理、账号可启停），一并纳入。
-const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio() || isDeploy() || isX50() || isALTapi();
+const managedKeyPool = () => isOpenCode() || isTokenHarbor() || isMistral() || isModelStudio() || isDeploy() || isFactory() || isX50() || isALTapi();
 const keyNeedsProvider = () => isOllama() || managedKeyPool();
 const RT_HINT = { opendesign: 'sk-amr-…', river: 'rv_…', ollama: 'ollama.com/settings/keys 签发的 key 原样粘贴',
-  x50: 'sk-50x-…（50X API Key）', deploy: 'Deploy Secret Key（原样粘贴，不是 access_key）', mistral: 'Mistral API Key（原样粘贴，支持 mstrl_…）', tokenharbor: 'thk_live_…（Token Harbor API Key）', modelstudio: 'sk-sp-…（Token Plan）或 sk-…（按量付费），完整粘贴', modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
+  factory: 'fk-…（Factory API Key，原样粘贴）', x50: 'sk-50x-…（50X API Key）', deploy: 'Deploy Secret Key（原样粘贴，不是 access_key）', mistral: 'Mistral API Key（原样粘贴，支持 mstrl_…）', tokenharbor: 'thk_live_…（Token Harbor API Key）', modelstudio: 'sk-sp-…（Token Plan）或 sk-…（按量付费），完整粘贴', modal: 'wk-<id>.ws-<secret>（Proxy Token 的完整形态，两段都要）', 'opencode-zen': 'OpenCode Zen API Key（原样粘贴）', 'opencode-go': 'OpenCode Go API Key（原样粘贴）' };
 const withPool = (path) => path + (path.includes('?') ? '&' : '?') + 'provider=' + pool;
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -251,7 +254,9 @@ $('#btn-password').addEventListener('click', () => {
   });
 });
 
-function showApp() {
+async function showApp() {
+  try { await readPoolStates(); } catch (e) { toast('读取号池开关失败：' + e.message, 'error'); return; }
+  if (!poolEnabled(pool)) pool = POOLS.find(poolEnabled) || 'opendesign';
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#base-url').textContent = location.origin;
@@ -293,7 +298,7 @@ const ALTAPI_PAGES = [...PROXY_PAGES, 'altreg', 'altsettings'];
 // 只属于注册机、不与通用页重名的那两个（切换池子后若无有效页时用 altreg 兜底）
 const ALTAPI_ONLY_PAGES = ['altreg', 'altsettings'];
 // perch.js loads after this file, so its loaders are looked up at call time
-const pages = { overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
+const pages = { pools: loadPools, overview: loadOverview, accounts: loadAccounts, keys: loadKeys, routing: loadSettings, requests: () => loadLogs('requests', true), errors: () => loadLogs('errors', true), details: () => loadLogs('details', true),
   perch: () => loadPerchOverview(), paccounts: () => loadPerchAccounts(), prequests: () => loadPerchRequests(true), pregister: () => loadPerchRegistrations(), pautosignup: () => loadPerchAutosignup(), pkeys: () => loadPerchKeys(), psettings: () => loadPerchSettings(),
   thoverview: () => loadTHOverview(), thregister: () => loadTHRegistrations(), thsettings: () => loadTHSettings(),
   mregister: () => loadMistralRegistrations(),
@@ -312,10 +317,11 @@ function go(page) {
   if (TELNYX_PAGES.includes(page) && !isTelnyx()) page = pool === 'perch' ? 'perch' : 'overview';
   // 只有 altapi 专属页需要跨池拦截；通用页（accounts/keys/…）所有池都能用。
   if (ALTAPI_ONLY_PAGES.includes(page) && !isALTapi()) page = pool === 'perch' ? 'perch' : 'overview';
-  if (isALTapi() && !ALTAPI_PAGES.includes(page)) page = 'altreg';
+  if (isALTapi() && !ALTAPI_PAGES.includes(page) && page !== 'pools') page = 'altreg';
   if (ALTAPI_ONLY_PAGES.includes(page) && window.POOL_ALTAPI) window.POOL_ALTAPI.init();
   if (isX50() && window.POOL_X50) window.POOL_X50.init();
-  if (isTelnyx() && !TELNYX_PAGES.includes(page)) page = 'telnyxreg';
+  if (isTelnyx() && !TELNYX_PAGES.includes(page) && page !== 'pools') page = 'telnyxreg';
+  if (!poolEnabled(pool)) page = 'pools';
   if (TELNYX_PAGES.includes(page) && window.POOL_TELNYX) window.POOL_TELNYX.init();
   if (currentPage === 'pregister' && page !== currentPage) stopPerchRegistrationPolling();
   if (currentPage === 'thregister' && page !== currentPage && typeof stopTHPolling === 'function') stopTHPolling();
@@ -341,7 +347,7 @@ function go(page) {
   }
 }
 function renderPoolTabs() {
-  $$('#pool-tabs .pool-tab').forEach((b) => b.classList.toggle('active', b.dataset.pool === pool));
+  $$('#pool-tabs .pool-tab').forEach((b) => { b.classList.toggle('active', b.dataset.pool === pool); b.classList.toggle('hidden', !poolEnabled(b.dataset.pool)); });
   const isPerch = pool === 'perch';
   const isTH = pool === 'tokenharbor';
   // the sidebar shows one pool's pages at a time. The `hidden` attribute is
@@ -394,11 +400,12 @@ function renderPoolTabs() {
   // 退回注册机只对 ALTapi 有意义（它的账号是注册机产的，能反查源候选）
   $('#oc-batch [data-oc-batch="alt-return"]').classList.toggle('hidden', !isALTapi());
   // the last two columns of the account table mean different things per pool
-  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', modelstudio: '套餐与额度', x50: '余额 / 目录', deploy: '额度与模型发现', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
-    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', x50: '24h 用量', deploy: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
+  const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', modelstudio: '套餐与额度', factory: 'Factory 身份 / 额度', x50: '余额 / 目录', deploy: '额度与模型发现', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
+    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', factory: '24h 用量', x50: '24h 用量', deploy: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
     x50: '添加 sk-50x-… 或从50X注册机批量入池；管理会话Token用于真实余额刷新，注册/推理代理独立。',
+    factory: '添加或批量导入 fk-… Key；原生 Chat / Responses / Messages 按模型路由，目录仅为配置参考，不证明授权；策略拒绝不换号绕过。',
     deploy: '添加或批量导入 Deploy Secret Key（不是 access_key）；独立分组，仅原生 Chat Completions，目录成功不代表 Key 已激活或推理授权。',
     mistral: '还没有 Mistral 账号。点「批量导入」粘贴 API Key，每行一个；或「手动添加」。',
     modelstudio: '还没有百炼 Model Studio 账号。点「批量导入」粘贴 API Key（sk-sp-… 为 Token Plan，sk-… 为按量付费），每行一个；或「手动添加」。',
@@ -412,7 +419,7 @@ function renderPoolTabs() {
 }
 $('#pool-tabs').addEventListener('click', (ev) => {
   const b = ev.target.closest('.pool-tab');
-  if (!b || b.dataset.pool === pool) return;
+  if (!b || b.dataset.pool === pool || !poolEnabled(b.dataset.pool)) return;
   pool = b.dataset.pool;
   localStorage.setItem('odb-pool', pool);
   accountsCache = [];
@@ -435,6 +442,30 @@ $('#pool-tabs').addEventListener('click', (ev) => {
   go(valid.includes(currentPage) ? currentPage : valid[0]);
 });
 $('#nav').addEventListener('click', (ev) => { const a = ev.target.closest('a[data-page]'); if (a) go(a.dataset.page); });
+
+// ---- global pool lifecycle (always accessible, including all-off) ----
+async function readPoolStates() {
+  const data = await api('GET', '/api/pools');
+  poolStates = Object.fromEntries(data.pools.map((p) => [p.provider, p.enabled]));
+  return data;
+}
+async function loadPools() {
+  const data = await readPoolStates();
+  renderPoolTabs();
+  $('#pools-table tbody').innerHTML = data.pools.map((p) => `<tr><td>${esc(POOL_LABEL[p.provider] || p.provider)}</td><td>${num(p.accounts)}</td><td><span class="badge ${p.enabled ? 'ok' : ''}">${p.enabled ? '已开启' : '已关闭'}</span></td><td><button class="btn small ${p.enabled ? '' : 'primary'}" data-pool-toggle="${esc(p.provider)}" data-enabled="${p.enabled ? 'false' : 'true'}">${p.enabled ? '关闭号池' : '开启号池'}</button></td></tr>`).join('');
+  $('#pools-table').dataset.revision = data.revision;
+}
+$('#pools-table').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-pool-toggle]'); if (!b) return;
+  const provider = b.dataset.poolToggle, enabled = b.dataset.enabled === 'true';
+  if (!enabled && await modal({ title: '关闭 ' + (POOL_LABEL[provider] || provider), body: '<p>关闭后隐藏日常标签、拒绝新推理/目录请求，取消本池后台刷新与注册任务。已在途推理允许自然结束；不删除账号、配置、日志或历史读数。重新开启不会自动重跑已取消注册。</p>', buttons: [{label:'取消', value:'cancel'}, {label:'确认关闭', value:'off', danger:true}] }) !== 'off') return;
+  b.disabled = true;
+  try {
+    await api('PUT', '/api/pools/' + encodeURIComponent(provider), { revision: Number($('#pools-table').dataset.revision), enabled });
+    toast(enabled ? '号池已开启' : '号池已关闭');
+    await loadPools();
+  } catch (e) { toast(e.message, 'error'); await loadPools().catch(() => {}); }
+});
 
 // ---- overview ----
 const GO_CACHE_LABEL = { hit: '命中缓存偏好', miss: '暂无缓存偏好', 'session-preferred': '优先原会话', 'busy-fallback': '缓存账号忙，另选', unavailable: '缓存账号不可用', invalidated: '来源变化，偏好失效' };
@@ -478,7 +509,7 @@ async function loadOverview() {
   const o = await api('GET', withPool('/api/overview'));
   const st = o.stats.total;
   $('#ov-egress-title').textContent = pool === 'opencode-go' ? '各固定出口路由 24 小时成功率（不是实测 IP）' : '各出口 IP 24 小时成功率';
-  $('#ov-quota-title').textContent = isX50() ? '50X 余额与能力边界（逐账号查看）' : isDeploy() ? 'Deploy 余额与能力边界' : pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : isMistral() ? 'Mistral 套餐预算（请在账号页查看）' : '套餐窗口（按工作区去重）';
+  $('#ov-quota-title').textContent = isFactory() ? 'Factory 额度与能力边界' : isX50() ? '50X 余额与能力边界（逐账号查看）' : isDeploy() ? 'Deploy 余额与能力边界' : pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : isMistral() ? 'Mistral 套餐预算（请在账号页查看）' : '套餐窗口（按工作区去重）';
   const okRate = st.r ? (st.s / Math.max(1, st.r - st.c)) : null;
   const ok = o.status.ok || 0;
   const cards = [
@@ -491,6 +522,7 @@ async function loadOverview() {
     ['24h ' + (pool === 'opencode-go' ? '价格表估算' : '费用'), costSum(st), pool === 'opencode-go' ? '不是 Go 订阅账单或额外扣费金额' : isTokenHarbor() ? '按手动价格估算；未配价/含缓存写入的不计，不是上游账单' : '按模型价格估算，未配价格的不计'],
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
+    ...(isFactory() ? [['Factory 身份', `${num(o.factory?.identityFresh || 0)} / ${num(o.accounts)}`, '新鲜身份 / 总账号；身份有效不代表模型推理授权'], ['Factory 额度', `${num(o.factory?.quotaFresh || 0)} 个新鲜`, 'Standard / Core 百分比逐账号展示；多Key共享，不累加']] : []),
     ...(isDeploy() ? [['Deploy 余额', '未知', o.deploy?.quotaReason || '仅绑定推理 Key，未绑定组织控制台会话；不按 Key 累加余额'], ['Deploy 模型目录', `${num(o.deploy?.catalogFresh || 0)} / ${num(o.accounts)}`, '新鲜目录账号 / 总数；目录不是 Key 激活或推理授权证明']] : []),
     ...(isALTapi() ? altOverviewCards() : []),
     [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 累计缓存读取 ${num(st.k || 0)}（缺失的上游用量不计）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
@@ -519,7 +551,7 @@ async function loadOverview() {
     return `<div class="col" title="${esc(label)} 请求 ${b.r}，失败 ${b.f}，取消 ${b.c}"><div class="seg ok" data-h="${b.s / peak * 100}"></div><div class="seg bad" data-h="${b.f / peak * 100}"></div><div class="seg cancel" data-h="${b.c / peak * 100}"></div></div>`;
   }).join('');
   applyWidths($('#ov-chart'));
-  $('#ov-windows').innerHTML = isX50() ? '<p class="muted">请在账号页刷新真实billing余额；缺失/失败/过期显示未知并保留历史。多Key共享账号余额/免费配额/限流，不累加为总可用量。免费层每日allowance未接入，不能以钱包0判耗尽。当前新注册无赠金保证。</p><p class="muted small">仅原生Chat/SSE与目录；目录不证明推理授权，其他协议本地拒绝。不自动充值/购买。</p>' : isDeploy() ? `<p class="muted">${esc(o.deploy?.quotaReason || '余额未知，未接入控制台会话。')}</p><p class="muted small">仅支持原生 Chat Completions（流式/非流式）；不转换 Responses / Messages。官方 405 可能表示组织暂停，429 默认停止轮换并遵守 Retry-After。请求费用是本池独立价格表估算，不是上游账单。</p>` : pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
+  $('#ov-windows').innerHTML = isFactory() ? '<p class="muted">Factory模型目录来自配置参考，不证明账号授权。账号页可查看Standard/Core的5小时、周、月共享百分比；读取权限不足、失败、过期显示未知并保留历史。不会自动开启Extra usage或将多Key额度相加。</p><p class="muted small">有限协议转换与工具schema适配；跨协议SSE先缓冲后输出。不注入Droid身份或改写提示词；content_policy_rejected立即停止。真实模型授权需单独测试。</p>' : isX50() ? '<p class="muted">请在账号页刷新真实billing余额；缺失/失败/过期显示未知并保留历史。多Key共享账号余额/免费配额/限流，不累加为总可用量。免费层每日allowance未接入，不能以钱包0判耗尽。当前新注册无赠金保证。</p><p class="muted small">仅原生Chat/SSE与目录；目录不证明推理授权，其他协议本地拒绝。不自动充值/购买。</p>' : isDeploy() ? `<p class="muted">${esc(o.deploy?.quotaReason || '余额未知，未接入控制台会话。')}</p><p class="muted small">仅支持原生 Chat Completions（流式/非流式）；不转换 Responses / Messages。官方 405 可能表示组织暂停，429 默认停止轮换并遵守 Retry-After。请求费用是本池独立价格表估算，不是上游账单。</p>` : pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
     const used = w.limit ? w.used / w.limit * 100 : 0;
     return `<div class="win"><div class="row"><b>${esc(fmtDur(w.durationSeconds))}</b><span class="muted">剩余 ${num(w.remaining)} / ${num(w.limit)} credits</span></div><div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div></div>`;
   }).join('') : `<p class="muted">${isMistral() ? '已接入 Studio / Vibe 套餐额度与组织订阅，请在账号页刷新查看；额度按用量百分比估算，不是钱包余额。读取失败或过期时标为未知并保留历史值。多个 Key 可能共享组织预算，不可直接相加；缓存命中由上游决定。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
@@ -529,7 +561,7 @@ async function loadOverview() {
 }
 
 // ---- accounts ----
-const STATUS = { 'low-balance': ['余额低于阈值，已停用调度', 'warn'], 'wallet-overage-enabled': ['官网钱包续费已开启，暂停调度', 'warn'], 'plan-unknown': ['套餐未知/过期', 'warn'], 'quota-unknown': ['周用量未知/过期', 'warn'], 'catalog-pending': ['等待模型同步', 'warn'], 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
+const STATUS = { 'provider-disabled': ['号池已关闭', ''], 'low-balance': ['余额低于阈值，已停用调度', 'warn'], 'wallet-overage-enabled': ['官网钱包续费已开启，暂停调度', 'warn'], 'plan-unknown': ['套餐未知/过期', 'warn'], 'quota-unknown': ['周用量未知/过期', 'warn'], 'catalog-pending': ['等待模型同步', 'warn'], 'policy-paused': ['政策暂停', 'warn'], ok: ['可用', 'ok'], disabled: ['已禁用', ''], cooldown: ['冷却中', 'warn'], quarantined: ['已隔离', 'bad'], 'quota-exhausted': ['额度耗尽', 'bad'], 'model-cooldown': ['模型冷却', 'warn'], 'no-key': ['无密钥', 'bad'], 'not-entitled': ['套餐不含该模型', 'warn'], 'funding-cooldown': ['额度耗尽（推断）', 'warn'] };
 const statusLabel = (s) => (STATUS[s] || [s])[0];
 const statusClass = (s) => (STATUS[s] || ['', ''])[1];
 
@@ -710,6 +742,13 @@ function modelStudioQuotaHTML(a) {
   return text;
 }
 
+function factoryQuotaHTML(a) {
+  const f = a.factory || a.quota?.factory;
+  if (!f) return '<span class="muted">身份 / 额度未知</span><div class="acc-sub">请刷新；未知不是0</div>';
+  const fresh = a.quotaFresh;
+  const windows = (f.windows || []).map((w) => `<div class="acc-sub">${esc(w.pool)} ${esc(w.name)}：${fresh ? '' : '上次'}${w.active ? `已用 ${esc(w.usedPercent)}% · ${new Date(w.resetsAt) <= new Date() ? '窗口已到期，等待刷新' : '重置 ' + esc(fmtTime(w.resetsAt, true))}` : '未激活窗口（不是可用额度）'}</div>`).join('');
+  return `<span class="badge ${fresh ? 'ok' : 'warn'}">${fresh ? '额度新鲜' : '额度未知 / 历史'}</span><div class="acc-sub">身份 ${esc(fmtTime(f.identityAt, true))} · 区域 ${esc(f.region || '默认')}</div>${windows}${f.extraUsageBalanceCents != null ? `<div class="acc-sub">${fresh ? '' : '上次'}Extra余额 ${esc(usd(String(f.extraUsageBalanceCents / 100)))}（仅展示，不改付费偏好）</div>` : ''}${f.quotaError ? `<div class="acc-sub">${esc(f.quotaError)}</div>` : ''}<div class="acc-sub">共享百分比不按Key累加；目录非授权证明</div>`;
+}
 function deployQuotaHTML(a) {
   const d = a.deploy || {};
   const labels = { ok: '目录读取成功', failed: '目录读取失败', stale: '目录已过期', unknown: '目录未读取' };
@@ -717,6 +756,7 @@ function deployQuotaHTML(a) {
 }
 
 function windowsHTML(a) {
+  if (a.provider === 'factory') return factoryQuotaHTML(a);
   if (a.provider === 'x50') return x50QuotaHTML(a);
   if (a.provider === 'deploy') return deployQuotaHTML(a);
   if (a.provider === 'opendesign') return openDesignQuotaHTML(a);
@@ -811,7 +851,7 @@ function accountRow(a) {
   const openCode = a.provider === 'opencode-zen' || a.provider === 'opencode-go';
   const ou = a.usage24h || {};
   const usage24 = `<div class="acc-sub">24h ${num(ou.r || 0)} 次 · ${num((ou.i || 0) + (ou.o || 0))} tokens</div>`;
-  const wallet = (modal || openCode || a.provider === 'tokenharbor' || a.provider === 'mistral' || a.provider === 'deploy' || a.provider === 'x50')
+  const wallet = (modal || openCode || a.provider === 'factory' || a.provider === 'tokenharbor' || a.provider === 'mistral' || a.provider === 'deploy' || a.provider === 'x50')
     ? (ou.r ? num(ou.r) + usage24 : '—')
     : ollama
       ? (q && q.ollama && q.ollama.purchasedUsd !== undefined && q.ollama.purchasedUsd !== ''
@@ -1008,7 +1048,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'deploy' ? '刷新模型目录（余额未知）' : a.provider === 'opendesign' ? '检测状态并刷新额度（只读）' : a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'factory' ? '检查身份 / 刷新额度（若有权限）' : a.provider === 'deploy' ? '刷新模型目录（余额未知）' : a.provider === 'opendesign' ? '检测状态并刷新额度（只读）' : a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -1034,7 +1074,7 @@ async function accountAction(a, act) {
       case 'proxy-test': { const r = await api('POST', `/api/accounts/${a.id}/test-proxy`); toast(r.ok ? ('出口可达 · ' + (GO_EGRESS_LABEL[r.egress?.status] || 'IP 未校验') + '（不代表推理授权）') : r.error); break; }
       case 'refresh': {
         const result = await api('POST', `/api/accounts/${a.id}/refresh-quota`);
-        if (a.provider === 'opendesign' || a.provider === 'mistral' || a.provider === 'deploy') toast(result.message || '检测完成，请查看分项结果', result.ok ? undefined : 'error');
+        if (a.provider === 'opendesign' || a.provider === 'mistral' || a.provider === 'factory' || a.provider === 'deploy') toast(result.message || '检测完成，请查看分项结果', result.ok ? undefined : 'error');
         else toast(a.provider === 'tokenharbor' ? '套餐、覆盖模型与周用量已刷新' : '额度已刷新');
         break;
       }
@@ -1061,7 +1101,7 @@ function accountForm(a) {
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
     <label>运行密钥</label><input id="f-rt" value="${v('runtimeKey')}" placeholder="${a ? '留空不变' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isX50() ? '50X仅支持原生Chat/SSE，目录不证明授权。管理会话Token用于billing，推理使用Bearer Key；代理与注册机分离，不自动付费。' : isDeploy() ? 'Deploy 使用原生 Chat Completions；Secret 原样保存，不是 access_key。目录成功不代表 Key 已 active 或有推理授权，余额需独立控制台会话，当前未知。不会自动注册、创建 Key、绑卡或充值。' : isMistral() ? 'Mistral 独立号池，使用现有调度器；识别 Codex / Claude / pi 会话头，不代表已完成各客户端验收。支持原生 Chat / 无状态 Responses，保留思考与工具，自动补会话缓存 key。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high。可刷新 Studio / Vibe 套餐额度与组织订阅，不是钱包余额；无控制密钥，管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isFactory() ? 'Factory API Key原样保存，账号/分组/下游与导入Key隔离。只读身份与额度权限分别展示；支持有限协议转换和工具schema适配；不改写身份/提示词，策略拒绝停止。无OAuth登录/续期、自动注册、付款或Extra usage开关。' : isX50() ? '50X仅支持原生Chat/SSE，目录不证明授权。管理会话Token用于billing，推理使用Bearer Key；代理与注册机分离，不自动付费。' : isDeploy() ? 'Deploy 使用原生 Chat Completions；Secret 原样保存，不是 access_key。目录成功不代表 Key 已 active 或有推理授权，余额需独立控制台会话，当前未知。不会自动注册、创建 Key、绑卡或充值。' : isMistral() ? 'Mistral 独立号池，使用现有调度器；识别 Codex / Claude / pi 会话头，不代表已完成各客户端验收。支持原生 Chat / 无状态 Responses，保留思考与工具，自动补会话缓存 key。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high。可刷新 Studio / Vibe 套餐额度与组织订阅，不是钱包余额；无控制密钥，管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
@@ -1122,7 +1162,7 @@ $('#btn-add-manual').addEventListener('click', async () => {
   loadAccounts().catch(() => {});
 });
 $('#btn-import').addEventListener('click', async () => {
-  const help = isX50() ? '<p class="muted small">每行 <code>sk-50x-Key[,名称[,代理URL]]</code>；固定50X，重复Key跳过。管理Token可在账号编辑补充，或从注册机批量入池自动关联。</p>' : isDeploy()
+  const help = isFactory() ? '<p class="muted small">每行 <code>fk-Key[,名称[,代理URL]]</code>；Factory独立分组，重复Key跳过。只接受Factory API Key，不导入Cookie/OAuth会话。</p>' : isX50() ? '<p class="muted small">每行 <code>sk-50x-Key[,名称[,代理URL]]</code>；固定50X，重复Key跳过。管理Token可在账号编辑补充，或从注册机批量入池自动关联。</p>' : isDeploy()
     ? '<p class="muted small">每行 <code>Secret Key[,名称[,代理URL]]</code>；不是 access_key，不加前缀。固定 provider=deploy，重复 Key 跳过；分组、客户端及导入密钥与其他池隔离。</p>'
     : isMistral()
     ? '<p class="muted small">每行 <code>API Key[,名称[,代理URL]]</code>，原样粘贴 Mistral 密钥；独立分组，无控制密钥。相同 Key 去重。</p>'
@@ -1136,7 +1176,7 @@ $('#btn-import').addEventListener('click', async () => {
       ? `<p class="muted small">每行一个账号：<code>运行密钥[,名称[,代理URL]]</code>。Ollama 的 key 没有固定前缀，导入时整行按本池默认的 <code>provider=ollama</code> 处理；也可以在行首写 <code>provider:ollama</code> 明确指定。逗号、空格或制表符分隔，<code>#</code> 开头为注释。</p>`
       : `<p class="muted small">每行一个账号：<code>运行密钥[,控制密钥[,名称[,代理URL]]]</code>（<code>rv_</code> 开头的自动识别为 River 账号、<code>wk-</code> 开头的是 Modal 账号，都没有控制密钥），逗号、空格或制表符分隔，<code>#</code> 开头为注释。行首可写 <code>provider:ollama</code> / <code>provider:modal</code> 指定号池。</p>`;
   const ph = { opendesign: 'sk-amr-xxx,vela_ctrl_xxx,账号A\nrv_xxx,River-1\nwk-xxx.ws-yyy,Modal-1', river: 'rv_xxx,River-1',
-    x50: 'sk-50x-example,50X-1', deploy: 'DEPLOY_SECRET_EXAMPLE,Deploy-1', mistral: 'mstrl_example_key,Mistral-1', tokenharbor: 'thk_live_example,TokenHarbor-1', modelstudio: 'sk-sp-example_key,百炼-1', ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1', 'opencode-zen': 'ZEN_API_KEY,zen-1', 'opencode-go': 'GO_API_KEY,go-1' }[pool];
+    factory: 'fk-example_test_key,Factory-1', x50: 'sk-50x-example,50X-1', deploy: 'DEPLOY_SECRET_EXAMPLE,Deploy-1', mistral: 'mstrl_example_key,Mistral-1', tokenharbor: 'thk_live_example,TokenHarbor-1', modelstudio: 'sk-sp-example_key,百炼-1', ollama: 'xxxxxxxxxxxxxxxxxxxxxxxx,ollama-1', modal: 'wk-xxxxxxxx.ws-yyyyyyyy,Modal-1', 'opencode-zen': 'ZEN_API_KEY,zen-1', 'opencode-go': 'GO_API_KEY,go-1' }[pool];
   await modal({ title: '批量导入', wide: true,
     body: `${help}
       <textarea id="imp-text" class="code" rows="10" placeholder="${esc(ph)}"></textarea>
@@ -1157,7 +1197,7 @@ async function testAccount(a) {
     $('#test-out').textContent = JSON.stringify(r, null, 2);
   };
   await modal({ title: '测试 ' + a.name, wide: true,
-    body: `<p class="muted small">「免费检查」只读取${(a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : a.provider === 'deploy' ? '模型目录（不校验 Key 激活状态，不代表推理授权；余额未知）' : a.provider === 'mistral' ? '模型列表（套餐额度请点刷新额度）' : a.provider === 'tokenharbor' ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=${(a.provider === 'deploy' || a.provider === 'x50') ? '256（包含 reasoning；上限，不是必然用量）' : '1'} 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
+    body: `<p class="muted small">「免费检查」只读取${a.provider === 'factory' ? 'whoami身份与billing额度（若有权限；目录为配置参考，不证明推理授权）' : (a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '账号模型列表、协议能力和 Go 额度（若支持）' : a.provider === 'deploy' ? '模型目录（不校验 Key 激活状态，不代表推理授权；余额未知）' : a.provider === 'mistral' ? '模型列表（套餐额度请点刷新额度）' : a.provider === 'tokenharbor' ? '模型列表（余额未知）' : a.provider === 'ollama' ? '模型列表和 /api/balance 余额' : a.provider === 'modal' ? '该 token 能访问的 Endpoint 列表' : '模型列表和工作区'}，不消耗额度。「真实请求」会发一条 max_tokens=${a.provider === 'factory' ? '32–64（按原生协议）' : (a.provider === 'deploy' || a.provider === 'x50') ? '256（包含 reasoning；上限，不是必然用量）' : '1'} 的推理，消耗少量 ${a.provider === 'modal' ? 'token（按量计费）' : 'credits'}。</p>
       <div class="row"><input id="test-model" placeholder="真实请求模型，默认 ${esc(a.provider === 'ollama' ? 'gpt-oss:20b' : a.provider === 'river' ? 'deepseek-ai/DeepSeek-V4.1-Flash' : a.provider === 'x50' ? 'deepseek-ai/DeepSeek-V4.1-Flash-1017' : a.provider === 'deploy' ? 'deepseek-ai/deepseek-v4.1-flash-1017' : a.provider === 'mistral' ? 'deepseek-v4-1-flash-1017' : (a.provider === 'modal' || a.provider === 'tokenharbor' || a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? '该账号模型列表中的首个模型（按原生协议）' : 'deepseek-v4.1-flash')}" size="34"></div>
       ${a.provider === 'deploy' ? `<div class="row muted small">每个账号目录可能只放行部分模型：先点「免费检查」读到模型列表，再点「用目录里的模型」填入。<button type="button" class="btn small ghost" id="test-model-fill">用目录里的模型</button></div>` : ''}
       <pre id="test-out" class="mt">点击下方按钮开始</pre>`,
@@ -1265,9 +1305,9 @@ $('#btn-new-key').addEventListener('click', async () => {
 async function loadImportKeys() {
   const d = await api('GET', withPool('/api/import-keys'));
   $('#import-url').textContent = location.origin + '/open/v1/accounts/import';
-  const example = isX50() ? { provider: 'x50', runtimeKey: 'sk-50x-example', name: '账号名', group: 'x50' } : isDeploy() ? { provider: 'deploy', runtimeKey: 'DEPLOY_SECRET_EXAMPLE', name: '账号名', group: 'deploy' } : { runtimeKey: 'sk-amr-…', controlKey: 'vela_ctrl_…', name: '账号名', group: '可选', note: '可选' };
+  const example = isFactory() ? { provider: 'factory', runtimeKey: 'fk-example_test_key', name: '账号名', group: 'factory' } : isX50() ? { provider: 'x50', runtimeKey: 'sk-50x-example', name: '账号名', group: 'x50' } : isDeploy() ? { provider: 'deploy', runtimeKey: 'DEPLOY_SECRET_EXAMPLE', name: '账号名', group: 'deploy' } : { runtimeKey: 'sk-amr-…', controlKey: 'vela_ctrl_…', name: '账号名', group: '可选', note: '可选' };
   $('#import-example').textContent = JSON.stringify(example);
-  $('#channel-protocol-guide').textContent = isX50() ? '50X渠道类型选OpenAI，仅Chat Completions / SSE与模型目录；其他协议无证据，本地拒绝。' : isDeploy() ? 'Deploy 渠道类型选 OpenAI，仅 Chat Completions；Responses / Anthropic Messages 本地拒绝，不做转换。' : '渠道类型选 OpenAI；号池支持 /v1/messages 时可选 Anthropic Claude（请先核对本池协议范围）。';
+  $('#channel-protocol-guide').textContent = isFactory() ? 'Factory按模型配置选择原生Chat/Responses/Messages；开启有限协议转换可从三种下游接口调用可无损表示的请求（工具/完整历史支持，跨协议SSE缓冲）。不支持字段本地400，不丢弃续传状态/签名推理。目录是参考，授权需实测；不伪装Droid。' : isX50() ? '50X渠道类型选OpenAI，仅Chat Completions / SSE与模型目录；其他协议无证据，本地拒绝。' : isDeploy() ? 'Deploy 渠道类型选 OpenAI，仅 Chat Completions；Responses / Anthropic Messages 本地拒绝，不做转换。' : '渠道类型选 OpenAI；号池支持 /v1/messages 时可选 Anthropic Claude（请先核对本池协议范围）。';
   $('#import-curl').textContent = `curl -X POST ${location.origin}/open/v1/accounts/import \\\n  -H 'Authorization: Bearer sk-odbimp-…' -H 'Content-Type: application/json' \\\n  -d '{"runtimeKey":"sk-amr-…","controlKey":"vela_ctrl_…","name":"账号A"}'`;
   if (isDeploy()) $('#import-curl').textContent = `curl -X POST ${location.origin}/open/v1/accounts/import -H 'Authorization: Bearer sk-odbimp-…' -H 'Content-Type: application/json' -d '${JSON.stringify(example)}'`;
   $('#ik-table tbody').innerHTML = d.keys.map((k) => `<tr data-id="${esc(k.id)}">
@@ -1381,7 +1421,7 @@ const MISTRAL_CONNECTION_FIELDS = [
   ['directMaxConns', '直连每Host连接上限', 'int', '1–100000，本池独立Transport实际生效；HTTP2连接数不等于流并发'],
   ['proxyMaxConns', '固定代理每Host连接上限', 'int', '1–10000，仍走账号固定代理；变更只关闭旧空闲连接，不中断在途'],
 ];
-const routingFields = () => pool === 'altapi' ? ROUTING_FIELDS.filter(([k]) => k !== 'modelsCacheSec') : (isDeploy() || isX50()) ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare'].includes(k)).map((f) => f[0] === 'ignoreCatalog' ? ['ignoreCatalog', '忽略目录模型过滤', 'bool', '目录只是模型发现，不证明本 Key 推理授权；关闭时按新鲜目录排除未列出的模型'] : f[0] === 'sticky' ? ['sticky', '会话粘性', 'bool', '尽量复用同一账号，不保证上游缓存命中'] : f).concat(MISTRAL_CONNECTION_FIELDS) : pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback').concat(MISTRAL_CONNECTION_FIELDS) : ROUTING_FIELDS;
+const routingFields = () => isFactory() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare','ignoreCatalog'].includes(k)).map((f) => f[0] === 'sticky' ? ['sticky','会话粘性','bool','尽量固定同一Key；有状态Responses必须命中原绑定，未知结果与已输出流不重放'] : f).concat(MISTRAL_CONNECTION_FIELDS) : pool === 'altapi' ? ROUTING_FIELDS.filter(([k]) => k !== 'modelsCacheSec') : (isDeploy() || isX50()) ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','lowShare','spentShare'].includes(k)).map((f) => f[0] === 'ignoreCatalog' ? ['ignoreCatalog', '忽略目录模型过滤', 'bool', '目录只是模型发现，不证明本 Key 推理授权；关闭时按新鲜目录排除未列出的模型'] : f[0] === 'sticky' ? ['sticky', '会话粘性', 'bool', '尽量复用同一账号，不保证上游缓存命中'] : f).concat(MISTRAL_CONNECTION_FIELDS) : pool === 'opencode-go' ? ROUTING_FIELDS.filter(([k]) => !['onBindingBusy','walletFallback','ignoreCatalog'].includes(k)) : isTokenHarbor() ? ROUTING_FIELDS.filter(([k]) => !['walletFallback','ignoreCatalog'].includes(k)) : isMistral() ? ROUTING_FIELDS.filter(([k]) => k !== 'walletFallback').concat(MISTRAL_CONNECTION_FIELDS) : ROUTING_FIELDS;
 const QUOTA_FIELDS = [
   ['enabled', '启用额度轮询', 'bool'],
   ['intervalSec', '轮询间隔（秒）', 'int', '建议 30–60 秒'],
@@ -1392,7 +1432,7 @@ const LOG_FIELDS = [
   ['retentionDays', '日志保留天数（默认7天）', 'int'], ['maxRequests', '请求日志条数', 'int'], ['maxErrors', '错误日志条数', 'int'], ['maxTotalMB', '总容量（MB）', 'int'],
   ['detail', '详细日志', 'bool', '记录请求头/体、响应头/体（凭据已脱敏），排查完请关闭'], ['maxDetails', '详细日志条数', 'int'], ['detailBodyKB', '单个体上限（KB）', 'int', '超出时保留头尾各一半、省略中间；内存中的详细日志总量上限 256MB，超出自动淘汰最旧的'],
 ];
-const logFields = () => (isTokenHarbor() || isMistral() || isDeploy() || isX50()) ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
+const logFields = () => (isTokenHarbor() || isMistral() || isDeploy() || isX50() || isFactory()) ? LOG_FIELDS.filter(([k]) => k !== 'detail') : LOG_FIELDS;
 function renderForm(el, fields, obj, prefix) {
   el.innerHTML = fields.map(([k, label, type, extra, hint]) => {
     const id = `${prefix}-${k}`;
@@ -1499,7 +1539,7 @@ async function editRule(kind, arr, idx) {
     <label>错误码（精确匹配）</label><textarea id="r-code" rows="2" placeholder="每行一个，如 3800">${esc((w.bodyCodes || []).join('\n'))}</textarea><span class="hint">匹配正文顶层 code / errorCode，和其他条件同时满足；不读取任意正文路径</span>
     <label>响应头</label><textarea id="r-hdr" rows="2" placeholder="每行一个：Header: 子串（子串可省略）">${esc(hdrs)}</textarea>
     ${isErr ? `<div class="sect">处理方式</div>
-    <label>作用范围</label><select id="r-scope">${opts((isDeploy() || isX50()) ? { account: SCOPES.account, model: SCOPES.model } : SCOPES, r.scope)}</select>
+    <label>作用范围</label><select id="r-scope">${opts((isDeploy() || isX50() || isFactory()) ? { account: SCOPES.account, model: SCOPES.model } : SCOPES, r.scope)}</select>
     <label>动作</label><select id="r-action">${opts(ACTIONS, r.action)}</select>
     <div id="r-reset" class="form" style="grid-column:1/-1;grid-template-columns:120px 1fr">
       <label>默认冷却</label><input id="r-fb" value="${esc(rs.fallback || '')}" placeholder="如 30s、10m、24h"><span class="hint">读不到恢复时间时使用</span>
@@ -1577,7 +1617,7 @@ async function loadSettings() {
   if (sourcePool !== pool || (typeof csrf !== 'undefined' && !csrf)) return;
   settingsCache = loaded;
   const s = settingsCache.settings;
-  if (isDeploy() || isX50()) settingsCache.strategies = settingsCache.strategies.filter((x) => !['smart','pace','least-used'].includes(x) || x === s.routing.strategy);
+  if (isDeploy() || isX50() || isFactory()) settingsCache.strategies = settingsCache.strategies.filter((x) => !['smart','pace','least-used'].includes(x) || x === s.routing.strategy);
   $('#altapi-balance-settings').classList.toggle('hidden', !isALTapi());
   $('#altapi-low-balance-disable').checked = s.altapi?.lowBalanceDisable === true;
   $('#altapi-min-balance').value = s.altapi?.minBalanceUsd ?? 0.5;
@@ -1587,13 +1627,19 @@ async function loadSettings() {
   $('#x50-pool-detail').checked = s.x50?.detailLog === true;
   $('#x50-pool-requests').checked = s.x50?.requestLog !== false;
   $('#x50-pool-errors').checked = s.x50?.errorLog !== false;
+  $('#factory-settings').classList.toggle('hidden', !isFactory());
+  $('#factory-base').value = s.factory?.baseUrl || 'https://api.factory.ai';
+  $('#factory-detail').checked = s.factory?.detailLog === true;
+  $('#factory-standard-only').checked = s.factory?.standardOnly === true;
+  $('#factory-compatibility').checked = s.factory?.compatibility !== false;
+  $('#factory-models').value = JSON.stringify(s.factory?.models || [], null, 2);
   $('#deploy-settings').classList.toggle('hidden', !isDeploy());
   $('#deploy-base').value = s.deploy?.baseUrl || 'https://api.deploy.com/api/v1';
   $('#deploy-sync').value = s.deploy?.modelSyncSec ?? 600;
   $('#deploy-detail-log').checked = s.deploy?.detailLog === true;
   $('#deploy-quota-note').textContent = s.deploy?.quotaReason || '余额未知；仅绑定推理 Key，未绑定组织控制台会话。';
   $('#quota-settings-title').textContent = isDeploy() ? '模型目录周期检查' : '额度轮询';
-  $('#rules-retry-note').textContent = (isDeploy() || isX50()) ? '命中后停止换号，即使错误规则已冷却本号；停用/删除停止规则可允许符合安全条件的换号。未知发送结果或已输出流不能重放。每池独立保存。' : '命中后停止换号；账号冷却/隔离规则优先，已发送或流式输出的安全门不允许重放。错误/重试规则每池独立，上方标签切换';
+  $('#rules-retry-note').textContent = isFactory() ? '独立规则；content_policy_rejected强制停止且不扣健康分，不能用自定义规则绕过。默认权限/计费/429停止轮换；已输出流或发送结果未知不得重放。' : (isDeploy() || isX50()) ? '命中后停止换号，即使错误规则已冷却本号；停用/删除停止规则可允许符合安全条件的换号。未知发送结果或已输出流不能重放。每池独立保存。' : '命中后停止换号；账号冷却/隔离规则优先，已发送或流式输出的安全门不允许重放。错误/重试规则每池独立，上方标签切换';
   $('#mistral-settings').classList.toggle('hidden', !isMistral());
   $('#modelstudio-settings').classList.toggle('hidden', !isModelStudio());
   const ms = s.modelStudio || {};
@@ -1620,8 +1666,8 @@ async function loadSettings() {
   if (pool === 'opencode-go') $('#form-routing').insertAdjacentHTML('beforeend', '<span></span><span class="hint">Go 已绑定会话满载时有界等待后返回 429，不临时借号；最大并发/RPM 在账号编辑中配置。缓存亲和为尽量复用，不保证上游缓存命中。</span>');
   renderForm($('#form-quota'), QUOTA_FIELDS, s.quota, 'qt');
   renderForm($('#form-logs'), logFields(), s.logs, 'lg');
-  $$('#form-logs input, #form-logs select').forEach((el) => { el.disabled = isDeploy() || isX50(); });
-  $('#shared-log-note').classList.toggle('hidden', !isDeploy() && !isX50());
+  $$('#form-logs input, #form-logs select').forEach((el) => { el.disabled = isDeploy() || isX50() || isFactory(); });
+  $('#shared-log-note').classList.toggle('hidden', !isDeploy() && !isX50() && !isFactory());
   if (isDeploy()) {
     $('#qt-enabled').parentElement.lastChild.textContent = '开启模型目录周期检查';
     $('label[for="qt-intervalSec"]').textContent = '调度检查间隔（秒）';
@@ -1644,6 +1690,12 @@ $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
   const body = { revision: s.revision, upstream: s.upstream, routing: readForm(routingFields(), 'rt', s.routing), quota: readForm(QUOTA_FIELDS, 'qt', s.quota), logs: readForm(logFields(), 'lg', s.logs), pricing: readPricing(), errorRules, retryRules };
+  if (isFactory()) {
+    let models;
+    try { models = JSON.parse($('#factory-models').value); if (!Array.isArray(models)) throw new Error(); }
+    catch { toast('Factory模型路由必须是JSON数组'); return; }
+    body.factory = { baseUrl: $('#factory-base').value.trim(), detailLog: $('#factory-detail').checked, standardOnly: $('#factory-standard-only').checked, compatibility: $('#factory-compatibility').checked, models };
+  }
   if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };
   if (isX50()) body.x50 = { baseUrl: $('#x50-pool-base').value.trim(), modelSyncSec: Number($('#x50-pool-sync').value), detailLog: $('#x50-pool-detail').checked, requestLog: $('#x50-pool-requests').checked, errorLog: $('#x50-pool-errors').checked };
   if (isDeploy()) body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked };

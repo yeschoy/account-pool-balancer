@@ -186,6 +186,8 @@ func perchStatusOf(a config.Account, sess *perchstore.Summary, met *quota.PerchM
 			return "login-expired", a.PerchLastError
 		}
 		return "restricted", a.PerchLastError
+	case "provider-disabled":
+		return "disabled", "号池已关闭"
 	case "disabled":
 		return "disabled", "已手动禁用"
 	case "no-key":

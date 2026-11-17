@@ -354,6 +354,9 @@ type x50RunJob struct {
 // than replayed, because a replay would create a second API key on the same
 // account.
 func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signupstore.Settings) (int, error) {
+	if m.srv != nil && !m.srv.cfg.Get().PoolEnabled("x50") {
+		return 0, errors.New("50X号池已关闭")
+	}
 	keyName := settings.KeyName
 	mailWait := time.Duration(settings.MailTimeoutSec) * time.Second
 	mailPoll := time.Duration(settings.MailPollSec) * time.Second
@@ -383,6 +386,9 @@ func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signup
 	var jobs []x50RunJob
 	seenID := map[string]bool{}
 	for _, id := range ids {
+		if m.srv != nil && !m.srv.cfg.Get().PoolEnabled("x50") {
+			break
+		}
 		if seenID[id] {
 			continue
 		}
@@ -402,6 +408,10 @@ func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signup
 			continue
 		}
 		runCtx, cancel := context.WithCancel(m.base)
+		if m.srv != nil {
+			cancel()
+			runCtx, cancel = m.srv.poolJobContext(m.base, "x50")
+		}
 		m.running[id] = cancel
 		m.pending++
 		m.mu.Unlock()
@@ -455,6 +465,11 @@ func (m *x50Manager) startRows(ids []string, concurrency int, settings x50signup
 }
 
 func (m *x50Manager) runOne(ctx context.Context, job x50RunJob, keyName string, mailWait, mailPoll, reqTimeout time.Duration, apiBase, mailBase string) {
+	if m.srv != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = m.srv.poolJobContext(ctx, "x50")
+		defer cancel()
+	}
 	defer func() {
 		m.mu.Lock()
 		if cancel, ok := m.running[job.RowID]; ok {

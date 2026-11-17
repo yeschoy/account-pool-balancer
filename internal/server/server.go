@@ -53,6 +53,10 @@ type Server struct {
 	mistralAudit   *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect
 	mistralLayouts *mistralLayouts    // bounded type/length/digest replay metadata, no text
 
+	poolWorkMu     sync.Mutex
+	poolWork       map[string]context.Context
+	poolWorkCancel map[string]context.CancelFunc
+
 	requestMu      sync.Mutex
 	draining       bool
 	requests       sync.WaitGroup
@@ -209,6 +213,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.thStopping = make(chan struct{})
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.TokenHarborFetch = s.fetchTHObservation
+	s.quota.FactoryHTTPFor = s.factoryHTTPClient
 	s.quota.DeployHTTPFor = s.deployHTTPClient
 	s.quota.X50HTTPFor = s.x50HTTPClient
 	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
@@ -250,7 +255,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	quotas := map[string]*quota.Snapshot{}
 	for id, q := range md.Quota {
 		if valid[id] {
-			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama || config.NativeChatOnly(a.Provider)) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
+			if a, ok := store.Get().Account(id); ok && (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderOllama || config.NativeGateway(a.Provider)) && (q == nil || q.CatalogSource != quota.ResponseBindingSource(store.Get(), a)) {
 				continue
 			}
 			quotas[id] = q
@@ -311,12 +316,16 @@ func New(dataDir string, opt Options) (*Server, error) {
 
 // onConfigChange drops what depends on a changed or removed account.
 func (s *Server) onConfigChange(old, next *config.Config) {
+	if !reflect.DeepEqual(old.PoolSwitches, next.PoolSwitches) {
+		s.reconcilePoolWork(next)
+		s.quota.PoolChanged(old, next)
+	}
 	s.reconcileALTAPIModels(next)
 	s.pool.ConfigureBindings(next)
 	s.pruneMistralTransports(old, next)
 	s.pruneNativeChatTransports(old, next)
 	s.rebindPerch(next)
-	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Deploy.BaseURL != next.Deploy.BaseURL || old.X50.BaseURL != next.X50.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Factory.BaseURL != next.Factory.BaseURL || !reflect.DeepEqual(old.Factory.Models, next.Factory.Models) || old.Deploy.BaseURL != next.Deploy.BaseURL || old.X50.BaseURL != next.X50.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -330,7 +339,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	}
 	for _, a := range old.Accounts {
 		n, ok := next.Account(a.ID)
-		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama || config.NativeChatOnly(a.Provider)) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
+		if (a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || a.Provider == config.ProviderOllama || config.NativeGateway(a.Provider)) && ok && quota.ResponseBindingSource(old, a) != quota.ResponseBindingSource(next, n) {
 			s.quota.Forget(a.ID)
 			s.pool.Invalidate(a.ID, false)
 		}
@@ -379,6 +388,11 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 		}
 		if a.Provider == config.ProviderX50 && next.X50.EffectiveQuota().Enabled {
 			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) || old.X50.ModelSyncSec != next.X50.ModelSyncSec || old.X50.EffectiveQuota() != next.X50.EffectiveQuota() {
+				s.quota.RefreshSession(a.ID)
+			}
+		}
+		if a.Provider == config.ProviderFactory && next.Factory.EffectiveQuota().Enabled {
+			if o, ok := old.Account(a.ID); !ok || quota.ResponseBindingSource(old, o) != quota.ResponseBindingSource(next, a) || old.Factory.EffectiveQuota() != next.Factory.EffectiveQuota() {
 				s.quota.RefreshSession(a.ID)
 			}
 		}
@@ -460,6 +474,7 @@ func (s *Server) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.stopAltAuto()
 			s.drainRequests() // cancel inference, release leases, then persist and close logs
 			<-quotaDone
 			<-modelsDone

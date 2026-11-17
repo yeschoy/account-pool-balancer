@@ -649,7 +649,7 @@ func (s *Server) apiPerchAutoRegisterBatch(w http.ResponseWriter, r *http.Reques
 		defer func() { m.mu.Lock(); m.running = false; m.mu.Unlock() }()
 		// Detached from the request: the batch outlives the client connection,
 		// and each registration is bounded by its own timeout.
-		ctx := context.Background()
+		ctx := s.poolWorkContext(config.ProviderPerch)
 		for _, id := range todo {
 			a.mu.Lock()
 			if a.workingID != "" || a.pendingID != "" {
@@ -701,6 +701,11 @@ func (s *Server) runPerchAuto(ctx context.Context) {
 	}
 }
 func (s *Server) perchAutoCheck(ctx context.Context) {
+	ctx, cancel := s.poolJobContext(ctx, config.ProviderPerch)
+	defer cancel()
+	if ctx.Err() != nil {
+		return
+	}
 	a := s.perchAuto
 	a.mu.Lock()
 	settings := a.settings

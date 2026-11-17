@@ -50,7 +50,7 @@ func ReadStream(p Protocol, rd io.Reader) (*Reply, error) {
 			return nil
 		}
 		var m object
-		if json.Unmarshal([]byte(data), &m) != nil {
+		if decodeJSON([]byte(data), &m) != nil {
 			return errors.New("invalid upstream SSE JSON")
 		}
 		typ := event
@@ -267,7 +267,7 @@ func ReadStream(p Protocol, rd io.Reader) (*Reply, error) {
 			b := blocks[i]
 			if a, ok := args[i]; ok {
 				var input any
-				if json.Unmarshal([]byte(a), &input) != nil {
+				if decodeJSON([]byte(a), &input) != nil {
 					return nil, errors.New("invalid streamed tool arguments")
 				}
 				b["input"] = input

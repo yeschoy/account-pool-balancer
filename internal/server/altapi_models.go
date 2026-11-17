@@ -26,7 +26,7 @@ type altapiModelsGroup struct {
 func (s *Server) reconcileALTAPIModels(cfg *config.Config) {
 	groups := map[string][]string{}
 	for _, a := range cfg.Accounts {
-		if a.Provider == config.ProviderALTAPI && a.Enabled && a.RuntimeKey != "" {
+		if a.Provider == config.ProviderALTAPI && cfg.PoolEnabled(a.Provider) && a.Enabled && a.RuntimeKey != "" {
 			groups[a.Group] = append(groups[a.Group], a.ID+"\x00"+cfg.NativeBindingSource(a))
 		}
 	}
@@ -112,6 +112,11 @@ func (s *Server) loopALTAPIModels(ctx context.Context, ticks <-chan time.Time) {
 }
 
 func (s *Server) refreshALTAPIModels(ctx context.Context, missingOnly bool) {
+	ctx, cancel := s.poolJobContext(ctx, config.ProviderALTAPI)
+	defer cancel()
+	if ctx.Err() != nil {
+		return
+	}
 	s.altapiModels.scanMu.Lock()
 	defer s.altapiModels.scanMu.Unlock()
 	cfg := s.cfg.Get().ForProvider(config.ProviderALTAPI)

@@ -79,6 +79,7 @@ type Snapshot struct {
 	TokenHarbor *TokenHarborState `json:"tokenHarbor,omitempty"`
 	Mistral     *MistralState     `json:"mistral,omitempty"`
 	ALTAPI      *ALTAPIState      `json:"altapi,omitempty"`
+	Factory     *FactoryState     `json:"factory,omitempty"`
 	X50         *X50State         `json:"x50,omitempty"`
 
 	AuthFailed  bool      `json:"authFailed"`
@@ -319,6 +320,7 @@ func (s *Snapshot) clone() *Snapshot {
 		return nil
 	}
 	c := *s
+	c.Factory = s.Factory.clone()
 	if s.ALTAPI != nil {
 		a := *s.ALTAPI
 		c.ALTAPI = &a
@@ -615,6 +617,7 @@ type ollamaRead struct {
 type Poller struct {
 	Cfg              func() *config.Config
 	HTTPFor          func(proxyURL string) *http.Client
+	FactoryHTTPFor   func(*config.Config, string) *http.Client
 	DeployHTTPFor    func(*config.Config, string) *http.Client
 	X50HTTPFor       func(*config.Config, string) *http.Client
 	OnUpdate         func(accountID string)
@@ -636,6 +639,8 @@ type Poller struct {
 	mu          sync.Mutex
 	snaps       map[string]*Snapshot
 	running     map[string]chan struct{}
+	cancels     map[string]context.CancelFunc
+	discarded   map[string]bool
 	ollamaReads map[string]*ollamaRead
 	pending     map[string]bool
 	urgent      map[string]bool
@@ -645,7 +650,7 @@ type Poller struct {
 
 func NewPoller(cfg func() *config.Config, httpFor func(string) *http.Client) *Poller {
 	return &Poller{Cfg: cfg, HTTPFor: httpFor, snaps: map[string]*Snapshot{}, running: map[string]chan struct{}{}, pending: map[string]bool{}, urgent: map[string]bool{},
-		models: map[string]time.Time{}, wake: make(chan struct{}, 1), ollamaReads: map[string]*ollamaRead{}}
+		models: map[string]time.Time{}, wake: make(chan struct{}, 1), ollamaReads: map[string]*ollamaRead{}, cancels: map[string]context.CancelFunc{}, discarded: map[string]bool{}}
 }
 
 // NoteModel records a requested model so each account's coverage of it is
@@ -813,6 +818,14 @@ func (p *Poller) refresh(id string, force bool) {
 
 func (p *Poller) Run(ctx context.Context) {
 	defer p.workers.Wait() // shutdown must not close logs/state beneath active refreshes
+	defer func() {
+		p.mu.Lock()
+		for id, cancel := range p.cancels {
+			p.discarded[id] = true
+			cancel()
+		}
+		p.mu.Unlock()
+	}()
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
@@ -854,8 +867,19 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 	}
 	mistralLimit := cfg.ForProvider(config.ProviderMistral).Quota.Concurrency
+	factoryInFlight := 0
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderFactory && p.running[a.ID] != nil {
+			factoryInFlight++
+		}
+	}
+	inFlight -= factoryInFlight
+	factoryLimit := cfg.Factory.EffectiveQuota().Concurrency
 	var urgent, due []config.Account
 	for _, a := range cfg.Accounts {
+		if !cfg.PoolEnabled(a.Provider) {
+			continue
+		}
 		if config.IsOpenCode(a.Provider) && !cfg.OpenCode.Enabled {
 			continue
 		}
@@ -873,11 +897,19 @@ func (p *Poller) dispatch(ctx context.Context) {
 		}
 	}
 	for _, a := range append(urgent, due...) {
+		if !p.Cfg().PoolEnabled(a.Provider) {
+			continue
+		}
 		if a.Provider == config.ProviderX50 {
 			if x50InFlight >= x50Limit {
 				continue
 			}
 			x50InFlight++
+		} else if a.Provider == config.ProviderFactory {
+			if factoryInFlight >= factoryLimit {
+				continue
+			}
+			factoryInFlight++
 		} else if a.Provider == config.ProviderDeploy {
 			if deployInFlight >= deployLimit {
 				continue
@@ -904,10 +936,11 @@ func (p *Poller) dispatch(ctx context.Context) {
 			p.ollamaReads[a.ID] = read
 		}
 		delete(p.urgent, a.ID)
+		c, cancel := context.WithTimeout(ctx, 45*time.Second)
+		p.cancels[a.ID] = cancel
 		p.workers.Add(1)
 		go func(a config.Account) {
 			defer p.workers.Done()
-			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			err := p.fetch(c, cfg, a)
 			if read != nil {
@@ -921,10 +954,16 @@ func (p *Poller) dispatch(ctx context.Context) {
 
 // RefreshNow reads one account synchronously (admin button).
 func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
+	if next, ok := p.Cfg().Account(a.ID); !ok || next.Provider != a.Provider || !p.Cfg().PoolEnabled(next.Provider) {
+		return errors.New("account pool is disabled or account changed")
+	}
 	var read *ollamaRead
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if !p.Cfg().PoolEnabled(a.Provider) {
+			return errors.New("account pool is disabled")
 		}
 		if a.Provider == config.ProviderOllama {
 			cfg := p.Cfg()
@@ -952,6 +991,13 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
 			}
 		}
 		p.running[a.ID] = make(chan struct{})
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		p.cancels[a.ID] = cancel
+		if !p.Cfg().PoolEnabled(a.Provider) {
+			cancel()
+			p.discarded[a.ID] = true
+		}
 		if a.Provider == config.ProviderOllama {
 			read = &ollamaRead{source: ResponseBindingSource(p.Cfg(), a)}
 			p.ollamaReads[a.ID] = read
@@ -983,6 +1029,9 @@ func (p *Poller) RefreshNow(ctx context.Context, a config.Account) (err error) {
 	if a.Provider == config.ProviderX50 {
 		return p.fetchX50(ctx, p.Cfg(), a, true)
 	}
+	if a.Provider == config.ProviderFactory {
+		return p.fetchFactory(ctx, p.Cfg(), a, true)
+	}
 	if a.Provider == config.ProviderDeploy {
 		return p.fetchDeploy(ctx, p.Cfg(), a, true)
 	}
@@ -1011,6 +1060,11 @@ func (p *Poller) finish(id string) {
 	}
 	close(p.running[id])
 	delete(p.running, id)
+	if cancel := p.cancels[id]; cancel != nil {
+		cancel()
+		delete(p.cancels, id)
+	}
+	delete(p.discarded, id)
 	delete(p.ollamaReads, id)
 	p.mu.Unlock()
 	select {
@@ -1071,6 +1125,9 @@ func applyCatalog(s *Snapshot, c *Catalog, now time.Time) {
 }
 
 func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account) error {
+	if !p.Cfg().PoolEnabled(a.Provider) {
+		return errors.New("account pool is disabled")
+	}
 	switch a.Provider {
 	case config.ProviderOpenDesign:
 		return p.fetchOpenDesign(ctx, cfg, a, false)
@@ -1086,6 +1143,8 @@ func (p *Poller) fetch(ctx context.Context, cfg *config.Config, a config.Account
 		return p.fetchMistral(ctx, cfg, a, false)
 	case config.ProviderModelStudio:
 		return p.fetchModelStudio(ctx, cfg, a, false)
+	case config.ProviderFactory:
+		return p.fetchFactory(ctx, cfg, a, false)
 	case config.ProviderDeploy:
 		return p.fetchDeploy(ctx, cfg, a, false)
 	case config.ProviderX50:
@@ -1393,6 +1452,11 @@ func (p *Poller) store(id string, s *Snapshot) { // an account deleted while it 
 		return
 	}
 	p.mu.Lock()
+	a, exists := p.Cfg().Account(id)
+	if !exists || !p.Cfg().PoolEnabled(a.Provider) || p.discarded[id] {
+		p.mu.Unlock()
+		return
+	}
 	if s.CatalogSource != "" {
 		cfg := p.Cfg()
 		a, ok := cfg.Account(id)

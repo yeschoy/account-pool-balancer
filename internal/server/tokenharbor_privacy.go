@@ -252,7 +252,7 @@ func thBodyPreview(body []byte, identities []string, limit int) ([]byte, bool) {
 // succeeds. Stream errors call this before downstream completion; dedupe by
 // request-local attempt index. No original request map/body is retained here.
 func (s *Server) thFailureDetail(cfg *config.Config, rec *requestLog, r *http.Request, body []byte, res *attemptResult, index int) {
-	if rec.Provider == config.ProviderTokenHarbor && !cfg.TokenHarbor.DetailLog || rec.Provider == config.ProviderDeploy && !cfg.Deploy.DetailLog || rec.Provider == config.ProviderX50 && !cfg.X50.DetailLog {
+	if rec.Provider == config.ProviderFactory && !cfg.Factory.DetailLog || rec.Provider == config.ProviderTokenHarbor && !cfg.TokenHarbor.DetailLog || rec.Provider == config.ProviderDeploy && !cfg.Deploy.DetailLog || rec.Provider == config.ProviderX50 && !cfg.X50.DetailLog {
 		return
 	}
 	if rec.failureDetails[index] {

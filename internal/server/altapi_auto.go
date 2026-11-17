@@ -178,6 +178,11 @@ func (s *Server) altAutoLoop(ctx context.Context) {
 
 // altAutoCheck 是一次判定：该不该补、补多少。
 func (s *Server) altAutoCheck(ctx context.Context) {
+	ctx, cancel := s.poolJobContext(ctx, config.ProviderALTAPI)
+	defer cancel()
+	if ctx.Err() != nil {
+		return
+	}
 	a := s.altAuto
 	a.mu.Lock()
 	st := a.settings

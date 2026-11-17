@@ -81,5 +81,5 @@ func (t TokenHarbor) AccountInterval() int {
 // StrictResponses pools persist confirmed, credential-bound response IDs and
 // refuse to guess an account for a server-side continuation.
 func StrictResponses(provider string) bool {
-	return IsOpenCode(provider) || provider == ProviderTokenHarbor
+	return IsOpenCode(provider) || provider == ProviderTokenHarbor || provider == ProviderFactory
 }

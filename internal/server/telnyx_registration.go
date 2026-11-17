@@ -192,6 +192,7 @@ func telnyxProxyLabel(raw string) string {
 
 // telnyxManager owns the run queue.
 type telnyxManager struct {
+	srv   *Server
 	store *telnyxsignupstore.Store
 	base  context.Context
 
@@ -242,6 +243,7 @@ func (s *Server) telnyxMgr() (*telnyxManager, error) {
 	}
 	ctx, cancel := context.WithCancel(root)
 	s.telnyxMgrRef = &telnyxManager{
+		srv:     s,
 		store:   st,
 		base:    ctx,
 		running: map[string]context.CancelFunc{},
@@ -325,6 +327,9 @@ func assignTelnyxProxies(existing []telnyxsignupstore.Row, targets []telnyxsignu
 }
 
 func (m *telnyxManager) startRows(ids []string, concurrency int, settings telnyxsignupstore.Settings) (int, error) {
+	if m.srv != nil && !m.srv.cfg.Get().PoolEnabled("telnyx") {
+		return 0, errors.New("Telnyx号池已关闭")
+	}
 	if concurrency <= 0 {
 		concurrency = settings.Concurrency
 	}
@@ -356,6 +361,10 @@ func (m *telnyxManager) startRows(ids []string, concurrency int, settings telnyx
 			continue
 		}
 		runCtx, cancel := context.WithCancel(m.base)
+		if m.srv != nil {
+			cancel()
+			runCtx, cancel = m.srv.poolJobContext(m.base, "telnyx")
+		}
 		m.running[id] = cancel
 		m.pending++
 		m.mu.Unlock()
@@ -396,6 +405,11 @@ func (m *telnyxManager) startRows(ids []string, concurrency int, settings telnyx
 }
 
 func (m *telnyxManager) runOne(ctx context.Context, job telnyxRunJob, settings telnyxsignupstore.Settings) {
+	if m.srv != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = m.srv.poolJobContext(ctx, "telnyx")
+		defer cancel()
+	}
 	// Throttle upstream traffic to the configured budget. Rows are queued up
 	// front so the console shows the whole batch immediately.
 	if m.gate != nil {

@@ -59,7 +59,7 @@ func ConvertRequest(from, to Protocol, b []byte) ([]byte, error) {
 		return b, nil
 	}
 	var m object
-	if json.Unmarshal(b, &m) != nil || m == nil {
+	if decodeJSON(b, &m) != nil || m == nil {
 		return nil, errors.New("invalid compatibility request JSON")
 	}
 	r, err := decodeRequest(from, m)
@@ -688,7 +688,7 @@ func encodeParts(p Protocol, parts []part) ([]any, error) {
 			}
 		case "call":
 			var args any
-			if json.Unmarshal([]byte(b.args), &args) != nil || obj(args) == nil {
+			if decodeJSON([]byte(b.args), &args) != nil || obj(args) == nil {
 				return nil, unsupported("non-object tool arguments")
 			}
 			out = append(out, object{"type": "tool_use", "id": b.id, "name": b.name, "input": args})

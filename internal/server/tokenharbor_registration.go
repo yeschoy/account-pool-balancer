@@ -400,6 +400,10 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 	if err != nil {
 		return err
 	}
+	poolRoot := s.poolWorkContext(config.ProviderTokenHarbor)
+	if poolRoot.Err() != nil {
+		return errors.New("TokenHarbor号池已关闭")
+	}
 	cfg := s.cfg.Get().TokenHarbor
 	if conc <= 0 {
 		conc = cfg.RegisterConcurrency
@@ -437,7 +441,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 		return errors.New(detail)
 	}
 
-	queueCtx, queueCancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	queueCtx, queueCancel := context.WithTimeout(poolRoot, 24*time.Hour)
 	release, waitErr := r.acquire(queueCtx, row.Attempt, conc)
 	queueCancel()
 	if waitErr != nil {
@@ -496,7 +500,7 @@ func (r *thRegistrar) run(id string, solve bool, conc int) error {
 
 	s.thLive(row.Email, "开始注册", "", logProxy, "info")
 	// 12m of work + the mail budget, which the flow spends inside this window.
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
+	ctx, cancel := context.WithTimeout(poolRoot, 12*time.Minute+time.Duration(cfg.MailTimeoutSec)*time.Second)
 	defer cancel()
 	var res thregister.Result
 	newSignup := row.GitHub == nil && len(row.Cookies) == 0

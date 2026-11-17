@@ -46,7 +46,7 @@ const context = {
   setInterval(fn) { const id = nextTimer++; timers.set(id, fn); return id; },
   clearInterval(id) { timers.delete(id); },
   stopPerchRegistrationPolling() {}, stopTHPolling() {}, stopMistralPolling() {},
-  startX50Polling() {}, stopX50Polling() {},
+  startX50Polling() {}, stopX50Polling() {}, startTelnyxPolling() {}, stopTelnyxPolling() {},
   startALTPolling() {}, stopALTPolling() {},
   startALTAutoPolling() {}, stopALTAutoPolling() {},
   startDeployPolling() {}, stopDeployPolling() {},
@@ -57,13 +57,13 @@ for (const name of ['loadOverview', 'loadAccounts', 'loadKeys', 'loadSettings', 
   'loadPerchAutosignup', 'loadPerchKeys', 'loadPerchSettings', 'loadTHOverview',
   'loadTHRegistrations', 'loadTHSettings', 'loadMistralRegistrations',
   'loadDeployRegistrations', 'loadDeploySettings',
-  'loadX50Registrations', 'loadX50Settings',
+  'loadX50Registrations', 'loadX50Settings', 'loadTelnyxRegistrations', 'loadTelnyxSettings', 'loadPools',
   'loadALTStatus', 'loadALTRegistrations', 'loadALTSettings']) {
   context[name] = async () => { loaded.push(name); };
 }
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('const POOLS ='), source.indexOf('const esc =')), context);
-vm.runInContext(source.slice(source.indexOf('const PROXY_PAGES ='), source.indexOf('// ---- overview ----')), context);
+vm.runInContext(source.slice(source.indexOf('const PROXY_PAGES ='), source.indexOf('// ---- global pool lifecycle')), context);
 const switchPool = provider => node('#pool-tabs').listeners.click({ target: { closest: () => ({ dataset: { pool: provider } }) } });
 const registration = anchors.find(el => el.dataset.page === 'mregister');
 const mistralSeparator = separators.find(el => el.dataset.poolNav === 'mistral');
@@ -75,7 +75,7 @@ for (const provider of vm.runInContext('POOLS', context)) {
   const before = loaded.length;
   context.go('mregister');
   // 50X 已具有通用推理管理页，跨池专属深链回到概览。
-  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : 'overview');
+  assert.equal(context.currentPage, provider === 'mistral' ? 'mregister' : provider === 'perch' ? 'perch' : provider === 'telnyx' ? 'telnyxreg' : 'overview');
   assert.equal(context.hash, '#' + context.currentPage);
   assert.equal(sections.find(el => el.id === 'page-mregister').classList.contains('hidden'), provider !== 'mistral');
   assert.equal(loaded.slice(before).includes('loadMistralRegistrations'), provider === 'mistral', provider + ' deep-link isolation');
@@ -84,7 +84,7 @@ for (const provider of vm.runInContext('POOLS.filter(p => p !== "mistral")', con
   switchPool('mistral');
   context.go('mregister');
   switchPool(provider);
-  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : 'overview');
+  assert.equal(context.currentPage, provider === 'perch' ? 'perch' : provider === 'telnyx' ? 'telnyxreg' : 'overview');
   assert.equal(registration.classList.contains('hidden'), true);
   assert.equal(mistralSeparator.classList.contains('hidden'), true);
 }
@@ -95,7 +95,7 @@ for (const provider of vm.runInContext('POOLS', context)) {
     assert.equal(anchors.find(el => el.dataset.page === page).classList.contains('hidden'), provider !== 'deploy');
     const before = loaded.length;
     context.go(page);
-    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : 'overview');
+    assert.equal(context.currentPage, provider === 'deploy' ? page : provider === 'perch' ? 'perch' : provider === 'telnyx' ? 'telnyxreg' : 'overview');
     assert.equal(loaded.slice(before).includes(loader), provider === 'deploy', provider + ' Deploy deep-link isolation');
     assert.equal(loaded.slice(before).includes('initDeployPage'), provider === 'deploy', 'Deploy deep links bind handlers');
   }
@@ -167,6 +167,13 @@ context.loadMistralCandidates = async () => {};
   resume();
   await loading;
   assert.equal(vm.runInContext('mistralPollTimer', context), null, 'late completion cannot restart Mistral polling');
+  vm.runInContext('poolStates = { factory: false }; pool = "factory";', context);
+  context.go('accounts');
+  assert.equal(context.currentPage, 'pools', 'disabled pool lands on always-visible controls');
+  vm.runInContext('poolStates = Object.fromEntries(POOLS.map(p => [p, false]));', context);
+  context.go('pools');
+  assert.equal(context.currentPage, 'pools', 'all-off must retain recovery controls');
+  vm.runInContext('poolStates = {}; pool = "opendesign";', context);
   let calls = 0;
   context.loadMistralStatus = async () => { calls++; };
   await context.loadMistralRegistrations();

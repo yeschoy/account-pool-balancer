@@ -314,7 +314,7 @@ func (p *Pool) classLocked(cfg *config.Config, model string, now time.Time) stri
 	class := "unknown"
 	inCatalog := false
 	for _, a := range cfg.Accounts {
-		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider) {
+		if config.IsOpenCode(a.Provider) || a.Provider == config.ProviderTokenHarbor || a.Provider == config.ProviderMistral || config.NativeGateway(a.Provider) {
 			continue
 		} // Independent catalogs must not teach OpenDesign funding classes
 		snap := p.quota(a.ID)
@@ -373,7 +373,7 @@ func (p *Pool) Succeeded(cfg *config.Config, id, model string) {
 	if st == nil || len(st.Strikes) == 0 {
 		return
 	}
-	if a, ok := cfg.Account(id); ok && (config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral || config.NativeChatOnly(a.Provider)) {
+	if a, ok := cfg.Account(id); ok && (config.IsOpenCode(a.Provider) || a.Provider == config.ProviderMistral || config.NativeGateway(a.Provider)) {
 		delete(st.Strikes, "account")
 	}
 	delete(st.Strikes, "plan")
@@ -402,6 +402,9 @@ func (p *Pool) ClassCooldown(id, class string, until time.Time, status int, reas
 
 // Unavailability says why a can't be scheduled for model, "" when it can.
 func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model string, now time.Time) string {
+	if !cfg.PoolEnabled(a.Provider) {
+		return "provider-disabled"
+	}
 	if !a.Enabled {
 		return "disabled"
 	}
@@ -474,6 +477,17 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 			return "quota-exhausted"
 		}
 		return "" // no OpenDesign funding classification
+	}
+	if a.Provider == config.ProviderFactory {
+		if model != "" {
+			if _, ok := cfg.Factory.Model(model); !ok {
+				return "not-entitled"
+			}
+		}
+		if model != "" && snap != nil && snap.CatalogSource == quota.ResponseBindingSource(cfg, a) && snap.Factory.Exhausted(cfg, model, now) {
+			return "quota-exhausted"
+		}
+		return "" // configured discovery / unknown quota never means OpenDesign funding
 	}
 	if a.Provider == config.ProviderDeploy {
 		r := cfg.Deploy.EffectiveRouting()
@@ -738,6 +752,9 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 	}
 	stale := time.Duration(cfg.Quota.StaleSec) * time.Second
 	snap := p.quota(a.ID)
+	if a.Provider == config.ProviderFactory {
+		return s
+	}
 	if a.Provider == config.ProviderMistral {
 		if snap != nil && snap.CatalogSource == quota.ResponseBindingSource(cfg, a) && snap.FreshMistral(now, stale) && snap.Mistral.Budget.Total > 0 {
 			b := snap.Mistral.Budget

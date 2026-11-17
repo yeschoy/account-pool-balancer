@@ -247,6 +247,15 @@ func (s *Server) adminOnly(h http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		if !s.poolAdminAllowed(w, r) {
+			return
+		}
+		p := s.adminPool(r)
+		if p != "" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			ctx, cancel := s.poolJobContext(r.Context(), p)
+			defer cancel()
+			r = r.WithContext(ctx)
+		}
 		h(w, r)
 	}
 }

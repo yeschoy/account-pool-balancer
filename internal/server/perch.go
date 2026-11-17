@@ -85,6 +85,10 @@ func (s *Server) initPerch() error {
 	}
 	s.perch.telemetry = perchtelemetry.New(s.telemetrySettings(s.cfg.Get()), auditSink{s}, s.logf)
 	s.perch.sched = perchstore.NewScheduler(k)
+	s.perch.sched.Enabled = func() bool { return s.cfg.Get().PoolEnabled(config.ProviderPerch) }
+	s.perch.sched.JobContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		return s.poolJobContext(ctx, config.ProviderPerch)
+	}
 	s.perch.sched.Concurrency = s.cfg.Get().Perch.RefreshConcurrency
 	s.perch.sched.OnResult = s.onPerchRefresh
 	s.quota.PerchFetch = s.fetchPerchMeter
@@ -181,6 +185,9 @@ func perchAccounts(cfg *config.Config) []config.Account {
 // the only verdict that marks an account as needing a fresh sign-in, and
 // turning that into a hard quarantine is what takes it out of service.
 func (s *Server) onPerchRefresh(accountID string, res perchstore.RefreshResult) {
+	if errors.Is(res.Err, context.Canceled) || !s.cfg.Get().PoolEnabled(config.ProviderPerch) && res.Err != nil {
+		return
+	} // disabling cancels work, not credentials
 	if s.perch != nil && res.Revision != 0 && !s.perch.keeper.IsCurrentRefresh(accountID, res) {
 		return
 	}
@@ -1027,8 +1034,10 @@ func (s *Server) RunPerch(ctx context.Context) {
 				return
 			case <-t.C:
 				accts := perchAccounts(s.cfg.Get())
-				if len(accts) > 0 {
-					s.checkPerchBatch(ctx, accts, nil)
+				if len(accts) > 0 && s.cfg.Get().PoolEnabled(config.ProviderPerch) {
+					work, cancel := s.poolJobContext(ctx, config.ProviderPerch)
+					s.checkPerchBatch(work, accts, nil)
+					cancel()
 				}
 			}
 		}

@@ -64,7 +64,7 @@ new vm.Script(appSource + '\n' + altSource);
 
 // ALTAPI 固定每小时后台刷新，不显示一个实际不生效的请求缓存TTL。
 {
-  const context = vm.createContext({ pool: 'altapi' });
+  const context = vm.createContext({ pool: 'altapi', isFactory: () => false });
   vm.runInContext(appSource.slice(appSource.indexOf('const STRATEGY_HINTS'), appSource.indexOf('// ---- error / retry rules')) + '\nglobalThis.fields = routingFields();', context);
   assert.ok(!context.fields.some((f) => f[0] === 'modelsCacheSec'));
   assert.ok(context.fields.some((f) => f[0] === 'ignoreCatalog'));
@@ -115,7 +115,7 @@ assert.match(appSource, /const isALTapi = \(\) => pool === 'altapi'/);
 assert.match(appSource, /altoverview: \(\) => loadALTStatus\(\), altreg: \(\) => loadALTRegistrations\(\), altsettings: \(\) => loadALTSettings\(\)/);
 assert.match(appSource, /if \(page === 'altreg'\) startALTPolling\(\)/);
 assert.match(appSource, /if \(currentPage === 'altreg' && page !== currentPage && typeof stopALTPolling === 'function'\) stopALTPolling\(\)/);
-assert.match(appSource, /if \(isALTapi\(\) && !ALTAPI_PAGES\.includes\(page\)\) page = 'altreg'/);
+assert.match(appSource, /if \(isALTapi\(\) && !ALTAPI_PAGES\.includes\(page\) && page !== 'pools'\) page = 'altreg'/);
 assert.match(appSource, /data-pool-nav="altapi"/);
 
 // 6) 每一个后端路由都要被前端用到，且路径拼在 /api/altapi 下。

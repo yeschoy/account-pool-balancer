@@ -95,6 +95,8 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/logout", s.apiLogout)
 	a := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, s.adminOnly(h)) }
 	a("POST /api/password", s.apiPassword)
+	a("GET /api/pools", s.apiPools)
+	a("PUT /api/pools/{provider}", s.apiSetPool)
 	a("GET /api/overview", s.apiOverview)
 	a("POST /api/stats/reset-cache-rate", s.apiResetCacheRate)
 	a("GET /api/accounts", s.apiAccounts)
@@ -315,6 +317,7 @@ type accountView struct {
 	ModelStudioPlan       string                 `json:"modelStudioPlan,omitempty"`
 	ModelStudioQuotaState string                 `json:"modelStudioQuotaState,omitempty"`
 	ModelStudioQuotaNote  string                 `json:"modelStudioQuotaNote,omitempty"`
+	Factory               *quota.FactoryState    `json:"factory,omitempty"`
 	Deploy                *quota.DeployDiagnosis `json:"deploy,omitempty"`
 }
 
@@ -328,7 +331,7 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 	usage := s.stats.Summary().Accounts
 	now := time.Now()
 	for _, a := range cfg.Accounts {
-		if config.NativeChatOnly(a.Provider) && snaps[a.ID] != nil && snaps[a.ID].CatalogSource != quota.ResponseBindingSource(cfg, a) {
+		if config.NativeGateway(a.Provider) && snaps[a.ID] != nil && snaps[a.ID].CatalogSource != quota.ResponseBindingSource(cfg, a) {
 			delete(snaps, a.ID)
 		}
 		if q := snaps[a.ID]; a.Provider == config.ProviderOpenDesign && q != nil && q.OpenDesign != nil && q.OpenDesign.Source != quota.OpenDesignSource(cfg, a) {
@@ -360,6 +363,9 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 			eg := s.goEgressView(cfg, a)
 			v.EgressIP, v.Egress = a.EgressIP, &eg
 		}
+		if a.Provider == config.ProviderFactory {
+			v.Factory = snaps[a.ID].FactoryView()
+		}
 		if a.Provider == config.ProviderDeploy {
 			v.Deploy = snaps[a.ID].DeployDiagnosis(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 		}
@@ -388,7 +394,7 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				}
 			}
 		}
-		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil || q.Mistral != nil || q.X50 != nil || q.ALTAPI != nil) {
+		if q := snaps[a.ID]; q != nil && (q.WorkspaceID != "" || !q.PlanAt.IsZero() || q.LastError != "" || !q.CatalogAt.IsZero() || q.Ollama != nil || q.Mistral != nil || q.Factory != nil || q.X50 != nil || q.ALTAPI != nil) {
 			v.Quota = q
 			switch a.Provider {
 			case config.ProviderOpenDesign:
@@ -417,6 +423,8 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				v.QuotaFresh = q.FreshALTAPIBalance(cfg, a, now)
 			case config.ProviderX50:
 				v.QuotaFresh = q.FreshX50(now, time.Duration(cfg.X50.EffectiveQuota().StaleSec)*time.Second)
+			case config.ProviderFactory:
+				v.QuotaFresh = q.Factory.Fresh(now, time.Duration(cfg.Factory.EffectiveQuota().StaleSec)*time.Second)
 			case config.ProviderDeploy:
 				v.QuotaFresh = false // A fresh catalog is not a measured balance.
 			case config.ProviderModelStudio:
@@ -657,7 +665,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 		lineProviderRejected := false
 		for _, field := range f {
 			if p, ok := strings.CutPrefix(field, "provider:"); ok && config.KnownProvider(p) {
-				if config.NativeChatOnly(declared) && p != declared {
+				if config.NativeGateway(declared) && p != declared {
 					lineProviderRejected = true
 					continue
 				}
@@ -665,7 +673,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			switch {
-			case (provider == config.ProviderOllama || provider == config.ProviderMistral || config.NativeChatOnly(provider) || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
+			case (provider == config.ProviderOllama || provider == config.ProviderMistral || config.NativeGateway(provider) || config.IsOpenCode(provider)) && a.RuntimeKey == "" && !strings.Contains(field, "://") && field != "":
 				// an Ollama key has no prefix the pool can check, so the
 				// first free token of such a line is the key
 				a.RuntimeKey = field
@@ -680,7 +688,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if lineProviderRejected {
-			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行不能从 Deploy 批量导入跨到其他号池")
+			errs = append(errs, "第 "+strconv.Itoa(n+1)+" 行不能从当前号池批量导入跨到其他号池")
 			continue
 		}
 		a.Provider = config.ResolveProvider(provider, a.RuntimeKey)
@@ -774,6 +782,28 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 			}
 			s.metaDirty.Store(true)
 			writeJSON(w, 200, map[string]any{"ok": fresh, "quotaRefreshed": fresh, "catalogRefreshed": q.CatalogError == "" && !q.CatalogAt.Before(started), "message": message})
+			return
+		}
+		if a.Provider == config.ProviderFactory {
+			current := s.cfg.Get()
+			n, exists := current.Account(id)
+			q := s.quota.Get(id)
+			if !exists || quota.ResponseBindingSource(cfg, a) != quota.ResponseBindingSource(current, n) || q == nil || q.Factory == nil || q.Factory.CheckedAt.Before(started) {
+				apiError(w, 409, errors.New("Factory来源变化或检测未完成"))
+				return
+			}
+			s.metaDirty.Store(true)
+			fresh := q.Factory.Fresh(time.Now(), time.Duration(current.Factory.EffectiveQuota().StaleSec)*time.Second) && !q.Factory.QuotaAt.Before(started)
+			message := "身份已验证；额度未知：" + quota.FactoryQuotaReason
+			if fresh {
+				message = "Factory额度窗口已刷新（共享百分比，不按Key累加）"
+			} else if q.Factory.QuotaError != "" {
+				message += " " + q.Factory.QuotaError
+			}
+			if err != nil {
+				message = err.Error()
+			}
+			writeJSON(w, 200, map[string]any{"ok": err == nil, "quotaRefreshed": fresh, "identityRefreshed": err == nil, "message": message, "factory": q.Factory})
 			return
 		}
 		if a.Provider == config.ProviderDeploy {
@@ -883,6 +913,10 @@ func (s *Server) apiTestAccount(w http.ResponseWriter, r *http.Request) {
 	_ = readBody(r, &in)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	if a.Provider == config.ProviderFactory {
+		writeJSON(w, http.StatusOK, s.testFactory(ctx, cfg, a, in.Inference, in.Model))
+		return
+	}
 	if config.IsOpenCode(a.Provider) {
 		writeJSON(w, http.StatusOK, s.testOpenCode(ctx, cfg, a, in.Inference, in.Model))
 		return
@@ -1141,7 +1175,7 @@ func (s *Server) apiDeviceStart(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadGateway, errors.New("申请设备授权失败："+err.Error()))
 		return
 	}
-	bg, bgCancel := context.WithDeadline(context.Background(), start.ExpiresAt.Add(30*time.Second))
+	bg, bgCancel := context.WithDeadline(s.poolWorkContext(config.ProviderOpenDesign), start.ExpiresAt.Add(30*time.Second))
 	f := &deviceFlow{ID: randHex(8), UserCode: start.UserCode, ActivationURL: start.ActivationURL, ExpiresAt: start.ExpiresAt,
 		Status: "pending", group: in.Group, accountID: in.AccountID, deviceID: start.DeviceID, secret: start.DeviceSecret, cancel: bgCancel}
 	s.devices.mu.Lock()
@@ -1420,6 +1454,7 @@ type settingsDoc struct {
 	Mistral     *config.Mistral      `json:"mistral,omitempty"`
 	ModelStudio *modelStudioSettings `json:"modelStudio,omitempty"`
 	X50         *x50Settings         `json:"x50,omitempty"`
+	Factory     *config.Factory      `json:"factory,omitempty"`
 	Deploy      *deploySettings      `json:"deploy,omitempty"`
 	ALTAPI      *altapiSettings      `json:"altapi,omitempty"`
 }
@@ -1478,11 +1513,14 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	if prov == config.ProviderX50 {
 		defaultPrices = c.X50.EffectivePricing().Models
 	}
+	if prov == config.ProviderFactory {
+		defaultPrices = []pricing.Entry{}
+	}
 	if prov == config.ProviderDeploy {
 		defaultPrices = config.DefaultDeployPricing().Models
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
+		"settings":   settingsDoc{Factory: &c.Factory, X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
@@ -1499,7 +1537,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Update(in.Revision, func(c *config.Config) error {
 		// Independent opaque-key pools must not overwrite shared/other-pool
 		// settings even when the console submits a full settings document.
-		independent := config.NativeChatOnly(prov) || prov == config.ProviderALTAPI
+		independent := config.NativeGateway(prov) || prov == config.ProviderALTAPI
 		if !independent {
 			c.Upstream, c.Logs = in.Upstream, in.Logs
 			c.Pricing = in.Pricing
@@ -1524,6 +1562,16 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch prov {
+		case config.ProviderFactory:
+			if in.Factory != nil {
+				c.Factory.BaseURL = in.Factory.BaseURL
+				c.Factory.DetailLog = in.Factory.DetailLog
+				c.Factory.StandardOnly = in.Factory.StandardOnly
+				c.Factory.Compatibility = in.Factory.Compatibility
+				c.Factory.Models = in.Factory.Models
+			}
+			c.Factory.Routing, c.Factory.Quota, c.Factory.Pricing = &in.Routing, &in.Quota, &in.Pricing
+			c.FactoryErrorRules, c.FactoryRetryRules = in.ErrorRules, in.RetryRules
 		case config.ProviderX50:
 			if in.X50 != nil {
 				c.X50.BaseURL = in.X50.BaseURL
@@ -1947,6 +1995,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	bindingLimit, bindingIndependent := s.pool.BindingCapacityFor(want)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"go":                      goView,
+		"factory":                 factoryOverviewFor(views),
 		"deploy":                  deployOverviewFor(views),
 		"accounts":                len(views),
 		"status":                  statusCount,
@@ -1986,7 +2035,7 @@ func (s *Server) apiResetCacheRate(w http.ResponseWriter, r *http.Request) {
 	switch provider {
 	case config.ProviderOpenDesign, config.ProviderRiver, config.ProviderOllama,
 		config.ProviderModal, config.ProviderMistral, config.ProviderTokenHarbor,
-		config.ProviderOpenCodeZen, config.ProviderOpenCodeGo, config.ProviderDeploy, config.ProviderX50:
+		config.ProviderOpenCodeZen, config.ProviderOpenCodeGo, config.ProviderFactory, config.ProviderDeploy, config.ProviderX50:
 	default:
 		apiError(w, http.StatusBadRequest, errors.New("请指定有效的号池"))
 		return

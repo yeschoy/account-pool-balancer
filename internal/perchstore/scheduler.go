@@ -10,7 +10,10 @@ import (
 // sessions that are due and renews them with bounded concurrency. It is the
 // piece that makes "import once, keep working" true after a restart too.
 type Scheduler struct {
-	k *Keeper
+	// Enabled pauses network work without removing saved sessions.
+	Enabled    func() bool
+	JobContext func(context.Context) (context.Context, context.CancelFunc)
+	k          *Keeper
 	// Tick is how often due sessions are looked for.
 	Tick time.Duration
 	// Concurrency bounds how many accounts renew at once.
@@ -56,6 +59,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 // RefreshDue renews every session that is due, at most Concurrency at a time.
 // It returns how many were attempted.
 func (s *Scheduler) RefreshDue(ctx context.Context) int {
+	if s.Enabled != nil && !s.Enabled() {
+		return 0
+	}
 	s.mu.Lock()
 	if s.paused {
 		s.mu.Unlock()
@@ -89,7 +95,16 @@ func (s *Scheduler) RefreshBlocks(ctx context.Context, accountIDs []string) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			res := s.k.Refresh(ctx, id, false)
+			work := ctx
+			if s.JobContext != nil {
+				var cancel context.CancelFunc
+				work, cancel = s.JobContext(ctx)
+				defer cancel()
+			}
+			if work.Err() != nil || s.Enabled != nil && !s.Enabled() {
+				return
+			}
+			res := s.k.Refresh(work, id, false)
 			if s.OnResult != nil {
 				s.OnResult(id, res)
 			}

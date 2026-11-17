@@ -29,6 +29,7 @@
   <aside class="side">
     <div class="brand"><span class="logo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 3v15M6 18h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5C7.5 7.5 16.5 7.5 20 8.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 8.5v3M20 8.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M18 11.5c0 3.5 4 3.5 4 0Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="7.8" r="1.8" fill="currentColor"/></svg></span> Account Pool</div>
     <nav id="nav">
+      <a data-page="pools">号池管理 / 启停</a>
       <a data-page="overview" class="active">概览</a>
       <a data-page="accounts">账号</a>
       <a data-page="keys">下游密钥</a>
@@ -77,6 +78,7 @@
       <button class="pool-tab" data-pool="mistral" role="tab">Mistral 号池</button>
       <button class="pool-tab" data-pool="tokenharbor" role="tab">Token Harbor 号池</button>
       <button class="pool-tab" data-pool="modelstudio" role="tab">百炼 Model Studio</button>
+      <button class="pool-tab" data-pool="factory" role="tab">Factory AI</button>
       <button class="pool-tab" data-pool="deploy" role="tab">Deploy 号池</button>
       <button class="pool-tab" data-pool="perch" role="tab">Perch 号池</button>
       <button class="pool-tab" data-pool="opencode-zen" role="tab">OpenCode Zen</button>
@@ -85,6 +87,11 @@
       <button class="pool-tab" data-pool="telnyx" role="tab">Telnyx</button>
       <button class="pool-tab" data-pool="altapi" role="tab">ALTapi</button>
     </div>
+    <section id="page-pools" class="page hidden">
+      <header class="page-head"><h1>号池管理 / 启停</h1></header>
+      <div class="panel"><p>关闭不用的号池可精简顶部标签并停止其后台上游刷新/注册任务；新推理和模型目录请求返回503。已在途推理允许自然结束。账号、配置、凭据、日志与历史额度保留，账号自身启用状态不变。</p><p class="muted small">此页始终可见，即使全部关闭仍可重新开启。开关保存后即时生效且重启保留；旧配置默认保持现有启用状态。重新开启不会自动重跑已取消注册，不会打开各池原本关闭的自动补号或OpenCode接入开关。共享日志保留清理与必要元数据保存继续运行。</p>
+      <div class="table-wrap"><table class="table" id="pools-table"><thead><tr><th>号池</th><th>账号数</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
+    </section>
     <section id="page-overview" class="page">
       <header class="page-head"><h1>概览</h1><div class="actions"><span class="muted" id="ov-updated"></span><button type="button" class="btn small" id="btn-reset-cache-rate">清空24h缓存命中率</button></div></header>
       <div id="ov-cards" class="cards"></div>
@@ -1349,6 +1356,22 @@
         </div>
         <p class="muted small">路由、会话头/粘性/TTL/忙时、并发/RPM/等待、尝试上限、健康、超时/体积/模型缓存、刷新、规则与价格表独立保存。无可靠官方价格表，默认费用未知，可手填估算价。管理会话失效仅标余额未知，不冒充推理鉴权失败；付费/预付费层新鲜余额≤0暂停调度；旧免费层的每日输出配额接口尚未知，不能用钱包零值判耗尽。多Key共享账号余额/配额/限流，不按Key累加。注册代理与推理代理独立。</p>
       </div>
+      <div class="panel hidden" id="factory-settings">
+        <h2>Factory AI 独立设置</h2>
+        <p class="muted small">参考magpie的模型路由、Fast Mode与工具schema转换。原生协议保留字节，跨协议支持有限Chat/Responses/Messages互转，JSON/SSE结果还原；不改写身份/提示词，不删历史附件绕过413。目录不是账号授权，content_policy_rejected停止。</p>
+        <div class="form">
+          <label for="factory-base">API源站（不含路径）</label><input id="factory-base" autocomplete="off" placeholder="https://api.factory.ai">
+          <span></span><span class="hint">可明确选择https://api.eu.factory.ai；不会自动向whoami返回的私有域名发送Key，也不跟随重定向或代理失败后直连。</span>
+          <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
+          <span></span><span class="hint">可从Chat/Responses/Messages调用不同原生协议模型；跨协议流完整缓冲（16MiB）后输出，不是低延迟流。不支持的字段/签名推理/续传引用本地400，不静默丢弃；关闭后只允许原生协议。工具根级composition包装/解包不受此开关影响。Fast仅在显式选择Fast模型或请求fast/priority时映射，可能花更多额度。</span>
+          <label for="factory-standard-only">仅使用Standard额度</label><label class="check"><input id="factory-standard-only" type="checkbox">开启</label>
+          <span></span><span class="hint">默认关闭。开启后任一新鲜、仍有效的Standard窗口达到100%即暂停本号所有模型（不改官网消费开关）；关闭时按Standard/Core模型分类，官网已允许且有真实Extra余额时不因窗口耗尽暂停。未知/失败/到期/未激活不当作补满或零余额；数据有延迟，要保证不花Extra须在官网关闭。</span>
+          <label for="factory-detail">本池详情日志</label><label class="check"><input id="factory-detail" type="checkbox">开启</label>
+        </div>
+        <label for="factory-models">模型原生路由（JSON数组）</label><textarea id="factory-models" class="code" rows="8"></textarea>
+        <p class="hint">每项{id,protocol,upstream}；protocol为chat/responses/messages，upstream为Factory的x-api-provider。默认目录来自固定版本参考；原生协议为chat/responses/messages。支持已配置Fast模型的显式参数映射与有限跨协议转换，Gemini generate尚未实现。空数组真正清空；已有自定义目录不会自动补模型。</p>
+        <p class="muted small">下方路由/会话/超时/并发/额度轮询/规则/价格独立保存。fk- Key的billing权限不足显示未知并保留历史，不等于推理Key失效；被拒后不周期重试billing，手动刷新可重查。Standard/Core为共享百分比，不逐Key累加。Extra余额仅展示，不自动开启或修改消费。费用默认未知，可填手动估算价；不是官方账单。日志保留/容量为共享设施，只读。</p>
+      </div>
       <div class="panel hidden" id="deploy-settings">
         <h2>Deploy 独立设置</h2>
         <p class="muted small">deploy.com 原生 Chat Completions（流式/非流式）；API 根必须包含 <code>/api/v1</code>，使用 Secret Key 而非 access_key。不转换 Responses / Messages，不自动注册、创建 Key、绑卡、充值或开启额外消费。目录成功不代表 Key 已 active 或有推理授权。</p>
@@ -1407,7 +1430,7 @@
           <div class="form" id="form-quota"></div>
           <h2 class="mt">日志</h2>
           <div class="form" id="form-logs"></div>
-          <p id="shared-log-note" class="hint hidden">以上是全局共享日志保留/容量，只读展示；Deploy / 50X 保存不更改它们。仅上方「本池详情日志」独立控制本池采集。</p>
+          <p id="shared-log-note" class="hint hidden">以上是全局共享日志保留/容量，只读展示；Deploy / 50X / Factory 保存不更改它们。仅上方「本池详情日志」独立控制本池采集。</p>
           <p class="hint">业务日志默认保留7天，可配置1–365天；请求、错误、详细及各号池事件日志统一自动过期，磁盘最迟每10分钟清理一次。已有明确保留天数不会被升级覆盖。注册账号/会话、支付记录和备份不属于日志，不会删除。</p>
           <h2 class="mt">选号预览</h2>
           <div class="row">

@@ -157,6 +157,13 @@ func (s *Server) apiPerchOpenImport(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusUnauthorized, errors.New("invalid or missing import key"))
 		return
 	}
+	if !s.cfg.Get().PoolEnabled(config.ProviderPerch) {
+		apiError(w, 409, errors.New("Perch号池已关闭"))
+		return
+	}
+	ctx, cancel := s.poolJobContext(r.Context(), config.ProviderPerch)
+	defer cancel()
+	r = r.WithContext(ctx)
 	// an import key scoped to another pool must not create Perch accounts
 	pool := importKeyPool(s.cfg.Get(), ik)
 	if pool != "" && pool != config.ProviderPerch {

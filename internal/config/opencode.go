@@ -181,6 +181,12 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 	if a.Provider == ProviderModelStudio {
 		return c.ModelStudioInferenceBase(a, protocol)
 	}
+	if a.Provider == ProviderFactory {
+		if protocol == "messages" || protocol == "anthropic" {
+			return c.RuntimeBase(a) + "/api/llm/a/v1"
+		}
+		return c.RuntimeBase(a) + "/api/llm/o/v1"
+	}
 	return c.RuntimeBase(a)
 }
 
@@ -197,6 +203,10 @@ func (c *Config) ForProvider(provider string) *Config {
 		out := *c
 		out.Routing, out.Quota = c.ALTAPI.EffectiveRouting(), c.ALTAPI.EffectiveQuota()
 		out.Pricing = c.ALTAPI.EffectivePricing()
+		return &out
+	case ProviderFactory:
+		out := *c
+		out.Routing, out.Quota, out.Pricing = c.Factory.EffectiveRouting(), c.Factory.EffectiveQuota(), c.Factory.EffectivePricing()
 		return &out
 	case ProviderDeploy:
 		out := *c

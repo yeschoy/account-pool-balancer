@@ -352,6 +352,7 @@ func (s *Server) importRegistered(row *registrationRow, group string) {
 }
 
 func (s *Server) runPerchRegistration(id string, accounts []registrationInput, auto bool, group string) {
+	poolRoot := s.poolWorkContext(config.ProviderPerch)
 	m := &s.perchRegistrations
 	defer func() {
 		m.mu.Lock()
@@ -362,6 +363,9 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 		m.mu.Unlock()
 	}()
 	for i := range accounts {
+		if poolRoot.Err() != nil {
+			return
+		}
 		m.mu.Lock()
 		job := m.jobs[id]
 		a := accounts[i]
@@ -369,7 +373,7 @@ func (s *Server) runPerchRegistration(id string, accounts []registrationInput, a
 		a.ProxyURL = job.Accounts[i].proxyURL
 		job.Accounts[i].Status = "registering"
 		m.mu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := context.WithTimeout(poolRoot, 10*time.Minute)
 		stage := "注册"
 		worker := m.worker
 		if worker == nil {

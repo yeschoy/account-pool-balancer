@@ -600,9 +600,18 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 	if len(ids) == 0 {
 		return
 	}
-	m.seq <- struct{}{}
+	ctx, cancel := m.srv.poolJobContext(context.Background(), "deploy")
+	defer cancel()
+	select {
+	case m.seq <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
 	defer func() { <-m.seq }()
 
+	if m.srv != nil && !m.srv.cfg.Get().PoolEnabled("deploy") {
+		return
+	}
 	st := m.store.Settings()
 	scriptPath, pyBin, err := m.scriptPaths(st)
 	if err != nil {
@@ -697,8 +706,6 @@ func (m *deployManager) runBatchMode(ids []string, resumeOnly bool) {
 	}
 	defer os.Remove(jobPath)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	for _, id := range validIDs {
 		id := id
 		m.mu.Lock()
@@ -770,7 +777,7 @@ type resendOutcome struct {
 // 已保证互斥。返回第一个 item_done 的事件；子命令未产出结果就退出时
 // 用 stderr 尾巴拼错误。
 func (m *deployManager) runPythonOnce(pyBin, scriptPath, jobPath string) (resendOutcome, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(m.srv.poolWorkContext("deploy"), 20*time.Minute)
 	defer cancel()
 
 	var stderr strings.Builder
@@ -1326,7 +1333,7 @@ func (s *Server) probeProxyEgress(upstream string, st deploysignupstore.Settings
 	if serr != nil {
 		return "", serr
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(s.poolWorkContext("deploy"), 45*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, py, script, "--probe-proxy")
 	cmd.Env = append(os.Environ(),
@@ -1721,7 +1728,7 @@ func (s *Server) runBindCards(items []bindItem, live bool, amount float64) ([]bi
 
 	// 每条绑卡要起浏览器，给足时间：每条 90 秒
 	timeout := time.Duration(len(items)*90+60) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(s.poolWorkContext("deploy"), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, py, payScript, "--bind-job", f.Name())

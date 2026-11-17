@@ -355,6 +355,9 @@ func (s *Server) importOne(ik config.ImportKey, it importItem, now time.Time) im
 		if provider == config.ProviderPerch {
 			return fail("perch accounts take no API key: POST the account export to /open/v1/perch/import instead")
 		}
+		if provider == config.ProviderFactory {
+			return fail("Factory runtimeKey must be a complete fk- API key without whitespace")
+		}
 		if provider == config.ProviderDeploy {
 			return fail("Deploy runtimeKey must be the opaque secret (8..512 ASCII characters without whitespace), not access_key")
 		}

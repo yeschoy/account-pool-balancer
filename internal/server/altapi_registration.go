@@ -256,9 +256,18 @@ func (m *altapiManager) runBatch(ids []string, origin batchOrigin) {
 	}
 	// one batch at a time; the send window is per-mailbox but the exit IP
 	// budget is shared, so serializing batches keeps CF calm
-	m.seq <- struct{}{}
+	ctx, cancel := m.srv.poolJobContext(context.Background(), "altapi")
+	defer cancel()
+	select {
+	case m.seq <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
 	defer func() { <-m.seq }()
 
+	if m.srv != nil && !m.srv.cfg.Get().PoolEnabled("altapi") {
+		return
+	}
 	st := m.store.Settings()
 	script, py, err := m.scriptPaths(st)
 	if err != nil {
@@ -306,11 +315,9 @@ func (m *altapiManager) runBatch(ids []string, origin batchOrigin) {
 		"code_delay_sec":     st.CodeDelaySec,
 		// 批次稀释：uid 是站点自增主键无法伪造，只能拉开间隔让真实用户
 		// 插进号段（实测我们那批 241–250 是全站唯一连续段）。
-		"batch_gap_sec":      st.BatchGapSec,
+		"batch_gap_sec": st.BatchGapSec,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	valid := make([]string, 0, len(ids))
 	for _, id := range ids {
 		c, err := m.store.Get(id)

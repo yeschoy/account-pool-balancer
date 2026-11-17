@@ -43,6 +43,7 @@ func (s *Server) deployHTTPClient(cfg *config.Config, proxy string) *http.Client
 	return &http.Client{Transport: s.transportFor(proxy, r, key), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 func (s *Server) pruneNativeChatTransports(old, next *config.Config) {
+	s.pruneProviderTransports(old.Factory.EffectiveRouting(), next.Factory.EffectiveRouting(), factoryTransportPrefix)
 	s.pruneProviderTransports(old.X50.EffectiveRouting(), next.X50.EffectiveRouting(), "\x00x50:")
 	s.pruneProviderTransports(old.Deploy.EffectiveRouting(), next.Deploy.EffectiveRouting(), deployTransportPrefix)
 }
