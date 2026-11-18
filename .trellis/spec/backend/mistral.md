@@ -152,4 +152,32 @@ Good: exclude one unentitled model and continue another permitted model on the s
 ### Wrong vs Correct
 Wrong: build the old migration fixture by slicing new defaults, silently alter customized production policies, or present a code commit as deployment. Correct: frozen prior payloads, exact-only migrations and explicit local/committed/deployed/config-applied evidence.
 
+## 13. Evidence-scoped DeepSeek Chat temperature validation (2026-11-18)
+
+### Scope / Trigger
+Production422 at2026-11-18T17:01:13Z: exact DeepSeek Chat `body.temperature / less_than_equal`, input1.62, ctx.le1.5; independently confirmed from existing NewAPI logs in remote memory. The sampled41 Mistral requests had40 successes and this one failure, not evidence of a general content-conversion/account failure.
+
+### Signatures
+`adaptMistralDeepSeekParameters(o *mistralWireObject) error`, called by `prepareMistralRequest` after original identity but before account/RPM admission; no new config, persistence or response adapter.
+
+### Contracts
+Only exact `deepseek-v4-1-flash-1017` Chat: temperature absent/null or numeric≤1.5 retains its exact wire value; over-limit/non-numeric/non-finite overflow or duplicate decoded fields (including escaped spellings) returns local400 `invalid_mistral_request`, category=request, no account/admission/health sample/upstream attempt. Error gives the1.5 upper bound without echoing supplied values. Do not silently clamp/drop sampling settings or infer other model/path limits or a new lower bound. Client/NewAPI must lower or omit1.62 to obtain generation; deployment of validation alone cannot make that input succeed.
+
+### Validation & Error Matrix
+| Input | Outcome |
+|---|---|
+| Missing/null/0/0.30e0/1.5/15e-1 | Native wire value preserved, normal single attempt |
+| 1.62/1.5001/2/1e309/non-numeric | Local400 before admission; actionable safe error |
+| Repeated/escaped-duplicate temperature | Local400, no duplicate collapse |
+| GLM/Large/other models, Responses/FIM/counting/other providers | No new constraint or rewrite |
+
+### Good / Base / Bad Cases
+Good: set client temperature≤1.5 or omit; compatible reasoning/history/tools/cache still work. Base: legal original numeric bytes are unchanged. Bad: clamp1.62 to manufacture success, quarantine accounts for a request parameter, call local400 a production inference recovery.
+
+### Tests Required
+`mistral_temperature_test.go`: old-source overlay reproduces upstream422; local JSON/SSE rejection has zero attempts/account state changes and request-category logs; legal boundaries/exponents/null preserve wire fields/history/thought/tools/large numbers/cache-affinity and actual JSON/SSE response conversion, one upstream attempt; exact model/path/provider isolation. Local Mock success is not deployment or production inference verification.
+
+### Wrong vs Correct
+Wrong: infer generic Chat temperature limits from recommendations or change live NewAPI rules without approval. Correct: use observed exact-model validation evidence, retain sampling intent, disclose caller correction and deployment boundaries separately.
+
 Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching ; https://docs.mistral.ai/api/endpoint/chat ; https://docs.mistral.ai/api/endpoint/responses ; https://docs.mistral.ai/inference/conversations/reasoning .

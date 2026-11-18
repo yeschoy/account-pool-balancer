@@ -233,6 +233,18 @@ func mistralString(raw []byte) string {
 }
 
 func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
+	// Observed DeepSeek Chat schema: temperature=1.62 is rejected with
+	// less_than_equal/ctx.le=1.5. Validate before admission, never silently
+	// clamp sampling intent or apply this bound to unverified models/paths.
+	if err := o.unique("temperature"); err != nil {
+		return err
+	}
+	if raw := o.get("temperature"); raw != nil && !bytes.Equal(raw, []byte("null")) {
+		var temperature float64
+		if json.Unmarshal(raw, &temperature) != nil || temperature > 1.5 {
+			return errors.New("Mistral DeepSeek Chat temperature must be a number no greater than 1.5 or null; lower temperature or omit it; sampling was not changed")
+		}
+	}
 	// Keep the existing stateless error contract, including duplicate store.
 	if err := o.unique("store"); err != nil {
 		return errors.New("Mistral Chat is stateless: duplicate store is not supported")
