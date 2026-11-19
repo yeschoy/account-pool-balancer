@@ -38,6 +38,28 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory 设备登录 401 修复（2026-11-19 09:45 UTC，2dda906）
+
+- 线上第一次真实 Factory 设备登录：浏览器显示 `auth.factory.ai/device/success`，但服务端 `/api/cli/whoami` 返回 **401**。已核实 `api.factory.ai/api/cli/whoami` 对无 token 与任意坏 token 都返回 401（带 `requestId`），生产 API 只接受 Factory 生产 WorkOS client 签发的 token；Factory 存在生产 `client_01HNM792M5G5G1A2THWPXKFMXB` 与 development `client_01HNM7927XNSKCJ4982Z5J3FFZ` 两个 client，`authorize/device` 只传 `client_id`，用 dev client 也能拿到成功页但 token 必被 401。当前代码固定使用生产 client。
+- 修复提交 **`2dda90620e0289aaf74b1f185f9bd855923d7317`**（已推送 `origin/master`）：whoami 使用 WorkOS 返回的**原始 access token**（不再经过 TrimSpace/重编码）；新增 `EnvironmentOf` 从 token `iss` 判断 `production`/`development`/`unknown`；登录失败时对话框显示 `diagnostic`（WorkOS 客户端、令牌有效期、dev 提示）；服务端日志记录 whoami 的 HTTP 状态、上游错误体（不含 token）与实际出口；新增前端/后端单测。`go vet`、Factory/登录相关测试、前端测试通过。
+- 预检：旧镜像 `release-ab6d46a-20261119T073132Z` healthy/0 重启/OOM=false/user 1000:1000、双内网别名、磁盘余量 302G。期间 OVH SSH 端口出现 `Connection reset` 到 `Connection refused`，约 20 分钟后自行恢复；恢复后继续，未在旧工作树构建。
+- 从干净 `git archive 2dda906` 生成 `/home/ubuntu/project/account-pool-balancer-releases/20261119T091803Z-2dda906`（867 文件），Factory 登录/客户端/前端 SHA256 与本地一致；构建 **`account-pool-balancer:release-2dda906-20261119T091803Z`**，ID `sha256:fb7a8ec282981bbff10f3c2da9710c8a35fe0e8b6bad18c3d043cc835e4a39dc`，revision `2dda906`，镜像创建 09:44:53Z（构建约 10 秒，复用缓存层）。
+- 旧镜像打 `rollback-20261119T091803Z`；**09:45:25.459Z 停旧**，09:45:25.823Z 退出；一致备份 `/home/ubuntu/backups/account-pool-balancer/20261119T091803Z-factory-login-401-fix-2dda906/data.tgz`（153 条目/149 文件，SHA256 `be5ce1c6d7e7aff66d424315b4cc6c252a36ba6303f47bd2fd7317dee53db5d4`），另存旧 Compose/.env 与 `config.before.json`。
+- **09:45:45.291Z 切换**（线上 Compose + release `deploy-image.override.yml`，`up -d --no-build`），09:45:45.834Z 新容器运行，**09:46:15.977Z healthy**；image `release-2dda906-…`、revision `2dda906`、restarts=0、OOM=false、user 1000:1000。
+- 验收：`ai-internal` 别名含 `account-pool-balancer` 与 `opendesign-balancer`，从 `new-api` 请求两别名 `/healthz` 均 `{"ok":true}`；宿主机 200；`config.json` 字节与部署前完全一致（SHA256 `7e0da100…`、revision 6438、563 账号）；`/assets/app.js?v=5749aac647` 宿主机与公网 SHA256 均 `64e5b999…`，含新增 `diagnostic` 渲染（2 处）。公网 `/healthz` 200。
+- **边界**：没有发送生产推理、没有创建 Factory 账号、没有改设置。公网首次拉取 app.js 在 25 秒超时（已接收 152K/185K），60 秒重试成功；属 CDN/链路慢，不是镜像问题。**401 是否已解决仍需用户在控制台重新走一次设备登录**：失败时看对话框的 `WorkOS客户端=`（dev 则换生产账号，production 仍 401 则看服务端日志里的上游错误体与 requestId）。
+- 回退：`docker compose -f docker-compose.yml -f docker-compose.override.yml -f <当前 release>/deploy-image.override.yml` 中把 image 换回 `rollback-20261119T091803Z`；不自动用备份覆盖上线后新写入。
+
+| 阶段 | UTC 2026-11-19 |
+|---|---|
+| SSH 恢复 | 09:42 前后 |
+| 干净归档完成 | 09:44 前 |
+| 新镜像创建 | 09:44:53 |
+| 停旧 / 退出 | 09:45:25.459 / 09:45:25.823 |
+| 一致备份完成 | 09:45:28.889 |
+| Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
+| Docker healthy | 09:46:15.977 |
+
 ## 当前部署：Factory OAuth / Gemini / WS / 出口池（2026-11-19 07:34 UTC，ab6d46a）
 
 - 用户授权「先提交部署」。业务提交 **`ab6d46ac05302ff1a807a61acf7db1aeb0e7f8e5`** 已推送 `origin/master`（从 `68e304b` 快进，含前一本地提交 `4866a47`）。本次工作树 51 个文件、约 25k 行（含 Factory 抓包/文档）；实现 Factory WorkOS 设备登录/刷新、Gemini generate/countTokens、Embeddings、Responses WebSocket、网关虚拟 auto/auto-fast、代理池/UA池与每账号 UA、出口头清洗和 HTTP/1.1 指纹对齐。未夹带其他窗口的注册/凭据修改。
