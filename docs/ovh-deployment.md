@@ -60,6 +60,27 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 抓包头对齐 / CLI UA / 压缩解码（2026-11-19 12:00 UTC，f3f7ce1）
+
+- 用户授权提交推送并部署。业务提交 **`f3f7ce128489354c49bab91b8761472b26186cc1`** 已推送 `origin/master`。改动：Factory 只发抓包里出现过的头（`traceparent` 仅 Responses/Gemini、`x-factory-exec-output-format` 仅 cli_exec 的 Responses/Gemini、`openai-platform` 仅 OpenAI 路由）、拒绝浏览器 UA（账号/UA池/默认 UA，运行期回退 CLI UA）、补 `Accept-Encoding: gzip, deflate, br, zstd` 并新增 gzip/deflate/br/zstd 响应解码（未知编码 502 `upstream_encoding`）。12 文件 +190/−14。
+- 本地验证复用提交前结果：`go build`/`go vet`/`go test ./...`（server 104.043s）/`go test -race`（factory+server，server 200.804s）/16 个前端测试全过，diff 无凭据。
+- 预检时线上为 `release-2dda906-20261119T091803Z`（**与上次记录不同：会话外又发生过一次 2dda906 部署**），healthy/restarts=0/OOM=false/user 1000:1000、双内网别名 ok、磁盘余量 301G。
+- **SSH 故障**：11:39–11:55Z 连续约 16 分钟 `kex_exchange_identification: read: Connection reset by peer`，期间公网 healthz 一直 200；随后短暂 `Connection refused`，11:55:18Z 自行恢复。未做任何配置改动，恢复后继续。
+- 干净 `git archive f3f7ce1` → `/home/ubuntu/project/account-pool-balancer-releases/20261119T115520Z-f3f7ce1`（869 文件，Dockerfile/go.mod/go.sum/三处关键源码 SHA256 与本机一致）。镜像 **`account-pool-balancer:release-f3f7ce1-20261119T115520Z`**，ID `sha256:163adf844bd353b7a9250698e71600a1e4a677a34a09add2611576cd6f12c7ba`，OCI revision `f3f7ce1`，创建 11:58:38Z。
+- 旧镜像打 `rollback-20261119T115520Z`。11:59:54.503Z 停旧，一致备份 `/home/ubuntu/backups/account-pool-balancer/20261119T115520Z-factory-headers-f3f7ce1/data.tgz`（88M、155 条目，SHA256 `ba442d39b001e5d7b8a53009e3945ae18cf84015486020785f90d1d67d40a528`），含旧 Compose/.env 与 `config.before.json`。
+- 12:00:13.146Z Compose 三文件叠加仅覆盖 image 切换，12:00:13.594Z 新容器运行，**12:00:43.739Z healthy**。
+- 验收：revision `f3f7ce1`、healthy、restarts=0、OOM=false、user 1000:1000；别名 `[account-pool-balancer, account-pool-balancer, opendesign-balancer]`；`new-api` 到两个别名均 `{"ok":true}`；宿主机 healthz 200；`data/config.json` 与部署前**字节完全一致**（SHA256 `7e0da100…`）；启动日志干净（无 altapi 报错）。新路由 401（`/v1/embeddings`、`/v1/responses/ws`、`/api/factory/assign-egress`）；`/assets/app.js?v=5749aac647` 本地/线上 SHA256 均 `64e5b999…`；公网 healthz 200、真实浏览器登录页无 pageerror。
+- **边界**：未发生产推理、未改账号/设置/池开关；线上 Factory 账号仍为 0，新头规则与压缩解码只经本地 Mock 验证。
+- 回退：镜像 `rollback-20261119T115520Z`；override 在 `/home/ubuntu/project/account-pool-balancer-releases/20261119T115520Z-f3f7ce1/deploy-image.override.yml`。
+
+| 阶段 | UTC 2026-11-19 |
+|---|---|
+| 归档完成 | 11:55:20 |
+| 新镜像创建 | 11:58:38 |
+| 停旧 / 备份完成 | 11:59:54 / 11:59:56 |
+| Compose 切换 / 新启动 | 12:00:13.146 / 12:00:13.594 |
+| Docker healthy | 12:00:43 |
+
 ## 当前部署：Factory OAuth / Gemini / WS / 出口池（2026-11-19 07:34 UTC，ab6d46a）
 
 - 用户授权「先提交部署」。业务提交 **`ab6d46ac05302ff1a807a61acf7db1aeb0e7f8e5`** 已推送 `origin/master`（从 `68e304b` 快进，含前一本地提交 `4866a47`）。本次工作树 51 个文件、约 25k 行（含 Factory 抓包/文档）；实现 Factory WorkOS 设备登录/刷新、Gemini generate/countTokens、Embeddings、Responses WebSocket、网关虚拟 auto/auto-fast、代理池/UA池与每账号 UA、出口头清洗和 HTTP/1.1 指纹对齐。未夹带其他窗口的注册/凭据修改。
