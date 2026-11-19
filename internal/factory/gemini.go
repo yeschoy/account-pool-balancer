@@ -126,3 +126,28 @@ func openGeminiSystem(m object) bool {
 	m["systemInstruction"] = map[string]any{"parts": parts}
 	return true
 }
+
+// OpenGeminiBodyWith is OpenGeminiBody with the droid system-prompt opening
+// made optional. With inject false the model is still placed in the body (the
+// captured route needs it) but no systemInstruction is created or rewritten.
+func OpenGeminiBodyWith(model string, body []byte, inject bool) ([]byte, error) {
+	if inject {
+		return OpenGeminiBody(model, body)
+	}
+	var m object
+	if decode(body, &m) != nil || m == nil {
+		return nil, errors.New("Factory Gemini request must be a JSON object")
+	}
+	if contents, ok := m["contents"].([]any); !ok || contents == nil {
+		return nil, errors.New("Factory Gemini request requires a contents array")
+	}
+	if existing, ok := m["model"].(string); ok && existing == model {
+		return body, nil
+	}
+	m["model"] = model
+	out, err := marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

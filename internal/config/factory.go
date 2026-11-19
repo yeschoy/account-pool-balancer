@@ -59,7 +59,12 @@ type Factory struct {
 	DetailLog      bool            `json:"detailLog"`
 	StandardOnly   bool            `json:"standardOnly"`
 	Compatibility  bool            `json:"compatibility"` // strict, buffered cross-protocol conversion
-	Models         []FactoryModel  `json:"models"`
+	// DroidBody opens every request's system prompt with droid's fixed line,
+	// as droid itself does. Factory serves a subscription's models to its own
+	// client, so this is the default; turning it off sends the caller's body
+	// unchanged and relies on the credential alone.
+	DroidBody *bool          `json:"droidBody,omitempty"`
+	Models    []FactoryModel `json:"models"`
 	// ProxyPool and UserAgents provide distinct per-account egress and
 	// inference identity. They are assignment sources only; an account's own
 	// ProxyURL/UserAgent always wins. Empty pools preserve the old behavior.
@@ -100,6 +105,12 @@ func (f Factory) EffectiveRequestSurface() string {
 		return FactorySurfaceExec
 	}
 	return FactorySurfaceTUI
+}
+
+// EffectiveDroidBody reports whether the droid system-prompt opening is
+// injected. Unset (older configs, new installs) means yes.
+func (f Factory) EffectiveDroidBody() bool {
+	return f.DroidBody == nil || *f.DroidBody
 }
 
 // EffectiveUserAgent resolves the inference UA: account override, pool

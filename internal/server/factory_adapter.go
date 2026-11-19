@@ -132,7 +132,11 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	}
 	// Factory serves a subscription's models to droid only, so the system
 	// prompt opens with droid's line exactly as droidBody/AnthropicBody set it.
-	plan.body = factory.OpenDroidBody(string(to), plan.body)
+	// Operators can turn this off for API-key accounts whose credential is
+	// enough on its own; the body is then left exactly as the caller sent it.
+	if cfg.Factory.EffectiveDroidBody() {
+		plan.body = factory.OpenDroidBody(string(to), plan.body)
+	}
 	if len(plan.body) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
 	}
@@ -163,7 +167,8 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
-	b, err := factory.OpenGeminiBody(model, body)
+	inject := cfg.Factory.EffectiveDroidBody()
+	b, err := factory.OpenGeminiBodyWith(model, body, inject)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +270,8 @@ func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*
 	if !ok || route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
-	b, err := factory.OpenGeminiBody(model, body)
+	inject := cfg.Factory.EffectiveDroidBody()
+	b, err := factory.OpenGeminiBodyWith(model, body, inject)
 	if err != nil {
 		return nil, err
 	}
