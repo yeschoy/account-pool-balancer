@@ -1967,6 +1967,22 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return factoryAdaptationFailure(res)
 		}
 	}
+	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil && len(rec.factoryPlan.toolAliases) > 0 {
+		// The request declared tool names Factory refuses under aliases; the
+		// caller must see its own names back in the calls the model returns.
+		resp.Header.Del("Content-Length")
+		if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+			resp.Body = factory.RestoreToolNamesStream(resp.Body, rec.factoryPlan.toolAliases)
+		} else if strings.Contains(strings.ToLower(ct), "json") {
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
+			if readErr == nil && len(raw) <= 16<<20 {
+				if restored, changed := factory.RestoreToolNames(raw, rec.factoryPlan.toolAliases); changed {
+					raw = restored
+				}
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+	}
 	if rec.factoryPlan != nil && rec.factoryPlan.generate && !rec.factoryPlan.stream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		// Factory's one /generate endpoint is a stream; a non-streaming
 		// :generateContent caller gets the merged GenerateContentResponse.

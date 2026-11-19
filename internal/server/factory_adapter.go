@@ -31,6 +31,10 @@ type factoryRequestPlan struct {
 	// adapted marks a body magpie's adapters rewrote (identity lines, pi
 	// openings, harness wording); the task instructions are unchanged.
 	adapted bool
+	// toolAliases maps a renamed tool (alias) to the caller's own name. Factory
+	// refuses requests declaring certain tool names, so a refused tool goes out
+	// under a name it takes and the reply is renamed back.
+	toolAliases map[string]string
 	// generate routes a Google generateContent body to /api/llm/g/v1/generate;
 	// the model comes from the path and the body is not converted.
 	generate    bool
@@ -154,6 +158,13 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 				plan.body = adapted
 				plan.adapted = true
 			}
+		}
+		// Factory refuses a request declaring certain tool names outright, so a
+		// refused tool is renamed before the opening and renamed back in the
+		// reply. This is independent of the prompt adapters.
+		if aliased, aliases := factory.AliasToolNames(plan.body); len(aliases) > 0 {
+			plan.body = aliased
+			plan.toolAliases = aliases
 		}
 		// Guarantee the opening the gateway requires, whatever shape the
 		// caller's system channel arrived in (message, string, block list, or
