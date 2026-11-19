@@ -28,6 +28,9 @@ type factoryRequestPlan struct {
 	// escaped marks a body whose refused client phrases were rewritten; the
 	// caller's text is unchanged after JSON decoding, only the wire bytes are.
 	escaped bool
+	// adapted marks a body magpie's adapters rewrote (identity lines, pi
+	// openings, harness wording); the task instructions are unchanged.
+	adapted bool
 	// generate routes a Google generateContent body to /api/llm/g/v1/generate;
 	// the model comes from the path and the body is not converted.
 	generate    bool
@@ -139,6 +142,13 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	switch cfg.Factory.EffectiveSystemMode() {
 	case config.SystemFold:
 		plan.body = factory.FoldSystemIntoUser(string(to), plan.body)
+	case config.SystemMagpie:
+		// magpie's adapters rewrite only the fixed client sentences and keep
+		// every task instruction, which is the shape Factory accepts.
+		if adapted, changed := factory.MagpieAdapt(string(to), plan.body); changed {
+			plan.body = adapted
+			plan.adapted = true
+		}
 	case config.SystemOpen:
 		plan.body = factory.OpenDroidBody(string(to), plan.body)
 	}

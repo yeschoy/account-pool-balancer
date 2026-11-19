@@ -43,14 +43,15 @@ func escapeFirst(s, phrase string) string {
 	if len(runes) == 0 {
 		return s
 	}
-	escaped := `\u` + hex4(uint16(runes[0])) + string(runes[1:])
+	escaped := `\u` + hex4(runes[0]) + string(runes[1:])
 	return strings.ReplaceAll(s, phrase, escaped)
 }
 
-func hex4(v uint16) string {
+func hex4(v rune) string {
 	const digits = "0123456789abcdef"
+	u := uint16(v)
 	return string([]byte{
-		digits[(v>>12)&0xf], digits[(v>>8)&0xf], digits[(v>>4)&0xf], digits[v&0xf],
+		digits[(u>>12)&0xf], digits[(u>>8)&0xf], digits[(u>>4)&0xf], digits[u&0xf],
 	})
 }
 
@@ -152,7 +153,7 @@ func ContainsRefusedPhrase(text string) bool {
 		if len(runes) < 2 {
 			continue
 		}
-		escaped := `\u` + hex4(uint16(runes[0])) + string(runes[1:])
+		escaped := `\u` + hex4(runes[0]) + string(runes[1:])
 		if strings.Contains(strings.ReplaceAll(text, escaped, "\x00"), phrase) {
 			return true
 		}

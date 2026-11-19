@@ -135,6 +135,12 @@ const (
 	// SystemFold moves the system channel into the first user turn and removes
 	// the system field, which is what Factory accepts from a foreign client.
 	SystemFold = "fold"
+	// SystemMagpie rewrites the caller's prompts the way magpie's Factory
+	// plugin does: fixed client identity lines become droid's, pi's opening
+	// and compaction sentences are reworded, "harness" in a client's own
+	// description says "runtime", and tool output quoting a refused phrase is
+	// wrapped. Task instructions are kept.
+	SystemMagpie = "magpie"
 )
 
 // EffectiveSystemMode resolves SystemMode, then the older DroidBody flag, then
@@ -142,7 +148,7 @@ const (
 // request.
 func (f Factory) EffectiveSystemMode() string {
 	switch f.SystemMode {
-	case SystemKeep, SystemOpen, SystemFold:
+	case SystemKeep, SystemOpen, SystemFold, SystemMagpie:
 		return f.SystemMode
 	}
 	if f.DroidBody != nil && !*f.DroidBody {

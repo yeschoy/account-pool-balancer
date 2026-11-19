@@ -108,3 +108,21 @@ func TestFactoryDroidVersionSetting(t *testing.T) {
 		t.Fatalf("UA=%q version=%q", h.Get("User-Agent"), h.Get("X-Client-Version"))
 	}
 }
+
+// The magpie mode rewrites a client identity line instead of folding it away.
+func TestFactoryMagpieSystemMode(t *testing.T) {
+	e := newFactoryEnv(t)
+	setFactoryMode(t, e, func(c *config.Config) { c.Factory.SystemMode = config.SystemMagpie })
+	body := `{"model":"glm-5.3","messages":[{"role":"system","content":"You are Claude Code, Anthropic's official CLI for Claude.\nDo it."},{"role":"user","content":"hi"}]}`
+	e.do(t, "/v1/chat/completions", body, nil)
+	up := e.snapshot()[0].body
+	if !strings.HasPrefix(up, `{"messages":[{"content":"You are Droid`) && !strings.Contains(up, "You are Droid") {
+		t.Fatalf("identity not rewritten: %s", up)
+	}
+	if strings.Contains(up, "You are Claude Code") {
+		t.Fatalf("client identity kept: %s", up)
+	}
+	if !strings.Contains(up, "Do it.") {
+		t.Fatalf("instructions lost: %s", up)
+	}
+}

@@ -1385,12 +1385,14 @@
           <span></span><span class="hint">请求声称的 droid 版本（<code>factory-cli/&lt;版本&gt;</code> 与 <code>X-Client-Version</code>）。Factory 有服务端 <code>min_cli_version</code>，版本落后即使其它头全对也可能被 403；留空用内置默认 <strong>0.242.0</strong>。droid 发版后改这里即可，不必重新构建。</span>
           <label for="factory-system-mode">System 处理方式</label><select id="factory-system-mode" class="small">
             <option value="open">注入 Droid 开头（默认）</option>
+            <option value="magpie">改写为 Droid 身份（magpie 做法）</option>
             <option value="fold">折叠进首条 user 消息</option>
             <option value="keep">保持原样</option>
           </select>
           <span></span><span class="hint">
             <strong>注入</strong>：system 开头写入 <code>You are Droid, an AI software engineering agent built by Factory.</code>，这是 droid 客户端身份标记。<br>
-            <strong>折叠</strong>：把调用方的 system 内容移到首条 user 消息前（<code>&lt;system&gt;…&lt;/system&gt;</code> 包裹），并**移除** system 字段——Factory 只接受 droid 自己的 system，其它内容和空 system 都可能被拒，而完全没有 system 字段是可接受的。<br>
+            <strong>改写（magpie）</strong>：按 <code>@magpie-community/opencode-factory-auth</code> 的适配器逐条改写——把 <code>You are Claude Code…</code> 等固定身份句换成 droid 开头，pi 的开场与压缩句改写，客户端自述里的 <code>harness</code> 改为 <code>runtime</code>，ZCode 环境段与模型行改写，Anthropic 计费头删除，工具输出里引用被拒短语时整体包成可解码的 JSON 字符串。<strong>任务指令全部保留。</strong><br>
+            <strong>折叠</strong>：把调用方的 system 内容移到首条 user 消息前（<code>&lt;system&gt;…&lt;/system&gt;</code> 包裹），并移除 system 字段。<br>
             <strong>保持</strong>：原样转发，只改路径与 model 位置。
           </span>
           <label for="factory-escape-phrases">转义被拒短语</label><label class="check"><input id="factory-escape-phrases" type="checkbox">开启</label>
