@@ -38,6 +38,29 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory OAuth / Gemini / WS / 出口池（2026-11-19 07:34 UTC，ab6d46a）
+
+- 用户授权「先提交部署」。业务提交 **`ab6d46ac05302ff1a807a61acf7db1aeb0e7f8e5`** 已推送 `origin/master`（从 `68e304b` 快进，含前一本地提交 `4866a47`）。本次工作树 51 个文件、约 25k 行（含 Factory 抓包/文档）；实现 Factory WorkOS 设备登录/刷新、Gemini generate/countTokens、Embeddings、Responses WebSocket、网关虚拟 auto/auto-fast、代理池/UA池与每账号 UA、出口头清洗和 HTTP/1.1 指纹对齐。未夹带其他窗口的注册/凭据修改。
+- 本地验证：`go test ./...`（server 100.730s）、`go test -race`（config/factory/factoryauth/quota/server，server 152.447s）、`go vet`、`go build`、全部前端测试通过；真实 Factory 推理、真实 OAuth 批准、真实代理池和真实 countTokens/Embeddings/WS 未验收，线上 563 个账号中 Factory 账号为 **0**。
+- 一次预检：旧镜像 `account-pool-balancer:release-altapi-20261116T213349Z`（ID `sha256:f906bc3348640f26391681ccbab89bf42e61145afc0081051fb1b54a598d89ef`）healthy、restarts=0、OOM=false、用户 1000:1000、data bind mount、磁盘余量 304G、`ai-internal` 别名含 `account-pool-balancer` 与 `opendesign-balancer`；`data/config.json` revision 6430、563 账号、0 Factory；未在旧工作树构建。
+- 从干净 `git archive ab6d46a` 生成 release 源码 `/home/ubuntu/project/account-pool-balancer-releases/20261119T073132Z-ab6d46a`（866 文件、11M，Dockerfile/go.mod/go.sum/Factory 新文件 SHA256 已核对），构建镜像 **`account-pool-balancer:release-ab6d46a-20261119T073132Z`**，ID `sha256:b9e20b787c03dc113dbc45b077f3a5464ef9292533306389b477c88cbc465935`，OCI revision `ab6d46a`；镜像创建 07:32:45Z，构建约 26 秒（归档 07:32:18 完成）。
+- 旧镜像先打 `account-pool-balancer:rollback-20261119T073132Z`（同 ID `sha256:f906bc…`）。07:33:53.965Z 停旧容器，07:33:54.389Z 退出；**一致备份** `/home/ubuntu/backups/account-pool-balancer/20261119T073132Z-factory-ab6d46a/data.tgz`（87M、149 条目/145 文件，SHA256 `be89cee9dca178d9060ab26ce9000ab0124cc28dbc6dba066942b55893d04394`），并保留旧 Compose/.env、旧镜像/网络快照和 `config.before.json`。
+- 07:34:06.219Z 以线上 Compose + release override 仅覆盖 image 切换（`docker-compose.yml` + `docker-compose.override.yml` + release 的 `deploy-image.override.yml`，`up -d --no-build`），07:34:06.607Z 新容器运行；**07:34:37Z healthy**。保留 UID1000:1000、bind mount、端口、环境、Healthcheck、资源参数和 `ai-internal` 两个别名。
+- 核心验收：镜像 revision `ab6d46a`、healthy、restarts=0、OOM=false、user 1000:1000；网络别名 `[account-pool-balancer, account-pool-balancer, opendesign-balancer]`；从 `new-api` 容器分别请求两个别名 `/healthz` 均 `{"ok":true}`；宿主机 healthz 200。`data/config.json` 字节与部署前完全一致（SHA256 `33c71517…`、revision 6430、563 账号、0 Factory），旧数据未被改写。
+- 新路由存在性（无凭据只做 401 检查，不触上游）：`POST /api/factory/assign-egress` 401 `login required`；`POST /v1/responses/ws`、`POST /v1/embeddings`、`POST /v1beta/models/gemini-4-carbon:countTokens` 均 401 认证错误；`/assets/app.js?v=04d852e48c` 本地/宿主机/公网 SHA256 均为 `38be02ef9beac4740aeccd2e763e28e209804c97b15769e3955193646eb487f4`，包含新 Factory 代理池 UI；公网 `/healthz` 与登录页 200，真实浏览器登录页无 pageerror。
+- **边界**：没有发送生产推理、没有创建/修改 Factory 账号或设置、没有启用新池/新功能；没有真实 Factory 上游调用。启动日志出现一次 `altapi models: background refresh failed; retaining the last successful catalogue if available`，服务仍 healthy/0 重启；该刷新与本次 Factory 代码无直接关联，未据此宣称 ALTAPI 目录已更新。
+- 回退：旧镜像 `rollback-20261119T073132Z`；release override 位于 `/home/ubuntu/project/account-pool-balancer-releases/20261119T073132Z-ab6d46a/deploy-image.override.yml`；回退只切回镜像，不用备份覆盖上线后新写入。备份目录保留 data/旧 Compose/.env/镜像与网络快照。
+
+| 阶段 | UTC 2026-11-19 |
+|---|---|
+| 干净归档完成 | 07:32:18 |
+| 新镜像创建 | 07:32:45 |
+| 停旧 / 退出 | 07:33:53.965 / 07:33:54.389 |
+| 一致备份完成 | 07:33:56.647 |
+| Compose 切换 / 新启动 | 07:34:06.219 / 07:34:06.607 |
+| Docker healthy | 07:34:37 |
+| 双内网入口 / 公网验收 | 07:34:37 后 |
+
 ## 当前部署：ALTAPI 精准换号、$0.50停用与每小时目录（2026-11-16 21:09 UTC，374fe20）
 
 - 用户授权提交、推送、部署三项ALTAPI变更；业务提交 **`374fe20d59a0d8112fb32ce4956fe4be4d83cb34`** 与规格 `e281c08` 已推送master。仅29个本轮业务/测试/文档文件，排除其他会话注册batch_gap接线、存储/Python脚本及逆向文档。复用已完成全仓普通/竞态/vet/build；从提交的干净归档另跑ALTAPI/Models精准测试、构建及相关前端，810文件SHA256验证一致。
