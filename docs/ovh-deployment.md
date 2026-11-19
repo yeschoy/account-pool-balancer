@@ -60,6 +60,15 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 登录组织绑定修复（2026-11-19 12:27 UTC，f40ac2e）
+
+- 现场问题：设备授权成功后 whoami 返回 `401 User not affiliated with an organization`（服务器日志 `whoami HTTP 401 (proxy=15.235.123.80:1080)`）。这是 Factory 拒绝未绑定组织的 token，不是请求头问题。
+- 修复 `f40ac2e`：设备登录拿到 token 后若 whoami 报该 401，先用 refresh token 以**已知组织**（工作区已配置的 WorkOS org）重新换取 access token 并重试 whoami；仍失败时把组织候选、WorkOS 账号下的组织与邮箱写进错误信息，而不是只显示 `HTTP 401`。新增 `POST /user_management/organizations` 只读诊断（失败不影响主流程）。
+- 提交 `f40ac2e` 已推送 master；`go vet`、`go test ./...`（server 102.862s）通过，新增 `TestFactoryLoginRetriesWhoamiWithOrganizations`、`TestFactoryLoginReportsMissingOrganization`。
+- 部署：干净 `git archive` → `/home/ubuntu/project/account-pool-balancer-releases/20261119T122530Z-f40ac2e`（871 文件）；镜像 `account-pool-balancer:release-f40ac2e-20261119T122530Z`；12:26:21Z 停旧，一致备份 `/home/ubuntu/backups/account-pool-balancer/20261119T122530Z-factory-org-f40ac2e/data.tgz`（SHA256 `033a7082…`）；12:26:37Z 切换，**12:27:07Z healthy**。
+- 验收：revision `f40ac2e`、healthy、restarts=0、OOM=false；`new-api` 到两个别名均 `{"ok":true}`；`config.json` 字节未变；公网 healthz 200；`/assets/app.js?v=5749aac647` 未变（本次无前端改动）。回退镜像 `rollback-20261119T122530Z`。
+- **边界**：真实账号能否在该组织下通过 whoami 仍需用户重试一次授权确认；未发生产推理。
+
 ## 当前部署：Factory 抓包头对齐 / CLI UA / 压缩解码（2026-11-19 12:00 UTC，f3f7ce1）
 
 - 用户授权提交推送并部署。业务提交 **`f3f7ce128489354c49bab91b8761472b26186cc1`** 已推送 `origin/master`。改动：Factory 只发抓包里出现过的头（`traceparent` 仅 Responses/Gemini、`x-factory-exec-output-format` 仅 cli_exec 的 Responses/Gemini、`openai-platform` 仅 OpenAI 路由）、拒绝浏览器 UA（账号/UA池/默认 UA，运行期回退 CLI UA）、补 `Accept-Encoding: gzip, deflate, br, zstd` 并新增 gzip/deflate/br/zstd 响应解码（未知编码 502 `upstream_encoding`）。12 文件 +190/−14。
