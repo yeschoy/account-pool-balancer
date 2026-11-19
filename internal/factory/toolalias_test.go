@@ -61,3 +61,16 @@ func TestRestoreToolNames(t *testing.T) {
 		t.Fatalf("arguments rewritten: %s", out)
 	}
 }
+
+// Responses declares tools flat ({"type":"function","name":...}), not nested
+// under "function"; both shapes must be renamed.
+func TestAliasToolNamesResponsesShape(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[],"tools":[{"type":"function","name":"read","description":"Read a file.","parameters":{"type":"object"}}]}`)
+	out, aliases := AliasToolNames(body)
+	if aliases["Read"] != "read" {
+		t.Fatalf("aliases = %v", aliases)
+	}
+	if strings.Contains(string(out), `"name":"read"`) || !strings.Contains(string(out), `"name":"Read"`) {
+		t.Fatalf("flat declaration not renamed: %s", out)
+	}
+}

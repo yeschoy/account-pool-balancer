@@ -171,13 +171,19 @@ func declaredTools(request object) []struct {
 		if tool == nil {
 			continue
 		}
+		// chat completions nests the declaration under "function"; Responses
+		// declares it flat. Both name the tool in a "name" field.
 		if text(tool["type"]) == "function" {
-			add(obj(tool["function"]))
-			continue
+			if fn := obj(tool["function"]); fn != nil {
+				add(fn)
+				continue
+			}
 		}
 		switch typ := text(tool["type"]); typ {
 		case "", "custom", "function":
-			add(tool)
+			if text(tool["name"]) != "" {
+				add(tool)
+			}
 		}
 		for _, decl := range list(tool["functionDeclarations"]) {
 			add(obj(decl))
