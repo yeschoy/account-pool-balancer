@@ -310,8 +310,10 @@ func (s *Server) factoryOrgCandidates(ctx context.Context, tok factoryauth.Token
 		out = append(out, org)
 	}
 	add(tok.OrgID)
-	for _, name := range []string{"org_id", "organization_id", "external_org_id"} {
-		add(factoryauth.JWTClaim(tok.AccessTokenRaw, name))
+	// The token's own claims come first: WorkOS puts the authorization
+	// organization there, and droid reads it from the same place.
+	for _, org := range factoryauth.JWTClaimsOf(tok.AccessTokenRaw) {
+		add(org)
 	}
 	cfg := s.cfg.Get()
 	for _, a := range cfg.Accounts {
@@ -358,8 +360,10 @@ func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, 
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", cfg.Factory.EffectiveManagementUserAgent())
 	req.Header.Set("X-Factory-Whoami-Extended", "true")
-	if tok.OrgID != "" {
-		req.Header.Set("X-Factory-Org-Id", tok.OrgID)
+	// droid sends the WorkOS active organization; when the token carries an
+	// organization claim instead, that is the value whoami expects.
+	if org := firstNonEmpty(tok.OrgID, factoryauth.JWTClaim(tok.AccessTokenRaw, "org_id"), factoryauth.JWTClaim(tok.AccessTokenRaw, "organization_id")); org != "" {
+		req.Header.Set("X-Factory-Org-Id", org)
 	}
 	resp, err := s.factoryHTTPClient(cfg, proxy).Do(req)
 	if err != nil {
@@ -562,8 +566,10 @@ func factoryOrgCandidates(tok factoryauth.Token) []string {
 		out = append(out, org)
 	}
 	add(tok.OrgID)
-	for _, name := range []string{"org_id", "organization_id", "external_org_id"} {
-		add(factoryauth.JWTClaim(tok.AccessTokenRaw, name))
+	// The token's own claims come first: WorkOS puts the authorization
+	// organization there, and droid reads it from the same place.
+	for _, org := range factoryauth.JWTClaimsOf(tok.AccessTokenRaw) {
+		add(org)
 	}
 	return out
 }
@@ -576,20 +582,36 @@ func (s *Server) factoryWorkOSOrganizations(ctx context.Context, tok factoryauth
 		return nil
 	}
 	client := s.factoryAuthClient(proxy)
-	get := func(path string, decode func([]byte) []string) []string {
+	if !strings.Contains(s.factoryAuthBase, "workos.com") && s.factoryAuthBase != "" {
+		// A test double or a self-hosted WorkOS has no membership endpoints;
+		// skip rather than add a doomed request to every login.
+		return nil
+	}
+	get := func(path, method string, decode func([]byte) []string) []string {
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		b, status, err := client.Get(rctx, path, token)
+		var b []byte
+		var status int
+		var err error
+		if method == http.MethodPost {
+			b, status, err = client.PostJSON(rctx, path, token, nil)
+		} else {
+			b, status, err = client.Get(rctx, path, token)
+		}
 		if err != nil || status != http.StatusOK {
-			log.Printf("factory login %s: workos %s HTTP %d: %v", label, path, status, err)
+			log.Printf("factory login %s: workos %s %s HTTP %d: %v", label, method, path, status, err)
 			return nil
 		}
 		return decode(b)
 	}
-	if orgs := get("/organizations", workosOrgIDs); len(orgs) > 0 {
+	// whose membership list, tried in the order WorkOS documents.
+	if orgs := get("/organizations", http.MethodGet, workosOrgIDs); len(orgs) > 0 {
 		return orgs
 	}
-	return get("/organizations", workosMembershipOrgIDs)
+	if orgs := get("/organization_memberships", http.MethodGet, workosMembershipOrgIDs); len(orgs) > 0 {
+		return orgs
+	}
+	return get("/authorize/organization", http.MethodPost, workosOrgIDs)
 }
 
 func workosOrgIDs(b []byte) []string {

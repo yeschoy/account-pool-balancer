@@ -14,6 +14,55 @@ import (
 
 // Factory refuses a token that is not bound to an organization. The login must
 // re-mint it against a known organization instead of failing the approval.
+func TestFactoryLoginUsesTokenClaimOrganization(t *testing.T) {
+	// A device-login token that carries org_id needs no lookup: whoami must be
+	// called with that organization straight away, as droid does.
+	e := newFactoryEnv(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user_management/authorize/device", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"device_code": "d", "user_code": "AAAA-BBBB", "verification_uri": "https://auth.example/device", "expires_in": 30, "interval": 1})
+	})
+	mux.HandleFunc("/user_management/authenticate", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  factoryLoginJWT(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "sub": "user-z", "email": "claim@example.com", "org_id": "org_claim"}),
+			"refresh_token": "r",
+		})
+	})
+	workos := httptest.NewServer(mux)
+	defer workos.Close()
+	e.s.factoryAuthBase = workos.URL + "/user_management"
+	var orgHeader string
+	e.mu.Lock()
+	e.handler = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/cli/whoami" {
+			orgHeader = r.Header.Get("X-Factory-Org-Id")
+			if orgHeader != "org_claim" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"detail":"User not affiliated with an organization","status":401}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"userId":"user-z","orgId":"org_claim"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}
+	e.mu.Unlock()
+	w := deployAdmin(t, e, "POST", "/api/factory/login", map[string]any{"group": "factory"})
+	var flow factoryLoginFlow
+	_ = json.Unmarshal(w.Body.Bytes(), &flow)
+	deadline := time.Now().Add(10 * time.Second)
+	for flow.Status == "pending" && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		w = deployAdmin(t, e, "GET", "/api/factory/login/"+flow.ID, nil)
+		_ = json.Unmarshal(w.Body.Bytes(), &flow)
+	}
+	if flow.Status != "approved" || orgHeader != "org_claim" {
+		t.Fatalf("status=%s orgHeader=%q diag=%s", flow.Status, orgHeader, flow.Diagnostic)
+	}
+}
+
 func TestFactoryLoginRetriesWhoamiWithOrganizations(t *testing.T) {
 	e := newFactoryEnv(t)
 	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {

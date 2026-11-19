@@ -5,6 +5,7 @@
 package factoryauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -291,7 +292,7 @@ func parseToken(b []byte, fallbackRefresh, fallbackOrg string) (Token, error) {
 		AccessToken:    strings.TrimSpace(rawAccess),
 		AccessTokenRaw: rawAccess,
 		RefreshToken:   doc.RefreshToken,
-		OrgID:          first(doc.ActiveOrganizationID, doc.OrganizationID, claims["org_id"], claims["organization_id"], fallbackOrg),
+		OrgID:          first(doc.ActiveOrganizationID, doc.OrganizationID, first(jwtClaimsOf(rawAccess)...), fallbackOrg),
 		UserID:         first(userID, claims["sub"], claims["user_id"]),
 		Email:          first(email, claims["email"]),
 	}
@@ -345,13 +346,53 @@ func jwtClaims(token string) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
-	for _, k := range []string{"exp", "sub", "user_id", "email", "org_id", "organization_id"} {
-		switch v := raw[k].(type) {
+	// org_id / organization_id may be a plain string or an array of ids;
+	// every claim keeps its original JSON form so the caller can decide.
+	for k, v := range raw {
+		switch t := v.(type) {
 		case string:
-			out[k] = v
+			out[k] = t
 		case float64:
-			out[k] = fmt.Sprintf("%.0f", v)
+			out[k] = fmt.Sprintf("%.0f", t)
+		case []any:
+			b, err := json.Marshal(t)
+			if err == nil {
+				out[k] = string(b)
+			}
 		}
+	}
+	return out
+}
+
+// jwtClaimsOf returns every organization-shaped claim in a token: scalar
+// org_id / organization_id / external_org_id values and the elements of the
+// array form (e.g. ["org_a","org_b"]), in deterministic order.
+func jwtClaimsOf(token string) []string {
+	claims := jwtClaims(token)
+	var out []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if v == "" || seen[v] || len(out) >= 8 {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	for _, k := range []string{"org_id", "organization_id", "external_org_id"} {
+		v := strings.TrimSpace(claims[k])
+		if v == "" {
+			continue
+		}
+		if strings.HasPrefix(v, "[") {
+			var arr []string
+			if json.Unmarshal([]byte(v), &arr) == nil {
+				for _, a := range arr {
+					add(a)
+				}
+				continue
+			}
+		}
+		add(v)
 	}
 	return out
 }
@@ -389,3 +430,42 @@ func (c *Client) Get(ctx context.Context, path, accessToken string) ([]byte, int
 	}
 	return body, resp.StatusCode, nil
 }
+
+// PostJSON performs a WorkOS POST with an empty JSON body and the caller's
+// bearer token. It is used for the read-only organization endpoints a device
+// login consults; it is never part of a token exchange.
+func (c *Client) PostJSON(ctx context.Context, path, accessToken string, body []byte) ([]byte, int, error) {
+	if body == nil {
+		body = []byte(`{}`)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	ua := c.UserAgent
+	if strings.TrimSpace(ua) == "" {
+		ua = "Bun/1.4.4"
+	}
+	req.Header.Set("User-Agent", ua)
+	hc := c.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return out, resp.StatusCode, nil
+}
+
+// JWTClaimsOf exposes every organization-shaped claim in a token, including
+// the array form, so a login can try each one.
+func JWTClaimsOf(token string) []string { return jwtClaimsOf(token) }
