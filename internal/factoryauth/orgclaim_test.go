@@ -46,3 +46,20 @@ func TestParseTokenPicksClaimOrganization(t *testing.T) {
 		t.Fatalf("token = %+v", tok)
 	}
 }
+
+// The authorize response may nest the organization instead of naming it in
+// active_organization_id.
+func TestParseTokenNestedOrganization(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"access_token":  claimsJWT(map[string]any{"sub": "u", "exp": 1}),
+		"refresh_token": "r",
+		"organization":  map[string]string{"id": "org_nested"},
+	})
+	tok, err := parseToken(body, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.OrgID != "org_nested" {
+		t.Fatalf("org = %q", tok.OrgID)
+	}
+}

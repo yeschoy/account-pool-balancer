@@ -115,6 +115,7 @@ Factory 设置新增：
 | `POST /v1beta/models/{model}:countTokens` | `/api/llm/g/v1/countTokens` | Gemini 原生计数；补`model`/Droid `systemInstruction`；返回`{totalTokens}`。上游路径按 generate 同族推断，抓包未直接命中 |
 | `POST /v1/embeddings` | `/api/llm/o/v1/embeddings` | OpenAI Embeddings 原样透传；默认`text-embedding-3-large`/openai；不流式、不改写 |
 | `GET /v1/responses/ws` | `wss://…/api/llm/o/v1/responses/ws` | Responses WebSocket 透传；首帧`response.create`决定模型/账号；HTTP CONNECT/SOCKS5 代理；升级后不重试 |
+| `GET /v1beta/models` | 本地配置参考列表（Google ListModels 格式） | 只列 `protocol=generate` 的 Gemini 路由，每条只声明 `generateContent`/`streamGenerateContent`；响应头 `X-Catalog-Source: configured-reference-not-entitlement` |
 | `GET /v1/models` | 本地配置参考列表 | **不是账号授权目录**，响应标注`configured-reference-not-entitlement`；另列`auto`/`auto-fast`虚拟模型 |
 
 模型路由JSON数组 `{id,protocol,upstream}` 可编辑、保存、重载；空数组真正清空。缺省综合固定版本参考与抓包：`claude-sonnet-5-5`/`claude-haiku-4-5-20251001` 为 `bedrock_anthropic`，`kimi-k3.1-pro` 为 `databricks`，`deepseek-v4.1-flash-1017` 为 `baseten`，`gpt-6.2-sol` 为 `openai`；Gemini `gemini-4-argon`/`gemini-4-carbon`/`gemini-4-hydrogen`/`gemini-3.x-flash` 为 `generate`/`google`；其余未观测模型保留参考值。`protocol=generate` 只接受 `upstream=google`。设置页「填入抓包参考路由」可把新默认值写入编辑框，保存后才生效。已有自定义目录不会重排/覆盖，但重新加载时会**自动补入缺失的 Gemini generate 与 embedding 条目**，不需要再点按钮。不发带Key的未知`/models`请求、不偷偷抓取客户端/猜测模型路由。未知模型或路径本地拒绝。

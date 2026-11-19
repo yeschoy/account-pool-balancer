@@ -315,7 +315,34 @@ func factoryModels(cfg *config.Config, group string) []byte {
 	return b
 }
 
-// testFactory separates free identity checks, quota permission, and paid model
+// factoryGenerateModels lists the configured Gemini generate routes for a
+// Factory group. It is the same configured reference the OpenAI-style listing
+// prints, in Google's shape, and never a per-account entitlement claim.
+func factoryGenerateModels(cfg *config.Config, group string) []factory.GeminiModel {
+	if !factoryGroupHasAccount(cfg, group) {
+		return []factory.GeminiModel{}
+	}
+	ids := make([]string, 0, 16)
+	for _, m := range cfg.Factory.Models {
+		if m.Protocol == "generate" && m.Upstream == "google" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return factory.GeminiModelList(ids)
+}
+
+// factoryGroupHasAccount reports whether group has an enabled Factory account,
+// so a closed or empty pool does not publish a catalogue it cannot serve.
+func factoryGroupHasAccount(cfg *config.Config, group string) bool {
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderFactory && a.Group == group && a.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// testFactory separates free identity checks, quota permission, and paid model// testFactory separates free identity checks, quota permission, and paid model
 // inference. All bodies keep the caller's native protocol; no policy adapter.
 func (s *Server) testFactory(ctx context.Context, cfg *config.Config, a config.Account, inference bool, model string) map[string]any {
 	started := time.Now()

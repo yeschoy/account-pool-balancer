@@ -446,6 +446,12 @@ func (s *Server) handleV1(w http.ResponseWriter, r *http.Request) {
 // streamGenerateContent and countTokens. Other Google methods would need a
 // route Factory does not expose.
 func (s *Server) handleV1Beta(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimRight(r.URL.Path, "/") == "/v1beta/models" && r.Method == http.MethodGet {
+		s.handleGeminiModels(w, r)
+		return
+	}
+	// A model-scoped GET (models/{id}) is a detail read this pool does not
+	// serve; only the list is offered.
 	if _, _, ok := factory.ParseGeminiPath(r.URL.Path); !ok {
 		if _, ok := factory.ParseGeminiCountTokens(r.URL.Path); !ok {
 			writeLocalError(w, "gemini", http.StatusNotFound, "invalid_request_error", "unsupported_endpoint", "unsupported Gemini endpoint: "+r.URL.Path, 0)
@@ -457,6 +463,33 @@ func (s *Server) handleV1Beta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.handleProxy(w, r)
+}
+
+// handleGeminiModels answers Google's ListModels with the configured Gemini
+// generate routes. Only generate is advertised: this pool has no embedContent,
+// batchGenerateContent, predict or video surface, so a client that filters on
+// supportedGenerationMethods picks a call Factory actually serves.
+func (s *Server) handleGeminiModels(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Get()
+	ck, ok := s.authClient(cfg, r)
+	if !ok {
+		writeLocalError(w, "gemini", http.StatusUnauthorized, "authentication_error", "invalid_api_key", "invalid API key", 0)
+		return
+	}
+	if keyPool(cfg, ck) != config.ProviderFactory {
+		writeLocalError(w, "gemini", http.StatusNotFound, "invalid_request_error", "unsupported_endpoint", "this pool does not serve "+r.URL.Path, 0)
+		return
+	}
+	if !cfg.PoolEnabled(config.ProviderFactory) {
+		writeLocalError(w, "gemini", 503, "api_error", "pool_disabled", "this account pool is disabled", 0)
+		return
+	}
+	models := factoryGenerateModels(cfg.ForProvider(config.ProviderFactory), ck.Group)
+	w.Header().Set("Content-Type", "application/json")
+	// Same caveat as GET /v1/models: a configured reference, not proof that
+	// any account may call these models.
+	w.Header().Set("X-Catalog-Source", "configured-reference-not-entitlement")
+	_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 }
 
 func ceilSeconds(d time.Duration) int {

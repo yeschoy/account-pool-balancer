@@ -270,8 +270,14 @@ func parseToken(b []byte, fallbackRefresh, fallbackOrg string) (Token, error) {
 		RefreshToken         string `json:"refresh_token"`
 		ActiveOrganizationID string `json:"active_organization_id"`
 		OrganizationID       string `json:"organization_id"`
-		ExpiresIn            int    `json:"expires_in"`
-		User                 *struct {
+		// The browser/desktop authorize response names the organization
+		// differently from a refresh; both spellings are accepted so a device
+		// grant that does carry one is not discarded.
+		Organization struct {
+			ID string `json:"id"`
+		} `json:"organization"`
+		ExpiresIn int `json:"expires_in"`
+		User      *struct {
 			ID    string `json:"id"`
 			Email string `json:"email"`
 		} `json:"user"`
@@ -292,7 +298,7 @@ func parseToken(b []byte, fallbackRefresh, fallbackOrg string) (Token, error) {
 		AccessToken:    strings.TrimSpace(rawAccess),
 		AccessTokenRaw: rawAccess,
 		RefreshToken:   doc.RefreshToken,
-		OrgID:          first(doc.ActiveOrganizationID, doc.OrganizationID, first(jwtClaimsOf(rawAccess)...), fallbackOrg),
+		OrgID:          first(doc.ActiveOrganizationID, doc.OrganizationID, doc.Organization.ID, first(jwtClaimsOf(rawAccess)...), fallbackOrg),
 		UserID:         first(userID, claims["sub"], claims["user_id"]),
 		Email:          first(email, claims["email"]),
 	}

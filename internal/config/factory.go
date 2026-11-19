@@ -18,7 +18,11 @@ const (
 	// 1.14.0 capture separates planes: api.factory.ai serves whoami, quota,
 	// settings and tools, while prem.factory.ai serves every /api/llm/* path.
 	FactoryDefaultInferenceBase = "https://prem.factory.ai"
-	FactoryDefaultModel         = "deepseek-v4.1-flash"
+	// FactoryDefaultModel is the model the console's "real request" test
+	// sends when the operator leaves the field empty. It is the capture's
+	// current DeepSeek Flash route (baseten, chat), not the deprecated
+	// DeepSeek V4.1 Flash entry droid lists as LEGACY.
+	FactoryDefaultModel = "deepseek-v4.1-flash-1017"
 	// FactorySurfaceTUI/Exec are droid's X-Factory-Request-Surface values.
 	FactorySurfaceTUI  = "cli_tui"
 	FactorySurfaceExec = "cli_exec"
