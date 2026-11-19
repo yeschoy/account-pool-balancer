@@ -60,6 +60,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory magpie 提示词适配（2026-11-19 20:14 UTC，a2b7cd8）
+
+- 用户选定按 `@magpie-community/opencode-factory-auth` 0.1.52 实现。`a2b7cd8` 把 magpie 的适配器依 `internal/factory/magpie.go`、`magpie_body.go` 移植进本仓库，作为 `systemMode=magpie`：固定身份句换 droid 开头、pi 开场与压缩句改写、客户端自述 `harness`→`runtime`、ZCode 环境段与模型行改写、Anthropic 计费头删除、工具描述与 schema 描述适配、工具输出引用被拒短语时包成可解码 JSON 串。任务指令全部保留；无需改动时不重编码。
+- 提交 `a2b7cd8` 已推送；`go vet`、`go test ./...`（server 100.426s）通过，新增 6 个 `internal/factory` 适配器测试与 `TestFactoryMagpieSystemMode`。
+- 部署：镜像 `account-pool-balancer:release-a2b7cd8-20261119T201328Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261119T201328Z-factory-magpie-a2b7cd8/data.tgz`；healthy/0 重启；双内网别名 `{"ok":true}`；`config.json` 未变；公网 200。回退 `rollback-20261119T201328Z`。
+- **边界**：线上 `systemMode` 仍未设置（等价 open，但 `droidBody=false` 使其等价 keep），需在设置页选择「改写为 Droid 身份（magpie 做法）」后生效；尚无真实上游 200 证据。
+
 ## 当前部署：Factory system 折叠 / 短语转义 / droid 版本（2026-11-19 19:52 UTC，9b4a144）
 
 - 现场：关闭 droid 开头注入后 `deepseek-v4.1-flash-1017` 与 `gemini-4-hydrogen` 均成功一次，但随后 `deepseek-v4.1-flash-1017` 与 Gemini 又被 403。错误日志显示上游原文为 `code:"content_policy_rejected"`「This request was blocked by Factory's usage policy check.」（`requestId yul1::…`）。
