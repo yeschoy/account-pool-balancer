@@ -209,7 +209,7 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 				// Re-mint it against the organization the claims advertise
 				// (or the single organization WorkOS reports) instead of
 				// asking the user to approve another code.
-				if retry, rerr := s.retryFactoryLoginWithOrg(ctx, f, tok, noOrg); rerr == nil {
+				if retry, rerr := s.retryFactoryLoginWithOrg(ctx, f, tok); rerr == nil {
 					if u2, e2, o2, w2 := s.factoryWhoamiOAuth(ctx, retry, f.proxyURL, f.ID); w2 == nil {
 						tok, userID, email, org = retry, u2, e2, o2
 						goto store
@@ -240,40 +240,42 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 // the WorkOS user is not in a Factory organization. It carries the candidate
 // organization so the login can re-mint the token without a new approval.
 type factoryNoOrganizationError struct {
-	candidates []string
-	localOrgs  []string
-	email      string
+	email string
 }
 
 func (e *factoryNoOrganizationError) Error() string {
-	msg := "Factory 未把该账号关联到任何组织（User not affiliated with an organization）"
+	msg := "Factory 拒绝该 access token：User not affiliated with an organization"
 	if e.email != "" {
 		msg += "：" + e.email
 	}
-	if len(e.candidates) > 0 {
-		msg += "。工作区已有的组织：" + strings.Join(e.candidates, "、") + "，令牌没有绑定到其中任何一个"
-	}
-	if len(e.localOrgs) > 0 {
-		msg += "。WorkOS 账号下的组织：" + strings.Join(e.localOrgs, "、")
-	} else if len(e.candidates) == 0 {
-		msg += "。WorkOS 也没有返回任何组织"
-	}
-	msg += "。请在 Factory 控制台确认该账号的组织后重新授权「" + e.email + "」；此账号未入池"
+	// droid sends X-Factory-Org-Id taken from WorkOS's active_organization_id
+	// first, and falls back to the JWT's org claim. The device grant returns
+	// neither, so droid would send no org header either; a re-minted token is
+	// bound to the organization and cannot be refused this way.
+	msg += "。该 token 未绑定组织（设备授权返回的 active_organization_id 为空），已用工厂令牌重新绑定后仍被拒绝。请检查该账号是否已被移出组织"
 	return msg
 }
 
-// retryFactoryLoginWithOrg exchanges the refresh token for an access token
-// bound to one of the organizations the login learned about. It returns the
-// retried token, or an error when no organization is known or WorkOS refuses.
-func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFlow, tok factoryauth.Token, noOrg *factoryNoOrganizationError) (factoryauth.Token, error) {
-	if len(noOrg.candidates) == 0 || tok.RefreshToken == "" {
-		return factoryauth.Token{}, errors.New("no candidate organization")
+// retryFactoryLoginWithOrg re-mints the access token so it is bound to an
+// organization.
+//
+// droid's own whoami sends X-Factory-Org-Id from WorkOS's
+// active_organization_id (falling back to the JWT org claim). The RFC 8628
+// device grant carries no organization, so the first token has no binding —
+// the same account works in droid only because a normal WorkOS login did bind
+// one. Re-refreshing with organization_id produces that binding.
+//
+// Candidates, best first: the token's own claims, the organizations this user
+// already holds in the pool, then the organizations WorkOS lists for the user.
+func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFlow, tok factoryauth.Token) (factoryauth.Token, error) {
+	if tok.RefreshToken == "" {
+		return factoryauth.Token{}, errors.New("no refresh token to re-bind")
 	}
 	client := s.factoryAuthClient(f.proxyURL)
-	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	var lastErr error
-	for _, org := range noOrg.candidates {
+	for _, org := range s.factoryOrgCandidates(ctx, tok, f.proxyURL, f.ID) {
 		retried, err := client.Refresh(rctx, tok.RefreshToken, org)
 		if err != nil {
 			lastErr = err
@@ -282,17 +284,45 @@ func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFl
 		if retried.OrgID == "" {
 			retried.OrgID = org
 		}
-		// Keep the original refresh token when WorkOS did not rotate it.
 		if retried.RefreshToken == "" {
 			retried.RefreshToken = tok.RefreshToken
 		}
-		log.Printf("factory login %s: retrying whoami with organization %s", f.ID, org)
+		log.Printf("factory login %s: re-bound token to organization %s", f.ID, org)
 		return retried, nil
 	}
 	if lastErr == nil {
-		lastErr = errors.New("organization retry failed")
+		lastErr = errors.New("no organization candidate to re-bind")
 	}
 	return factoryauth.Token{}, lastErr
+}
+
+// factoryOrgCandidates lists organizations worth binding the token to, in the
+// order droid would have used them first.
+func (s *Server) factoryOrgCandidates(ctx context.Context, tok factoryauth.Token, proxy, label string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(org string) {
+		org = strings.TrimSpace(org)
+		if org == "" || seen[org] || len(out) >= 8 {
+			return
+		}
+		seen[org] = true
+		out = append(out, org)
+	}
+	add(tok.OrgID)
+	for _, name := range []string{"org_id", "organization_id", "external_org_id"} {
+		add(factoryauth.JWTClaim(tok.AccessTokenRaw, name))
+	}
+	cfg := s.cfg.Get()
+	for _, a := range cfg.Accounts {
+		if a.Provider == config.ProviderFactory && a.FactoryWorkOSOrgID != "" {
+			add(a.FactoryWorkOSOrgID)
+		}
+	}
+	for _, org := range s.factoryWorkOSOrganizations(ctx, tok, proxy, label) {
+		add(org)
+	}
+	return out
 }
 
 // factoryLoginDiagnostic records the non-secret facts that explain a rejected
@@ -347,9 +377,7 @@ func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, 
 			// the gateway has. Report candidates so the caller can retry the
 			// token against a known organization.
 			email := firstNonEmpty(tok.Email, factoryauth.JWTClaim(tok.AccessTokenRaw, "email"))
-			local := s.factoryWorkOSOrganizations(ctx, tok, proxy, label)
-			candidates := factoryLocalOrganizations(s.cfg.Get(), "")
-			return "", "", "", &factoryNoOrganizationError{candidates: candidates, localOrgs: local, email: email}
+			return "", "", "", &factoryNoOrganizationError{email: email}
 		}
 		return "", "", "", fmt.Errorf("Factory whoami HTTP %d", resp.StatusCode)
 	}
@@ -536,21 +564,6 @@ func factoryOrgCandidates(tok factoryauth.Token) []string {
 	add(tok.OrgID)
 	for _, name := range []string{"org_id", "organization_id", "external_org_id"} {
 		add(factoryauth.JWTClaim(tok.AccessTokenRaw, name))
-	}
-	return out
-}
-
-// factoryLocalOrganizations lists the WorkOS organizations already configured
-// on Factory accounts, used only to explain a "no organization" rejection.
-func factoryLocalOrganizations(cfg *config.Config, exclude string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, a := range cfg.Accounts {
-		if a.ID == exclude || a.Provider != config.ProviderFactory || a.FactoryWorkOSOrgID == "" || seen[a.FactoryWorkOSOrgID] {
-			continue
-		}
-		seen[a.FactoryWorkOSOrgID] = true
-		out = append(out, a.FactoryWorkOSOrgID)
 	}
 	return out
 }

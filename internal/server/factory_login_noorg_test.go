@@ -58,7 +58,7 @@ func TestFactoryLoginReportsMissingOrganization(t *testing.T) {
 	if flow.Status != "failed" {
 		t.Fatalf("expected failure, got %+v", flow)
 	}
-	if !strings.Contains(flow.Error, "未把该账号关联到任何组织") || !strings.Contains(flow.Error, "nobody@example.com") {
+	if !strings.Contains(flow.Error, "User not affiliated with an organization") || !strings.Contains(flow.Error, "nobody@example.com") {
 		t.Fatalf("error does not explain the cause: %q", flow.Error)
 	}
 	if len(e.s.cfg.Get().Accounts) != 2 {
