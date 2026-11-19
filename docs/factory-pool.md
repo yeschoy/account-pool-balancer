@@ -91,6 +91,9 @@ Factory 设置新增：
 - **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
 - **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。**只接受 CLI 形态**：账号、UA 池、默认 UA 都拒绝 `Mozilla/…` 浏览器 UA（推理请求不发送 Sec-CH-UA/Accept-Language/Sec-Fetch-*，浏览器 UA 会自相矛盾）；运行期若读到旧配置里的浏览器 UA，会回退为 `factory-cli/1.14.0`。
 - **Accept-Encoding**：推理请求发送 droid 的 `gzip, deflate, br, zstd`；上游压缩响应在进入 JSON/SSE/Gemini 聚合前统一解码（gzip/deflate/br/zstd），未知编码返回 502 `upstream_encoding`。
+- **System 处理三档**（`factory.systemMode`）：`open`（默认，system 开头写 droid 的固定句）、`fold`（把调用方 system 移到首条 user 消息前并移除 system 字段）、`keep`（原样）。Factory 只接受 droid 自己的 system 内容，其它内容和空 system 都可能被拒；完全没有 system 字段是可接受的。
+- **被拒短语转义**（`factory.escapeClientPhrases`，默认开）：Factory usage policy 会读整个对话，出现其它 agent 的 system 提示词（`You are Claude Code…`、`You have been invoked in the following environment:` 等，共 9 条）时整条对话都 403 `content_policy_rejected`。开启后把这些短语首字符写成 JSON `\uXXXX` 转义，JSON 解析后模型读到原字符，只有线上字节不同。短语表与 magpie 0.1.52 `client-phrases.json` 一致。
+- **Droid 版本可配**（`factory.droidVersion`）：默认 `0.242.0`。Factory 有服务端 `min_cli_version`，版本落后即使其它头全对也可能 403；改这里即可，无需重新构建。
 - **Droid 系统提示开头开关**：`factory.droidBody`（默认开）。开启时每个请求的 system 开头写入 `You are Droid, an AI software engineering agent built by Factory.`（Chat/Responses/Messages/Gemini 四条原生路径）。关闭后请求体只保留路径与 `model` 位置的改动，完全保留调用方原文。关闭后若上游拒绝，说明该身份标记仍被校验。
 - **按协议对齐头集合**：抓包里 `traceparent` 只出现在 Responses/Gemini，`x-factory-exec-output-format` 只出现在 Responses/Gemini 的 cli_exec 调用，`openai-platform` 只在 OpenAI 路由。网关按实际线路协议逐条判断，不再“有就发”。
 - **默认推理 UA**：账号和 UA 池都没填时使用；默认 `factory-cli/1.14.0`。

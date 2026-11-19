@@ -60,6 +60,15 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory system 折叠 / 短语转义 / droid 版本（2026-11-19 19:52 UTC，9b4a144）
+
+- 现场：关闭 droid 开头注入后 `deepseek-v4.1-flash-1017` 与 `gemini-4-hydrogen` 均成功一次，但随后 `deepseek-v4.1-flash-1017` 与 Gemini 又被 403。错误日志显示上游原文为 `code:"content_policy_rejected"`「This request was blocked by Factory's usage policy check.」（`requestId yul1::…`）。
+- 参考 `tjboudreaux/pi-provider-factory`（contract `droid-0.184.0.verify.json`：system 原文 200、留空 403、通用内容 403）与 `@magpie-community/opencode-factory-auth` 0.1.52（`client-phrases.json` 与 `x-client-version 0.242.0`）定位根因：Factory 读整个请求体，system 通道必须逐字是 droid 自己的提示词，且对话中不得出现其它 agent 的固定提示词。
+- 实现 `9b4a144`：`systemMode` 三档（open/fold/keep）、被拒短语转义（默认开）、`droidVersion` 可配（默认 0.242.0，UA 与 `X-Client-Version` 随之变化）。
+- 提交 `9b4a144` 已推送；`go vet`、`go test ./...`（server 95.063s）通过，新增 `TestFactoryFoldSystemMode`、`TestFactoryKeepSystemMode`、`TestFactoryEscapesRefusedClientPhrases`、`TestFactoryDroidVersionSetting` 与 4 个 `internal/factory` 短语测试。
+- 部署：镜像 `account-pool-balancer:release-9b4a144-20261119T195039Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261119T195039Z-factory-systemmode-9b4a144/data.tgz`；healthy/0 重启；双内网别名 `{"ok":true}`；`config.json` 未变；公网 200；`/assets/app.js?v=fa888707a5`。回退 `rollback-20261119T195039Z`。
+- **边界**：线上仍是 `droidBody=false`（等价 keep），新能力需在设置页选择后才会生效；短语转义与折叠模式尚无真实上游 200 证据。
+
 ## 当前部署：Factory 登录跨代理重试（2026-11-19 13:28 UTC，b2f203f）
 
 - 现场：`63fe752` 上线后，登录仍在 whoami 报 `User not affiliated with an organization`。服务器日志显示 WorkOS 组织查询三个候选端点分别返回 404/401/404，说明**用户 token 无权列组织**，WorkOS 侧拿不到组织。
