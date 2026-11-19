@@ -60,6 +60,15 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 登录跨代理重试（2026-11-19 13:28 UTC，b2f203f）
+
+- 现场：`63fe752` 上线后，登录仍在 whoami 报 `User not affiliated with an organization`。服务器日志显示 WorkOS 组织查询三个候选端点分别返回 404/401/404，说明**用户 token 无权列组织**，WorkOS 侧拿不到组织。
+- 根因判断：设备授权 token 未绑定组织（`active_organization_id` 为空、claims 无 org），而浏览器授权时是有组织的。此前重试只在登录代理上执行；若该出口与授权出口不同，Factory 仍可能拒绝。
+- 修复 `b2f203f`：重绑定改为先在登录代理、再在池分配代理各试一次，whoami 同样分别验证；成功时记下实际可用的代理。同时**移除对 WorkOS 管理端点的探测**（用户 token 必然 401/404），新增 token claims 组织日志便于现场定位。
+- 提交 `b2f203f` 已推送；`go vet`、`go test ./...`（server 107.149s）通过。
+- 部署：镜像 `account-pool-balancer:release-b2f203f-20261119T132639Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261119T132639Z-factory-proxyretry-b2f203f/data.tgz`；healthy/0 重启/无 OOM；双内网别名 `{"ok":true}`；`config.json` 未变；公网 200。回退 `rollback-20261119T132639Z`。
+- **边界**：仍未能完成一次真实账号授权；下一次尝试后日志会打印 token claims 的组织值，可用于判定是「token 完全无组织」还是「组织被 Factory 拒绝」。
+
 ## 当前部署：Factory 登录从 token claims 取组织（2026-11-19 13:13 UTC，63fe752）
 
 - 现场：设备授权成功后 whoami 仍 401，错误里写「WorkOS 也没有返回任何组织」。用户从浏览器 `POST /user_management/authenticate` 响应确认该账号**确有组织** `organization_id: org_01M7HKHC275DB7HV6QP4WSCRAV`。
