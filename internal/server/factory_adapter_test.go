@@ -65,8 +65,14 @@ func TestFactoryCrossProtocolMatrix(t *testing.T) {
 					}
 					// Droid's client identity, not the caller's; and the body opens
 					// with droid's line while the task instructions survive.
-					if h := calls[0].header; h.Get("User-Agent") != "factory-cli/"+factory.DroidVersion || h.Get("X-Factory-Client") != "cli" || h.Get("X-Client-Version") != factory.DroidVersion || h.Get("X-Provider-Routing-Source") != factory.RoutingSourceConfiguredOrder || h.Get("X-Factory-Request-Surface") != "cli_tui" || h.Get("X-Session-Id") == "" || h.Get("X-Assistant-Message-Id") == "" || len(h.Get("Traceparent")) != 55 {
+					h := calls[0].header
+					if h.Get("User-Agent") != "factory-cli/"+factory.DroidVersion || h.Get("X-Factory-Client") != "cli" || h.Get("X-Client-Version") != factory.DroidVersion || h.Get("X-Provider-Routing-Source") != factory.RoutingSourceConfiguredOrder || h.Get("X-Factory-Request-Surface") != "cli_tui" || h.Get("X-Session-Id") == "" || h.Get("X-Assistant-Message-Id") == "" {
 						t.Fatalf("droid client identity missing: %v", h)
+					}
+					// droid 1.14.0 sends traceparent only on Responses and
+					// Gemini; Chat Completions and Messages carry none.
+					if want := to == "responses"; want != (len(h.Get("Traceparent")) == 55) {
+						t.Fatalf("traceparent presence mismatch for %s: %q", to, h.Get("Traceparent"))
 					}
 					if !strings.Contains(calls[0].body, factory.DroidLine) || strings.Count(calls[0].body, factory.DroidLine) != 1 {
 						t.Fatalf("system prompt not opened as droid's (calls=%d path=%s): %s", len(calls), calls[0].path, calls[0].body)

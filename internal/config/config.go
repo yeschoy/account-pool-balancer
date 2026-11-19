@@ -1405,6 +1405,23 @@ func ValidateUserAgent(ua string) error {
 	return nil
 }
 
+// ValidateClientUserAgent additionally refuses a browser User-Agent.
+//
+// A browser string is only believable together with Sec-CH-UA, Accept-Language
+// and Sec-Fetch-*; the gateway deliberately sends none of those on an upstream
+// call, so a Chrome UA would announce "browser" in one header and "script" in
+// the next. droid sends factory-cli/<version> and Bun sends Bun/<version>, so a
+// browser name is a different identity, not a disguise.
+func ValidateClientUserAgent(ua string) error {
+	if err := ValidateUserAgent(ua); err != nil {
+		return err
+	}
+	if strings.HasPrefix(strings.TrimSpace(ua), "Mozilla/") {
+		return errors.New("userAgent must be a real CLI identity such as factory-cli/1.14.0, not a browser User-Agent")
+	}
+	return nil
+}
+
 func ValidateProxyURL(raw string) error {
 	if raw == "" {
 		return nil
@@ -1836,7 +1853,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, err)
 		}
 		if strings.TrimSpace(a.UserAgent) != "" {
-			if err := ValidateUserAgent(strings.TrimSpace(a.UserAgent)); err != nil {
+			if err := ValidateClientUserAgent(strings.TrimSpace(a.UserAgent)); err != nil {
 				return fmt.Errorf("accounts[%s]: %w", a.ID, err)
 			}
 		}

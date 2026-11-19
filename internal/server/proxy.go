@@ -1869,6 +1869,22 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	defer resp.Body.Close()
 	markSent()
+	if acct.Provider == config.ProviderFactory && resp.Header.Get("Content-Encoding") != "" {
+		// The transport sends droid's Accept-Encoding and Go does not decode
+		// automatically, so every Factory body is decoded here before any
+		// parser (JSON, SSE, Gemini aggregation) sees it.
+		decoded, derr := decodeFactoryBody(resp.Body, resp.Header.Get("Content-Encoding"))
+		if derr != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "upstream_encoding", "upstream"
+			res.contentType = "application/json"
+			res.body = []byte(`{"error":{"type":"api_error","code":"upstream_encoding","message":"Factory response used an unsupported content-encoding"}}`)
+			return res
+		}
+		resp.Body = decoded
+		resp.Header.Del("Content-Encoding")
+		resp.Header.Del("Content-Length")
+		resp.ContentLength = -1
+	}
 	res.upstreamStatus = resp.StatusCode
 	res.header = resp.Header
 	audit.response(resp)

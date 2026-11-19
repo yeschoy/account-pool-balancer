@@ -85,8 +85,15 @@ func TestFactoryNativeProtocolsAndNoRewrite(t *testing.T) {
 		if h.Get("X-Api-Provider") != v.provider || h.Get("X-Factory-Client") != "cli" || h.Get("X-Client-Version") != factory.DroidVersion || h.Get("X-Factory-Org-Id") != "" || h.Get("X-Session-Id") == "caller-session" || h.Get("User-Agent") != "factory-cli/"+factory.DroidVersion || h.Get("X-Factory-Request-Surface") != config.FactorySurfaceTUI || h.Get("X-Provider-Routing-Source") != factory.RoutingSourceConfiguredOrder || h.Get("OpenAI-Platform") != "" {
 			t.Fatalf("client identity not droid's: %v", h)
 		}
-		if tp := h.Get("Traceparent"); len(tp) != 55 || tp[:3] != "00-" || tp[52:] != "-01" {
-			t.Fatalf("traceparent not W3C: %q", tp)
+		// The captured Chat Completions and Messages calls carry no
+		// traceparent; Responses and Gemini do. Sending one where droid does
+		// not is a different client identity.
+		if v.path == "/v1/responses" || strings.HasPrefix(v.path, "/v1beta/models/") {
+			if tp := h.Get("Traceparent"); len(tp) != 55 || tp[:3] != "00-" || tp[52:] != "-01" {
+				t.Fatalf("traceparent not W3C on %s: %q", v.path, tp)
+			}
+		} else if tp := h.Get("Traceparent"); tp != "" {
+			t.Fatalf("traceparent sent on %s but the capture has none: %q", v.path, tp)
 		}
 		if h.Get("Accept") != "application/json" || h.Get("Content-Type") != "application/json" {
 			t.Fatal("wire content headers", h)
@@ -220,8 +227,13 @@ func TestFactoryCaptureSurfaceAndOpenAIPlatform(t *testing.T) {
 		t.Fatal(rsp.StatusCode, out)
 	}
 	q := e.snapshot()[1].header
-	if q.Get("OpenAI-Platform") != "" || q.Get("X-Factory-Exec-Output-Format") != "json" {
-		t.Fatalf("platform leaked to a non-OpenAI route: %v", q)
+	// Neither the OpenAI platform nor the exec output format appears on a
+	// Chat Completions call in the capture, even under cli_exec.
+	if q.Get("OpenAI-Platform") != "" || q.Get("X-Factory-Exec-Output-Format") != "" {
+		t.Fatalf("responses-only header leaked to chat: %v", q)
+	}
+	if q.Get("X-Factory-Request-Surface") != config.FactorySurfaceExec {
+		t.Fatalf("surface lost: %v", q)
 	}
 }
 

@@ -46,7 +46,10 @@ func (s *Server) factoryTransportFor(proxyURL string, cfg config.Routing, key st
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: time.Second,
-		DisableCompression:    true,
+		// The gateway sends droid's own Accept-Encoding itself (see
+		// factoryAcceptEncoding). Go's automatic gzip would add a header only
+		// it knows about and would not match the CLI identity.
+		DisableCompression: true,
 	}
 	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
@@ -166,16 +169,30 @@ func (s *Server) factoryHeaders(cfg *config.Config, h http.Header, acct config.A
 	}
 	factory.ApplyClientHeaders(h)
 	ua := cfg.Factory.EffectiveUserAgent(acct)
+	if strings.HasPrefix(ua, "Mozilla/") {
+		// Config validation refuses this; a stored value from an older config
+		// must not turn a CLI call into half a browser.
+		ua = config.FactoryDefaultInferenceUserAgent
+	}
 	h.Set("User-Agent", ua)
 	h.Set("X-Client-Version", config.FactoryClientVersion(ua))
 	session, messageID, traceparent := "", "", ""
 	if plan != nil {
 		session, messageID, traceparent = plan.session, plan.messageID, plan.traceparent
 	}
-	factory.ApplyForwardHeaders(h, m.Upstream, session, messageID, cfg.Factory.EffectiveRequestSurface(), traceparent)
+	// Only the headers the capture shows for this wire protocol: Chat
+	// Completions and Messages carry no traceparent in droid 1.14.0.
+	factory.ApplyProtocolForwardHeaders(h, wireProtocol(m.Protocol, plan), m.Upstream, session, messageID, cfg.Factory.EffectiveRequestSurface(), traceparent)
 	// droid's model calls are JSON requests. Chat/Responses/Messages declare
 	// JSON even when the response is an SSE stream; the Gemini route sends the
 	// capture's wildcard Accept instead.
+	// Accept-Encoding is droid's list (Bun's client offers every codec it
+	// decodes); the response path decodes whatever the upstream chooses, so
+	// this is never an undecodable body.
+	h.Set("Accept-Encoding", factoryAcceptEncoding)
+	// The codec list is droid's; nothing browser-shaped is added beside it.
+	// Nothing sets Accept-Language, Origin or Sec-* on this request, and the
+	// transport would have added gzip automatically if it were still enabled.
 	h.Set("Content-Type", "application/json")
 	if m.Protocol == "generate" {
 		h.Set("Accept", "*/*")
@@ -198,6 +215,21 @@ func (s *Server) factoryHeaders(cfg *config.Config, h http.Header, acct config.A
 			h.Set("Anthropic-Beta", anthropicBeta)
 		}
 	}
+}
+
+// wireProtocol maps a configured model route to the protocol actually put on
+// the wire, which is what the captured header sets are keyed by.
+func wireProtocol(protocol string, plan *factoryRequestPlan) string {
+	if plan != nil && string(plan.to) != "" {
+		return string(plan.to)
+	}
+	switch protocol {
+	case "chat", "responses", "messages", "generate":
+		return protocol
+	case "anthropic":
+		return "messages"
+	}
+	return "chat"
 }
 
 // factoryRequestIDs derives droid's x-session-id, x-assistant-message-id and
@@ -385,6 +417,16 @@ func (s *Server) testFactory(ctx context.Context, cfg *config.Config, a config.A
 		return out
 	}
 	defer resp.Body.Close()
+	// The transport sends droid's Accept-Encoding and Go does not decode
+	// automatically, so the test reads the decoded body like the proxy does.
+	if enc := resp.Header.Get("Content-Encoding"); enc != "" {
+		decoded, derr := decodeFactoryBody(resp.Body, enc)
+		if derr != nil {
+			result["error"] = "Factory response used an unsupported content-encoding"
+			return out
+		}
+		resp.Body = decoded
+	}
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	result["status"], result["ms"] = resp.StatusCode, time.Since(start).Milliseconds()
 	if e != nil || len(raw) > 64<<10 {

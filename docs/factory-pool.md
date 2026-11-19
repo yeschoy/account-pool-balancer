@@ -89,7 +89,9 @@ Factory 的登录与刷新走 **WorkOS User Management**，不是 `api.factory.a
 Factory 设置新增：
 
 - **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
-- **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。
+- **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。**只接受 CLI 形态**：账号、UA 池、默认 UA 都拒绝 `Mozilla/…` 浏览器 UA（推理请求不发送 Sec-CH-UA/Accept-Language/Sec-Fetch-*，浏览器 UA 会自相矛盾）；运行期若读到旧配置里的浏览器 UA，会回退为 `factory-cli/1.14.0`。
+- **Accept-Encoding**：推理请求发送 droid 的 `gzip, deflate, br, zstd`；上游压缩响应在进入 JSON/SSE/Gemini 聚合前统一解码（gzip/deflate/br/zstd），未知编码返回 502 `upstream_encoding`。
+- **按协议对齐头集合**：抓包里 `traceparent` 只出现在 Responses/Gemini，`x-factory-exec-output-format` 只出现在 Responses/Gemini 的 cli_exec 调用，`openai-platform` 只在 OpenAI 路由。网关按实际线路协议逐条判断，不再“有就发”。
 - **默认推理 UA**：账号和 UA 池都没填时使用；默认 `factory-cli/1.14.0`。
 - **管理/额度 UA**：仅用于 whoami、billing、WorkOS 设备码/刷新；默认 `Bun/1.4.4`，不与推理 UA 混用。
 - 「为现有账号分配代理/UA」只填缺失字段，不覆盖已有值；需要重新分配时先清空账号代理/UA 再点。

@@ -291,7 +291,7 @@ func (c *Config) normalizeFactory() error {
 		if ua == "" {
 			continue
 		}
-		if err := ValidateUserAgent(ua); err != nil {
+		if err := ValidateClientUserAgent(ua); err != nil {
 			return fmt.Errorf("factory: user-agent pool: %w", err)
 		}
 		if !seenUA[ua] {
@@ -305,7 +305,7 @@ func (c *Config) normalizeFactory() error {
 	f.UserAgents = cleanUA
 	for _, ua := range []string{f.UserAgent, f.ManagementUserAgent} {
 		if strings.TrimSpace(ua) != "" {
-			if err := ValidateUserAgent(strings.TrimSpace(ua)); err != nil {
+			if err := ValidateClientUserAgent(strings.TrimSpace(ua)); err != nil {
 				return fmt.Errorf("factory: %w", err)
 			}
 		}

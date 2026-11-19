@@ -37,11 +37,28 @@ Factory 路径不再调用 `copyRequestHeaders` 后保留任何值，而是先�
 
 这意味着即使上游反代错误地把下游地址写进某个自定义头，只要它落在上述地址类拼写里，也不会随 Factory 请求发出；即使落在别的客户端头里，也会因为“全部清空后重建”而不存在。
 
+### 抓包里没有的头也不发
+
+前半段解决“多发了不该发的”，这一段解决“发了抓包没有的”。droid 1.14.0 对每个 `prem.factory.ai` 路由发的头集合并不相同，网关按**实际发出的线路协议**逐条对齐：
+
+| 头 | Chat Completions | Messages | Responses | Gemini generate | Responses WS |
+|---|---|---|---|---|---|
+| `traceparent` | 无 | 无 | **有** | **有** | 无（在首帧 `_factory` 里） |
+| `x-factory-exec-output-format` | 无 | 无 | **有**（cli_exec） | **有**（cli_exec） | **有**（cli_exec） |
+| `openai-platform` | 无 | 无 | **有**（仅 openai） | 无 | **有**（仅 openai） |
+| `x-session-id` / `x-assistant-message-id` | 有 | 有 | 有 | 有 | 仅 session |
+| `x-api-provider` / `x-provider-routing-source` / `x-factory-request-surface` | 有 | 有 | 有 | 有 | 有 |
+
+实现：`factory.ApplyProtocolForwardHeaders` 按 `wireProtocol(model.Protocol, plan)` 决定发送集合，跨协议转换后按**转换后的协议**判断（例如 Chat 请求被转成 Responses，就按 Responses 的集合发）。
+
+`x-message-call-type: session-title-generation` 是 droid 自己做会话标题生成时的标记，网关没有对应场景，因此不发——这也是“抓包里没出现的、不属于我们场景的头不发”。
+
 ## HTTP/TLS 指纹
 
 - **HTTP/1.1**：Factory 专用 `http.Transport` 设置 `ForceAttemptHTTP2=false`，与抓包中的 `Connection: keep-alive` 一致。WorkOS 设备码/刷新也使用同一 HTTP/1.1 transport，并发送 `User-Agent: Bun/1.4.4`，不再使用 Go 默认 UA。
 - **TLS 仍是 Go 默认 ClientHello**。droid CLI 是 Bun/BoringSSL；本仓库没有 droid/Bun 的 TLS ClientHello 实测数据，因此没有用 Chrome/Node 的 uTLS 指纹硬套。用 Chrome 指纹配 `factory-cli` UA 只会制造另一种矛盾。
-- **`Accept-Encoding` 缺失**：Go transport 关闭了自动压缩，抓包中 droid 发送 `gzip, deflate, br, zstd`。这是当前 HTTP 指纹差异之一；补它需要同时处理 br/zstd 解压和 SSE 流，未在本轮强行修改。
+- **`Accept-Encoding`**：已按 droid 发送 `gzip, deflate, br, zstd`（CLI 的编码列表，不是浏览器的那套），transport 仍保留 `DisableCompression` 以免 Go 再叠加自动 gzip。为兑现这个头，Factory 响应在进入 JSON/SSE/Gemini 聚合前统一解码 gzip / deflate / br / zstd（`internal/server/factory_decode.go`）；未知编码返回 502 `upstream_encoding`，不会把压缩体喂给解析器。
+- **UA 形态**：推理 UA 必须是真实 CLI 身份（默认 `factory-cli/1.14.0`）。配置校验现在**拒绝 `Mozilla/…` 浏览器 UA**（账号、UA 池、默认 UA 三处），因为本网关在推理请求上不发送 `Sec-CH-UA`、`Accept-Language`、`Sec-Fetch-*`，浏览器 UA 只会自相矛盾；下游自带的浏览器 UA/Origin/Cookie 也不会被转发。
 - **头顺序/大小写**：Go 会规范化头名并按自己的顺序写出；HTTP/1.1 下与 Bun 的顺序不完全一致。
 
 ## WebSocket 指纹
@@ -74,6 +91,8 @@ Factory 路径不再调用 `copyRequestHeaders` 后保留任何值，而是先�
 | HTTP/2 指纹 | 已改为 HTTP/1.1 |
 | Go TLS JA3/JA4 | 仍存在；无 droid TLS 实测，不伪造 |
 | `Accept-Encoding` / 头顺序 | 仍存在 |
+| 推理 UA 被配成浏览器 UA | 已阻断（配置拒绝，运行期再次回退到 CLI UA） |
+| `Accept-Encoding` 缺失 | 已补 droid 的 CLI 编码列表，并配套 gzip/deflate/br/zstd 解码 |
 | 未配置 `OpenAI-Platform` 或请求面选错 | 抓包中有该头/`cli_exec`；缺失或错选是身份不一致，不是 IP 泄漏，但可被关联 |
 | 下游 `Anthropic-Beta` | 为功能兼容保留；仍暴露客户端特性选择 |
 | WebSocket `Origin`/压缩扩展 | 仍存在 |

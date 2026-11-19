@@ -1376,7 +1376,7 @@
           <label for="factory-proxy-pool">代理池（每行一个）</label><textarea id="factory-proxy-pool" class="code" rows="4" placeholder="http://user:pass@host:port&#10;socks5://host:port"></textarea>
           <span></span><span class="hint">新账号、OAuth登录和批量导入会优先分配未被其他Factory账号使用的代理；账号自己的代理优先。这决定 Factory/WorkOS 看到的出口 IP；留空则直连本机出口。代理池只负责分配，不验证代理质量。</span>
           <label for="factory-ua-pool">UA池（每行一个）</label><textarea id="factory-ua-pool" class="code" rows="3" placeholder="factory-cli/1.14.0&#10;factory-cli/1.14.1"></textarea>
-          <span></span><span class="hint">新账号/登录按池分配不同推理 UA；账号自己的 UA 优先。管理面 whoami/billing/WorkOS 不使用此池。</span>
+          <span></span><span class="hint">新账号/登录按池分配不同推理 UA；账号自己的 UA 优先。管理面 whoami/billing/WorkOS 不使用此池。必须是真实 CLI 形态（<code>factory-cli/&lt;版本&gt;</code>），浏览器 UA 会被拒绝：发出时不会附带 Sec-CH-UA / Accept-Language / Sec-Fetch-*，浏览器 UA 只会自相矛盾。</span>
           <label for="factory-user-agent">默认推理 UA</label><input id="factory-user-agent" autocomplete="off" placeholder="factory-cli/1.14.0">
           <label for="factory-management-user-agent">管理/额度 UA</label><input id="factory-management-user-agent" autocomplete="off" placeholder="Bun/1.4.4">
           <span></span><span class="hint">默认推理 UA 只用于模型/WS；管理 UA 用于 whoami、billing、WorkOS 设备码与刷新。留空使用 droid 1.14.0 参考值。</span>

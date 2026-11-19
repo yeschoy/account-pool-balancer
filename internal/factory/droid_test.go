@@ -129,6 +129,35 @@ func TestOpenDroidBodyAnthropic(t *testing.T) {
 	}
 }
 
+func TestApplyProtocolForwardHeadersFollowsCapture(t *testing.T) {
+	tp := RandomTraceparent()
+	for _, tc := range []struct {
+		protocol, surface string
+		tp, exec          bool
+	}{
+		{"chat", SurfaceTUI, false, false},
+		{"messages", SurfaceTUI, false, false},
+		{"responses", SurfaceTUI, true, false},
+		{"generate", SurfaceTUI, true, false},
+		{"chat", SurfaceExec, false, false},
+		{"messages", SurfaceExec, false, false},
+		{"responses", SurfaceExec, true, true},
+		{"generate", SurfaceExec, true, true},
+	} {
+		h := http.Header{}
+		ApplyProtocolForwardHeaders(h, tc.protocol, "openai", "sess", "msg", tc.surface, tp)
+		if got := h.Get("Traceparent") != ""; got != tc.tp {
+			t.Fatalf("%s/%s traceparent=%q", tc.protocol, tc.surface, h.Get("Traceparent"))
+		}
+		if got := h.Get("X-Factory-Exec-Output-Format") != ""; got != tc.exec {
+			t.Fatalf("%s/%s exec format=%q", tc.protocol, tc.surface, h.Get("X-Factory-Exec-Output-Format"))
+		}
+		if h.Get("X-Api-Provider") != "openai" || h.Get("X-Session-Id") != "sess" || h.Get("X-Assistant-Message-Id") != "msg" || h.Get("X-Provider-Routing-Source") != RoutingSourceConfiguredOrder {
+			t.Fatalf("%s/%s base headers: %v", tc.protocol, tc.surface, h)
+		}
+	}
+}
+
 func TestDroidClientHeaders(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Factory-Client", "other")

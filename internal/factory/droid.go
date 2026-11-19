@@ -119,6 +119,33 @@ func ApplyForwardHeaders(h http.Header, upstream, session, messageID, surface, t
 	}
 }
 
+// ApplyProtocolForwardHeaders writes the subset of droid's model headers that
+// the 1.14.0 capture shows for this wire protocol. Not every call carries the
+// same set: droid sends traceparent for Responses and Gemini but not for Chat
+// Completions or Messages, and the exec output format only appears when the
+// request ran through exec. Sending a header the capture does not carry is a
+// different client, not a closer copy of this one.
+//
+// protocol is the wire protocol after any conversion: chat, responses,
+// messages or generate.
+func ApplyProtocolForwardHeaders(h http.Header, protocol, upstream, session, messageID, surface, traceparent string) {
+	h.Set("X-Api-Provider", upstream)
+	h.Set("X-Provider-Routing-Source", RoutingSourceConfiguredOrder)
+	h.Set("X-Factory-Request-Surface", Surface(surface))
+	if Surface(surface) == SurfaceExec && (protocol == "responses" || protocol == "generate") {
+		h.Set("X-Factory-Exec-Output-Format", "json")
+	}
+	if (protocol == "responses" || protocol == "generate") && traceparent != "" {
+		h.Set("Traceparent", traceparent)
+	}
+	if session != "" {
+		h.Set("X-Session-Id", session)
+	}
+	if messageID != "" {
+		h.Set("X-Assistant-Message-Id", messageID)
+	}
+}
+
 // ApplyAPIEndpointHeaders adds what Factory's Anthropic route expects beside
 // the bearer token: droid's Anthropic client is made with the literal key
 // "placeholder", which Anthropic's SDK sends as x-api-key.

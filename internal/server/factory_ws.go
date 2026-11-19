@@ -123,7 +123,9 @@ func (s *Server) proxyFactoryWS(ws *websocket.Conn, r *http.Request, cfg *config
 	factory.ApplyClientHeaders(h)
 	h.Set("User-Agent", cfg.Factory.EffectiveUserAgent(acct))
 	h.Set("X-Client-Version", config.FactoryClientVersion(cfg.Factory.EffectiveUserAgent(acct)))
-	factory.ApplyForwardHeaders(h, route.Upstream, session, frame.Factory.AssistantMessageID, cfg.Factory.EffectiveRequestSurface(), trace)
+	// The captured Responses WebSocket handshake carries no traceparent; the
+	// trace context lives in the first frame instead.
+	factory.ApplyProtocolForwardHeaders(h, "responses", route.Upstream, session, frame.Factory.AssistantMessageID, cfg.Factory.EffectiveRequestSurface(), "")
 	h.Set("Authorization", "Bearer "+acct.RuntimeKey)
 	if cfg.Factory.OpenAIPlatform != "" {
 		h.Set("OpenAI-Platform", cfg.Factory.OpenAIPlatform)
@@ -190,6 +192,10 @@ func (s *Server) dialFactoryWS(ctx context.Context, cfg *config.Config, a config
 	if err != nil {
 		return nil, err
 	}
+	// The capture's upstream handshake carries no Origin and asks for no
+	// permessage-deflate, so the client presents the same minimal frame:
+	// x/net/websocket always sends Origin from this config field, and reporting
+	// a page origin here would be a browser fingerprint droid never showed.
 	wc := &websocket.Config{Location: u, Origin: &url.URL{Scheme: "https", Host: u.Host}, Version: websocket.ProtocolVersionHybi13, Header: h}
 	ws, err := websocket.NewClient(wc, conn)
 	if err != nil {
