@@ -201,6 +201,7 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 			}
 			continue // transient network error; keep polling until expiry
 		}
+		log.Printf("factory login %s: token claims org=%q (proxy=%s)", f.ID, tok.OrgID, egressLabel(f.proxyURL))
 		userID, email, org, err := s.factoryWhoamiOAuth(ctx, tok, f.proxyURL, f.ID)
 		if err != nil {
 			var noOrg *factoryNoOrganizationError
@@ -209,12 +210,32 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 				// Re-mint it against the organization the claims advertise
 				// (or the single organization WorkOS reports) instead of
 				// asking the user to approve another code.
-				if retry, rerr := s.retryFactoryLoginWithOrg(ctx, f, tok); rerr == nil {
-					if u2, e2, o2, w2 := s.factoryWhoamiOAuth(ctx, retry, f.proxyURL, f.ID); w2 == nil {
+				//
+				// Re-bind on the login proxy first; a token already bound to
+				// an organization can still be refused if the egress differs
+				// from where it was authorized, so the pool proxy is the
+				// second attempt.
+				proxies := []string{f.proxyURL}
+				if p2, _ := s.factoryEgressFor(s.cfg.Get(), "login-retry-"+f.ID); p2 != "" && p2 != f.proxyURL {
+					proxies = append(proxies, p2)
+				}
+				var lastErr error = err
+				for _, proxy := range proxies {
+					retry, rerr := s.retryFactoryLoginWithOrg(ctx, f, tok, proxy)
+					if rerr != nil {
+						log.Printf("factory login %s: re-bind via %s failed: %v", f.ID, egressLabel(proxy), rerr)
+						continue
+					}
+					u2, e2, o2, w2 := s.factoryWhoamiOAuth(ctx, retry, proxy, f.ID)
+					if w2 == nil {
 						tok, userID, email, org = retry, u2, e2, o2
+						f.proxyURL = proxy
 						goto store
 					}
+					log.Printf("factory login %s: whoami after re-bind via %s: %v", f.ID, egressLabel(proxy), w2)
+					lastErr = w2
 				}
+				err = lastErr
 			}
 			s.factoryLogins.mu.Lock()
 			f.Diagnostic = s.factoryLoginDiagnostic(tok)
@@ -267,15 +288,15 @@ func (e *factoryNoOrganizationError) Error() string {
 //
 // Candidates, best first: the token's own claims, the organizations this user
 // already holds in the pool, then the organizations WorkOS lists for the user.
-func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFlow, tok factoryauth.Token) (factoryauth.Token, error) {
+func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFlow, tok factoryauth.Token, proxy string) (factoryauth.Token, error) {
 	if tok.RefreshToken == "" {
 		return factoryauth.Token{}, errors.New("no refresh token to re-bind")
 	}
-	client := s.factoryAuthClient(f.proxyURL)
+	client := s.factoryAuthClient(proxy)
 	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	var lastErr error
-	for _, org := range s.factoryOrgCandidates(ctx, tok, f.proxyURL, f.ID) {
+	for _, org := range s.factoryOrgCandidates(tok) {
 		retried, err := client.Refresh(rctx, tok.RefreshToken, org)
 		if err != nil {
 			lastErr = err
@@ -298,7 +319,7 @@ func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFl
 
 // factoryOrgCandidates lists organizations worth binding the token to, in the
 // order droid would have used them first.
-func (s *Server) factoryOrgCandidates(ctx context.Context, tok factoryauth.Token, proxy, label string) []string {
+func (s *Server) factoryOrgCandidates(tok factoryauth.Token) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(org string) {
@@ -320,9 +341,6 @@ func (s *Server) factoryOrgCandidates(ctx context.Context, tok factoryauth.Token
 		if a.Provider == config.ProviderFactory && a.FactoryWorkOSOrgID != "" {
 			add(a.FactoryWorkOSOrgID)
 		}
-	}
-	for _, org := range s.factoryWorkOSOrganizations(ctx, tok, proxy, label) {
-		add(org)
 	}
 	return out
 }
@@ -570,82 +588,6 @@ func factoryOrgCandidates(tok factoryauth.Token) []string {
 	// organization there, and droid reads it from the same place.
 	for _, org := range factoryauth.JWTClaimsOf(tok.AccessTokenRaw) {
 		add(org)
-	}
-	return out
-}
-
-// factoryWorkOSOrganizations asks WorkOS which organizations this user belongs
-// to. It is diagnostic only: a failure returns nil, never an error path.
-func (s *Server) factoryWorkOSOrganizations(ctx context.Context, tok factoryauth.Token, proxy, label string) []string {
-	token := firstNonEmpty(tok.AccessTokenRaw, tok.AccessToken)
-	if token == "" {
-		return nil
-	}
-	client := s.factoryAuthClient(proxy)
-	if !strings.Contains(s.factoryAuthBase, "workos.com") && s.factoryAuthBase != "" {
-		// A test double or a self-hosted WorkOS has no membership endpoints;
-		// skip rather than add a doomed request to every login.
-		return nil
-	}
-	get := func(path, method string, decode func([]byte) []string) []string {
-		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		var b []byte
-		var status int
-		var err error
-		if method == http.MethodPost {
-			b, status, err = client.PostJSON(rctx, path, token, nil)
-		} else {
-			b, status, err = client.Get(rctx, path, token)
-		}
-		if err != nil || status != http.StatusOK {
-			log.Printf("factory login %s: workos %s %s HTTP %d: %v", label, method, path, status, err)
-			return nil
-		}
-		return decode(b)
-	}
-	// whose membership list, tried in the order WorkOS documents.
-	if orgs := get("/organizations", http.MethodGet, workosOrgIDs); len(orgs) > 0 {
-		return orgs
-	}
-	if orgs := get("/organization_memberships", http.MethodGet, workosMembershipOrgIDs); len(orgs) > 0 {
-		return orgs
-	}
-	return get("/authorize/organization", http.MethodPost, workosOrgIDs)
-}
-
-func workosOrgIDs(b []byte) []string {
-	var doc struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(b, &doc) != nil {
-		return nil
-	}
-	out := make([]string, 0, len(doc.Data))
-	for _, o := range doc.Data {
-		if o.ID != "" {
-			out = append(out, o.ID)
-		}
-	}
-	return out
-}
-
-func workosMembershipOrgIDs(b []byte) []string {
-	var doc struct {
-		Data []struct {
-			OrganizationID string `json:"organization_id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(b, &doc) != nil {
-		return nil
-	}
-	out := make([]string, 0, len(doc.Data))
-	for _, m := range doc.Data {
-		if m.OrganizationID != "" {
-			out = append(out, m.OrganizationID)
-		}
 	}
 	return out
 }
