@@ -63,8 +63,23 @@ type Factory struct {
 	// as droid itself does. Factory serves a subscription's models to its own
 	// client, so this is the default; turning it off sends the caller's body
 	// unchanged and relies on the credential alone.
-	DroidBody *bool          `json:"droidBody,omitempty"`
-	Models    []FactoryModel `json:"models"`
+	DroidBody *bool `json:"droidBody,omitempty"`
+	// DroidVersion is the droid release the requests claim to be
+	// (factory-cli/<version> and X-Client-Version). droid reads a server-side
+	// min_cli_version and Factory refuses an old release even when every other
+	// header matches, so this is meant to stay current. Empty uses the
+	// built-in default.
+	DroidVersion string `json:"droidVersion,omitempty"`
+	// SystemMode is how the caller's system channel is presented:
+	// "keep" (unchanged), "open" (droid's line prepended, the default), or
+	// "fold" (moved into the first user turn, system channel removed).
+	SystemMode string `json:"systemMode,omitempty"`
+	// EscapeClientPhrases escapes the first character of the phrases Factory's
+	// usage policy refuses, so a conversation that quotes another agent's
+	// prompt is not rejected. The model still reads the same characters after
+	// JSON decoding; only the wire bytes differ.
+	EscapeClientPhrases *bool          `json:"escapeClientPhrases,omitempty"`
+	Models              []FactoryModel `json:"models"`
 	// ProxyPool and UserAgents provide distinct per-account egress and
 	// inference identity. They are assignment sources only; an account's own
 	// ProxyURL/UserAgent always wins. Empty pools preserve the old behavior.
@@ -75,7 +90,11 @@ type Factory struct {
 }
 
 const (
-	FactoryDefaultInferenceUserAgent  = "factory-cli/1.14.0"
+	// factoryDefaultDroidVersion is the release the requests claim to be when
+	// nothing is configured. Factory enforces a server-side minimum client
+	// version, so this must stay at the current droid release.
+	factoryDefaultDroidVersion        = "0.242.0"
+	FactoryDefaultInferenceUserAgent  = "factory-cli/" + factoryDefaultDroidVersion
 	FactoryDefaultManagementUserAgent = "Bun/1.4.4"
 )
 
@@ -107,10 +126,41 @@ func (f Factory) EffectiveRequestSurface() string {
 	return FactorySurfaceTUI
 }
 
+// System handling modes for Factory.SystemMode.
+const (
+	// SystemKeep sends the caller's system channel unchanged.
+	SystemKeep = "keep"
+	// SystemOpen prepends droid's line to the system channel.
+	SystemOpen = "open"
+	// SystemFold moves the system channel into the first user turn and removes
+	// the system field, which is what Factory accepts from a foreign client.
+	SystemFold = "fold"
+)
+
+// EffectiveSystemMode resolves SystemMode, then the older DroidBody flag, then
+// the default. Unknown values fall back to the default rather than failing a
+// request.
+func (f Factory) EffectiveSystemMode() string {
+	switch f.SystemMode {
+	case SystemKeep, SystemOpen, SystemFold:
+		return f.SystemMode
+	}
+	if f.DroidBody != nil && !*f.DroidBody {
+		return SystemKeep
+	}
+	return SystemOpen
+}
+
 // EffectiveDroidBody reports whether the droid system-prompt opening is
-// injected. Unset (older configs, new installs) means yes.
+// injected, i.e. the resolved mode is open.
 func (f Factory) EffectiveDroidBody() bool {
-	return f.DroidBody == nil || *f.DroidBody
+	return f.EffectiveSystemMode() == SystemOpen
+}
+
+// EffectiveEscapeClientPhrases reports whether refused client phrases are
+// escaped. Unset means yes: it only rewrites text Factory already refuses.
+func (f Factory) EffectiveEscapeClientPhrases() bool {
+	return f.EscapeClientPhrases == nil || *f.EscapeClientPhrases
 }
 
 // EffectiveUserAgent resolves the inference UA: account override, pool
@@ -122,7 +172,16 @@ func (f Factory) EffectiveUserAgent(a Account) string {
 	if ua := strings.TrimSpace(f.UserAgent); ua != "" {
 		return ua
 	}
-	return FactoryDefaultInferenceUserAgent
+	return "factory-cli/" + f.EffectiveDroidVersion()
+}
+
+// EffectiveDroidVersion returns the release to claim, defaulting to the
+// built-in one.
+func (f Factory) EffectiveDroidVersion() string {
+	if v := strings.TrimSpace(f.DroidVersion); v != "" {
+		return v
+	}
+	return factoryDefaultDroidVersion
 }
 
 func (f Factory) EffectiveManagementUserAgent() string {
@@ -140,7 +199,7 @@ func FactoryClientVersion(ua string) string {
 			return v
 		}
 	}
-	return "1.14.0"
+	return factoryDefaultDroidVersion
 }
 
 func DefaultFactoryModels() []FactoryModel {

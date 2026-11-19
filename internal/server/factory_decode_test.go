@@ -127,8 +127,8 @@ func TestFactorySendsCLIIdentityOnly(t *testing.T) {
 		"Sec-Fetch-Mode": "cors", "Accept-Language": "zh-CN", "Sec-Ch-Ua": `"Chromium"`,
 	})
 	h := e.snapshot()[0].header
-	if h.Get("User-Agent") != "factory-cli/1.14.0" {
-		t.Fatalf("browser UA reached upstream: %q", h.Get("User-Agent"))
+	if ua := h.Get("User-Agent"); ua != "factory-cli/"+config.Default().Factory.EffectiveDroidVersion() {
+		t.Fatalf("browser UA reached upstream: %q", ua)
 	}
 	for _, name := range []string{"Accept-Language", "Sec-Ch-Ua", "Sec-Fetch-Mode", "Origin", "Referer"} {
 		if h.Get(name) != "" {

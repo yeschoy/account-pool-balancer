@@ -1700,7 +1700,9 @@ async function loadSettings() {
   $('#factory-detail').checked = s.factory?.detailLog === true;
   $('#factory-standard-only').checked = s.factory?.standardOnly === true;
   $('#factory-compatibility').checked = s.factory?.compatibility !== false;
-  $('#factory-droid-body').checked = s.factory?.droidBody !== false;
+  $('#factory-droid-version').value = s.factory?.droidVersion || '';
+  $('#factory-system-mode').value = s.factory?.systemMode || (s.factory?.droidBody === false ? 'keep' : 'open');
+  $('#factory-escape-phrases').checked = s.factory?.escapeClientPhrases !== false;
   $('#factory-models').value = JSON.stringify(s.factory?.models || [], null, 2);
   $('#deploy-settings').classList.toggle('hidden', !isDeploy());
   $('#deploy-base').value = s.deploy?.baseUrl || 'https://api.deploy.com/api/v1';
@@ -1776,7 +1778,10 @@ $('#btn-save-settings').addEventListener('click', async () => {
     try { models = JSON.parse($('#factory-models').value); if (!Array.isArray(models)) throw new Error(); }
     catch { toast('Factory模型路由必须是JSON数组'); return; }
     const lines = (v) => v.split('\n').map((x) => x.trim()).filter(Boolean);
-    body.factory = { baseUrl: $('#factory-base').value.trim(), inferenceUrl: $('#factory-inference').value.trim(), requestSurface: $('#factory-surface').value, openaiPlatform: $('#factory-openai-platform').value.trim(), detailLog: $('#factory-detail').checked, standardOnly: $('#factory-standard-only').checked, compatibility: $('#factory-compatibility').checked, droidBody: $('#factory-droid-body').checked, models,
+    body.factory = { baseUrl: $('#factory-base').value.trim(), inferenceUrl: $('#factory-inference').value.trim(), requestSurface: $('#factory-surface').value, openaiPlatform: $('#factory-openai-platform').value.trim(), detailLog: $('#factory-detail').checked, standardOnly: $('#factory-standard-only').checked, compatibility: $('#factory-compatibility').checked,
+      droidVersion: $('#factory-droid-version').value.trim(),
+      systemMode: $('#factory-system-mode').value,
+      escapeClientPhrases: $('#factory-escape-phrases').checked, models,
       proxyPool: lines($('#factory-proxy-pool').value), userAgents: lines($('#factory-ua-pool').value), userAgent: $('#factory-user-agent').value.trim(), managementUserAgent: $('#factory-management-user-agent').value.trim() };
   }
   if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };

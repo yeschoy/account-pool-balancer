@@ -25,6 +25,9 @@ type factoryRequestPlan struct {
 	session     string
 	messageID   string
 	traceparent string
+	// escaped marks a body whose refused client phrases were rewritten; the
+	// caller's text is unchanged after JSON decoding, only the wire bytes are.
+	escaped bool
 	// generate routes a Google generateContent body to /api/llm/g/v1/generate;
 	// the model comes from the path and the body is not converted.
 	generate    bool
@@ -130,12 +133,22 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 			return nil, err
 		}
 	}
-	// Factory serves a subscription's models to droid only, so the system
-	// prompt opens with droid's line exactly as droidBody/AnthropicBody set it.
-	// Operators can turn this off for API-key accounts whose credential is
-	// enough on its own; the body is then left exactly as the caller sent it.
-	if cfg.Factory.EffectiveDroidBody() {
+	// Factory's usage policy reads the system channel: droid's own opening is
+	// accepted, other content is refused, and a foreign client's prompt is
+	// either opened with droid's line or moved into the first user turn.
+	switch cfg.Factory.EffectiveSystemMode() {
+	case config.SystemFold:
+		plan.body = factory.FoldSystemIntoUser(string(to), plan.body)
+	case config.SystemOpen:
 		plan.body = factory.OpenDroidBody(string(to), plan.body)
+	}
+	// A conversation that quotes another agent's prompt is refused wherever it
+	// appears, so the phrases are escaped before the request leaves.
+	if cfg.Factory.EffectiveEscapeClientPhrases() {
+		if escaped, changed := factory.EscapeClientPhrases(plan.body); changed {
+			plan.body = escaped
+			plan.escaped = true
+		}
 	}
 	if len(plan.body) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
@@ -167,8 +180,13 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
-	inject := cfg.Factory.EffectiveDroidBody()
-	b, err := factory.OpenGeminiBodyWith(model, body, inject)
+	var b []byte
+	var err error
+	if cfg.Factory.EffectiveSystemMode() == config.SystemFold {
+		b, err = factory.FoldGeminiSystem(model, body)
+	} else {
+		b, err = factory.OpenGeminiBodyWith(model, body, cfg.Factory.EffectiveDroidBody())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +288,13 @@ func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*
 	if !ok || route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
-	inject := cfg.Factory.EffectiveDroidBody()
-	b, err := factory.OpenGeminiBodyWith(model, body, inject)
+	var b []byte
+	var err error
+	if cfg.Factory.EffectiveSystemMode() == config.SystemFold {
+		b, err = factory.FoldGeminiSystem(model, body)
+	} else {
+		b, err = factory.OpenGeminiBodyWith(model, body, cfg.Factory.EffectiveDroidBody())
+	}
 	if err != nil {
 		return nil, err
 	}

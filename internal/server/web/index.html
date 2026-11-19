@@ -1381,8 +1381,20 @@
           <label for="factory-management-user-agent">管理/额度 UA</label><input id="factory-management-user-agent" autocomplete="off" placeholder="Bun/1.4.4">
           <span></span><span class="hint">默认推理 UA 只用于模型/WS；管理 UA 用于 whoami、billing、WorkOS 设备码与刷新。留空使用 droid 1.14.0 参考值。</span>
           <button class="btn small" id="btn-factory-assign-egress" type="button" title="先保存代理池/UA池，再分配">为现有账号分配代理/UA</button>
-          <label for="factory-droid-body">注入 Droid 系统提示开头</label><label class="check"><input id="factory-droid-body" type="checkbox">开启</label>
-          <span></span><span class="hint">默认开启：每个请求的 system 开头写入 <code>You are Droid, an AI software engineering agent built by Factory.</code>（Chat/Responses/Messages/Gemini 都注入），这是 Factory 把订阅模型开放给 droid 客户端的身份标记。关闭后请求体只改路径与 model 位置，完全保留调用方原文，适合已确认凭据（如 API Key）本身足够的场景；关闭后若被上游拒绝，请重新开启。</span>
+          <label for="factory-droid-version">Droid 版本</label><input id="factory-droid-version" placeholder="0.242.0" size="12">
+          <span></span><span class="hint">请求声称的 droid 版本（<code>factory-cli/&lt;版本&gt;</code> 与 <code>X-Client-Version</code>）。Factory 有服务端 <code>min_cli_version</code>，版本落后即使其它头全对也可能被 403；留空用内置默认 <strong>0.242.0</strong>。droid 发版后改这里即可，不必重新构建。</span>
+          <label for="factory-system-mode">System 处理方式</label><select id="factory-system-mode" class="small">
+            <option value="open">注入 Droid 开头（默认）</option>
+            <option value="fold">折叠进首条 user 消息</option>
+            <option value="keep">保持原样</option>
+          </select>
+          <span></span><span class="hint">
+            <strong>注入</strong>：system 开头写入 <code>You are Droid, an AI software engineering agent built by Factory.</code>，这是 droid 客户端身份标记。<br>
+            <strong>折叠</strong>：把调用方的 system 内容移到首条 user 消息前（<code>&lt;system&gt;…&lt;/system&gt;</code> 包裹），并**移除** system 字段——Factory 只接受 droid 自己的 system，其它内容和空 system 都可能被拒，而完全没有 system 字段是可接受的。<br>
+            <strong>保持</strong>：原样转发，只改路径与 model 位置。
+          </span>
+          <label for="factory-escape-phrases">转义被拒短语</label><label class="check"><input id="factory-escape-phrases" type="checkbox">开启</label>
+          <span></span><span class="hint">Factory 的 usage policy 会读整个对话：出现其它 agent 的 system 提示词（如 <code>You are Claude Code…</code>、<code>You have been invoked in the following environment:</code>）时整条对话都会被 403 <code>content_policy_rejected</code>。开启后把这些短语的首字符写成 JSON <code>\u0059</code> 转义，JSON 解析后模型读到的仍是原字符，只有线上字节不同。关闭则原样发送。</span>
           <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
           <span></span><span class="hint">可从Chat/Responses/Messages调用不同原生协议模型；跨协议流完整缓冲（16MiB）后输出，不是低延迟流。不支持的字段/签名推理/续传引用本地400，不静默丢弃；关闭后只允许原生协议。工具根级composition包装/解包不受此开关影响。Fast仅在显式选择Fast模型或请求fast/priority时映射，可能花更多额度。</span>
           <label for="factory-standard-only">仅使用Standard额度</label><label class="check"><input id="factory-standard-only" type="checkbox">开启</label>

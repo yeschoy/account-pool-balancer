@@ -19,9 +19,21 @@ import (
 	"strings"
 )
 
-// DroidVersion is the droid release the requests claim to be. droid's binary
-// reads a server-side min_cli_version, so this tracks the captured release.
-const DroidVersion = "1.14.0"
+// DroidVersion is the droid release the requests claim to be when the operator
+// sets nothing. droid's binary reads a server-side min_cli_version and Factory
+// refuses an old release even when every other header matches, so the default
+// follows the current droid release rather than the 1.14.0 capture the rest of
+// this file is built from; the capture stays the reference for header values.
+const DroidVersion = "0.242.0"
+
+// DroidVersionOf returns the release to claim: the configured one when it is
+// non-empty, otherwise DroidVersion.
+func DroidVersionOf(configured string) string {
+	if v := strings.TrimSpace(configured); v != "" {
+		return v
+	}
+	return DroidVersion
+}
 
 // BunVersion is the runtime string droid's non-inference HTTP uses. The
 // capture shows two User-Agents and mixing them is the visible mismatch:
