@@ -69,6 +69,21 @@ Factory 的登录与刷新走 **WorkOS User Management**，不是 `api.factory.a
 
 > 本机验收：真实 WorkOS `authorize/device` 已通过控制台成功签发 device code（`auth.factory.ai/device` 链接可用）；设备批准、token 兑换、pending/approved、拒绝、刷新与额度读取用 Mock 覆盖。未使用真实账号完成一次审批，不能据此声称线上登录已验收。
 
+#### 401 排查（线上真实失败记录）
+
+线上第一次真实设备登录时，浏览器已显示 `auth.factory.ai/device/success`（设置完成），但服务器侧 `/api/cli/whoami` 返回 **401**。已核实的结论与新增能力：
+
+- `api.factory.ai/api/cli/whoami` 对无 token 和任意坏 token 都返回 401，响应体带 `requestId`；生产 API **只接受 Factory 生产 WorkOS client 签发的 access token**。
+- Factory 有两个 WorkOS client：生产 `client_01HNM792M5G5G1A2THWPXKFMXB`，development `client_01HNM7927XNSKCJ4982Z5J3FFZ`。`authorize/device` 只传 `client_id`，所以用 dev client 也能拿到成功页，但换出的 token 在 `api.factory.ai` 上必然 401。本项目固定使用生产 client。
+- 现在失败时对话框会显示 `diagnostic`：从 access token 的 `iss`（`…/client_<id>`）判断 `production` / `development` / `unknown`、令牌有效期，并在 dev 时直接说明「api.factory.ai 只接受生产 client」；同时服务端日志记录 whoami 的 HTTP 状态与上游错误体（不含 token），以及实际出口（`direct` 或代理主机）。
+- whoami 使用的 Bearer 现在是 WorkOS 返回的**原始 access token 字符串**（不经过任何重编码），与抓包 `Authorization: Bearer <token>` 一致。
+
+若再次出现 401：先看诊断里的 `WorkOS客户端`。
+
+- `development`：浏览器批准用的是 dev 环境（例如用了 Factory 的 dev/测试站），换生产账号重新批准。
+- `production` 仍 401：看服务端日志里的上游错误体与 `requestId`，可能是该账号或组织未被 Factory 生产环境接纳、令牌已过期，或数据库迁移把 org 头填错。
+- 网络错误（`Factory whoami 网络请求失败`）：检查该账号代理能否访问 `api.factory.ai`。
+
 ### 每账号代理池、出口 IP 与 UA
 
 Factory 设置新增：

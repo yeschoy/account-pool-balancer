@@ -18,12 +18,20 @@ import (
 )
 
 const (
-	// DefaultBase is WorkOS User Management, the service the Factory desktop
-	// client uses for sign-in and refresh. /api/auth/* on api.factory.ai is 404.
-	DefaultBase = "https://api.workos.com/user_management"
+	// ProductionDefaultBase is WorkOS User Management for Factory production.
+	ProductionDefaultBase = "https://api.workos.com/user_management"
+	// DevelopmentDefaultBase is the WorkOS User Management host of Factory's
+	// non-production environment. Its device codes approve at
+	// auth.factory.ai/device too, but its tokens are rejected by
+	// api.factory.ai with 401.
+	DevelopmentDefaultBase = "https://api.workos.com/user_management"
+	// DefaultBase is ProductionDefaultBase, kept for existing callers.
+	DefaultBase = ProductionDefaultBase
 	// ProductionClientID is Factory's production WorkOS client. It is public
 	// (it appears in the OAuth authorization URL), not a secret.
 	ProductionClientID = "client_01HNM792M5G5G1A2THWPXKFMXB"
+	// DevClientID is Factory's development WorkOS client.
+	DevClientID = "client_01HNM7927XNSKCJ4982Z5J3FFZ"
 	// DeviceGrant is the OAuth device-code grant type.
 	DeviceGrant = "urn:ietf:params:oauth:grant-type:device_code"
 )
@@ -42,12 +50,16 @@ type Device struct {
 // access token's JWT exp when present; otherwise a conservative default is
 // used so the caller refreshes before a real 401.
 type Token struct {
-	AccessToken  string
-	RefreshToken string
-	OrgID        string
-	UserID       string
-	Email        string
-	ExpiresAt    time.Time
+	AccessToken string
+	// AccessTokenRaw is the exact response text of access_token. WorkOS
+	// documents it as a JWT, but the opaque value it actually returns is not
+	// parseable here, and whoami must receive what WorkOS issued.
+	AccessTokenRaw string
+	RefreshToken   string
+	OrgID          string
+	UserID         string
+	Email          string
+	ExpiresAt      time.Time
 }
 
 // OAuthError is WorkOS's structured OAuth error.
@@ -79,11 +91,51 @@ type Client struct {
 	HTTP      *http.Client
 }
 
+// EnvironmentOf names the WorkOS environment from a JWT access token. WorkOS
+// puts the issuing client in `iss` ("./client_<id>") and the workspace in
+// `wids`; Factory's production API only accepts tokens minted for its
+// production client, so a development-client token always ends in HTTP 401.
+//
+// Any claim that is missing or not readable returns "", and an issuer that is
+// neither Factory client returns "unknown". Callers must not treat "" as proof
+// that the token is production.
+func EnvironmentOf(jwt string) string {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var raw struct {
+		Iss  string   `json:"iss"`
+		Wids []string `json:"wids"`
+	}
+	if json.Unmarshal(payload, &raw) != nil {
+		return ""
+	}
+	if raw.Iss != "" {
+		iss := strings.TrimSuffix(raw.Iss, "/")
+		if i := strings.LastIndex(iss, "/"); i >= 0 {
+			iss = iss[i+1:]
+		}
+		iss = strings.TrimPrefix(iss, "client_")
+		switch iss {
+		case strings.TrimPrefix(ProductionClientID, "client_"):
+			return "production"
+		case strings.TrimPrefix(DevClientID, "client_"):
+			return "development"
+		}
+	}
+	return "unknown"
+}
+
 func (c *Client) base() string {
 	if strings.TrimSpace(c.Base) != "" {
 		return strings.TrimRight(c.Base, "/")
 	}
-	return DefaultBase
+	return ProductionDefaultBase
 }
 
 func (c *Client) clientID() string {
@@ -213,6 +265,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken, orgID string) (Token
 func parseToken(b []byte, fallbackRefresh, fallbackOrg string) (Token, error) {
 	var doc struct {
 		AccessToken          string `json:"access_token"`
+		AccessTokenAlt       string `json:"token"`
 		RefreshToken         string `json:"refresh_token"`
 		ActiveOrganizationID string `json:"active_organization_id"`
 		OrganizationID       string `json:"organization_id"`
@@ -222,20 +275,25 @@ func parseToken(b []byte, fallbackRefresh, fallbackOrg string) (Token, error) {
 			Email string `json:"email"`
 		} `json:"user"`
 	}
-	if json.Unmarshal(b, &doc) != nil || doc.AccessToken == "" {
+	if json.Unmarshal(b, &doc) != nil {
 		return Token{}, errors.New("factoryauth: invalid token response")
 	}
-	claims := jwtClaims(doc.AccessToken)
+	rawAccess := first(doc.AccessToken, doc.AccessTokenAlt)
+	if rawAccess == "" {
+		return Token{}, errors.New("factoryauth: token response has no access token")
+	}
+	claims := jwtClaims(rawAccess)
 	userID, email := "", ""
 	if doc.User != nil {
 		userID, email = doc.User.ID, doc.User.Email
 	}
 	t := Token{
-		AccessToken:  doc.AccessToken,
-		RefreshToken: doc.RefreshToken,
-		OrgID:        first(doc.ActiveOrganizationID, doc.OrganizationID, claims["org_id"], claims["organization_id"], fallbackOrg),
-		UserID:       first(userID, claims["sub"], claims["user_id"]),
-		Email:        first(email, claims["email"]),
+		AccessToken:    strings.TrimSpace(rawAccess),
+		AccessTokenRaw: rawAccess,
+		RefreshToken:   doc.RefreshToken,
+		OrgID:          first(doc.ActiveOrganizationID, doc.OrganizationID, claims["org_id"], claims["organization_id"], fallbackOrg),
+		UserID:         first(userID, claims["sub"], claims["user_id"]),
+		Email:          first(email, claims["email"]),
 	}
 	if t.RefreshToken == "" {
 		t.RefreshToken = fallbackRefresh

@@ -1237,6 +1237,7 @@ async function deviceAuth(opts = {}) {
       <button type="button" class="btn ghost small" id="da-copy">复制链接</button></p>
       <p>状态：<span class="badge ${flow.status === 'approved' ? 'ok' : flow.status === 'pending' ? 'accent' : 'bad'}">${esc(st)}</span>
       ${flow.email ? ' · ' + esc(flow.email) : ''}${flow.error ? ' · ' + esc(flow.error) : ''}</p>
+      ${flow.diagnostic ? `<p class="muted small">${esc(flow.diagnostic)}</p>` : ''}
       <p class="muted small">有效期至 ${esc(fmtTime(flow.expiresAt))}。批准使用的是该浏览器会话，请确认登录的是正确账号。</p>`;
     const copy = $('#da-copy');
     if (copy) copy.onclick = () => navigator.clipboard.writeText(flow.activationUrl).then(() => toast('已复制'));
@@ -1288,6 +1289,7 @@ async function factoryLogin(opts = {}) {
       <button type="button" class="btn ghost small" id="fl-copy">复制链接</button></p>
       <p>状态：<span class="badge ${flow.status === 'approved' ? 'ok' : flow.status === 'pending' ? 'accent' : 'bad'}">${esc(st)}</span>
       ${flow.email ? ' · ' + esc(flow.email) : ''}${flow.error ? ' · ' + esc(flow.error) : ''}</p>
+      ${flow.diagnostic ? `<p class="muted small">${esc(flow.diagnostic)}</p>` : ''}
       <p class="muted small">有效期至 ${esc(fmtTime(flow.expiresAt))}。批准后服务器会用 WorkOS 返回的 access/refresh token 建号，访问令牌到期自动续期。</p>`;
     const copy = $('#fl-copy');
     if (copy) copy.onclick = () => navigator.clipboard.writeText(url).then(() => toast('已复制'));

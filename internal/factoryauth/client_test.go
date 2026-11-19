@@ -77,3 +77,22 @@ func TestDeniedAndInvalidRefresh(t *testing.T) {
 		t.Fatal("invalid grant", err)
 	}
 }
+
+func jwtIss(iss string) string {
+	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"`+iss+`","sub":"u"}`)) + ".sig"
+}
+
+func TestEnvironmentOf(t *testing.T) {
+	cases := map[string]string{
+		jwtIss("https://api.workos.com/user_management/" + ProductionClientID): "production",
+		jwtIss("https://api.workos.com/user_management/" + DevClientID):        "development",
+		jwtIss("https://api.workos.com/user_management/client_other"):          "unknown",
+		jwtIss("https://api.workos.com/"):                                      "unknown",
+		"opaque-token":                                                         "",
+	}
+	for tok, want := range cases {
+		if got := EnvironmentOf(tok); got != want {
+			t.Fatalf("EnvironmentOf(%q) = %q, want %q", tok, got, want)
+		}
+	}
+}

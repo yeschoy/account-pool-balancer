@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,6 +30,10 @@ type factoryLoginFlow struct {
 	AccountID               string    `json:"accountId,omitempty"`
 	Email                   string    `json:"email,omitempty"`
 	Updated                 bool      `json:"updated,omitempty"`
+	// Diagnostic explains a failed token exchange in terms the operator can
+	// act on (wrong WorkOS client, expired token, proxy egress). It never
+	// contains a token.
+	Diagnostic string `json:"diagnostic,omitempty"`
 
 	deviceCode    string
 	interval      int
@@ -190,8 +195,11 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 			}
 			continue // transient network error; keep polling until expiry
 		}
-		userID, email, org, err := s.factoryWhoamiOAuth(ctx, tok, f.proxyURL)
+		userID, email, org, err := s.factoryWhoamiOAuth(ctx, tok, f.proxyURL, f.ID)
 		if err != nil {
+			s.factoryLogins.mu.Lock()
+			f.Diagnostic = s.factoryLoginDiagnostic(tok)
+			s.factoryLogins.mu.Unlock()
 			setStatus("failed", err.Error())
 			return
 		}
@@ -208,15 +216,36 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 	}
 }
 
+// factoryLoginDiagnostic records the non-secret facts that explain a rejected
+// login: which WorkOS client minted the token, its expiry, and whether a proxy
+// carried the whoami call.
+func (s *Server) factoryLoginDiagnostic(tok factoryauth.Token) string {
+	env := factoryauth.EnvironmentOf(tok.AccessTokenRaw)
+	parts := []string{"WorkOS客户端=" + env}
+	if !tok.ExpiresAt.IsZero() {
+		parts = append(parts, "令牌有效期="+tok.ExpiresAt.Format(time.RFC3339))
+	}
+	if env == "development" {
+		parts = append(parts, "该令牌由 Factory 的 development client 签发，api.factory.ai 只接受生产 client 的令牌（401）")
+	}
+	return strings.Join(parts, "；")
+}
+
 // factoryWhoamiOAuth validates a freshly issued access token against Factory's
-// whoami and reads the identity the account should be stored under.
-func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, proxy string) (userID, email, org string, err error) {
+// whoami and reads the identity the account should be stored under. The request
+// mirrors the captured droid call exactly (Bearer, org, whoami-extended, Bun UA,
+// Accept */*) and nothing else.
+func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, proxy, label string) (userID, email, org string, err error) {
 	cfg := s.cfg.Get()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.Factory.BaseURL+"/api/cli/whoami", nil)
 	if err != nil {
 		return "", "", "", errors.New("Factory whoami request failed")
 	}
-	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+	bearer := tok.AccessToken
+	if bearer == "" {
+		bearer = tok.AccessTokenRaw
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", cfg.Factory.EffectiveManagementUserAgent())
 	req.Header.Set("X-Factory-Whoami-Extended", "true")
@@ -225,10 +254,13 @@ func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, 
 	}
 	resp, err := s.factoryHTTPClient(cfg, proxy).Do(req)
 	if err != nil {
+		log.Printf("factory login %s: whoami transport error (proxy=%s): %v", label, egressLabel(proxy), err)
 		return "", "", "", errors.New("Factory whoami 网络请求失败")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Printf("factory login %s: whoami HTTP %d (proxy=%s) body=%q", label, resp.StatusCode, egressLabel(proxy), strings.TrimSpace(string(detail)))
 		return "", "", "", fmt.Errorf("Factory whoami HTTP %d", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
