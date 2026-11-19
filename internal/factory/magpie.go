@@ -101,8 +101,16 @@ func harnessAt(text string, i int) int {
 	default:
 		return 0
 	}
-	if next := i + len(word); next < len(text) && (isIdentByte(text[next]) || text[next] == '-' && next+0 < len(text) && text[next+1] >= 'a' || text[next] == '/' || text[next] == '.') {
-		return 0
+	// A trailing character that names a file, an identifier or a compound
+	// keeps the word as it is; a sentence's full stop does not.
+	if next := i + len(word); next < len(text) {
+		c := text[next]
+		switch {
+		case isIdentByte(c), c == '/', c == '\\', c == '-':
+			return 0
+		case c == '.' && next+1 < len(text) && isIdentByte(text[next+1]):
+			return 0
+		}
 	}
 	return len(word)
 }
