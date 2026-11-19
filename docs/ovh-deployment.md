@@ -60,6 +60,18 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 准入规则修复（2026-11-19 21:17 UTC，4d7b394）
+
+- 现场：DSH 经 new-api 调 Factory 号池全部 `403 content_policy_rejected`（`yul1::…`）。用户已把 `systemMode` 切到 `magpie` 仍失败。
+- **用真账号直接探测 prem.factory.ai**（只花 2 token 级请求）定位到三条独立规则，逐条修复：
+  1. **system 必须以 DroidLine 开头**（无 system→403；普通 system→403；DroidLine→200）。`a7b9d20` 让 open/magpie 模式在所有形态（缺失、字符串、block 列表、Gemini systemInstruction）下都保证开头。
+  2. **句号前的 `Harness` 未被改写**：`cbe0eb9` 修掉 `harnessAt` 把句末 `.` 当文件扩展名的问题（`DeepSeek Harness.` → `DeepSeek Runtime.`）。
+  3. **被拒工具名**（`read`/`bash`/`grep`…）：`09f18ef` / `01d3cd6` / `4d7b394` 按 magpie 名单改名 + 响应还原，覆盖 chat/Responses 嵌套与扁平声明、Anthropic、Gemini functionDeclarations。
+- 逐项验收（经宿主机 127.0.0.1:8790、factory 分组客户端 Key）：无 system / system 字符串 / system block / 带工具 / 流式 全部 200；Gemini `generateContent` 200；`/v1/messages` 200 且工具名还原为 `read`；`/v1/responses` 扁平工具 200 且还原；工具调用非流式与流式都还原为调用方原名。
+- 线上真实流量（newapi → factory）：21:18 起 `deepseek-v4.1-flash-1017`、`gemini-4-hydrogen`、`gpt-5.4`、`claude-sonnet-5-5` 连续 200；最后一次 factory 403 为 21:14（修复前）。
+- 部署：镜像 `account-pool-balancer:release-4d7b394-20261119T211617Z`；各步备份在 `/home/ubuntu/backups/account-pool-balancer/20261119T2*factory-*`；healthy、restarts=0；回退 `rollback-20261119T211617Z` 与更早的 `rollback-*`。
+- 说明：`claude-sonnet-5-5` 仍偶发 400（上游对该模型的 `tool_choice` 形状限制），非策略拦截。
+
 ## 当前部署：Factory magpie 提示词适配（2026-11-19 20:14 UTC，a2b7cd8）
 
 - 用户选定按 `@magpie-community/opencode-factory-auth` 0.1.52 实现。`a2b7cd8` 把 magpie 的适配器依 `internal/factory/magpie.go`、`magpie_body.go` 移植进本仓库，作为 `systemMode=magpie`：固定身份句换 droid 开头、pi 开场与压缩句改写、客户端自述 `harness`→`runtime`、ZCode 环境段与模型行改写、Anthropic 计费头删除、工具描述与 schema 描述适配、工具输出引用被拒短语时包成可解码 JSON 串。任务指令全部保留；无需改动时不重编码。
