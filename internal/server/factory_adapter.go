@@ -209,6 +209,14 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
+	var aliases map[string]string
+	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
+		// Factory refuses a function declaration whose name it blocks, so the
+		// tool is renamed here and renamed back in the reply.
+		if aliased, found := factory.AliasToolNames(body); len(found) > 0 {
+			body, aliases = aliased, found
+		}
+	}
 	var b []byte
 	var err error
 	switch cfg.Factory.EffectiveSystemMode() {
@@ -231,7 +239,7 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if len(b) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
 	}
-	return &factoryRequestPlan{body: b, model: model, generate: true, stream: stream}, nil
+	return &factoryRequestPlan{body: b, model: model, generate: true, stream: stream, toolAliases: aliases}, nil
 }
 
 // prepareFactoryEmbeddings accepts OpenAI's embeddings body unchanged. Factory

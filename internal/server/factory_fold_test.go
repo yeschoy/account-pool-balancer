@@ -156,3 +156,27 @@ func TestFactoryMagpieAlwaysOpens(t *testing.T) {
 		t.Fatalf("gemini opening missing: %s", up)
 	}
 }
+
+// Factory refuses a request that declares a tool named read; the outbound
+// body must carry a name it accepts, and the reply must carry the caller's.
+func TestFactoryAliasesRefusedToolNames(t *testing.T) {
+	e := newFactoryEnv(t)
+	setFactoryMode(t, e, func(c *config.Config) { c.Factory.SystemMode = config.SystemMagpie })
+	body := `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}],"tools":[` +
+		`{"type":"function","function":{"name":"read","description":"Read a file."}}]}`
+	e.do(t, "/v1/chat/completions", body, nil)
+	up := e.snapshot()[0].body
+	if strings.Contains(up, `"name":"read"`) {
+		t.Fatalf("refused tool name still sent: %s", up)
+	}
+	if !strings.Contains(up, `"name":"Read"`) {
+		t.Fatalf("tool not renamed to droid's: %s", up)
+	}
+
+	// The Gemini route carries its declarations in functionDeclarations.
+	e.do(t, "/v1beta/models/gemini-4-carbon:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[{"name":"grep","description":"Search."}]}]}`, nil)
+	up = e.snapshot()[1].body
+	if strings.Contains(up, `"name":"grep"`) || !strings.Contains(up, `"name":"Grep"`) {
+		t.Fatalf("gemini declaration not renamed: %s", up)
+	}
+}
