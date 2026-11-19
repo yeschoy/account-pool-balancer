@@ -355,3 +355,37 @@ func jwtClaims(token string) map[string]string {
 	}
 	return out
 }
+
+// JWTClaim reads one unverified claim from a WorkOS access token. The token is
+// never validated here; callers only use it to name a rejected account.
+func JWTClaim(token, name string) string { return jwtClaims(token)[name] }
+
+// Get performs an authenticated WorkOS User Management GET. It exists for the
+// organization lookups a device login needs; token exchange stays on post.
+func (c *Client) Get(ctx context.Context, path, accessToken string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	ua := c.UserAgent
+	if strings.TrimSpace(ua) == "" {
+		ua = "Bun/1.4.4"
+	}
+	req.Header.Set("User-Agent", ua)
+	hc := c.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
+}

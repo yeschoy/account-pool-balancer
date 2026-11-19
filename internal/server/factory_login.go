@@ -42,6 +42,12 @@ type factoryLoginFlow struct {
 	userAgent     string
 	targetAccount string
 	cancel        context.CancelFunc
+
+	// pendingRefresh/pendingOrg remember the WorkOS token that whoami
+	// rejected for missing an organization, so a retry can re-mint it with
+	// that organization rather than making the user approve a new code.
+	pendingRefresh string
+	pendingOrg     string
 }
 
 type factoryLoginFlows struct {
@@ -197,23 +203,96 @@ func (s *Server) pollFactoryLogin(ctx context.Context, f *factoryLoginFlow, c *f
 		}
 		userID, email, org, err := s.factoryWhoamiOAuth(ctx, tok, f.proxyURL, f.ID)
 		if err != nil {
+			var noOrg *factoryNoOrganizationError
+			if errors.As(err, &noOrg) && tok.RefreshToken != "" {
+				// Factory will only serve a token bound to an organization.
+				// Re-mint it against the organization the claims advertise
+				// (or the single organization WorkOS reports) instead of
+				// asking the user to approve another code.
+				if retry, rerr := s.retryFactoryLoginWithOrg(ctx, f, tok, noOrg); rerr == nil {
+					if u2, e2, o2, w2 := s.factoryWhoamiOAuth(ctx, retry, f.proxyURL, f.ID); w2 == nil {
+						tok, userID, email, org = retry, u2, e2, o2
+						goto store
+					}
+				}
+			}
 			s.factoryLogins.mu.Lock()
 			f.Diagnostic = s.factoryLoginDiagnostic(tok)
 			s.factoryLogins.mu.Unlock()
 			setStatus("failed", err.Error())
 			return
 		}
-		accountID, updated, err := s.storeFactoryOAuth(f, tok, userID, email, org)
+	store:
+		accountID, updated, storeErr := s.storeFactoryOAuth(f, tok, userID, email, org)
 		s.factoryLogins.mu.Lock()
 		f.deviceCode = ""
-		if err != nil {
-			f.Status, f.Error = "failed", err.Error()
+		if storeErr != nil {
+			f.Status, f.Error = "failed", storeErr.Error()
 		} else {
 			f.Status, f.AccountID, f.Email, f.Updated = "approved", accountID, email, updated
 		}
 		s.factoryLogins.mu.Unlock()
 		return
 	}
+}
+
+// factoryNoOrganizationError is Factory's whoami refusing a valid token because
+// the WorkOS user is not in a Factory organization. It carries the candidate
+// organization so the login can re-mint the token without a new approval.
+type factoryNoOrganizationError struct {
+	candidates []string
+	localOrgs  []string
+	email      string
+}
+
+func (e *factoryNoOrganizationError) Error() string {
+	msg := "Factory 未把该账号关联到任何组织（User not affiliated with an organization）"
+	if e.email != "" {
+		msg += "：" + e.email
+	}
+	if len(e.candidates) > 0 {
+		msg += "。工作区已有的组织：" + strings.Join(e.candidates, "、") + "，令牌没有绑定到其中任何一个"
+	}
+	if len(e.localOrgs) > 0 {
+		msg += "。WorkOS 账号下的组织：" + strings.Join(e.localOrgs, "、")
+	} else if len(e.candidates) == 0 {
+		msg += "。WorkOS 也没有返回任何组织"
+	}
+	msg += "。请在 Factory 控制台确认该账号的组织后重新授权「" + e.email + "」；此账号未入池"
+	return msg
+}
+
+// retryFactoryLoginWithOrg exchanges the refresh token for an access token
+// bound to one of the organizations the login learned about. It returns the
+// retried token, or an error when no organization is known or WorkOS refuses.
+func (s *Server) retryFactoryLoginWithOrg(ctx context.Context, f *factoryLoginFlow, tok factoryauth.Token, noOrg *factoryNoOrganizationError) (factoryauth.Token, error) {
+	if len(noOrg.candidates) == 0 || tok.RefreshToken == "" {
+		return factoryauth.Token{}, errors.New("no candidate organization")
+	}
+	client := s.factoryAuthClient(f.proxyURL)
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var lastErr error
+	for _, org := range noOrg.candidates {
+		retried, err := client.Refresh(rctx, tok.RefreshToken, org)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if retried.OrgID == "" {
+			retried.OrgID = org
+		}
+		// Keep the original refresh token when WorkOS did not rotate it.
+		if retried.RefreshToken == "" {
+			retried.RefreshToken = tok.RefreshToken
+		}
+		log.Printf("factory login %s: retrying whoami with organization %s", f.ID, org)
+		return retried, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("organization retry failed")
+	}
+	return factoryauth.Token{}, lastErr
 }
 
 // factoryLoginDiagnostic records the non-secret facts that explain a rejected
@@ -261,6 +340,17 @@ func (s *Server) factoryWhoamiOAuth(ctx context.Context, tok factoryauth.Token, 
 	if resp.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		log.Printf("factory login %s: whoami HTTP %d (proxy=%s) body=%q", label, resp.StatusCode, egressLabel(proxy), strings.TrimSpace(string(detail)))
+		if resp.StatusCode == http.StatusUnauthorized && strings.Contains(string(detail), "affiliated with an organization") {
+			// Factory accepted the token but will not serve it: the WorkOS user
+			// belongs to no Factory organization. Whoami cannot name the
+			// account, so the claims and WorkOS evidence are the only identity
+			// the gateway has. Report candidates so the caller can retry the
+			// token against a known organization.
+			email := firstNonEmpty(tok.Email, factoryauth.JWTClaim(tok.AccessTokenRaw, "email"))
+			local := s.factoryWorkOSOrganizations(ctx, tok, proxy, label)
+			candidates := factoryLocalOrganizations(s.cfg.Get(), "")
+			return "", "", "", &factoryNoOrganizationError{candidates: candidates, localOrgs: local, email: email}
+		}
 		return "", "", "", fmt.Errorf("Factory whoami HTTP %d", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
@@ -428,4 +518,99 @@ func (s *Server) factoryAccountToken(ctx context.Context, cfg *config.Config, a 
 	a.FactoryAccessExpires = tok.ExpiresAt
 	a.FactoryWorkOSOrgID = firstNonEmpty(tok.OrgID, a.FactoryWorkOSOrgID)
 	return a, nil
+}
+
+// factoryOrgCandidates lists organizations the login could bind the token to:
+// the token claims first, then the ones WorkOS reports for this user.
+func factoryOrgCandidates(tok factoryauth.Token) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(org string) {
+		org = strings.TrimSpace(org)
+		if org == "" || seen[org] {
+			return
+		}
+		seen[org] = true
+		out = append(out, org)
+	}
+	add(tok.OrgID)
+	for _, name := range []string{"org_id", "organization_id", "external_org_id"} {
+		add(factoryauth.JWTClaim(tok.AccessTokenRaw, name))
+	}
+	return out
+}
+
+// factoryLocalOrganizations lists the WorkOS organizations already configured
+// on Factory accounts, used only to explain a "no organization" rejection.
+func factoryLocalOrganizations(cfg *config.Config, exclude string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range cfg.Accounts {
+		if a.ID == exclude || a.Provider != config.ProviderFactory || a.FactoryWorkOSOrgID == "" || seen[a.FactoryWorkOSOrgID] {
+			continue
+		}
+		seen[a.FactoryWorkOSOrgID] = true
+		out = append(out, a.FactoryWorkOSOrgID)
+	}
+	return out
+}
+
+// factoryWorkOSOrganizations asks WorkOS which organizations this user belongs
+// to. It is diagnostic only: a failure returns nil, never an error path.
+func (s *Server) factoryWorkOSOrganizations(ctx context.Context, tok factoryauth.Token, proxy, label string) []string {
+	token := firstNonEmpty(tok.AccessTokenRaw, tok.AccessToken)
+	if token == "" {
+		return nil
+	}
+	client := s.factoryAuthClient(proxy)
+	get := func(path string, decode func([]byte) []string) []string {
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		b, status, err := client.Get(rctx, path, token)
+		if err != nil || status != http.StatusOK {
+			log.Printf("factory login %s: workos %s HTTP %d: %v", label, path, status, err)
+			return nil
+		}
+		return decode(b)
+	}
+	if orgs := get("/organizations", workosOrgIDs); len(orgs) > 0 {
+		return orgs
+	}
+	return get("/organizations", workosMembershipOrgIDs)
+}
+
+func workosOrgIDs(b []byte) []string {
+	var doc struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(doc.Data))
+	for _, o := range doc.Data {
+		if o.ID != "" {
+			out = append(out, o.ID)
+		}
+	}
+	return out
+}
+
+func workosMembershipOrgIDs(b []byte) []string {
+	var doc struct {
+		Data []struct {
+			OrganizationID string `json:"organization_id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(doc.Data))
+	for _, m := range doc.Data {
+		if m.OrganizationID != "" {
+			out = append(out, m.OrganizationID)
+		}
+	}
+	return out
 }
