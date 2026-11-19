@@ -136,20 +136,28 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 			return nil, err
 		}
 	}
-	// Factory's usage policy reads the system channel: droid's own opening is
-	// accepted, other content is refused, and a foreign client's prompt is
-	// either opened with droid's line or moved into the first user turn.
+	// Factory refuses any system channel that does not open with droid's line:
+	// a measured body with no system at all, and one whose system is an
+	// ordinary prompt, are both 403 content_policy_rejected. Every mode but
+	// keep therefore ends with the opening in place; keep sends what the
+	// caller wrote and accepts that Factory may refuse it.
 	switch cfg.Factory.EffectiveSystemMode() {
 	case config.SystemFold:
 		plan.body = factory.FoldSystemIntoUser(string(to), plan.body)
-	case config.SystemMagpie:
-		// magpie's adapters rewrite only the fixed client sentences and keep
-		// every task instruction, which is the shape Factory accepts.
-		if adapted, changed := factory.MagpieAdapt(string(to), plan.body); changed {
-			plan.body = adapted
-			plan.adapted = true
+	case config.SystemKeep:
+		// unchanged
+	default:
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+			// magpie's adapters rewrite only the fixed client sentences and
+			// keep every task instruction.
+			if adapted, changed := factory.MagpieAdapt(string(to), plan.body); changed {
+				plan.body = adapted
+				plan.adapted = true
+			}
 		}
-	case config.SystemOpen:
+		// Guarantee the opening the gateway requires, whatever shape the
+		// caller's system channel arrived in (message, string, block list, or
+		// absent entirely).
 		plan.body = factory.OpenDroidBody(string(to), plan.body)
 	}
 	// A conversation that quotes another agent's prompt is refused wherever it
@@ -192,10 +200,19 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	}
 	var b []byte
 	var err error
-	if cfg.Factory.EffectiveSystemMode() == config.SystemFold {
+	switch cfg.Factory.EffectiveSystemMode() {
+	case config.SystemFold:
 		b, err = factory.FoldGeminiSystem(model, body)
-	} else {
-		b, err = factory.OpenGeminiBodyWith(model, body, cfg.Factory.EffectiveDroidBody())
+	case config.SystemKeep:
+		// Only the model placement the captured route needs.
+		b, err = factory.OpenGeminiBodyWith(model, body, false)
+	default:
+		// Factory requires the opening on this route too, so open mode and
+		// magpie mode both keep the systemInstruction.
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+			body = factory.MagpieAdaptGemini(body)
+		}
+		b, err = factory.OpenGeminiBodyWith(model, body, true)
 	}
 	if err != nil {
 		return nil, err
@@ -300,10 +317,19 @@ func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*
 	}
 	var b []byte
 	var err error
-	if cfg.Factory.EffectiveSystemMode() == config.SystemFold {
+	switch cfg.Factory.EffectiveSystemMode() {
+	case config.SystemFold:
 		b, err = factory.FoldGeminiSystem(model, body)
-	} else {
-		b, err = factory.OpenGeminiBodyWith(model, body, cfg.Factory.EffectiveDroidBody())
+	case config.SystemKeep:
+		// Only the model placement the captured route needs.
+		b, err = factory.OpenGeminiBodyWith(model, body, false)
+	default:
+		// Factory requires the opening on this route too, so open mode and
+		// magpie mode both keep the systemInstruction.
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+			body = factory.MagpieAdaptGemini(body)
+		}
+		b, err = factory.OpenGeminiBodyWith(model, body, true)
 	}
 	if err != nil {
 		return nil, err

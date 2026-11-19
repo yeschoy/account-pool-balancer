@@ -368,3 +368,50 @@ func marshalString(s string) (string, error) {
 
 // QuotedToolPrefix explains the wrapper to the model.
 const QuotedToolPrefix = "Tool output encoded as a JSON string. Decode the JSON string to recover the exact original text before using it:\n"
+
+// MagpieAdaptGemini applies the prompt adapters to a Google generateContent
+// body's systemInstruction. The generated route keeps the instruction in
+// systemInstruction.parts, so only those text parts are rewritten; the user's
+// own contents are left alone and the opening is added by OpenGeminiBodyWith.
+func MagpieAdaptGemini(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var m object
+	if decode(body, &m) != nil || m == nil {
+		return body
+	}
+	changed := false
+	switch si := m["systemInstruction"].(type) {
+	case string:
+		if adapted := PromptText(si); adapted != si {
+			m["systemInstruction"] = adapted
+			changed = true
+		}
+	case map[string]any:
+		if parts, ok := si["parts"].([]any); ok {
+			for _, raw := range parts {
+				part, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				s, ok := part["text"].(string)
+				if !ok {
+					continue
+				}
+				if adapted := PromptText(s); adapted != s {
+					part["text"] = adapted
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return body
+	}
+	out, err := marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
+}

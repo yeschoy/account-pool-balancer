@@ -126,3 +126,33 @@ func TestFactoryMagpieSystemMode(t *testing.T) {
 		t.Fatalf("instructions lost: %s", up)
 	}
 }
+
+// Factory refuses a body whose system channel is absent or does not open with
+// droid's line (measured: no system -> 403, "You are a helpful assistant." ->
+// 403, droid's line -> 200). Every mode but keep must therefore guarantee the
+// opening, including when the caller sends no system message at all.
+func TestFactoryMagpieAlwaysOpens(t *testing.T) {
+	e := newFactoryEnv(t)
+	setFactoryMode(t, e, func(c *config.Config) { c.Factory.SystemMode = config.SystemMagpie })
+
+	// No system message at all.
+	e.do(t, "/v1/chat/completions", `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`, nil)
+	up := e.snapshot()[0].body
+	if !strings.Contains(up, `"role":"system"`) || !strings.Contains(up, factory.DroidLine) {
+		t.Fatalf("no system opening added: %s", up)
+	}
+
+	// System content as a block list.
+	e.do(t, "/v1/chat/completions", `{"model":"glm-5.3","messages":[{"role":"system","content":[{"type":"text","text":"You are a helpful assistant."}]},{"role":"user","content":"hi"}]}`, nil)
+	up = e.snapshot()[1].body
+	if !strings.Contains(up, factory.DroidLine) {
+		t.Fatalf("block system not opened: %s", up)
+	}
+
+	// Gemini keeps its systemInstruction and opens with droid's line.
+	e.do(t, "/v1beta/models/gemini-4-carbon:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, nil)
+	up = e.snapshot()[2].body
+	if !strings.Contains(up, "systemInstruction") || !strings.Contains(up, factory.DroidLine) {
+		t.Fatalf("gemini opening missing: %s", up)
+	}
+}
