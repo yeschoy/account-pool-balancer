@@ -48,6 +48,9 @@ func TestCopyRequestHeadersDropsEveryClientAddressSpelling(t *testing.T) {
 		"Client-IP", "X-Originating-IP", "X-Cluster-Client-IP", "X-Remote-IP",
 		"X-Remote-Addr", "Via", "X-ProxyUser-IP", "Fastly-Client-IP",
 		"X-Akamai-Client-IP", "X-Bluecoat-Via", "X-Hermes-Client-IP",
+		"Proxy-Client-IP", "WL-Proxy-Client-IP", "HTTP-Client-IP", "X-True-IP",
+		"X-Envoy-External-Address", "X-Original-Forwarded-For",
+		"X-Azure-ClientIP", "X-Azure-SocketIP", "X-MS-Client-IP",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := http.Header{}

@@ -2,9 +2,36 @@
 
 ## 状态与边界
 
-本版本参考 [magpie-community/plugins 的 Factory 插件](https://github.com/magpie-community/plugins/tree/main/packages/factory)，固定研究版本 `d24fd5d1824e1078e7c8c56732813f8263fcf728`。采用认证、模型路由元数据、只读身份/额度接口、Fast Mode字段映射，以及`anthropic-tools.mjs`的工具schema包装/结果解包；不是该插件的完整移植。MIT许可与来源见`THIRD_PARTY_NOTICES.md`。另复用本项目的有限协议桥接，而非将该插件误描述为通用协议桥。
+出口 IP/网络指纹审计见 [factory-egress-privacy.md](factory-egress-privacy.md)。本版本参考 [magpie-community/plugins 的 Factory 插件](https://github.com/magpie-community/plugins/tree/main/packages/factory)，固定研究版本 `d24fd5d1824e1078e7c8c56732813f8263fcf728`。采用认证、模型路由元数据、只读身份/额度接口、Fast Mode字段映射、`anthropic-tools.mjs`的工具schema包装/结果解包，以及Droid客户端请求头与系统提示词开头（`factoryHeaders`/`droidBody`/`anthropicBody`）；不是该插件的完整移植。MIT许可与来源见`THIRD_PARTY_NOTICES.md`。另复用本项目的有限协议桥接，而非将该插件误描述为通用协议桥。
 
-**没有移植**：Droid身份/客户端伪装、系统提示词或工具结果改写、内容策略拒绝后的重新包装、组织或账号轮换绕过。Factory模型网关不是其Public API中的普通公开模型服务契约；上游可以拒绝第三方客户端。本版本不会为取得200隐藏这一限制。
+**没有移植**：pi/ZCode等第三方客户端的固定句式替换、工具结果/历史内容改写（除下述Droid开头行外）、内容策略拒绝后的重新包装、组织或账号轮换绕过、413剥图、多模态扩展。自定义子集不包含多模态扩展。Factory模型网关不是其Public API中的普通公开模型服务契约；即使补齐客户端身份，上游仍可因字段、套餐或区域策略拒绝。本版本不会为取得200隐藏这一限制。本版本另实现了网关侧的 `auto`/`auto-fast` 虚拟选择、Gemini `countTokens`、OpenAI `Embeddings` 与 Responses WebSocket 透传；它们不属于插件原始移植，边界见下文。
+
+### Droid 客户端身份（按 1.14.0 本地抓包对齐）
+
+Factory 只把订阅的模型请求视为 Droid 发出的请求（插件 README “Requests from other agents”，magpie #242/#506），但客户端身份必须与真实 droid 一致，而不是照抄插件的旧常量。`docs/factory-cli-endpoints.md` 的 3.66 小时、399 条 HTTP / 27 次 LLM 抓包给出了当前行为：
+
+| 项 | 取值 | 来源 |
+|---|---|---|
+| 版本 | `1.14.0` | 抓包 `x-client-version` / `factory-cli/1.14.0` |
+| 推理 `User-Agent` | `factory-cli/1.14.0`，仅 `/api/llm/*` | 抓包；与其它 HTTP 混用即破绽 |
+| 管理/额度 `User-Agent` | `Bun/1.4.4` | 抓包 whoami、billing、settings、tools、telemetry |
+| `X-Factory-Client` / `X-Client-Version` | `cli` / `1.14.0`（whoami 例外，见下） | 抓包 |
+| `X-Factory-Org-Id` | 该账号 whoami 读到的 `orgId`，没有则不发送 | 抓包 |
+| `X-Factory-Request-Surface` | 可配置 `cli_tui`（默认）或 `cli_exec` | 抓包两种形态 |
+| `X-Factory-Exec-Output-Format` | `cli_exec` 时为 `json` | 抓包 |
+| `x-api-provider` | 模型配置的 upstream | 抓包 |
+| `x-session-id` / `x-assistant-message-id` | 由网关自身会话指纹派生的 UUID 形状值（路径+首条 system/user 的 HMAC；message 另含本次请求体） | 抓包；不转发调用方值 |
+| `x-provider-routing-source` | `configured_order`（本网关按模型配置选上游；抓包的 `session_lock` 表示 droid 复用会话锁定的供应商，本网关不声称） | 抓包 |
+| `traceparent` | `00-<32hex>-<16hex>-01`；同会话复用 trace，逐消息换 span | 抓包 |
+| `OpenAI-Platform` | 可选设置；抓包值为 `org-<base64>`。whoami 不返回该映射且抓包值只属于一个组织，因此默认不发送，不伪造 | 抓包 |
+| `X-Api-Key` | `placeholder`（仅 `/llm/a`，与 Bearer 并存） | 抓包 |
+| 系统提示词开头 | `You are Droid, an AI software engineering agent built by Factory.` | `droidBody`/`anthropicBody` |
+
+调用方自带的 `User-Agent`、`X-Factory-*`、`X-Client-Version`、`X-Session-Id`、`X-Provider-Routing-Source`、`OpenAI-Platform`、`Traceparent`、`X-Anthropic-Billing-Header` 一律丢弃后再写入上表值，因此下游客户端指纹不会外泄到上游。
+
+**whoami 与 billing 的头部不同**（抓包逐端点差异）：whoami 只带 Bearer、`X-Factory-Whoami-Extended: true`、当前组织与 `Bun/1.4.4`，**不带** `X-Factory-Client` / `X-Client-Version` / 请求面；billing/limits 带完整业务头（client、version、org、请求面，抓包中时常还有 traceparent）。本项目按端点分别发送，不再用推理 UA 读取额度。
+
+请求体改写只覆盖固定开头：Chat 首个 system 消息前加行、Responses `instructions` 前置、Messages `system` 首块前置并丢弃 Claude Code 的 `x-anthropic-billing-header:` 行（该行后若还有指令则保留）。用户指令、历史、工具 schema、大整数均原样保留（`json.Number` 保证 >2^53 不丢精度）；已符合的请求体逐字节原样发送。
 
 ### 用户授权 Key 的真实接口证据
 
@@ -13,7 +40,7 @@
 | 接口 | 2026-11-17 UTC 实测 | 含义 |
 |---|---|---|
 | `GET https://api.factory.ai/api/cli/whoami` | 200，约1502ms | Key可识别用户和组织，不证明模型授权 |
-| `POST /api/llm/o/v1/chat/completions`，`deepseek-v4.1-flash`，64输出Token上限、无system | 403，`content_policy_rejected`，约2465ms | 被Factory使用策略检查拒绝；未取得模型输出，不通过改写/伪装绕过 |
+| `POST /api/llm/o/v1/chat/completions`，`deepseek-v4.1-flash`，64输出Token上限、无system | 403，`content_policy_rejected`，约2465ms | 该次请求既无 system 也无 Droid 身份头；是否因此被拒未单独分辨 |
 | `GET /api/billing/limits`，17:14UTC | **200**，约1432ms | 普通fk-Key本次确实能读额度，不能长期硬编码未知 |
 
 本次额度：Standard周、月各已用1%；5小时窗口及Core窗口 `windowEnd=null`，表示无活动窗口，不等于完整可用额度。Extra余额0美分，`extraUsageAllowed=true`是上游既有状态；未修改官网偏好。
@@ -24,39 +51,77 @@
 
 顶部「Factory AI」，使用已有概览、账号、下游密钥、导入密钥、路由设置、请求/错误/详情日志。
 
-- `provider=factory`，默认分组`factory`，使用完整`fk-` API Key；其他池不能接受Factory Key。
+- `provider=factory`，默认分组`factory`，支持完整`fk-` API Key，或通过「Factory 授权登录」生成的 WorkOS 设备会话；其他池不能接受Factory Key。
 - 复用账号CRUD、启停、去重批量导入、完整凭据查看/复制、代理、权重/优先级、并发/RPM。管理员读取保留登录/CSRF/no-store边界，凭据不写localStorage；日志脱敏。
 - 批量格式：`fk-example_test_key,账号名,http://127.0.0.1:8080`。示例Key无效。
-- 开放导入使用Factory专属导入密钥，显式`provider=factory`；下游密钥不能导入，导入密钥不能推理。
+- 开放导入使用Factory专属导入密钥，显式`provider=factory`；下游密钥不能导入，导入密钥不能推理。OAuth 账号不通过批量导入创建，只能在控制台设备授权或重新授权。
+
+### Factory 授权登录（WorkOS Device Authorization）
+
+Factory 的登录与刷新走 **WorkOS User Management**，不是 `api.factory.ai/api/auth/*`（实测 404）。本项目使用 WorkOS 设备授权，不依赖桌面端的 `factory-desktop://` 回调，也不允许 `http://localhost` 回调（该 client 未登记，WorkOS 会跳 `redirect-uri-invalid`）：
+
+1. `POST https://api.workos.com/user_management/authorize/device`，`client_id=client_01HNM792M5G5G1A2THWPXKFMXB`，得到 `device_code`、`user_code`、`verification_uri`（`https://auth.factory.ai/device`）和 `verification_uri_complete`。
+2. 控制台展示验证码与链接；用户在浏览器批准后，服务端按 `interval` 轮询 `POST /user_management/authenticate`（`grant_type=urn:ietf:params:oauth:grant-type:device_code`）。
+3. 成功后得到 `access_token` / `refresh_token` / `active_organization_id`；用访问令牌调用 `/api/cli/whoami` 校验身份，再按 WorkOS user id 或 email 建号/更新。
+4. 访问令牌临近过期（JWT `exp` 前 2 分钟）时，用 `grant_type=refresh_token` 刷新；推理、whoami、billing 都使用刷新后的访问令牌。刷新失败使该账号短期冷却/切换，不把 Refresh Token 写进日志或页面。
+
+账号字段：`RuntimeKey` 保存短期 access token，`factoryRefreshToken` 保存续期令牌，`factoryAccessExpiresAt` 保存过期时间，`factoryOrgId` 保存组织。OAuth 账号的 `NativeBindingSource` 按 WorkOS user id 固定，不因 access token 轮换而丢弃额度快照/绑定；控制台账号列表显示「OAuth 授权」徽标，不显示或复制 access/refresh token。重新授权使用账号操作菜单的「Factory 重新授权」。
+
+> 本机验收：真实 WorkOS `authorize/device` 已通过控制台成功签发 device code（`auth.factory.ai/device` 链接可用）；设备批准、token 兑换、pending/approved、拒绝、刷新与额度读取用 Mock 覆盖。未使用真实账号完成一次审批，不能据此声称线上登录已验收。
+
+### 每账号代理池、出口 IP 与 UA
+
+Factory 设置新增：
+
+- **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
+- **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。
+- **默认推理 UA**：账号和 UA 池都没填时使用；默认 `factory-cli/1.14.0`。
+- **管理/额度 UA**：仅用于 whoami、billing、WorkOS 设备码/刷新；默认 `Bun/1.4.4`，不与推理 UA 混用。
+- 「为现有账号分配代理/UA」只填缺失字段，不覆盖已有值；需要重新分配时先清空账号代理/UA 再点。
+
+**实际出口 IP 只由账号代理决定**。`EgressIP` 是出口检查的观察值，不是可设置/伪造的请求头；不同设备要得到不同 IP，必须给它们分配不同代理。代理池小于账号数时会重复使用；控制台对无代理 Factory 账号显示「直连出口」。
+
+同一账号的推理、Gemini、Embeddings、countTokens、WebSocket、whoami/billing、OAuth refresh 都走该账号代理；OAuth 浏览器批准页仍使用用户浏览器 IP。
 
 ## 原生协议与模型
 
-API源站默认`https://api.factory.ai`，也可明确设`https://api.eu.factory.ai`；必须是无路径、凭据、查询、片段的HTTP(S)origin。本地测试可使用HTTP Mock。
+抓包显示 Factory 有两个面：管理面 `api.factory.ai`（whoami、billing、settings、tools、遥测），模型面 `prem.factory.ai`（全部 `/api/llm/*`，含 Responses WebSocket 与 HTTP 回退）。本项目的「管理/额度源站」默认 `https://api.factory.ai`，可明确设 `https://api.eu.factory.ai`；「推理源站」留空时默认 `api.factory.ai` 映射到 `https://prem.factory.ai`，自定义/Mock/代理源站则沿用同一 origin，也可显式填写。两者都必须是无路径、凭据、查询、片段的 HTTP(S) origin。下游 `/v1/responses/ws` 已接入并透传到抓包中的 `wss://prem.../api/llm/o/v1/responses/ws`；HTTP `/v1/responses` 仍保留为回退。WS 升级后不重试，也不计入 HTTP 请求统计。
 
 | 下游路径 | 上游路径 | 路由 |
 |---|---|---|
 | `/v1/chat/completions` | `/api/llm/o/v1/chat/completions` | 开源模型，x-api-provider按配置 |
 | `/v1/responses` | `/api/llm/o/v1/responses` | GPT/OpenAI，Grok/xai |
 | `/v1/messages` | `/api/llm/a/v1/messages` | Claude/anthropic，MiniMax M2.7/fireworks |
-| `GET /v1/models` | 本地配置参考列表 | **不是账号授权目录**，响应标注`configured-reference-not-entitlement` |
+| `POST /v1beta/models/{model}:generateContent` | `/api/llm/g/v1/generate` | Gemini/google，请求体保留`contents/tools/generationConfig`，补`model`与Droid `systemInstruction`；上游SSE时做最小合并后返回JSON，其余原样 |
+| `POST /v1beta/models/{model}:streamGenerateContent` | 同上 | Gemini SSE 透传；上游JSON时包装为单条SSE；无`[DONE]`，以`finishReason`或`promptFeedback`结束 |
+| `POST /v1/models/{model}:generateContent` | 同上 | 同一Google路径的兼容别名 |
+| `POST /v1beta/models/{model}:countTokens` | `/api/llm/g/v1/countTokens` | Gemini 原生计数；补`model`/Droid `systemInstruction`；返回`{totalTokens}`。上游路径按 generate 同族推断，抓包未直接命中 |
+| `POST /v1/embeddings` | `/api/llm/o/v1/embeddings` | OpenAI Embeddings 原样透传；默认`text-embedding-3-large`/openai；不流式、不改写 |
+| `GET /v1/responses/ws` | `wss://…/api/llm/o/v1/responses/ws` | Responses WebSocket 透传；首帧`response.create`决定模型/账号；HTTP CONNECT/SOCKS5 代理；升级后不重试 |
+| `GET /v1/models` | 本地配置参考列表 | **不是账号授权目录**，响应标注`configured-reference-not-entitlement`；另列`auto`/`auto-fast`虚拟模型 |
 
-模型路由JSON数组 `{id,protocol,upstream}` 可编辑、保存、重载；空数组真正清空。缺省来自固定版本参考，不发带Key的未知`/models`请求、不偷偷抓取客户端/猜测模型路由。未知模型或路径本地拒绝。Gemini generate、auto、Embeddings尚未实现。
+模型路由JSON数组 `{id,protocol,upstream}` 可编辑、保存、重载；空数组真正清空。缺省综合固定版本参考与抓包：`claude-sonnet-5-5`/`claude-haiku-4-5-20251001` 为 `bedrock_anthropic`，`kimi-k3.1-pro` 为 `databricks`，`deepseek-v4.1-flash-1017` 为 `baseten`，`gpt-6.2-sol` 为 `openai`；Gemini `gemini-4-argon`/`gemini-4-carbon`/`gemini-4-hydrogen`/`gemini-3.x-flash` 为 `generate`/`google`；其余未观测模型保留参考值。`protocol=generate` 只接受 `upstream=google`。设置页「填入抓包参考路由」可把新默认值写入编辑框，保存后才生效。已有自定义目录不会重排/覆盖，但重新加载时会**自动补入缺失的 Gemini generate 与 embedding 条目**，不需要再点按钮。不发带Key的未知`/models`请求、不偷偷抓取客户端/猜测模型路由。未知模型或路径本地拒绝。
+
+- **auto / auto-fast**：droid 客户端自己选 auto；网关侧把下游传入的`auto`解析为同协议第一条已配置路由，`auto-fast`解析为第一条`-fast`路由。`/v1/models`列出`auto`，存在`-fast`路由时再列`auto-fast`，响应标注`gateway-virtual-auto`；这不是 Factory 服务端 Router 的复刻。
+- **countTokens**：按 Gemini 原生`/v1beta/models/{model}:countTokens`接收，转发到`/api/llm/g/v1/countTokens`并补`model`与Droid systemInstruction；响应`{totalTokens}`。上游路径未在抓包中出现，属于同族推断。
+- **Embeddings**：`/v1/embeddings`原样转发到`/api/llm/o/v1/embeddings`，只接受配置为`embeddings`/`openai`的模型（默认`text-embedding-3-large`）；不流式、不做协议转换。
+- **Responses WebSocket**：`GET /v1/responses/ws`先认证下游Key，读取首帧`response.create`的`model`，租用账号后连接`wss://prem.../api/llm/o/v1/responses/ws`并原样双向转发文本帧。支持HTTP CONNECT/SOCKS5账号代理；升级发出后不重试，也不计入HTTP请求统计。
 
 ### 插件适配与有限跨协议转换（续轮）
 
 - **参考插件的工具schema转换**：Messages工具根级`anyOf/oneOf/allOf`整体包到必填`arguments`对象里，改写schema位置的本地`$ref/$dynamicRef`指针；独立`$id`、anchor以及`const/default/examples`中的普通数据不误改。历史`tool_use.input`、`input_examples`同步包装；调用ID、用户指令和工具结果保持。无`$id`的递归资源拒绝而非错误搬移。
 - **返回还原**：仅当前请求确实包装的工具解包；真实调用者字段`arguments`不误拆。JSON与原生Messages SSE均保留原工具ID、Unicode、大整数及上游usage。SSE只缓存包装工具参数，文本/推理/普通工具继续流式输出；每工具参数4MiB、并行总16MiB、单帧8MiB上限。无效/截断参数不能当作完成，也不换号重放或降健康；已提交HTTP200时追加错误事件，不伪造终止成功。
 - **Fast Mode**：参考模型列表包含Opus/GPT的Fast条目。显式Fast模型补`speed=fast`及Anthropic beta，或`service_tier=priority`；对基座模型显式请求fast/priority且对应Fast模型已配置时映射。普通请求不自动升级；GLM-5.2 Fast是独立Chat模型，不由priority切换。Fast可能更贵，不自动接受新付费条件。已有自定义模型列表不自动覆写。
-- **本项目协议桥**：`factory.compatibility`控制Chat/Responses/Messages之间六个方向的有限转换，保存/重载后生效；新建默认配置开启，旧已保存但缺该字段的配置保留关闭，需在UI显式启用。按模型原生协议选择路径/x-api-provider，再转回调用者协议。复用已有工具/图像/完整历史桥，数字解码改用保真number token避免>2^53舍入。
+- **本项目协议桥**：`factory.compatibility`控制Chat/Responses/Messages之间六个方向的有限转换，保存/重载后生效；新建默认配置开启，旧已保存但缺该字段的配置保留关闭，需在UI显式启用。按模型原生协议选择路径/x-api-provider，再转回调用者协议。复用已有工具/图像/完整历史桥，数字解码改用保真number token避免>2^53舍入。**Gemini不参与该转换**：只能从 `/v1beta` 原生路径调用，不做Chat→Gemini或Gemini→Chat的有损映射。
 - **跨协议SSE是缓冲模式**：总响应16MiB、单事件2MiB上限，等完整成功响应后输出目标SSE，返回`X-Compatibility-Mode: buffered`；不是实时首Token流。原生SSE不进入整包缓冲。签名thinking、服务端续传引用、hosted tools等不能无损表示的字段本地400；响应不能表示则502且不重放，不悄悄删字段或编造usage。`previous_response_id`只能留在原生Responses，虚拟转换出的Responses ID不承诺上游续传。
 
-原生请求除显式Fast/工具schema适配外保持原始JSON字节、指令及原生字段；不改变调用者身份。仅替换认证、按管理员配置设置x-api-provider，使用真实的balancer User-Agent，不声称Droid CLI。API Key本身已组织绑定，不传客户端的X-Factory-Org-Id，whoami提供的region/private-host只作诊断，不自动将凭据送往返回域名。不跟随重定向，不在代理失败后直连。
+原生请求除显式Fast/工具schema适配和上节Droid固定开头外保持原始JSON字节、指令及原生字段；Gemini请求只补`model`与Droid `systemInstruction`开头，`contents`、`tools`、`generationConfig`、安全设置和大整数原样保留；调用方身份头被替换为Droid客户端身份（见上节），不再使用balancer自报User-Agent。`X-Factory-Org-Id` 取该账号whoami读到的组织，不转发客户端自带值；whoami提供的region/private-host只作诊断，不自动将凭据送往返回域名。不跟随重定向，不在代理失败后直连。
 
 NewAPI可按模型原生协议选择渠道，也可显式开启上述有限转换使用可表示的请求；转换不消除上游授权/策略限制。列表可见不代表可推理。默认真实测试模型`deepseek-v4.1-flash`，保留手填；模型测试与身份/额度检查分别显示结果。测试请求32–64输出Token上限，不遍历模型/账号。
 
 ## 独立路由与会话
 
-Factory独立保存：选号、粘性、会话头、显式/弱粘性TTL、忙时策略、等待、尝试上限、健康阈值、首事件/空闲/总请求超时、请求体/模型缓存、直连/代理连接上限、额度轮询及价格/规则。
+Factory独立保存：选号、粘性、会话头、显式/弱粘性TTL、忙时策略、等待、尝试上限、健康阈值、首事件/空闲/总请求超时、请求体/模型缓存、直连/代理连接上限、额度轮询及价格/规则；以及本轮新增的推理源站、Droid 客户端形态（`cli_tui`/`cli_exec`）和可选 `OpenAI-Platform`。这些字段保存、重载与重启后保留；留空/缺省有明确回退，不静默改写别池。
 
 缺省在途最少、粘性开启、绑定忙时拒绝。真实会话标识优先于缓存提示，身份HMAC按分组和下游Key隔离；缓存亲和不保证上游缓存命中。
 
@@ -64,7 +129,7 @@ Responses续传只认已确认、未过期、同Key/Base/代理来源的原账�
 
 ## 额度全链路
 
-独立轮询（默认600秒）、独立并发预算、手动刷新 → `whoami`身份强类型校验 → `billing/limits`强类型窗口/余额校验 → `Snapshot.Factory` → metadata持久化 → 账号API与页面。额度/身份来源绑定provider+完整Key+Base+代理；来源变化失效，锁内再校验，旧来源迟到结果不发布。身份的user/org变化也清空原组织读数。
+独立轮询（默认600秒）、独立并发预算、手动刷新 → `whoami`（Bun UA、扩展标记、当前组织）身份强类型校验 → `billing/limits`（Bun UA、client/version、请求面、组织、traceparent）强类型窗口/余额校验 → `Snapshot.Factory` → metadata持久化 → 账号API与页面。whoami 建立的 org 作为本次 billing 与后续推理的 `X-Factory-Org-Id`；每账号显式传递，不再使用跨账号共享的全局变量。额度/身份来源绑定provider+完整Key+Base+代理；来源变化失效，锁内再校验，旧来源迟到结果不发布。身份的user/org变化也清空原组织读数。
 
 - Standard/Core各有5小时、周、月百分比及reset；空/缺失/错误类型不当零。窗口尚未激活、已过期、读取失败、旧历史明确展示。
 - 额度401/403不等于推理Key无效；保留历史，标`unsupported-credential`，停止周期重试billing，手动刷新可重新验证。身份401单独记录AuthFailed。
@@ -101,4 +166,11 @@ Responses续传只认已确认、未过期、同Key/Base/代理来源的原账�
 
 - 续轮验证：六种跨协议方向的JSON/SSE、工具schema根级composition/ref/resource/字面数据/历史/示例、Unicode/大整数、普通工具字段不误拆、参数截断/错误/超限/关闭传播、Fast映射/保留beta、无损限制本地拒绝/无上游无健康消耗；新增浏览器转换开关关闭400零上游、开启200转为Chat、保存与重载/落盘一致，16个前端回归通过。续轮最终`go test ./...`通过（server89.478s）、全仓竞态通过（server141.916s）、vet/build/diff/gofmt通过；直接运行公开插件schema适配与Go实现的8组同输入结构对照一致（不含身份/提示词改写）；重点竞态重复5轮通过。
 
-本轮代码与文档按用户授权提交并推送；未部署。真实Factory推理成功、全部模型/第三方客户端授权、生产NewAPI渠道验收仍未完成。OAuth登录/续期、Droid云端Agent、注册与支付不在此次实现范围。没有创建Trellis任务。临时公开源码、Mock、日志和浏览器回执已登记，清理需用户同意。
+- 2026-11-19 新增 Gemini countTokens、Embeddings、虚拟 auto/auto-fast 与 Responses WebSocket：countTokens 走 `/api/llm/g/v1/countTokens`（Mock）；Embeddings 走 `/api/llm/o/v1/embeddings`（Mock，`text-embedding-3-large`）；auto 在 Chat/Gemini 路径解析为具体已配置路由并改写 body；WS 通过本地上下游 WebSocket 回环验证首帧 `response.create`、账号租用、Bearer/org/UA 头与双向文本帧。真实 Factory 的 countTokens、Embeddings、WS 尚未调用。
+- 2026-11-19 Factory 授权登录：`factoryauth` 覆盖 device code、pending/slow_down/expired/denied、refresh 轮换与 JWT `exp`；服务端覆盖设备码启动→轮询批准→whoami→建号/重授权、OAuth access token 推理、过期自动刷新、额度轮询续期、号池关闭与跨池重授权拒绝；账号来源按 WorkOS user id 固定，access token 轮换不清空快照。真实 WorkOS `authorize/device` 已通过本地浏览器从控制台签发 device code；真实账号批准、token 兑换与刷新仍未执行。
+- 2026-11-19 新增 Gemini 原生路由：`/v1beta/models/{model}:generateContent` 与 `:streamGenerateContent`（含 `X-Goog-Api-Key` 鉴权、`/v1/models/{model}:generateContent` 别名）→ `prem.factory.ai/api/llm/g/v1/generate`；补 `model` 与 Droid `systemInstruction`，保留`contents/tools/generationConfig`；同形态JSON/SSE原样透传，跨形态做最小合并/单事件包装；`generate`只接受`google`，Chat/Responses/Messages不做Gemini转换。
+- 2026-11-19 按 1.14.0 抓包对齐：`go test ./...` 通过（server 100.730s）；`go test -race`（config/factory/factoryauth/quota/server，server 152.447s）、`go vet ./...`、`go build ./...`、`factory_web_test.js` 与全部 Web JS 语法检查通过。新增/更新断言覆盖：双 User-Agent、`cli_tui`/`cli_exec`、exec 输出格式、W3C traceparent 形状、`configured_order`、OpenAI-Platform 仅 OpenAI 路由与仅配置后发送、whoami 与 billing 头部差异、模型面 `prem.factory.ai` 默认映射、保存/重载/重启保留推理源站/请求面/OpenAI-Platform、额度失败历史，以及 Gemini 路径解析/`systemInstruction`开头/大整数保留/JSON与SSE透传/`finishReason`终止/非generate模型拒绝；代理池/UA池分配、账号 UA 头与版本、设置重载。
+- 真实本地浏览器（本地 Mock、假 Key）：Factory 路由设置页可见并修改推理源站、`cli_exec`、`OpenAI-Platform`；「填入抓包参考路由」把 61 条参考路由（含 `gemini-4-carbon` generate/google）写入编辑框，保存后 `/api/settings` 实际生效；重载表单、`/api/settings` 与磁盘一致；经真实代理发送 Responses、Chat 与 Gemini `:generateContent`，Mock 分别收到 `factory-cli/1.14.0`、正确的 `x-api-provider`、`X-Factory-Request-Surface`、`configured_order`、`traceparent`，Gemini 收到 `/api/llm/g/v1/generate`、body 含 `model` 与 Droid `systemInstruction`，且未转发下游 `X-Goog-Api-Key`；`OpenAI-Platform` 仅出现在 OpenAI 路由；无页面 JS 错误（仅有既有 CSP inline-style 控制台提示，未由本改动引入）。
+- 端到端路径复核（本地 Mock）：`deepseek-v4.1-flash-1017` → `/api/llm/o/v1/chat/completions` + `baseten`；`kimi-k3.1-pro` → 同一路径 + `databricks`；`gemini-4-carbon` → `/api/llm/g/v1/generate` + `google`。
+
+本轮代码与文档未提交、未部署。真实Factory推理成功、全部模型/第三方客户端授权、生产NewAPI渠道验收仍未完成。Factory WorkOS 设备登录已接入（真实设备码启动 + Mock 批准/刷新）；真实浏览器批准、Refresh Token 线上轮换、真实 Factory countTokens/Embeddings/Responses WebSocket、Droid云端Agent、注册与支付仍未验收。没有创建Trellis任务。临时公开源码、Mock、日志和浏览器回执已登记，清理需用户同意。

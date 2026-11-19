@@ -182,10 +182,17 @@ func (c *Config) InferenceBase(a Account, protocol string) string {
 		return c.ModelStudioInferenceBase(a, protocol)
 	}
 	if a.Provider == ProviderFactory {
-		if protocol == "messages" || protocol == "anthropic" {
-			return c.RuntimeBase(a) + "/api/llm/a/v1"
+		base := c.Factory.EffectiveInferenceBase()
+		switch protocol {
+		case "messages", "anthropic":
+			return base + "/api/llm/a/v1"
+		case "generate":
+			return base + "/api/llm/g/v1"
+		case "embeddings":
+			return base + "/api/llm/o/v1"
+		default:
+			return base + "/api/llm/o/v1"
 		}
-		return c.RuntimeBase(a) + "/api/llm/o/v1"
 	}
 	return c.RuntimeBase(a)
 }

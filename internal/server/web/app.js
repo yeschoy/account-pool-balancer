@@ -394,6 +394,7 @@ function renderPoolTabs() {
   document.body.dataset.pool = pool;
   $('#x50-pool-proxy').classList.toggle('hidden', !isX50());
   $('#btn-add-device').classList.toggle('hidden', pool !== 'opendesign');
+  $('#btn-factory-login').classList.toggle('hidden', !isFactory());
   $('#oc-batch').classList.toggle('hidden', !managedKeyPool());
   $('#oc-batch [data-oc-batch="proxy"]').classList.toggle('hidden', !isOpenCode());
   $('#oc-batch [data-oc-batch="keys"]').classList.toggle('hidden', !isTokenHarbor());
@@ -870,7 +871,7 @@ function accountRow(a) {
   const shared = a.sharedWorkspaceWith && a.sharedWorkspaceWith.length ? `<span class="badge warn" title="与其他账号同一工作区，额度共享">共享工作区</span>` : '';
   return `<tr data-id="${esc(a.id)}">
     <td><div class="acc-name">${managedKeyPool() ? `<input type="checkbox" data-oc-select="${esc(a.id)}" aria-label="选择 ${esc(a.name)}" ${ocSelected.has(a.id) ? 'checked' : ''}> ` : ''}${esc(a.name)}</div><div class="acc-sub">${esc(a.email || a.id)}</div>${accountCredentialHTML(a)}
-      <div class="chips"><span class="badge">${esc(a.group)}</span>${tier}${a.hasProxy ? '<span class="badge" title="' + esc(a.proxyUrl) + '">代理</span>' : ''}${a.priority !== 50 ? '<span class="badge">优先级 ' + a.priority + '</span>' : ''}${shared}</div></td>
+      <div class="chips"><span class="badge">${esc(a.group)}</span>${tier}${a.factoryOAuth ? '<span class="badge accent" title="WorkOS 设备授权；访问令牌自动续期，Refresh Token 不展示">OAuth 授权</span>' : ''}${a.userAgent ? '<span class="badge" title="' + esc(a.userAgent) + '">UA</span>' : ''}${a.provider === 'factory' && !a.hasProxy ? '<span class="badge bad" title="未配置出站代理：Factory/WorkOS 会看到本机出口 IP；浏览器授权页仍使用本机浏览器 IP">直连出口</span>' : ''}${a.hasProxy ? '<span class="badge" title="' + esc(a.proxyUrl) + '">代理</span>' : ''}${a.priority !== 50 ? '<span class="badge">优先级 ' + a.priority + '</span>' : ''}${shared}</div></td>
     <td>${status}</td>
     <td>${windowsHTML(a)}</td>
     <td class="num">${a.provider === 'opendesign' ? openDesignFundingHTML(a) : wallet + pkg + sum + covHTML}</td>
@@ -1048,7 +1049,7 @@ document.addEventListener('click', (ev) => {
   const id = btn.closest('tr').dataset.id;
   const a = accountsCache.find((x) => x.id === id);
   if (!a) return;
-  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'factory' ? '检查身份 / 刷新额度（若有权限）' : a.provider === 'deploy' ? '刷新模型目录（余额未知）' : a.provider === 'opendesign' ? '检测状态并刷新额度（只读）' : a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
+  const items = [['edit', '编辑'], ...(a.provider === 'tokenharbor' ? [['th-proxy', '修改代理']] : []), ['test', '测试连通'], ...((a.provider === 'opencode-zen' || a.provider === 'opencode-go') ? [['proxy-test', '检测固定出口']] : []), ['refresh', a.provider === 'factory' ? '检查身份 / 刷新额度（若有权限）' : a.provider === 'deploy' ? '刷新模型目录（余额未知）' : a.provider === 'opendesign' ? '检测状态并刷新额度（只读）' : a.provider === 'tokenharbor' ? '刷新模型/套餐/周用量' : a.provider === 'ollama' ? '刷新余额' : '刷新额度'], ['recover', '恢复（清除冷却/隔离）'], ['reset-health', '重置健康分'], ...(a.provider === 'opendesign' ? [['reauth', '重新设备授权']] : []), ...(a.provider === 'factory' && a.factoryOAuth ? [['factory-reauth', 'Factory 重新授权']] : []), ...(a.provider === 'tokenharbor' ? [['th-return', '退回注册机']] : []), ['toggle', a.enabled ? '禁用' : '启用'], ['delete', '删除', 'danger']];
   const list = document.createElement('div');
   list.className = 'menu-list';
   list.innerHTML = items.map(([k, l, c]) => `<button data-act="${k}" class="${c || ''}">${esc(l)}</button>`).join('');
@@ -1081,6 +1082,7 @@ async function accountAction(a, act) {
       case 'recover': await api('POST', `/api/accounts/${a.id}/recover`); toast('已恢复'); break;
       case 'reset-health': await api('POST', `/api/accounts/${a.id}/reset-health`); toast('健康分已重置'); break;
       case 'reauth': return deviceAuth({ accountId: a.id });
+      case 'factory-reauth': return factoryLogin({ accountId: a.id });
       case 'th-proxy': await thPoolProxy(a); break;
       case 'th-return': return await thReturnToRegistration(a.id, a.name);
       case 'toggle': await api('PUT', `/api/accounts/${a.id}`, { enabled: !a.enabled }); break;
@@ -1100,8 +1102,10 @@ function accountForm(a) {
     <label>邮箱</label><input id="f-email" value="${v('email')}">
     <label>分组</label><input id="f-group" value="${v('group', defGroup)}" placeholder="${defGroup}">
     <span class="hint">下游密钥只调度同分组的账号</span>
-    <label>运行密钥</label><input id="f-rt" value="${v('runtimeKey')}" placeholder="${a ? '留空不变' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">
-    ${!isOpenDesign() ? `<span></span><span class="hint">${isFactory() ? 'Factory API Key原样保存，账号/分组/下游与导入Key隔离。只读身份与额度权限分别展示；支持有限协议转换和工具schema适配；不改写身份/提示词，策略拒绝停止。无OAuth登录/续期、自动注册、付款或Extra usage开关。' : isX50() ? '50X仅支持原生Chat/SSE，目录不证明授权。管理会话Token用于billing，推理使用Bearer Key；代理与注册机分离，不自动付费。' : isDeploy() ? 'Deploy 使用原生 Chat Completions；Secret 原样保存，不是 access_key。目录成功不代表 Key 已 active 或有推理授权，余额需独立控制台会话，当前未知。不会自动注册、创建 Key、绑卡或充值。' : isMistral() ? 'Mistral 独立号池，使用现有调度器；识别 Codex / Claude / pi 会话头，不代表已完成各客户端验收。支持原生 Chat / 无状态 Responses，保留思考与工具，自动补会话缓存 key。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high。可刷新 Studio / Vibe 套餐额度与组织订阅，不是钱包余额；无控制密钥，管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
+    ${a?.factoryOAuth
+      ? `<label>登录方式</label><div class="muted small">Factory WorkOS 设备授权；访问令牌自动续期，Refresh Token 不展示。重新授权请用账号操作菜单。</div>`
+      : `<label>运行密钥</label><input id="f-rt" value="${v('runtimeKey')}" placeholder="${a ? '留空不变' : RT_HINT[pool] || RT_HINT.opendesign}" autocomplete="off">`}
+    ${!isOpenDesign() ? `<span></span><span class="hint">${isFactory() ? 'Factory API Key原样保存，账号/分组/下游与导入Key隔离。只读身份与额度权限分别展示；支持有限协议转换、工具schema适配、Gemini原生generate/countTokens、Embeddings与Responses WebSocket；auto/auto-fast由网关选择同协议已配置路由；OAuth设备登录账号自动续期，不显示Refresh Token；不改写身份/提示词，策略拒绝停止。无自动注册、付款或Extra usage开关。' : isX50() ? '50X仅支持原生Chat/SSE，目录不证明授权。管理会话Token用于billing，推理使用Bearer Key；代理与注册机分离，不自动付费。' : isDeploy() ? 'Deploy 使用原生 Chat Completions；Secret 原样保存，不是 access_key。目录成功不代表 Key 已 active 或有推理授权，余额需独立控制台会话，当前未知。不会自动注册、创建 Key、绑卡或充值。' : isMistral() ? 'Mistral 独立号池，使用现有调度器；识别 Codex / Claude / pi 会话头，不代表已完成各客户端验收。支持原生 Chat / 无状态 Responses，保留思考与工具，自动补会话缓存 key。DeepSeek V4.1 Flash 1017、GLM 5.3 / Flash 支持 low / high / max，未传默认 high。可刷新 Studio / Vibe 套餐额度与组织订阅，不是钱包余额；无控制密钥，管理员可直接查看和复制 Key。' : isTokenHarbor() ? '原生 Chat / Responses / Messages，保留缓存标记，会话默认不溢出。管理员可直接查看和复制 Key；需通过原注册记录关联会话才能自动检测套餐，单独导入 Key 无法确认套餐时暂停。未知模型不放行，不借钱包，免费功能不自动开启。' : isOpenCode() ? 'OpenCode 套餐必须明确选择；仅 Go 具有已知的 usage 查询契约，Zen 余额显示未知。管理员可直接查看和复制密钥。' : isModal()
       ? 'Modal 只有 Proxy Token 一把钥匙：它既能推理，也能列出该 token 可见的 Endpoint；Modal 没有额度接口，没有控制密钥。'
       : isOllama() 
         ? 'Ollama 的 key 直接读 /api/balance，没有单独的控制密钥；自建服务填任意值（如 <code>ollama</code>）即可。'
@@ -1109,7 +1113,7 @@ function accountForm(a) {
       : `<label>控制密钥</label><input id="f-ctrl" value="${v('controlKey')}" placeholder="vela_ctrl_…（留空不变）" autocomplete="off">
     ${a && a.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除控制密钥</label>' : ''}`}
     ${isX50() ? `<label>管理会话Token</label><input id="f-ctrl" value="${v('controlKey')}" autocomplete="off" placeholder="可选，裸Token；仅用于/api/billing"><span></span><span class="hint">缺失/失效余额显示未知，不从赠金常量推算。注册机入池自动关联；不复制密码/接码凭据。</span>${a?.hasControlKey ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ctrl">移除管理Token</label>' : ''}` : ''}
-    ${a ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && (isOpenDesign() || isX50()) ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}${a.hasProxy ? '<button type="button" class="btn small" data-copy="proxyUrl">复制代理</button>' : ''}</span>` : ''}
+    ${a && !a.factoryOAuth ? `<span></span><span class="keycopy"><button type="button" class="btn small" data-copy="runtimeKey">复制运行密钥</button>${a.hasControlKey && (isOpenDesign() || isX50()) ? '<button type="button" class="btn small" data-copy="controlKey">复制控制密钥</button>' : ''}${a.hasProxy ? '<button type="button" class="btn small" data-copy="proxyUrl">复制代理</button>' : ''}</span>` : ''}
     ${!a ? `<span></span><span class="hint">新账号进 ${POOL_LABEL[pool]} 号池${keyNeedsProvider() ? '（provider=' + pool + '）' : ''}</span>` : ''}
     <label>最大并发</label><input id="f-conc" type="number" min="0" value="${v('maxConcurrent', pool === 'opencode-go' ? 1 : 0)}">
     <span class="hint">0 表示不限</span>
@@ -1118,9 +1122,11 @@ function accountForm(a) {
     <label>优先级</label><input id="f-prio" type="number" min="1" max="100" value="${v('priority', 50)}">
     <span class="hint">数字越小越优先，同优先级内按策略排序</span>
     <label>出站代理</label><input id="f-proxy" type="text" autocomplete="off" value="${v('proxyUrl')}" placeholder="http:// 或 socks5://（留空不变）">
+    ${isFactory() ? `<label>推理 UA</label><input id="f-ua" type="text" autocomplete="off" value="${v('userAgent')}" placeholder="留空使用默认/UA池">` : ''}
     ${pool === 'tokenharbor' ? '<span></span><span class="hint">号池与注册机代理独立设置，此处修改不影响原注册记录；新建入池时默认沿用注册代理。换出口后旧套餐/周用量失效，重新检测通过前暂停调度。</span>' : ''}
   ${pool === 'opencode-go' ? '<span></span><span class="hint">支持 HTTP/HTTPS、SOCKS5/SOCKS5H 的 IPv6 代理，例如 socks5h://[2001:db8::10]:1080（示例地址须替换）。IPv6 主机须带方括号；代理入口地址不代表它的实际出口。</span>' : ''}
     ${a && a.hasProxy ? '<span></span><label class="check"><input type="checkbox" id="f-clear-proxy">移除代理（直连）</label>' : ''}
+    ${a && a.userAgent ? '<span></span><label class="check"><input type="checkbox" id="f-clear-ua">移除推理UA（用默认/UA池）</label>' : ''}
     ${pool === 'opencode-go' ? `<label>预期固定出口 IP</label><input id="f-egress-ip" value="${v('egressIp')}" placeholder="IPv4/IPv6，不带方括号；可共享同一固定 IP"><span class="hint">先在 Go 设置配置 IP 校验 URL。留空仅绑定出口，不宣称 IP 已固定；设置后校验失败会阻止推理及额度/目录查询。</span>` : ''}
     <label>备注</label><input id="f-note" value="${v('note')}" maxlength="500">
     <label>启用</label><label class="check"><input type="checkbox" id="f-enabled" ${!a || a.enabled ? 'checked' : ''}>参与调度</label>
@@ -1131,12 +1137,14 @@ function readAccountForm() {
   const out = { name: $('#f-name').value, email: $('#f-email').value, group: $('#f-group').value, note: $('#f-note').value,
     maxConcurrent: n('#f-conc'), maxRpm: n('#f-rpm'), weight: n('#f-weight'), priority: n('#f-prio'), enabled: $('#f-enabled').checked };
   if ($('#f-egress-ip')) out.egressIp = $('#f-egress-ip').value.trim();
-  if ($('#f-rt').value.trim()) out.runtimeKey = $('#f-rt').value.trim();
+  if ($('#f-rt') && $('#f-rt').value.trim()) out.runtimeKey = $('#f-rt').value.trim();
   if ($('#f-ctrl') && $('#f-ctrl').value.trim()) out.controlKey = $('#f-ctrl').value.trim();
   if (keyNeedsProvider()) out.provider = pool; // an Ollama key has no prefix to read this from
   if ($('#f-proxy').value.trim()) out.proxyUrl = $('#f-proxy').value.trim();
+  if ($('#f-ua') && $('#f-ua').value.trim()) out.userAgent = $('#f-ua').value.trim();
   if ($('#f-clear-ctrl') && $('#f-clear-ctrl').checked) out.clearControlKey = true;
   if ($('#f-clear-proxy') && $('#f-clear-proxy').checked) out.clearProxy = true;
+  if ($('#f-clear-ua') && $('#f-clear-ua').checked) out.clearUserAgent = true;
   return out;
 }
 let editingAccountId = null;
@@ -1259,6 +1267,57 @@ async function deviceAuth(opts = {}) {
   });
 }
 $('#btn-add-device').addEventListener('click', () => deviceAuth());
+
+// Factory uses WorkOS device authorization: no localhost callback is allowed
+// by its OAuth client, so the user approves a code on auth.factory.ai while
+// this console polls. The server exchanges and stores the tokens.
+async function factoryLogin(opts = {}) {
+  let flow = null, timer = null;
+  const groups = [...new Set(accountsCache.map((a) => a.group).concat([defaultGroup()]))].sort();
+  const target = opts.accountId ? accountsCache.find((a) => a.id === opts.accountId) : null;
+  const step1 = !opts.accountId ? `<div class="form"><label>分组</label><select id="fl-group">${groups.map((g) => `<option>${esc(g)}</option>`).join('')}</select>
+      <label>出站代理</label><input id="fl-proxy" placeholder="http:// 或 socks5://（留空用代理池）">
+      <label>推理 UA</label><input id="fl-ua" placeholder="留空用 UA池/默认"><span></span><span class="hint">代理池/UA池会为每个账号分配不同出口与 UA；不填且池为空时 WorkOS 与 Factory 会看到本机出口 IP。浏览器批准页仍使用本机浏览器 IP。</span></div>` : '';
+  const render = () => {
+    if (!flow) return;
+    const st = { pending: '等待批准…', approved: '已批准', expired: '已过期', failed: '失败', cancelled: '已取消' }[flow.status] || flow.status;
+    const url = flow.verificationUriComplete || flow.verificationUri;
+    $('#fl-flow').innerHTML = `<p>在浏览器打开 Factory 授权页，确认下面的代码：</p>
+      <div class="code-big">${esc(flow.userCode)}</div>
+      <p><a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="btn primary">打开 Factory 授权页</a>
+      <button type="button" class="btn ghost small" id="fl-copy">复制链接</button></p>
+      <p>状态：<span class="badge ${flow.status === 'approved' ? 'ok' : flow.status === 'pending' ? 'accent' : 'bad'}">${esc(st)}</span>
+      ${flow.email ? ' · ' + esc(flow.email) : ''}${flow.error ? ' · ' + esc(flow.error) : ''}</p>
+      <p class="muted small">有效期至 ${esc(fmtTime(flow.expiresAt))}。批准后服务器会用 WorkOS 返回的 access/refresh token 建号，访问令牌到期自动续期。</p>`;
+    const copy = $('#fl-copy');
+    if (copy) copy.onclick = () => navigator.clipboard.writeText(url).then(() => toast('已复制'));
+  };
+  const poll = async () => {
+    try {
+      flow = await api('GET', `/api/factory/login/${flow.id}`);
+      render();
+      if (flow.status !== 'pending') {
+        clearInterval(timer);
+        if (flow.status === 'approved') { toast(flow.updated ? '已更新 Factory 授权：' + (flow.email || '') : '已添加 Factory 账号：' + (flow.email || '')); loadAccounts().catch(() => {}); }
+      }
+    } catch (e) { modalErr(e.message); }
+  };
+  await modal({
+    title: target ? 'Factory 重新授权 ' + target.name : 'Factory 授权登录',
+    body: `${step1}<div id="fl-flow" class="mt"><p class="muted">点「开始」向 Factory 申请设备授权码。</p></div>`,
+    onOpen: (dlg) => { dlg._onClose = () => { clearInterval(timer); if (flow && flow.status === 'pending') api('DELETE', `/api/factory/login/${flow.id}`).catch(() => {}); }; },
+    buttons: [{ label: '关闭', value: 'c' }, { label: '开始', value: 'start', primary: true, action: async () => {
+      if (flow && flow.status === 'pending') return false;
+      const body = opts.accountId ? { accountId: opts.accountId } : { group: $('#fl-group').value, proxyUrl: $('#fl-proxy').value.trim(), userAgent: $('#fl-ua').value.trim() };
+      flow = await api('POST', '/api/factory/login', body);
+      render();
+      clearInterval(timer);
+      timer = setInterval(poll, 2000);
+      return false;
+    } }],
+  });
+}
+$('#btn-factory-login').addEventListener('click', () => factoryLogin());
 
 // ---- client keys ----
 async function loadKeys() {
@@ -1629,6 +1688,13 @@ async function loadSettings() {
   $('#x50-pool-errors').checked = s.x50?.errorLog !== false;
   $('#factory-settings').classList.toggle('hidden', !isFactory());
   $('#factory-base').value = s.factory?.baseUrl || 'https://api.factory.ai';
+  $('#factory-inference').value = s.factory?.inferenceUrl || '';
+  $('#factory-surface').value = s.factory?.requestSurface || 'cli_tui';
+  $('#factory-openai-platform').value = s.factory?.openaiPlatform || '';
+  $('#factory-proxy-pool').value = (s.factory?.proxyPool || []).join('\n');
+  $('#factory-ua-pool').value = (s.factory?.userAgents || []).join('\n');
+  $('#factory-user-agent').value = s.factory?.userAgent || '';
+  $('#factory-management-user-agent').value = s.factory?.managementUserAgent || '';
   $('#factory-detail').checked = s.factory?.detailLog === true;
   $('#factory-standard-only').checked = s.factory?.standardOnly === true;
   $('#factory-compatibility').checked = s.factory?.compatibility !== false;
@@ -1686,6 +1752,18 @@ async function loadSettings() {
   const ov = await api('GET', withPool('/api/overview'));
   $('#pv-group').innerHTML = (ov.groups.length ? ov.groups : [defaultGroup()]).map((g) => `<option>${esc(g)}</option>`).join('');
 }
+$('#btn-factory-assign-egress').addEventListener('click', async () => {
+  try {
+    const r = await api('POST', '/api/factory/assign-egress');
+    toast(`已分配代理 ${r.proxyAssigned} 个、UA ${r.uaAssigned} 个`);
+    await loadSettings();
+  } catch (e) { toast(e.message); }
+});
+$('#btn-factory-models-default').addEventListener('click', () => {
+  const models = settingsCache?.defaults?.factoryModels || [];
+  $('#factory-models').value = JSON.stringify(models, null, 2);
+  toast('已填入抓包参考路由，保存后生效');
+});
 $('#btn-save-settings').addEventListener('click', async () => {
   const s = settingsCache.settings;
   const errorRules = errRules, retryRules = retRules;
@@ -1694,7 +1772,9 @@ $('#btn-save-settings').addEventListener('click', async () => {
     let models;
     try { models = JSON.parse($('#factory-models').value); if (!Array.isArray(models)) throw new Error(); }
     catch { toast('Factory模型路由必须是JSON数组'); return; }
-    body.factory = { baseUrl: $('#factory-base').value.trim(), detailLog: $('#factory-detail').checked, standardOnly: $('#factory-standard-only').checked, compatibility: $('#factory-compatibility').checked, models };
+    const lines = (v) => v.split('\n').map((x) => x.trim()).filter(Boolean);
+    body.factory = { baseUrl: $('#factory-base').value.trim(), inferenceUrl: $('#factory-inference').value.trim(), requestSurface: $('#factory-surface').value, openaiPlatform: $('#factory-openai-platform').value.trim(), detailLog: $('#factory-detail').checked, standardOnly: $('#factory-standard-only').checked, compatibility: $('#factory-compatibility').checked, models,
+      proxyPool: lines($('#factory-proxy-pool').value), userAgents: lines($('#factory-ua-pool').value), userAgent: $('#factory-user-agent').value.trim(), managementUserAgent: $('#factory-management-user-agent').value.trim() };
   }
   if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };
   if (isX50()) body.x50 = { baseUrl: $('#x50-pool-base').value.trim(), modelSyncSec: Number($('#x50-pool-sync').value), detailLog: $('#x50-pool-detail').checked, requestLog: $('#x50-pool-requests').checked, errorLog: $('#x50-pool-errors').checked };

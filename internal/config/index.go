@@ -58,6 +58,19 @@ func (c *Config) NativeBindingSource(a Account) string {
 	if a.Provider == ProviderX50 {
 		return HashKey(a.Provider + "\x00" + a.RuntimeKey + "\x00" + a.ControlKey + "\x00" + a.ProxyURL + "\x00" + base)
 	}
+	if a.Provider == ProviderFactory && a.FactoryRefreshToken != "" {
+		// OAuth access tokens rotate; the quota/account source must not, or
+		// every refresh would discard its snapshot and bindings. The WorkOS
+		// user id is the stable identity.
+		stable := a.UserID
+		if stable == "" {
+			stable = a.Email
+		}
+		if stable == "" {
+			stable = a.FactoryRefreshToken
+		}
+		return HashKey(a.Provider + "\x00oauth\x00" + stable + "\x00" + a.ProxyURL + "\x00" + base)
+	}
 	if c.index != nil {
 		if v, ok := c.index.sources[a.ID]; ok && v.provider == a.Provider && v.key == a.RuntimeKey && v.proxy == a.ProxyURL && v.base == base {
 			return v.hash

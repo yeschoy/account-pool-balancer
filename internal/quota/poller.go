@@ -615,9 +615,11 @@ type ollamaRead struct {
 }
 
 type Poller struct {
-	Cfg              func() *config.Config
-	HTTPFor          func(proxyURL string) *http.Client
-	FactoryHTTPFor   func(*config.Config, string) *http.Client
+	Cfg            func() *config.Config
+	HTTPFor        func(proxyURL string) *http.Client
+	FactoryHTTPFor func(*config.Config, string) *http.Client
+	// FactoryToken renews an OAuth device-login account before its reads.
+	FactoryToken     func(context.Context, *config.Config, config.Account) (config.Account, error)
 	DeployHTTPFor    func(*config.Config, string) *http.Client
 	X50HTTPFor       func(*config.Config, string) *http.Client
 	OnUpdate         func(accountID string)

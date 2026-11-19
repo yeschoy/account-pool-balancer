@@ -1,0 +1,4748 @@
+[
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 12164,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "12164"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "clientservices.googleapis.com",
+  "path": "/chrome-variations/seed",
+  "status": 304,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "if-none-match",
+    "SMChYyMDI2MTExOC0wMTAwMzguNTM0MDAwEgsIARADGJ0BIAAoAQ==#itTg6wqfy0M="
+   ],
+   [
+    "a-im",
+    "x-bm,gzip"
+   ],
+   [
+    "sec-fetch-site",
+    "none"
+   ],
+   [
+    "sec-fetch-mode",
+    "no-cors"
+   ],
+   [
+    "sec-fetch-dest",
+    "empty"
+   ],
+   [
+    "user-agent",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+   ],
+   [
+    "accept-encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "priority",
+    "u=4, i"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 29997,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "29997"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 4286,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "4286"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28331,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28331"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 1599,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-626778cdd2fce98fcba56fcec0a7d32a-f064f3960f1eab47-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "1599"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 37347,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "37347"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/feature-flags",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-33470bea5daf0f21-01"
+   ],
+   [
+    "x-provider-routing-refresh",
+    "1"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 966,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-08583f8a8092bd24-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "966"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/billing/limits",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-7871e52bb2d92e40-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ],
+  "resp_decoded": "{\"usesTokenRateLimitsBilling\":true,\"hasActiveSubscription\":true,\"limits\":{\"standard\":{\"fiveHour\":{\"usedPercent\":2,\"windowEnd\":\"2026-11-18T18:32:52.554Z\",\"secondsRemaining\":10621},\"weekly\":{\"usedPercent\":1,\"windowEnd\":\"2026-11-24T21:04:14.291Z\",\"secondsRemaining\":538103},\"monthly\":{\"usedPercent\":1,\"windowEnd\":\"2026-12-17T21:04:14.291Z\",\"secondsRemaining\":2525303}},\"core\":{\"fiveHour\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"weekly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"monthly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null}}},\"overagePreference\":\"droidCore\",\"canManageOverage\":true,\"extraUsageBalanceCents\":0,\"extraUsageAllowed\":true}"
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 61454,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "61454"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/g/v1/generate",
+  "status": 200,
+  "req_bytes": 455881,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-0f0de0bbda4f8f24-01"
+   ],
+   [
+    "x-api-provider",
+    "google"
+   ],
+   [
+    "x-assistant-message-id",
+    "76384017-c5fb-4c51-a1e7-f67d7eb16576"
+   ],
+   [
+    "x-provider-routing-source",
+    "session_lock"
+   ],
+   [
+    "x-session-id",
+    "ae279291-9922-4762-9c87-1f78a53dde27"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "455881"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 8028,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-08583f8a8092bd24-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "8028"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 59802,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "59802"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 4713,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "4713"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 6574,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "6574"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/g/v1/generate",
+  "status": 200,
+  "req_bytes": 457964,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-5fa458492283068c-01"
+   ],
+   [
+    "x-api-provider",
+    "google"
+   ],
+   [
+    "x-assistant-message-id",
+    "35cee4dd-9f96-4389-af17-fbfe06dfb42f"
+   ],
+   [
+    "x-provider-routing-source",
+    "session_lock"
+   ],
+   [
+    "x-session-id",
+    "ae279291-9922-4762-9c87-1f78a53dde27"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "457964"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 8801,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-0aab2658384a16158ef04ef84aaed322-c1e764d153e15104-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "8801"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 37113,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "37113"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-49faa95996cb40847eab5fdba7cf5810-e60295279afd7bf5-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28363,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28363"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-49faa95996cb40847eab5fdba7cf5810-e60295279afd7bf5-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28377,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28377"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-49faa95996cb40847eab5fdba7cf5810-e60295279afd7bf5-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "clientservices.googleapis.com",
+  "path": "/chrome-variations/seed",
+  "status": 304,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "if-none-match",
+    "SMChYyMDI2MTExOC0wMTAwMzguNTM0MDAwEgsIARADGJ0BIAAoAQ==#itTg6wqfy0M="
+   ],
+   [
+    "a-im",
+    "x-bm,gzip"
+   ],
+   [
+    "sec-fetch-site",
+    "none"
+   ],
+   [
+    "sec-fetch-mode",
+    "no-cors"
+   ],
+   [
+    "sec-fetch-dest",
+    "empty"
+   ],
+   [
+    "user-agent",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+   ],
+   [
+    "accept-encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "priority",
+    "u=4, i"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28375,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28375"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "update.googleapis.com",
+  "path": "/service/update2/json",
+  "status": 200,
+  "req_bytes": 810,
+  "req_headers": [
+   [
+    "content-length",
+    "810"
+   ],
+   [
+    "x-goog-update-appid",
+    "nmmhkkegccagdldgiimedpiccmgmieda"
+   ],
+   [
+    "x-goog-update-interactivity",
+    "bg"
+   ],
+   [
+    "x-goog-update-updater",
+    "chromecrx-157.0.8103.79"
+   ],
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "sec-fetch-site",
+    "none"
+   ],
+   [
+    "sec-fetch-mode",
+    "no-cors"
+   ],
+   [
+    "sec-fetch-dest",
+    "empty"
+   ],
+   [
+    "user-agent",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+   ],
+   [
+    "accept-encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "accept-language",
+    "en-US,en;q=0.9"
+   ],
+   [
+    "priority",
+    "u=4, i"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "api.factory.ai",
+  "path": "/api/automations/sync",
+  "status": 200,
+  "req_bytes": 199,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "199"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-49faa95996cb40847eab5fdba7cf5810-e60295279afd7bf5-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 5181,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "5181"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28376,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28376"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-49faa95996cb40847eab5fdba7cf5810-e60295279afd7bf5-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 28375,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "28375"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3397,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3397"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/feature-flags",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-a97155f4da39adc327ba95b4ad53ceb8-57fb244cb8c5d558-01"
+   ],
+   [
+    "x-provider-routing-refresh",
+    "1"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 1157,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-a97155f4da39adc327ba95b4ad53ceb8-57fb244cb8c5d558-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "1157"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/billing/limits",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ],
+  "resp_decoded": "{\"usesTokenRateLimitsBilling\":true,\"hasActiveSubscription\":true,\"limits\":{\"standard\":{\"fiveHour\":{\"usedPercent\":3,\"windowEnd\":\"2026-11-18T18:32:52.554Z\",\"secondsRemaining\":7536},\"weekly\":{\"usedPercent\":1,\"windowEnd\":\"2026-11-24T21:04:14.291Z\",\"secondsRemaining\":535018},\"monthly\":{\"usedPercent\":1,\"windowEnd\":\"2026-12-17T21:04:14.291Z\",\"secondsRemaining\":2522218}},\"core\":{\"fiveHour\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"weekly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"monthly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null}}},\"overagePreference\":\"droidCore\",\"canManageOverage\":true,\"extraUsageBalanceCents\":0,\"extraUsageAllowed\":true}"
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-a05acbe8b24136b4277f0b400ee4f8a6-fb4f22032e2cb7a6-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 93896,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "93896"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/o/v1/responses/ws",
+  "status": 101,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Connection",
+    "Upgrade"
+   ],
+   [
+    "Upgrade",
+    "websocket"
+   ],
+   [
+    "Sec-WebSocket-Version",
+    "13"
+   ],
+   [
+    "Sec-WebSocket-Extensions",
+    "permessage-deflate; client_max_window_bits"
+   ],
+   [
+    "Sec-WebSocket-Key",
+    "8vysXfS/UQt7dGetYCWzUw=="
+   ],
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "OpenAI-Platform",
+    "org-bHuLtG1fGmYk5YaOihAAXFBw"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "x-api-provider",
+    "openai"
+   ],
+   [
+    "x-provider-routing-source",
+    "configured_order"
+   ],
+   [
+    "x-session-id",
+    "cb26df58-05b0-473b-a7e5-5ded44daf733"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.workos.com",
+  "path": "/sso/jwks/client_01HNM792M5G5G1A2THWPXKFMXB",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "User-Agent",
+    "jose/v5.9.6"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.workos.com"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "prem.factory.ai",
+  "path": "/api/internal/user-preferences",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "traceparent",
+    "00-a05acbe8b24136b4277f0b400ee4f8a6-c653a87a0b93155e-01"
+   ],
+   [
+    "x-client-version",
+    "1.14.0"
+   ],
+   [
+    "x-factory-client",
+    "cli"
+   ],
+   [
+    "x-factory-org-id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "x-factory-request-surface",
+    "cli_tui"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 36680,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "36680"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/billing/limits",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-6faba7e12cd29cbfabfcc60f1c9f9428-c0d406ebe2651388-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ],
+  "resp_decoded": "{\"usesTokenRateLimitsBilling\":true,\"hasActiveSubscription\":true,\"limits\":{\"standard\":{\"fiveHour\":{\"usedPercent\":3,\"windowEnd\":\"2026-11-18T18:32:52.554Z\",\"secondsRemaining\":7492},\"weekly\":{\"usedPercent\":1,\"windowEnd\":\"2026-11-24T21:04:14.291Z\",\"secondsRemaining\":534974},\"monthly\":{\"usedPercent\":1,\"windowEnd\":\"2026-12-17T21:04:14.291Z\",\"secondsRemaining\":2522174}},\"core\":{\"fiveHour\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"weekly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"monthly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null}}},\"overagePreference\":\"droidCore\",\"canManageOverage\":true,\"extraUsageBalanceCents\":0,\"extraUsageAllowed\":true}"
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 827,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "827"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/o/v1/chat/completions",
+  "status": 200,
+  "req_bytes": 2145,
+  "req_headers": [
+   [
+    "Accept",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "x-api-provider",
+    "baseten"
+   ],
+   [
+    "x-assistant-message-id",
+    "oneshot-assistant-1795019280139"
+   ],
+   [
+    "x-client-version",
+    "1.14.0"
+   ],
+   [
+    "x-factory-client",
+    "cli"
+   ],
+   [
+    "x-factory-org-id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "x-factory-request-surface",
+    "cli_tui"
+   ],
+   [
+    "x-message-call-type",
+    "session-title-generation"
+   ],
+   [
+    "x-provider-routing-source",
+    "configured_order"
+   ],
+   [
+    "x-session-id",
+    "cb26df58-05b0-473b-a7e5-5ded44daf733"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "2145"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/o/v1/chat/completions",
+  "status": 200,
+  "req_bytes": 58466,
+  "req_headers": [
+   [
+    "Accept",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "traceparent",
+    "00-6faba7e12cd29cbfabfcc60f1c9f9428-9541dffac265a438-01"
+   ],
+   [
+    "x-api-provider",
+    "baseten"
+   ],
+   [
+    "x-assistant-message-id",
+    "bb99ba00-016d-421b-bcae-0ecb3c369976"
+   ],
+   [
+    "x-client-version",
+    "1.14.0"
+   ],
+   [
+    "x-factory-client",
+    "cli"
+   ],
+   [
+    "x-factory-org-id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "x-factory-request-surface",
+    "cli_tui"
+   ],
+   [
+    "x-provider-routing-source",
+    "configured_order"
+   ],
+   [
+    "x-session-id",
+    "cb26df58-05b0-473b-a7e5-5ded44daf733"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "58466"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 15315,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "15315"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 2297,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "2297"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 139053,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "139053"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 548,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-c8545497c006dc0e29ddc85991d06ed8-8dc8e128f8ec3bef-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "548"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/billing/limits",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-c8545497c006dc0e29ddc85991d06ed8-d72278ad883f72e3-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ],
+  "resp_decoded": "{\"usesTokenRateLimitsBilling\":true,\"hasActiveSubscription\":true,\"limits\":{\"standard\":{\"fiveHour\":{\"usedPercent\":3,\"windowEnd\":\"2026-11-18T18:32:52.554Z\",\"secondsRemaining\":7479},\"weekly\":{\"usedPercent\":1,\"windowEnd\":\"2026-11-24T21:04:14.291Z\",\"secondsRemaining\":534961},\"monthly\":{\"usedPercent\":1,\"windowEnd\":\"2026-12-17T21:04:14.291Z\",\"secondsRemaining\":2522161}},\"core\":{\"fiveHour\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"weekly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null},\"monthly\":{\"usedPercent\":0,\"windowEnd\":null,\"secondsRemaining\":null}}},\"overagePreference\":\"droidCore\",\"canManageOverage\":true,\"extraUsageBalanceCents\":0,\"extraUsageAllowed\":true}"
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/llm/o/v1/chat/completions",
+  "status": 200,
+  "req_bytes": 58744,
+  "req_headers": [
+   [
+    "Accept",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "User-Agent",
+    "factory-cli/1.14.0"
+   ],
+   [
+    "traceparent",
+    "00-c8545497c006dc0e29ddc85991d06ed8-506af04260aed138-01"
+   ],
+   [
+    "x-api-provider",
+    "baseten"
+   ],
+   [
+    "x-assistant-message-id",
+    "f1736660-e38a-4bd1-b31d-d6777a0f8b0c"
+   ],
+   [
+    "x-client-version",
+    "1.14.0"
+   ],
+   [
+    "x-factory-client",
+    "cli"
+   ],
+   [
+    "x-factory-org-id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "x-factory-request-surface",
+    "cli_tui"
+   ],
+   [
+    "x-provider-routing-source",
+    "session_lock"
+   ],
+   [
+    "x-session-id",
+    "cb26df58-05b0-473b-a7e5-5ded44daf733"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "58744"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "prem.factory.ai",
+  "path": "/api/apps/cloud-sync/sessions/batch",
+  "status": 200,
+  "req_bytes": 3661,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "X-Factory-Request-Surface",
+    "cli_tui"
+   ],
+   [
+    "traceparent",
+    "00-c8545497c006dc0e29ddc85991d06ed8-aba98c0df1818a20-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "prem.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3661"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 87212,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "87212"
+   ]
+  ]
+ },
+ {
+  "method": "POST",
+  "host": "telemetry.factory.ai",
+  "path": "/api/ingest",
+  "status": 200,
+  "req_bytes": 3398,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "telemetry.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ],
+   [
+    "Content-Length",
+    "3398"
+   ]
+  ]
+ },
+ {
+  "method": "GET",
+  "host": "api.factory.ai",
+  "path": "/api/organization/managed-settings",
+  "status": 200,
+  "req_bytes": 0,
+  "req_headers": [
+   [
+    "Authorization",
+    "Bearer <REDACTED>"
+   ],
+   [
+    "X-Client-Version",
+    "1.14.0"
+   ],
+   [
+    "X-Factory-Client",
+    "cli"
+   ],
+   [
+    "X-Factory-Org-Id",
+    "l8UcsyG66DhBujPAoWdc"
+   ],
+   [
+    "traceparent",
+    "00-a05acbe8b24136b4277f0b400ee4f8a6-c653a87a0b93155e-01"
+   ],
+   [
+    "Connection",
+    "keep-alive"
+   ],
+   [
+    "User-Agent",
+    "Bun/1.4.4"
+   ],
+   [
+    "Accept",
+    "*/*"
+   ],
+   [
+    "Host",
+    "api.factory.ai"
+   ],
+   [
+    "Accept-Encoding",
+    "gzip, deflate, br, zstd"
+   ]
+  ]
+ }
+]

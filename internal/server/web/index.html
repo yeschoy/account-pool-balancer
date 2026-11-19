@@ -1265,6 +1265,7 @@
           <button class="btn" id="btn-refresh-acc">刷新</button>
           <button class="btn" id="btn-import">批量导入</button>
           <button class="btn" id="btn-add-manual">手动添加</button>
+          <button class="btn hidden" id="btn-factory-login">Factory 授权登录</button>
           <button class="btn primary" id="btn-add-device">设备授权添加</button>
         </div>
       </header>
@@ -1358,10 +1359,28 @@
       </div>
       <div class="panel hidden" id="factory-settings">
         <h2>Factory AI 独立设置</h2>
-        <p class="muted small">参考magpie的模型路由、Fast Mode与工具schema转换。原生协议保留字节，跨协议支持有限Chat/Responses/Messages互转，JSON/SSE结果还原；不改写身份/提示词，不删历史附件绕过413。目录不是账号授权，content_policy_rejected停止。</p>
+        <p class="muted small">参考magpie的模型路由、Fast Mode与工具schema转换，并按droid 1.14.0本地抓包对齐客户端身份。原生协议保留字节，跨协议支持有限Chat/Responses/Messages互转，JSON/SSE结果还原；不改写任务指令/历史/工具schema，不删历史附件绕过413。目录不是账号授权，content_policy_rejected停止。</p>
         <div class="form">
-          <label for="factory-base">API源站（不含路径）</label><input id="factory-base" autocomplete="off" placeholder="https://api.factory.ai">
-          <span></span><span class="hint">可明确选择https://api.eu.factory.ai；不会自动向whoami返回的私有域名发送Key，也不跟随重定向或代理失败后直连。</span>
+          <label for="factory-base">管理/额度源站（不含路径）</label><input id="factory-base" autocomplete="off" placeholder="https://api.factory.ai">
+          <span></span><span class="hint">whoami、billing/limits与工具接口的源站；默认https://api.factory.ai，可明确设为https://api.eu.factory.ai。不会自动向whoami返回的私有域名发送Key，也不跟随重定向或代理失败后直连。</span>
+          <label for="factory-inference">推理源站（不含路径）</label><input id="factory-inference" autocomplete="off" placeholder="https://prem.factory.ai">
+          <span></span><span class="hint">droid 1.14.0的/api/llm/*走prem.factory.ai而非api.factory.ai。留空时：默认源站自动映射到https://prem.factory.ai，自定义/Mock/代理源站沿用同一origin（EU如实际不同请显式填写）；也可显式填写。WebSocket /responses/ws已接入并透传；Responses HTTP仍保留回退。</span>
+          <label for="factory-surface">Droid客户端形态</label>
+          <select id="factory-surface">
+            <option value="cli_tui">cli_tui（交互TUI）</option>
+            <option value="cli_exec">cli_exec（非交互exec）</option>
+          </select>
+          <span></span><span class="hint">写入X-Factory-Request-Surface；cli_exec同时发送X-Factory-Exec-Output-Format: json。只影响身份头，不改变请求内容或模型路由。</span>
+          <label for="factory-openai-platform">OpenAI-Platform（可选）</label><input id="factory-openai-platform" autocomplete="off" placeholder="org-…（仅OpenAI路由）">
+          <span></span><span class="hint">droid在OpenAI路由发送该组织的org-&lt;base64&gt;标识；whoami不返回该映射，抓包值只属于单个组织，因此留空则不伪造。多组织混用本池时不要填写。</span>
+          <label for="factory-proxy-pool">代理池（每行一个）</label><textarea id="factory-proxy-pool" class="code" rows="4" placeholder="http://user:pass@host:port&#10;socks5://host:port"></textarea>
+          <span></span><span class="hint">新账号、OAuth登录和批量导入会优先分配未被其他Factory账号使用的代理；账号自己的代理优先。这决定 Factory/WorkOS 看到的出口 IP；留空则直连本机出口。代理池只负责分配，不验证代理质量。</span>
+          <label for="factory-ua-pool">UA池（每行一个）</label><textarea id="factory-ua-pool" class="code" rows="3" placeholder="factory-cli/1.14.0&#10;factory-cli/1.14.1"></textarea>
+          <span></span><span class="hint">新账号/登录按池分配不同推理 UA；账号自己的 UA 优先。管理面 whoami/billing/WorkOS 不使用此池。</span>
+          <label for="factory-user-agent">默认推理 UA</label><input id="factory-user-agent" autocomplete="off" placeholder="factory-cli/1.14.0">
+          <label for="factory-management-user-agent">管理/额度 UA</label><input id="factory-management-user-agent" autocomplete="off" placeholder="Bun/1.4.4">
+          <span></span><span class="hint">默认推理 UA 只用于模型/WS；管理 UA 用于 whoami、billing、WorkOS 设备码与刷新。留空使用 droid 1.14.0 参考值。</span>
+          <button class="btn small" id="btn-factory-assign-egress" type="button" title="先保存代理池/UA池，再分配">为现有账号分配代理/UA</button>
           <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
           <span></span><span class="hint">可从Chat/Responses/Messages调用不同原生协议模型；跨协议流完整缓冲（16MiB）后输出，不是低延迟流。不支持的字段/签名推理/续传引用本地400，不静默丢弃；关闭后只允许原生协议。工具根级composition包装/解包不受此开关影响。Fast仅在显式选择Fast模型或请求fast/priority时映射，可能花更多额度。</span>
           <label for="factory-standard-only">仅使用Standard额度</label><label class="check"><input id="factory-standard-only" type="checkbox">开启</label>
@@ -1369,7 +1388,8 @@
           <label for="factory-detail">本池详情日志</label><label class="check"><input id="factory-detail" type="checkbox">开启</label>
         </div>
         <label for="factory-models">模型原生路由（JSON数组）</label><textarea id="factory-models" class="code" rows="8"></textarea>
-        <p class="hint">每项{id,protocol,upstream}；protocol为chat/responses/messages，upstream为Factory的x-api-provider。默认目录来自固定版本参考；原生协议为chat/responses/messages。支持已配置Fast模型的显式参数映射与有限跨协议转换，Gemini generate尚未实现。空数组真正清空；已有自定义目录不会自动补模型。</p>
+        <button class="btn small" id="btn-factory-models-default" type="button">填入抓包参考路由</button>
+        <p class="hint">每项{id,protocol,upstream}；protocol为chat/responses/messages/generate/embeddings，upstream为Factory的x-api-provider。默认目录综合固定版本参考与抓包：claude-sonnet-5-5/claude-haiku-4-5为bedrock_anthropic，kimi-k3.1-pro为databricks，deepseek-v4.1-flash-1017为baseten，gpt-6.2-sol为openai，text-embedding-3-large为embeddings/openai。Gemini generate（google）按原生`/v1beta/models/{model}:generateContent`与`:streamGenerateContent`透传到`/api/llm/g/v1/generate`；`google`只用于generate。countTokens走`/api/llm/g/v1/countTokens`；Embeddings走`/api/llm/o/v1/embeddings`；Responses WebSocket为`/v1/responses/ws`。下游`auto`/`auto-fast`由网关选同协议第一条/第一条`-fast`路由。空数组真正清空；已有非空自定义目录会补入缺失的Gemini/embedding条目，不重排。</p>
         <p class="muted small">下方路由/会话/超时/并发/额度轮询/规则/价格独立保存。fk- Key的billing权限不足显示未知并保留历史，不等于推理Key失效；被拒后不周期重试billing，手动刷新可重查。Standard/Core为共享百分比，不逐Key累加。Extra余额仅展示，不自动开启或修改消费。费用默认未知，可填手动估算价；不是官方账单。日志保留/容量为共享设施，只读。</p>
       </div>
       <div class="panel hidden" id="deploy-settings">

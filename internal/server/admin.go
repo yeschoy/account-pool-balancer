@@ -113,6 +113,10 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /api/device-auth", s.apiDeviceStart)
 	a("GET /api/device-auth/{flow}", s.apiDevicePoll)
 	a("DELETE /api/device-auth/{flow}", s.apiDeviceCancel)
+	a("POST /api/factory/login", s.apiFactoryLoginStart)
+	a("POST /api/factory/assign-egress", s.apiFactoryAssignEgress)
+	a("GET /api/factory/login/{flow}", s.apiFactoryLoginPoll)
+	a("DELETE /api/factory/login/{flow}", s.apiFactoryLoginCancel)
 	a("GET /api/client-keys", s.apiClientKeys)
 	a("POST /api/client-keys", s.apiCreateClientKey)
 	a("PUT /api/client-keys/{id}", s.apiUpdateClientKey)
@@ -289,6 +293,7 @@ type accountView struct {
 	Priority       int                        `json:"priority"`
 	HasProxy       bool                       `json:"hasProxy"`
 	ProxyURL       string                     `json:"proxyUrl"`
+	UserAgent      string                     `json:"userAgent,omitempty"`
 	ProxyHealth    *proxyHealthView           `json:"proxyHealth,omitempty"`
 	EgressIP       string                     `json:"egressIp,omitempty"`
 	Egress         *goEgressView              `json:"egress,omitempty"`
@@ -319,6 +324,11 @@ type accountView struct {
 	ModelStudioQuotaNote  string                 `json:"modelStudioQuotaNote,omitempty"`
 	Factory               *quota.FactoryState    `json:"factory,omitempty"`
 	Deploy                *quota.DeployDiagnosis `json:"deploy,omitempty"`
+	// FactoryOAuth marks an account created by the WorkOS device login. Its
+	// access token is not shown through the generic key copy.
+	FactoryOAuth         bool      `json:"factoryOAuth,omitempty"`
+	FactoryAccessExpires time.Time `json:"factoryAccessExpiresAt,omitzero"`
+	FactoryOrgID         string    `json:"factoryOrgId,omitempty"`
 }
 
 var proxyAuthRe = regexp.MustCompile(`//[^/@]*@`)
@@ -349,7 +359,7 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		v := accountView{ID: a.ID, Provider: a.Provider, Name: a.Name, Email: a.Email, UserID: a.UserID, Note: a.Note, Group: a.Group, Enabled: a.Enabled,
 			RuntimeKey: a.RuntimeKey, ControlKey: a.ControlKey, HasControlKey: a.ControlKey != "",
 			MaxConcurrent: a.MaxConc, MaxRPM: a.MaxRPM, Weight: a.Weight, Priority: a.Priority,
-			HasProxy: a.ProxyURL != "", ProxyURL: a.ProxyURL, CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
+			HasProxy: a.ProxyURL != "", ProxyURL: a.ProxyURL, UserAgent: a.UserAgent, CreatedAt: a.CreatedAt, Runtime: views[a.ID], Usage24h: usage[a.ID],
 			TokenIncomplete: a.Provider == config.ProviderModal && config.ModalTokenIncomplete(a.RuntimeKey)}
 		if a.Provider == config.ProviderOpenDesign {
 			v.Diagnosis = snaps[a.ID].OpenDesignDiagnosis(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
@@ -365,6 +375,10 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		}
 		if a.Provider == config.ProviderFactory {
 			v.Factory = snaps[a.ID].FactoryView()
+			if a.FactoryRefreshToken != "" {
+				v.FactoryOAuth, v.FactoryAccessExpires, v.FactoryOrgID = true, a.FactoryAccessExpires, a.FactoryOrgID
+				v.RuntimeKey, v.ControlKey, v.HasControlKey = "", "", false
+			}
 		}
 		if a.Provider == config.ProviderDeploy {
 			v.Deploy = snaps[a.ID].DeployDiagnosis(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
@@ -494,6 +508,8 @@ type accountInput struct {
 	Weight          *int    `json:"weight"`
 	Priority        *int    `json:"priority"`
 	ProxyURL        *string `json:"proxyUrl"`
+	UserAgent       *string `json:"userAgent"`
+	ClearUserAgent  bool    `json:"clearUserAgent"`
 	EgressIP        *string `json:"egressIp"`
 	ClearProxy      bool    `json:"clearProxy"`
 }
@@ -511,6 +527,10 @@ func (in accountInput) apply(a *config.Account) {
 	set(&a.Note, in.Note)
 	set(&a.Group, in.Group)
 	set(&a.EgressIP, in.EgressIP)
+	set(&a.UserAgent, in.UserAgent)
+	if in.ClearUserAgent {
+		a.UserAgent = ""
+	}
 	if in.Provider != nil && config.KnownProvider(strings.TrimSpace(*in.Provider)) {
 		a.Provider = strings.TrimSpace(*in.Provider)
 	}
@@ -577,6 +597,7 @@ func (s *Server) apiCreateAccount(w http.ResponseWriter, r *http.Request) {
 		a.Group = config.GroupForProvider(a.Provider)
 	}
 	cfg, err := s.cfg.Update(rev(in.ExpectedRevision), func(c *config.Config) error {
+		assignFactoryEgress(c, &a)
 		c.Accounts = append(c.Accounts, a)
 		return nil
 	})
@@ -598,6 +619,9 @@ func (s *Server) apiUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Update(rev(in.ExpectedRevision), func(c *config.Config) error {
 		for i := range c.Accounts {
 			if c.Accounts[i].ID == id {
+				if c.Accounts[i].FactoryRefreshToken != "" && in.RuntimeKey != nil && strings.TrimSpace(*in.RuntimeKey) != "" && strings.TrimSpace(*in.RuntimeKey) != c.Accounts[i].RuntimeKey {
+					return errors.New("Factory OAuth 账号请使用“重新授权”；如需改用 fk- Key，请删除后重新创建")
+				}
 				in.apply(&c.Accounts[i])
 				if c.Accounts[i].Provider == config.ProviderTokenHarbor && in.ProxyURL != nil && !in.ClearProxy {
 					return thsignupstore.ValidateProxy(strings.TrimSpace(*in.ProxyURL))
@@ -729,6 +753,7 @@ func (s *Server) apiImportAccounts(w http.ResponseWriter, r *http.Request) {
 			if config.WriteOnlyCredentials(a.Provider) && seen[key] {
 				continue
 			}
+			assignFactoryEgress(c, &a)
 			c.Accounts = append(c.Accounts, a)
 			seen[key] = true
 			count++
@@ -893,6 +918,10 @@ func (s *Server) apiAccountKeys(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.cfg.Get().Account(r.PathValue("id"))
 	if !ok {
 		apiError(w, http.StatusNotFound, errors.New("account not found"))
+		return
+	}
+	if a.Provider == config.ProviderFactory && a.FactoryRefreshToken != "" {
+		writeJSON(w, http.StatusOK, map[string]string{"oauth": "true", "proxyUrl": a.ProxyURL})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runtimeKey": a.RuntimeKey, "controlKey": a.ControlKey, "proxyUrl": a.ProxyURL})
@@ -1519,11 +1548,17 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	if prov == config.ProviderDeploy {
 		defaultPrices = config.DefaultDeployPricing().Models
 	}
+	defaults := map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()}
+	if prov == config.ProviderFactory {
+		// The console can fill the captured reference routes without
+		// overwriting an existing custom list until the operator saves it.
+		defaults["factoryModels"] = config.DefaultFactoryModels()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings":   settingsDoc{Factory: &c.Factory, X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
-		"defaults":   map[string]any{"errorRules": defErr, "retryRules": config.DefaultRetryRulesFor(prov), "pricing": defaultPrices, "mistralPerformance": config.DefaultMistral().EffectivePerformance()},
+		"defaults":   defaults,
 	})
 }
 
@@ -1565,10 +1600,17 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 		case config.ProviderFactory:
 			if in.Factory != nil {
 				c.Factory.BaseURL = in.Factory.BaseURL
+				c.Factory.InferenceURL = in.Factory.InferenceURL
+				c.Factory.RequestSurface = in.Factory.RequestSurface
+				c.Factory.OpenAIPlatform = in.Factory.OpenAIPlatform
 				c.Factory.DetailLog = in.Factory.DetailLog
 				c.Factory.StandardOnly = in.Factory.StandardOnly
 				c.Factory.Compatibility = in.Factory.Compatibility
 				c.Factory.Models = in.Factory.Models
+				c.Factory.ProxyPool = in.Factory.ProxyPool
+				c.Factory.UserAgents = in.Factory.UserAgents
+				c.Factory.UserAgent = in.Factory.UserAgent
+				c.Factory.ManagementUserAgent = in.Factory.ManagementUserAgent
 			}
 			c.Factory.Routing, c.Factory.Quota, c.Factory.Pricing = &in.Routing, &in.Quota, &in.Pricing
 			c.FactoryErrorRules, c.FactoryRetryRules = in.ErrorRules, in.RetryRules

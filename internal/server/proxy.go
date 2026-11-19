@@ -362,7 +362,13 @@ func poolPathOK(provider, path string) bool {
 	case config.ProviderTokenHarbor:
 		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
 	case config.ProviderFactory:
-		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages"
+		if _, _, ok := factory.ParseGeminiPath(path); ok {
+			return true
+		}
+		if _, ok := factory.ParseGeminiCountTokens(path); ok {
+			return true
+		}
+		return path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages" || path == "/v1/embeddings"
 	case config.ProviderDeploy, config.ProviderX50:
 		return path == "/v1/chat/completions" // GET /models is handled before this POST-only gate.
 	case config.ProviderModelStudio:
@@ -393,7 +399,35 @@ func writeLocalError(w http.ResponseWriter, proto string, status int, typ, code,
 		writeJSON(w, status, map[string]any{"type": "error", "error": map[string]any{"type": typ, "message": msg}})
 		return
 	}
+	if proto == "gemini" {
+		writeJSON(w, status, map[string]any{"error": map[string]any{"code": status, "message": msg, "status": geminiStatus(status)}})
+		return
+	}
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code}})
+}
+
+func geminiStatus(code int) string {
+	switch code {
+	case 400:
+		return "INVALID_ARGUMENT"
+	case 401:
+		return "UNAUTHENTICATED"
+	case 403:
+		return "PERMISSION_DENIED"
+	case 404:
+		return "NOT_FOUND"
+	case 408:
+		return "DEADLINE_EXCEEDED"
+	case 429:
+		return "RESOURCE_EXHAUSTED"
+	case 500:
+		return "INTERNAL"
+	case 502, 503:
+		return "UNAVAILABLE"
+	case 504:
+		return "DEADLINE_EXCEEDED"
+	}
+	return "UNKNOWN"
 }
 
 func (s *Server) handleV1(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +437,23 @@ func (s *Server) handleV1(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		writeLocalError(w, "openai", http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "method not allowed", 0)
+		return
+	}
+	s.handleProxy(w, r)
+}
+
+// handleV1Beta is the Gemini native surface: generateContent,
+// streamGenerateContent and countTokens. Other Google methods would need a
+// route Factory does not expose.
+func (s *Server) handleV1Beta(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := factory.ParseGeminiPath(r.URL.Path); !ok {
+		if _, ok := factory.ParseGeminiCountTokens(r.URL.Path); !ok {
+			writeLocalError(w, "gemini", http.StatusNotFound, "invalid_request_error", "unsupported_endpoint", "unsupported Gemini endpoint: "+r.URL.Path, 0)
+			return
+		}
+	}
+	if r.Method != http.MethodPost {
+		writeLocalError(w, "gemini", http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "method not allowed", 0)
 		return
 	}
 	s.handleProxy(w, r)
@@ -419,6 +470,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	proto := "openai"
 	if strings.HasPrefix(r.URL.Path, "/v1/messages") {
 		proto = "anthropic"
+	}
+	if _, _, ok := factory.ParseGeminiPath(r.URL.Path); ok {
+		proto = "gemini"
+	}
+	if _, ok := factory.ParseGeminiCountTokens(r.URL.Path); ok {
+		proto = "gemini"
 	}
 	var cw *captureWriter
 	var reqHeader http.Header
@@ -705,6 +762,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		body = prepared
 	}
 	rec.Model, _ = obj["model"].(string)
+	if gmodel, gstream, ok := factory.ParseGeminiPath(r.URL.Path); ok {
+		// Google puts the model in the path, not the body. It is the routing
+		// key before any account is leased; the body keeps its own fields.
+		rec.Model, rec.Stream = gmodel, gstream
+	}
 	if rec.Provider == config.ProviderFactory {
 		rec.factoryPlan, err = prepareFactory(cfg, r.URL.Path, body)
 		if err != nil {
@@ -713,7 +775,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			finish(400, "failed")
 			return
 		}
+		rec.factoryPlan.session, rec.factoryPlan.messageID, rec.factoryPlan.traceparent = s.factoryRequestIDs(cfg, r.Header, body)
 		rec.Model = rec.factoryPlan.model
+		if rec.factoryPlan.generate {
+			rec.Stream = rec.factoryPlan.stream
+		}
 	}
 	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
 		rec.ErrorCategory = "request"
@@ -738,6 +804,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec.Stream, _ = obj["stream"].(bool)
+	if gmodel, gstream, ok := factory.ParseGeminiPath(r.URL.Path); ok {
+		// The plan may have resolved a virtual model (auto); keep its concrete
+		// routing key instead of putting the path token back.
+		rec.Model, rec.Stream = gmodel, gstream
+		if rec.factoryPlan != nil && rec.factoryPlan.model != "" {
+			rec.Model = rec.factoryPlan.model
+		}
+	}
 	if !config.IsOpenCode(rec.Provider) && rec.Provider != config.ProviderTokenHarbor && rec.Provider != config.ProviderMistral && rec.Provider != config.ProviderOllama && !config.NativeGateway(rec.Provider) {
 		s.quota.NoteModel(rec.Model)
 	} // OpenCode must not feed OpenDesign preflight coverage
@@ -755,6 +829,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderFactory {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
 		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
+		// Gemini has no messages/input history for the shared fallback; use
+		// its first system/user text so a conversation still sticks.
+		if rec.Provider == config.ProviderFactory && rec.factoryPlan != nil && rec.factoryPlan.generate && ident.Fingerprint == "" {
+			if stable := stableConversation(obj); stable != "" {
+				ident = Identity{Source: "message_hmac", KeyType: "message_hmac", Confidence: "fallback", Fingerprint: s.fingerprint(identityScope, "gemini", stable)}
+			}
+		}
 	} else if rec.Provider == config.ProviderMistral {
 		ident = s.mistralIdentity(cfg, identityScope, r.Header, obj)
 		rec.ClientFamily = goClientFamily(r.Header, obj)
@@ -961,6 +1042,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.AccountID, rec.AccountName, rec.SelectionReason, rec.Overflow = acct.ID, acct.Name, d.Reason, d.Overflow
 		rec.Proxy = egressLabel(acct.ProxyURL)
+		if acct.Provider == config.ProviderFactory && acct.FactoryRefreshToken != "" {
+			next, terr := s.factoryAccountToken(r.Context(), cfg, acct)
+			if terr != nil {
+				lease.Release()
+				excluded[acct.ID] = true
+				s.pool.Cooldown(acct.ID, "", time.Now().Add(time.Minute), 401, "factory-oauth-refresh", "factory-oauth-refresh")
+				rec.Attempts = append(rec.Attempts, attemptLog{Account: acct.ID, AccountName: acct.Name, Status: 401, Egress: egressLabel(acct.ProxyURL), Terminal: "auth"})
+				last = &attemptResult{kind: outFailed, status: 401, terminal: "auth", category: "auth", contentType: "application/json", body: []byte(`{"error":{"message":"Factory OAuth token refresh failed","type":"authentication_error"}}`)}
+				if i+1 >= maxAttempts {
+					break
+				}
+				continue
+			}
+			acct, lease.Account = next, next
+		}
 
 		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident, detailIdentities)
 		res.privateIdentities = detailIdentities
@@ -1403,12 +1499,19 @@ var skipRequestHeaders = map[string]bool{
 	"x-client-ip": true, "client-ip": true, "x-originating-ip": true, "x-cluster-client-ip": true,
 	"x-remote-ip": true, "x-remote-addr": true, "x-host": true, "via": true, "x-proxyuser-ip": true,
 	"fastly-client-ip": true, "x-akamai-client-ip": true, "x-bluecoat-via": true, "x-hermes-client-ip": true,
+	// More proxy/CDN spellings that carry the downstream peer address.
+	"proxy-client-ip": true, "wl-proxy-client-ip": true, "http-client-ip": true,
+	"x-true-ip": true, "x-envoy-external-address": true, "x-original-forwarded-for": true,
+	"x-azure-clientip": true, "x-azure-socketip": true, "x-ms-client-ip": true,
 }
 
 func copyRequestHeaders(dst, src http.Header) {
 	for k, vs := range src {
 		lk := strings.ToLower(k)
-		if skipRequestHeaders[lk] || strings.HasPrefix(lk, "x-forwarded-") || strings.HasPrefix(lk, "cf-") {
+		if skipRequestHeaders[lk] || strings.HasPrefix(lk, "x-forwarded-") || strings.HasPrefix(lk, "cf-") ||
+			strings.HasPrefix(lk, "x-original-") || strings.HasPrefix(lk, "x-envoy-") ||
+			strings.HasPrefix(lk, "x-azure-") || strings.HasPrefix(lk, "x-ms-") ||
+			strings.HasPrefix(lk, "x-proxy-") {
 			continue
 		}
 		for _, v := range vs {
@@ -1557,6 +1660,8 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			markSent()
 		}
 	}}
+	generate := rec.factoryPlan != nil && rec.factoryPlan.generate
+	countTokens := rec.factoryPlan != nil && rec.factoryPlan.countTokens
 	targetPath := strings.TrimPrefix(r.URL.Path, "/v1")
 	if ocTo != "" {
 		targetPath = opencode.Path(ocTo)
@@ -1570,8 +1675,17 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if ocTo != "" {
 		protoForBase = string(ocTo)
 	}
+	if generate {
+		// Google's model/action path collapses to Factory's one generate
+		// endpoint; the model travels in the body and alt=sse is a client
+		// detail Factory does not take.
+		targetPath, protoForBase = "/generate", "generate"
+	}
+	if countTokens {
+		targetPath, protoForBase = "/countTokens", "generate"
+	}
 	target := cfg.InferenceBase(acct, protoForBase) + targetPath
-	if r.URL.RawQuery != "" {
+	if r.URL.RawQuery != "" && !generate {
 		target += "?" + r.URL.RawQuery
 	}
 	if acct.Provider == config.ProviderOpenCodeGo && ocTo == opencode.Messages {
@@ -1622,17 +1736,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		}
 	case config.ProviderFactory:
 		m, _ := cfg.Factory.Model(rec.Model)
-		for name := range req.Header {
-			lower := strings.ToLower(name)
-			if strings.HasPrefix(lower, "x-factory-") || strings.HasPrefix(lower, "x-provider-routing-") {
-				req.Header.Del(name)
-			}
-		}
-		req.Header.Set("X-Api-Provider", m.Upstream)
-		req.Header.Del("X-Factory-Org-Id")
-		req.Header.Del("X-Factory-Client")
-		req.Header.Del("X-Client-Version")
-		req.Header.Set("User-Agent", "account-pool-balancer/factory-gateway")
+		s.factoryHeaders(cfg, req.Header, acct, m, rec.factoryPlan)
 		if ocTo == opencode.Messages {
 			if rec.factoryPlan != nil && rec.factoryPlan.beta {
 				betas := strings.Split(req.Header.Get("Anthropic-Beta"), ",")
@@ -1650,9 +1754,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 					req.Header.Set("Anthropic-Beta", value+factoryFastBeta)
 				}
 			}
-			if req.Header.Get("Anthropic-Version") == "" {
-				req.Header.Set("Anthropic-Version", "2023-06-01")
-			}
+			// droid's Anthropic client pins this version; a downstream
+			// caller's other value is not what Factory saw from droid.
+			req.Header.Set("Anthropic-Version", "2023-06-01")
 		}
 	case config.ProviderOllama, config.ProviderModal, config.ProviderTokenHarbor, config.ProviderMistral, config.ProviderDeploy, config.ProviderX50:
 		// Token Harbor accepts Bearer on all native protocols.
@@ -1814,6 +1918,20 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return factoryAdaptationFailure(res)
 		}
 	}
+	if rec.factoryPlan != nil && rec.factoryPlan.generate && !rec.factoryPlan.stream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+		// Factory's one /generate endpoint is a stream; a non-streaming
+		// :generateContent caller gets the merged GenerateContentResponse.
+		merged, aggErr := aggregateGeminiSSE(resp.Body, 512<<20)
+		if aggErr != nil {
+			res.kind, res.status, res.terminal, res.category = outFailed, 502, "compatibility", "compatibility"
+			res.contentType = "application/json"
+			res.body = []byte(`{"error":{"message":"Factory Gemini stream could not be aggregated; the request was not replayed"}}`)
+			return res
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(merged))
+		ct = "application/json"
+		res.contentType = ct
+	}
 	if ocTo != "" && ocFrom != ocTo {
 		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
 		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
@@ -1874,6 +1992,19 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		res.mistralLayout.observe(native, false)
 	}
 	h := w.Header()
+	if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.stream && !strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+		// A streaming Gemini caller asked for SSE; wrap a JSON answer rather
+		// than making it parse a content type it did not request.
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("Cache-Control", "no-cache")
+		h.Set("X-Accel-Buffering", "no")
+		h.Set("X-Attempts", strconv.Itoa(attemptNo))
+		setUpstreamRequestID(h, resp.Header, acct.Provider)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(append(append([]byte("data: "), b...), '\n', '\n'))
+		res.kind, res.result, res.status, res.terminal = outDelivered, "success", http.StatusOK, "success"
+		return res
+	}
 	h.Set("Content-Type", ct)
 	h.Set("X-Attempts", strconv.Itoa(attemptNo))
 	setUpstreamRequestID(h, resp.Header, acct.Provider)
@@ -2001,6 +2132,12 @@ func scanUsage(m map[string]any, u *usage) {
 			set(&u.reasoning, intField(d, "reasoning_tokens"))
 		}
 	}
+	if gm, ok := m["usageMetadata"].(map[string]any); ok {
+		set(&u.in, intField(gm, "promptTokenCount"))
+		set(&u.out, intField(gm, "candidatesTokenCount"))
+		set(&u.cached, intField(gm, "cachedContentTokenCount"))
+		set(&u.reasoning, intField(gm, "thoughtsTokenCount"))
+	}
 }
 
 // ---- SSE ----
@@ -2100,6 +2237,16 @@ func sseError(event string, data []byte) (bool, int, []byte) {
 
 // hasUsage says whether data has a "usage" member that isn't null: OpenAI
 // chunks streamed with include_usage carry "usage":null until the last one.
+// geminiTerminal says whether a Gemini SSE chunk ends the answer. Google has
+// no [DONE] frame: the last chunk carries a candidate finishReason (or a
+// promptFeedback for a blocked prompt).
+func geminiTerminal(data []byte) bool {
+	if bytes.Contains(data, []byte(`"finishReason"`)) && !bytes.Contains(data, []byte(`"finishReason":null`)) && !bytes.Contains(data, []byte(`"finishReason": null`)) {
+		return true
+	}
+	return bytes.Contains(data, []byte(`"promptFeedback"`))
+}
+
 func hasUsage(data []byte) bool {
 	key := []byte(`"usage"`)
 	for rest := data; ; {
@@ -2137,6 +2284,7 @@ type evMsg struct {
 func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config.Config, lease *pool.Lease, resp *http.Response, res *attemptResult,
 	cancel context.CancelFunc, timer *time.Timer, timedOut *atomic.Bool, attemptNo int, start time.Time, isResponses bool, group string, body []byte, privateIdentities []string, audit *cacheAuditAttempt) *attemptResult {
 	mistralResponses := (lease.Account.Provider == config.ProviderMistral || lease.Account.Provider == config.ProviderFactory) && r.URL.Path == "/v1/responses"
+	geminiStream := lease.Account.Provider == config.ProviderFactory && res.goRecord != nil && res.goRecord.factoryPlan != nil && res.goRecord.factoryPlan.generate
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	events := make(chan evMsg, 16)
 	done := make(chan struct{})
@@ -2263,7 +2411,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 	}
 	scan := func(event string, data []byte) {
 		audit.captureUsage(data)
-		if !hasUsage(data) && !(isResponses && (event == "response.created" || event == "response.completed")) && !bytes.Contains(data, []byte(`"response.created"`)) {
+		if !hasUsage(data) && !bytes.Contains(data, []byte(`"usageMetadata"`)) && !(isResponses && (event == "response.created" || event == "response.completed")) && !bytes.Contains(data, []byte(`"response.created"`)) {
 			return
 		}
 		var m map[string]any
@@ -2318,7 +2466,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		res.evaluated = true // transport incompleteness is not a bad credential
 		return res
 	}
-	deployStream := config.NativeGateway(lease.Account.Provider) && !mistralResponses
+	deployStream := config.NativeGateway(lease.Account.Provider) && !mistralResponses && !geminiStream
 	incompleteDeploy := func() *attemptResult {
 		res.result, res.terminal, res.category = "failed", "incomplete_stream", "incomplete_stream"
 		if !res.evaluated && res.goRecord != nil {
@@ -2328,7 +2476,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 		return res // Preserve received bytes; never synthesize DONE or replay.
 	}
-	firstDone := mistralResponses && mistralResponsesTerminal(firstEvent, firstData) || deployStream && isTerminalEvent(firstEvent, firstData)
+	firstDone := mistralResponses && mistralResponsesTerminal(firstEvent, firstData) || deployStream && isTerminalEvent(firstEvent, firstData) || geminiStream && geminiTerminal(firstData)
 	if !write(first) {
 		if firstDone {
 			return res
@@ -2368,7 +2516,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			if len(m.ev) > 0 {
 				res.upstreamLast = m.at
 				event, data, _ := sseFields(m.ev)
-				done := isTerminalEvent(event, data)
+				done := isTerminalEvent(event, data) || geminiStream && geminiTerminal(data)
 				if mistralResponses {
 					done = mistralResponsesTerminal(event, data)
 				}

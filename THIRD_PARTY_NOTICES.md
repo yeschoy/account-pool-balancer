@@ -7,6 +7,9 @@ stream adaptation in `internal/factory/` are adapted from
 `magpie-community/plugins/packages/factory/anthropic-tools.mjs`, commit
 `d24fd5d1824e1078e7c8c56732813f8263fcf728`.
 Model routing and explicit Fast Mode mapping also reference this plugin.
+The droid client headers and fixed system-prompt opening in
+`internal/factory/droid.go` are adapted from the same package's `index.mjs`
+(`factoryHeaders`, `send`, `droidBody`, `droidChat`, `anthropicBody`).
 
 Source: https://github.com/magpie-community/plugins/tree/d24fd5d1824e1078e7c8c56732813f8263fcf728/packages/factory
 

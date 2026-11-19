@@ -507,6 +507,7 @@ func (s *Server) applyStaged(id, action, target string) (string, error) {
 			}
 			a := config.Account{ID: config.NewID("acc_"), Provider: st.Provider, Name: st.Name, Group: st.Group, Enabled: true, RuntimeKey: st.RuntimeKey, ControlKey: st.ControlKey,
 				ProxyURL: st.ProxyURL, Note: importNote(st.ImportedAt, st.ImportKey, st.Note), CreatedAt: now}
+			assignFactoryEgress(c, &a)
 			c.Accounts = append(c.Accounts, a)
 			accountID = a.ID
 			return nil
@@ -541,6 +542,7 @@ func (s *Server) applyStaged(id, action, target string) (string, error) {
 			if st.ProxyURL != "" {
 				a.ProxyURL = st.ProxyURL
 			}
+			assignFactoryEgress(c, a)
 			a.Note = clipRunes(importNote(st.ImportedAt, st.ImportKey, st.Note)+"\n覆盖确认 "+now.Local().Format(noteTimeLayout), 500)
 			accountID = a.ID
 			return nil

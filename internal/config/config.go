@@ -664,24 +664,37 @@ type ImportKey struct {
 }
 
 type Account struct {
-	ID          string    `json:"id"`
-	Provider    string    `json:"provider,omitempty"` // opendesign (default) | river | ollama
-	Name        string    `json:"name"`
-	Email       string    `json:"email,omitempty"`
-	UserID      string    `json:"userId,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	Group       string    `json:"group"`
-	Enabled     bool      `json:"enabled"`
-	RuntimeKey  string    `json:"runtimeKey"`
-	ControlKey  string    `json:"controlKey,omitempty"`
-	WorkspaceID string    `json:"workspaceId,omitempty"`
-	MaxConc     int       `json:"maxConcurrent"`
-	MaxRPM      int       `json:"maxRpm"`
-	Weight      int       `json:"weight"`
-	Priority    int       `json:"priority"`
-	ProxyURL    string    `json:"proxyUrl,omitempty"`
-	EgressIP    string    `json:"egressIp,omitempty"` // optional expected static Go egress; sharing is allowed
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          string `json:"id"`
+	Provider    string `json:"provider,omitempty"` // opendesign (default) | river | ollama
+	Name        string `json:"name"`
+	Email       string `json:"email,omitempty"`
+	UserID      string `json:"userId,omitempty"`
+	Note        string `json:"note,omitempty"`
+	Group       string `json:"group"`
+	Enabled     bool   `json:"enabled"`
+	RuntimeKey  string `json:"runtimeKey"`
+	ControlKey  string `json:"controlKey,omitempty"`
+	WorkspaceID string `json:"workspaceId,omitempty"`
+	MaxConc     int    `json:"maxConcurrent"`
+	MaxRPM      int    `json:"maxRpm"`
+	Weight      int    `json:"weight"`
+	Priority    int    `json:"priority"`
+	ProxyURL    string `json:"proxyUrl,omitempty"`
+	// UserAgent is an optional per-account inference UA (Factory). Empty uses
+	// the pool default; management/whoami keep their own runtime UA.
+	UserAgent string    `json:"userAgent,omitempty"`
+	EgressIP  string    `json:"egressIp,omitempty"` // optional expected static Go egress; sharing is allowed
+	CreatedAt time.Time `json:"createdAt"`
+
+	// ---- Factory OAuth ----------------------------------------------------
+	// FactoryRefreshToken marks an account created by Factory's WorkOS device
+	// login rather than an fk- API key. RuntimeKey then holds the short-lived
+	// access token; this token renews it. Neither is exposed by the console's
+	// generic key copy for this mode.
+	FactoryRefreshToken  string    `json:"factoryRefreshToken,omitempty"`
+	FactoryAccessExpires time.Time `json:"factoryAccessExpiresAt,omitzero"`
+	FactoryOrgID         string    `json:"factoryOrgId,omitempty"`       // Factory's X-Factory-Org-Id
+	FactoryWorkOSOrgID   string    `json:"factoryWorkosOrgId,omitempty"` // WorkOS organization_id for refresh
 
 	// ---- Perch only -------------------------------------------------------
 	// PerchUserID is the Supabase user id: the account's identity, and the
@@ -1379,6 +1392,19 @@ func clampInt(v *int, lo, hi int, name string) error {
 
 var forbiddenProxyChars = regexp.MustCompile(`[\s]`)
 
+// ValidateUserAgent rejects values that cannot be a single HTTP header value.
+func ValidateUserAgent(ua string) error {
+	if ua == "" || len(ua) > 512 {
+		return errors.New("userAgent must be 1..512 bytes")
+	}
+	for _, r := range ua {
+		if r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			return errors.New("userAgent contains a control character")
+		}
+	}
+	return nil
+}
+
 func ValidateProxyURL(raw string) error {
 	if raw == "" {
 		return nil
@@ -1707,7 +1733,16 @@ func (c *Config) Normalize() error {
 		if !KnownProvider(a.Provider) {
 			return fmt.Errorf("accounts[%s]: unknown provider", a.ID)
 		}
-		if !ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
+		if a.Provider == ProviderFactory && a.FactoryRefreshToken != "" {
+			// A device-login account has no fk- key. The access token is a JWT
+			// and may be empty only between a failed refresh and the next one.
+			if a.RuntimeKey != "" && (len(a.RuntimeKey) > 8192 || strings.TrimSpace(a.RuntimeKey) != a.RuntimeKey) {
+				return fmt.Errorf("accounts[%s]: invalid Factory OAuth access token", a.ID)
+			}
+			if len(a.FactoryRefreshToken) > 8192 || strings.TrimSpace(a.FactoryRefreshToken) != a.FactoryRefreshToken {
+				return fmt.Errorf("accounts[%s]: invalid Factory OAuth refresh token", a.ID)
+			}
+		} else if !ValidRuntimeKeyFor(a.Provider, a.RuntimeKey) {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, runtimeKeyError(a.Provider))
 		}
 		// OpenDesign reads its control plane with a vela_ctrl_ control key;
@@ -1799,6 +1834,11 @@ func (c *Config) Normalize() error {
 		}
 		if err := clampInt(&a.MaxRPM, 0, 100000, "maxRpm"); err != nil {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, err)
+		}
+		if strings.TrimSpace(a.UserAgent) != "" {
+			if err := ValidateUserAgent(strings.TrimSpace(a.UserAgent)); err != nil {
+				return fmt.Errorf("accounts[%s]: %w", a.ID, err)
+			}
 		}
 		if err := ValidateProxyURL(a.ProxyURL); err != nil {
 			return fmt.Errorf("accounts[%s]: %v", a.ID, err)

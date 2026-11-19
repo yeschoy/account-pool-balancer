@@ -22,6 +22,7 @@ import (
 	"account-pool-balancer/internal/altapisignupstore"
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/deploysignupstore"
+	"account-pool-balancer/internal/factoryauth"
 	"account-pool-balancer/internal/fsutil"
 	"account-pool-balancer/internal/logstore"
 	"account-pool-balancer/internal/mistralsignupstore"
@@ -91,6 +92,12 @@ type Server struct {
 
 	admin   *adminAuth
 	devices *deviceFlows
+	// Factory device-login flows and per-account refresh locks.
+	factoryLogins    *factoryLoginFlows
+	factoryAuthBase  string
+	factoryTokenMu   sync.Mutex
+	factoryTokenLock map[string]*sync.Mutex
+	factoryEgressSeq atomic.Uint64
 	// openAuth only rate-limits failed import-key authentications.
 	openAuth *adminAuth
 	// staging holds open-endpoint imports that collide with an account.
@@ -214,6 +221,7 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.quota = quota.NewPoller(store.Get, s.httpClient)
 	s.quota.TokenHarborFetch = s.fetchTHObservation
 	s.quota.FactoryHTTPFor = s.factoryHTTPClient
+	s.quota.FactoryToken = s.factoryAccountToken
 	s.quota.DeployHTTPFor = s.deployHTTPClient
 	s.quota.X50HTTPFor = s.x50HTTPClient
 	s.quota.GoEgressCheck = func(ctx context.Context, cfg *config.Config, a config.Account) error {
@@ -286,6 +294,9 @@ func New(dataDir string, opt Options) (*Server, error) {
 	s.admin = newAdminAuth(filepath.Join(dataDir, "sessions.json"))
 	s.openAuth = newAdminAuth("")
 	s.devices = newDeviceFlows()
+	s.factoryLogins = newFactoryLoginFlows()
+	s.factoryAuthBase = factoryauth.DefaultBase
+	s.factoryTokenLock = map[string]*sync.Mutex{}
 	if s.staging, err = loadStaging(stagingPath(dataDir)); err != nil {
 		return nil, err
 	}
@@ -325,7 +336,7 @@ func (s *Server) onConfigChange(old, next *config.Config) {
 	s.pruneMistralTransports(old, next)
 	s.pruneNativeChatTransports(old, next)
 	s.rebindPerch(next)
-	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Factory.BaseURL != next.Factory.BaseURL || !reflect.DeepEqual(old.Factory.Models, next.Factory.Models) || old.Deploy.BaseURL != next.Deploy.BaseURL || old.X50.BaseURL != next.X50.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
+	if old.Upstream.OllamaBase != next.Upstream.OllamaBase || !reflect.DeepEqual(old.OpenCode, next.OpenCode) || old.TokenHarbor.BaseURL != next.TokenHarbor.BaseURL || old.Factory.BaseURL != next.Factory.BaseURL || old.Factory.EffectiveInferenceBase() != next.Factory.EffectiveInferenceBase() || !reflect.DeepEqual(old.Factory.Models, next.Factory.Models) || old.Deploy.BaseURL != next.Deploy.BaseURL || old.X50.BaseURL != next.X50.BaseURL || old.Mistral.BaseURL != next.Mistral.BaseURL || old.ModelStudio.Region != next.ModelStudio.Region || !reflect.DeepEqual(old.ModelStudio.PlanOverrides, next.ModelStudio.PlanOverrides) || !reflect.DeepEqual(old.Accounts, next.Accounts) {
 		s.resetModels()
 	}
 	if old.Routing.DirectMaxConns != next.Routing.DirectMaxConns || old.Routing.ProxyMaxConns != next.Routing.ProxyMaxConns {
@@ -551,6 +562,8 @@ func (s *Server) httpClient(proxyURL string) *http.Client {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", s.handleV1)
+	mux.HandleFunc("/v1/responses/ws", s.handleFactoryResponsesWS)
+	mux.HandleFunc("/v1beta/", s.handleV1Beta)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))

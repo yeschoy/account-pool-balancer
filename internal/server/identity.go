@@ -268,7 +268,8 @@ func contentText(c any) string {
 }
 
 // stableConversation is the first system/developer text and the first user
-// text (each clipped to 4096 bytes) across Chat, Messages and Responses bodies.
+// text (each clipped to 4096 bytes) across Chat, Messages, Responses and
+// Gemini generate bodies.
 func stableConversation(body map[string]any) string {
 	var sys, user string
 	if v, ok := body["system"]; ok {
@@ -276,6 +277,9 @@ func stableConversation(body map[string]any) string {
 	}
 	if v, ok := body["instructions"].(string); ok && sys == "" {
 		sys = v
+	}
+	if v, ok := body["systemInstruction"]; ok && sys == "" {
+		sys = geminiPartsText(v)
 	}
 	scan := func(items []any) {
 		for _, it := range items {
@@ -310,6 +314,20 @@ func stableConversation(body map[string]any) string {
 	case []any:
 		scan(in)
 	}
+	if contents, ok := body["contents"].([]any); ok {
+		for _, it := range contents {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			if role, _ := m["role"].(string); role == "user" {
+				if user == "" {
+					user = geminiPartsText(m["parts"])
+				}
+				break
+			}
+		}
+	}
 	if sys == "" && user == "" {
 		return ""
 	}
@@ -317,10 +335,34 @@ func stableConversation(body map[string]any) string {
 	return string(out)
 }
 
+// geminiPartsText flattens Gemini's parts array (or a systemInstruction
+// object) to the text parts it carries.
+func geminiPartsText(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case map[string]any:
+		return geminiPartsText(x["parts"])
+	case []any:
+		var b strings.Builder
+		for _, raw := range x {
+			if p, ok := raw.(map[string]any); ok {
+				if t, ok := p["text"].(string); ok {
+					b.WriteString(t)
+					b.WriteByte('\n')
+				}
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
 // bodyKeysKept are the top-level fields identity and routing read; the rest
 // of a request body (tools, the long message history) is never decoded.
 var bodyKeysKept = map[string]bool{"model": true, "stream": true, "store": true, "previous_response_id": true, "prompt_cache_key": true, "promptCacheKey": true,
-	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true, "user": true}
+	"session_id": true, "conversation_id": true, "thread_id": true, "metadata": true, "system": true, "instructions": true, "user": true,
+	"contents": true, "systemInstruction": true}
 
 // parseRequestBody decodes just what routing needs from a request body: the
 // fields in bodyKeysKept, plus the leading messages/input items up to the

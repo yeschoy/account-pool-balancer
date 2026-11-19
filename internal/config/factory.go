@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"account-pool-balancer/internal/pricing"
@@ -10,15 +11,25 @@ import (
 )
 
 const (
-	ProviderFactory     = "factory"
-	FactoryKeyPrefix    = "fk-"
-	FactoryDefaultBase  = "https://api.factory.ai"
-	FactoryDefaultModel = "deepseek-v4.1-flash"
-	FactoryReference    = "magpie-community/plugins@d24fd5d1824e1078e7c8c56732813f8263fcf728/packages/factory"
+	ProviderFactory    = "factory"
+	FactoryKeyPrefix   = "fk-"
+	FactoryDefaultBase = "https://api.factory.ai"
+	// FactoryDefaultInferenceBase is where droid sends model calls. The
+	// 1.14.0 capture separates planes: api.factory.ai serves whoami, quota,
+	// settings and tools, while prem.factory.ai serves every /api/llm/* path.
+	FactoryDefaultInferenceBase = "https://prem.factory.ai"
+	FactoryDefaultModel         = "deepseek-v4.1-flash"
+	// FactorySurfaceTUI/Exec are droid's X-Factory-Request-Surface values.
+	FactorySurfaceTUI  = "cli_tui"
+	FactorySurfaceExec = "cli_exec"
+	FactoryReference   = "magpie-community/plugins@d24fd5d1824e1078e7c8c56732813f8263fcf728/packages/factory"
 )
 
-// FactoryModel describes routing, not this account's entitlement. No prompt or
-// client-identity rewrite is performed. Unknown models require an explicit entry.
+// FactoryModel describes routing, not this account's entitlement. Unknown
+// models require an explicit entry. A request's task prompts, history and tool
+// schema are never rewritten; the only body change is droid's fixed system
+// opening, and the client identity becomes droid's own (see
+// internal/factory/droid.go and docs/factory-pool.md).
 type FactoryModel struct {
 	ID       string `json:"id"`
 	Protocol string `json:"protocol"` // chat | responses | messages
@@ -26,18 +37,95 @@ type FactoryModel struct {
 }
 
 type Factory struct {
-	BaseURL       string          `json:"baseUrl"`
-	Routing       *Routing        `json:"routing,omitempty"`
-	Quota         *Quota          `json:"quota,omitempty"`
-	Pricing       *pricing.Config `json:"pricing,omitempty"`
-	DetailLog     bool            `json:"detailLog"`
-	StandardOnly  bool            `json:"standardOnly"`
-	Compatibility bool            `json:"compatibility"` // strict, buffered cross-protocol conversion
-	Models        []FactoryModel  `json:"models"`
+	// BaseURL is the management plane: whoami, billing, settings and tools.
+	BaseURL string `json:"baseUrl"`
+	// InferenceURL is the model plane. Empty derives it from BaseURL so a
+	// custom or mock host keeps working; the default pair is api→prem.
+	InferenceURL string `json:"inferenceUrl,omitempty"`
+	// RequestSurface is droid's X-Factory-Request-Surface. cli_tui is the
+	// interactive client; cli_exec also sends X-Factory-Exec-Output-Format.
+	RequestSurface string `json:"requestSurface,omitempty"`
+	// OpenAIPlatform is the optional `org-…` value droid sends on the OpenAI
+	// route. The capture's token belongs to one organization and whoami does
+	// not expose it, so it is configuration rather than a fabricated constant.
+	OpenAIPlatform string          `json:"openaiPlatform,omitempty"`
+	Routing        *Routing        `json:"routing,omitempty"`
+	Quota          *Quota          `json:"quota,omitempty"`
+	Pricing        *pricing.Config `json:"pricing,omitempty"`
+	DetailLog      bool            `json:"detailLog"`
+	StandardOnly   bool            `json:"standardOnly"`
+	Compatibility  bool            `json:"compatibility"` // strict, buffered cross-protocol conversion
+	Models         []FactoryModel  `json:"models"`
+	// ProxyPool and UserAgents provide distinct per-account egress and
+	// inference identity. They are assignment sources only; an account's own
+	// ProxyURL/UserAgent always wins. Empty pools preserve the old behavior.
+	ProxyPool           []string `json:"proxyPool,omitempty"`
+	UserAgents          []string `json:"userAgents,omitempty"`
+	UserAgent           string   `json:"userAgent,omitempty"`
+	ManagementUserAgent string   `json:"managementUserAgent,omitempty"`
 }
 
+const (
+	FactoryDefaultInferenceUserAgent  = "factory-cli/1.14.0"
+	FactoryDefaultManagementUserAgent = "Bun/1.4.4"
+)
+
 func DefaultFactory() Factory {
-	return Factory{BaseURL: FactoryDefaultBase, Models: DefaultFactoryModels(), Compatibility: true}
+	return Factory{BaseURL: FactoryDefaultBase, RequestSurface: FactorySurfaceTUI, Models: DefaultFactoryModels(), Compatibility: true}
+}
+
+// EffectiveInferenceBase returns the origin model calls go to. An explicit
+// inference URL wins; the stock management origin maps to the captured prem
+// host, and any other configured origin (EU, mock, proxy) is reused verbatim.
+func (f Factory) EffectiveInferenceBase() string {
+	if s := strings.TrimRight(strings.TrimSpace(f.InferenceURL), "/"); s != "" {
+		return s
+	}
+	b := strings.TrimRight(strings.TrimSpace(f.BaseURL), "/")
+	if b == "" || b == FactoryDefaultBase {
+		return FactoryDefaultInferenceBase
+	}
+	return b
+}
+
+// EffectiveRequestSurface validates to the two surfaces droid emits. Unknown
+// or empty values fall back to the interactive one; Normalize rejects them on
+// save so a typo never reaches the wire.
+func (f Factory) EffectiveRequestSurface() string {
+	if f.RequestSurface == FactorySurfaceExec {
+		return FactorySurfaceExec
+	}
+	return FactorySurfaceTUI
+}
+
+// EffectiveUserAgent resolves the inference UA: account override, pool
+// default, then droid's captured CLI identity.
+func (f Factory) EffectiveUserAgent(a Account) string {
+	if ua := strings.TrimSpace(a.UserAgent); ua != "" {
+		return ua
+	}
+	if ua := strings.TrimSpace(f.UserAgent); ua != "" {
+		return ua
+	}
+	return FactoryDefaultInferenceUserAgent
+}
+
+func (f Factory) EffectiveManagementUserAgent() string {
+	if ua := strings.TrimSpace(f.ManagementUserAgent); ua != "" {
+		return ua
+	}
+	return FactoryDefaultManagementUserAgent
+}
+
+// FactoryClientVersion returns the X-Client-Version matching a
+// factory-cli/<version> UA, or droid's captured version for any other UA.
+func FactoryClientVersion(ua string) string {
+	if strings.HasPrefix(ua, "factory-cli/") {
+		if v := strings.TrimSpace(strings.TrimPrefix(ua, "factory-cli/")); v != "" {
+			return v
+		}
+	}
+	return "1.14.0"
 }
 
 func DefaultFactoryModels() []FactoryModel {
@@ -47,14 +135,22 @@ func DefaultFactoryModels() []FactoryModel {
 			out = append(out, FactoryModel{ID: id, Protocol: protocol, Upstream: upstream})
 		}
 	}
-	// Routing metadata only, reviewed against FactoryReference. Fast mode is
-	// explicit client intent, never a paid tier chosen by the gateway.
-	add("messages", "anthropic", "claude-fable-5.2", "claude-fable-5.1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5-20251001")
-	add("responses", "openai", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.3-codex")
+	// Routing metadata, reviewed against FactoryReference and the droid
+	// 1.14.0 capture. Fast mode is explicit client intent, never a paid tier
+	// chosen by the gateway. The capture observed bedrock_anthropic for
+	// claude-sonnet-5-5/claude-haiku-4-5, databricks for kimi-k3.1-pro and
+	// baseten for deepseek-v4.1-flash-1017; Gemini's models are the captured
+	// generate/google route (one body field and one upstream path).
+	add("messages", "anthropic", "claude-fable-5.2", "claude-fable-5.1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-5-5")
+	add("messages", "bedrock_anthropic", "claude-sonnet-5-5", "claude-haiku-4-5-20251001")
+	add("responses", "openai", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.3-codex")
 	add("responses", "xai", "grok-4.7", "grok-4.6")
-	add("chat", "fireworks", "glm-5.3", "glm-5.3-flash", "kimi-k3.1-pro", "kimi-k3", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "qwen3.8-max", "minimax-m3.1-flash", "minimax-m3", "inkling", "muse-spark-1.2")
-	add("chat", "baseten", "glm-5.2", "glm-5.2-fast", "nemotron-3.5-super", "nemotron-3-ultra", "beam-1.0")
+	add("chat", "fireworks", "glm-5.3", "glm-5.3-flash", "kimi-k3", "deepseek-v4.1-flash", "qwen3.8-max", "minimax-m3.1-flash", "minimax-m3", "inkling", "muse-spark-1.2")
+	add("chat", "databricks", "kimi-k3.1-pro")
+	add("chat", "baseten", "glm-5.2", "glm-5.2-fast", "deepseek-v4.1-flash-1017", "nemotron-3.5-super", "nemotron-3-ultra", "beam-1.0")
 	add("chat", "mistral", "mistral-large-4", "mistral-medium-3.5")
+	add("generate", "google", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview")
+	add("embeddings", "openai", "text-embedding-3-large")
 	add("messages", "fireworks", "minimax-m2.7")
 	add("messages", "anthropic", "claude-opus-5-5-fast", "claude-opus-5-fast", "claude-opus-4-8-fast")
 	add("responses", "openai", "gpt-5.5-fast", "gpt-5.4-fast", "gpt-5.3-codex-fast", "gpt-6-sol-fast", "gpt-6-luna-fast", "gpt-5.6-sol-fast")
@@ -110,15 +206,48 @@ func (f Factory) Model(id string) (FactoryModel, bool) {
 	return FactoryModel{}, false
 }
 
+// factoryOpenAIPlatformRE bounds the OpenAI organization token droid sends:
+// the captured value is `org-` plus base64url characters. It is an
+// identifier, not a credential, but an overlong or spaced value is rejected.
+var factoryOpenAIPlatformRE = regexp.MustCompile(`^org-[A-Za-z0-9_-]{1,160}$`)
+
+func validateFactoryOrigin(name, value string) error {
+	u, err := url.Parse(value)
+	if err != nil || len(value) > 4096 || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Path != "" {
+		return fmt.Errorf("%s must be an HTTP(S) origin without path, credentials, query or fragment", name)
+	}
+	return nil
+}
+
 func (c *Config) normalizeFactory() error {
 	f := &c.Factory
 	if f.BaseURL == "" {
 		f.BaseURL = FactoryDefaultBase
 	}
 	f.BaseURL = strings.TrimRight(strings.TrimSpace(f.BaseURL), "/")
-	u, err := url.Parse(f.BaseURL)
-	if err != nil || len(f.BaseURL) > 4096 || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Path != "" {
-		return fmt.Errorf("factory.baseUrl must be an HTTP(S) origin without path, credentials, query or fragment")
+	if err := validateFactoryOrigin("factory.baseUrl", f.BaseURL); err != nil {
+		return err
+	}
+	f.InferenceURL = strings.TrimRight(strings.TrimSpace(f.InferenceURL), "/")
+	if f.InferenceURL != "" {
+		if err := validateFactoryOrigin("factory.inferenceUrl", f.InferenceURL); err != nil {
+			return err
+		}
+	}
+	if f.RequestSurface == "" {
+		f.RequestSurface = FactorySurfaceTUI
+	}
+	if f.RequestSurface != FactorySurfaceTUI && f.RequestSurface != FactorySurfaceExec {
+		return fmt.Errorf("factory.requestSurface must be %s or %s", FactorySurfaceTUI, FactorySurfaceExec)
+	}
+	f.OpenAIPlatform = strings.TrimSpace(f.OpenAIPlatform)
+	if f.OpenAIPlatform != "" {
+		if !strings.HasPrefix(f.OpenAIPlatform, "org-") {
+			f.OpenAIPlatform = "org-" + f.OpenAIPlatform
+		}
+		if !factoryOpenAIPlatformRE.MatchString(f.OpenAIPlatform) {
+			return fmt.Errorf("factory.openaiPlatform must be org- plus base64url characters")
+		}
 	}
 	if f.Quota != nil {
 		if err := normalizeQuota(f.Quota); err != nil {
@@ -130,8 +259,73 @@ func (c *Config) normalizeFactory() error {
 			return fmt.Errorf("factory: %w", err)
 		}
 	}
+	if len(f.ProxyPool) > 500 {
+		return fmt.Errorf("factory: proxy pool too large")
+	}
+	seenProxy := map[string]bool{}
+	cleanProxy := make([]string, 0, len(f.ProxyPool))
+	for _, raw := range f.ProxyPool {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue
+		}
+		if err := ValidateProxyURL(p); err != nil {
+			return fmt.Errorf("factory: proxy pool: %w", err)
+		}
+		if !seenProxy[p] {
+			seenProxy[p] = true
+			cleanProxy = append(cleanProxy, p)
+		}
+	}
+	if len(cleanProxy) == 0 {
+		cleanProxy = nil
+	}
+	f.ProxyPool = cleanProxy
+	if len(f.UserAgents) > 100 {
+		return fmt.Errorf("factory: user-agent pool too large")
+	}
+	cleanUA := make([]string, 0, len(f.UserAgents))
+	seenUA := map[string]bool{}
+	for _, raw := range f.UserAgents {
+		ua := strings.TrimSpace(raw)
+		if ua == "" {
+			continue
+		}
+		if err := ValidateUserAgent(ua); err != nil {
+			return fmt.Errorf("factory: user-agent pool: %w", err)
+		}
+		if !seenUA[ua] {
+			seenUA[ua] = true
+			cleanUA = append(cleanUA, ua)
+		}
+	}
+	if len(cleanUA) == 0 {
+		cleanUA = nil
+	}
+	f.UserAgents = cleanUA
+	for _, ua := range []string{f.UserAgent, f.ManagementUserAgent} {
+		if strings.TrimSpace(ua) != "" {
+			if err := ValidateUserAgent(strings.TrimSpace(ua)); err != nil {
+				return fmt.Errorf("factory: %w", err)
+			}
+		}
+	}
 	if f.Models == nil {
 		f.Models = DefaultFactoryModels()
+	} else if len(f.Models) > 0 {
+		// Existing custom lists predate the Gemini route. Add only the
+		// captured Gemini generate entries; never overwrite or reorder a
+		// caller's own routes.
+		seen := make(map[string]bool, len(f.Models)+len(DefaultFactoryModels()))
+		for _, m := range f.Models {
+			seen[m.ID] = true
+		}
+		for _, d := range DefaultFactoryModels() {
+			if (d.Protocol == "generate" || d.Protocol == "embeddings") && !seen[d.ID] {
+				f.Models = append(f.Models, d)
+				seen[d.ID] = true
+			}
+		}
 	}
 	if len(f.Models) > 1000 {
 		return fmt.Errorf("factory: at most 1000 model routes")
@@ -142,13 +336,21 @@ func (c *Config) normalizeFactory() error {
 			return fmt.Errorf("factory: invalid or duplicate model id")
 		}
 		seen[m.ID] = true
-		if m.Protocol != "chat" && m.Protocol != "responses" && m.Protocol != "messages" {
+		switch m.Protocol {
+		case "chat", "responses", "messages", "generate", "embeddings":
+		default:
 			return fmt.Errorf("factory: unsupported model protocol")
 		}
 		switch m.Upstream {
-		case "anthropic", "openai", "xai", "fireworks", "baseten", "mistral":
+		case "anthropic", "bedrock_anthropic", "openai", "xai", "fireworks", "baseten", "databricks", "google", "mistral":
 		default:
 			return fmt.Errorf("factory: unsupported x-api-provider")
+		}
+		if m.Protocol == "generate" && m.Upstream != "google" {
+			return fmt.Errorf("factory: generate models require google")
+		}
+		if m.Protocol == "embeddings" && m.Upstream != "openai" {
+			return fmt.Errorf("factory: embeddings models require openai")
 		}
 	}
 	if c.FactoryErrorRules == nil {

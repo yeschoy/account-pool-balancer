@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"account-pool-balancer/internal/config"
 	"account-pool-balancer/internal/factory"
@@ -18,13 +19,35 @@ type factoryRequestPlan struct {
 	model    string
 	beta     bool
 	tools    factory.ToolNames
+	// session and messageID are droid's conversation and message identifiers
+	// for this request. droid sends both on every model call; they derive from
+	// the gateway's own conversation fingerprint, never from the caller.
+	session     string
+	messageID   string
+	traceparent string
+	// generate routes a Google generateContent body to /api/llm/g/v1/generate;
+	// the model comes from the path and the body is not converted.
+	generate    bool
+	countTokens bool
+	stream      bool
 }
 
 // prepareFactory is run before leasing an account. Unsupported/lossy conversions
 // are local 400s without RPM, network, health changes or silent field removal.
 // Same-protocol requests retain their bytes unless a documented wire adapter is
-// required. No identity strings, task prompts or tool output text are rewritten.
+// required. Task prompts, tool input and tool output text are never rewritten;
+// the one body change beyond routing is droid's fixed system opening (see
+// factory.OpenBody), which Factory requires of every caller.
 func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryRequestPlan, error) {
+	if model, ok := factory.ParseGeminiCountTokens(path); ok {
+		return prepareFactoryCountTokens(cfg, model, body)
+	}
+	if model, stream, ok := factory.ParseGeminiPath(path); ok {
+		return prepareFactoryGenerate(cfg, model, stream, body)
+	}
+	if path == "/v1/embeddings" {
+		return prepareFactoryEmbeddings(cfg, body)
+	}
 	from := opencode.FromPath(path)
 	var m map[string]json.RawMessage
 	if from == "" || json.Unmarshal(body, &m) != nil || m == nil {
@@ -34,9 +57,24 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	if json.Unmarshal(m["model"], &model) != nil || model == "" {
 		return nil, errors.New("Factory requires a configured model")
 	}
+	requested := model
+	var ok bool
+	if model, ok = resolveFactoryAuto(cfg, model, string(from)); !ok {
+		return nil, fmt.Errorf("Factory %s has no configured %s model; add one to the Factory model routes", requested, from)
+	}
+	if model != requested {
+		rewritten, err := replaceFactoryModel(body, model)
+		if err != nil {
+			return nil, err
+		}
+		body = rewritten
+	}
 	route, ok := cfg.Factory.Model(model)
 	if !ok {
 		return nil, errors.New("Factory model is not configured")
+	}
+	if route.Protocol == "generate" {
+		return nil, errors.New("Factory Gemini models require /v1beta/models/{model}:generateContent or :streamGenerateContent")
 	}
 	to := opencode.Protocol(route.Protocol)
 	plan := &factoryRequestPlan{from: from, to: to, body: body, model: model}
@@ -92,10 +130,149 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 			return nil, err
 		}
 	}
+	// Factory serves a subscription's models to droid only, so the system
+	// prompt opens with droid's line exactly as droidBody/AnthropicBody set it.
+	plan.body = factory.OpenDroidBody(string(to), plan.body)
 	if len(plan.body) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
 	}
 	return plan, nil
+}
+
+// prepareFactoryGenerate validates a Gemini native request and maps it to
+// Factory's captured /generate endpoint. The body keeps every field (tools,
+// generationConfig, safety settings, history); only the model and droid's
+// systemInstruction opening are written.
+func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body []byte) (*factoryRequestPlan, error) {
+	requested := model
+	resolved, ok := resolveFactoryAuto(cfg, model, "generate")
+	if !ok {
+		return nil, fmt.Errorf("Factory %s has no configured generate model; add one to the Factory model routes", requested)
+	}
+	if resolved != requested {
+		rewritten, err := replaceFactoryModel(body, resolved)
+		if err != nil {
+			return nil, err
+		}
+		body, model = rewritten, resolved
+	}
+	route, ok := cfg.Factory.Model(model)
+	if !ok {
+		return nil, errors.New("Factory model is not configured")
+	}
+	if route.Protocol != "generate" || route.Upstream != "google" {
+		return nil, errors.New("Factory model is not a Google generate route")
+	}
+	b, err := factory.OpenGeminiBody(model, body)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > cfg.Routing.MaxBodyMB<<20 {
+		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
+	}
+	return &factoryRequestPlan{body: b, model: model, generate: true, stream: stream}, nil
+}
+
+// prepareFactoryEmbeddings accepts OpenAI's embeddings body unchanged. Factory
+// serves the same shape at /api/llm/o/v1/embeddings; no system prompt, tool or
+// protocol conversion applies.
+func prepareFactoryEmbeddings(cfg *config.Config, body []byte) (*factoryRequestPlan, error) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil || m == nil {
+		return nil, errors.New("Factory embeddings requires a JSON object")
+	}
+	var model string
+	if json.Unmarshal(m["model"], &model) != nil || model == "" {
+		return nil, errors.New("Factory embeddings requires a configured model")
+	}
+	requested := model
+	var ok bool
+	if model, ok = resolveFactoryAuto(cfg, model, "embeddings"); !ok {
+		return nil, fmt.Errorf("Factory %s has no configured embeddings model", requested)
+	}
+	if model != requested {
+		rewritten, err := replaceFactoryModel(body, model)
+		if err != nil {
+			return nil, err
+		}
+		body = rewritten
+	}
+	route, ok := cfg.Factory.Model(model)
+	if !ok || route.Protocol != "embeddings" || route.Upstream != "openai" {
+		return nil, errors.New("Factory embeddings model is not configured")
+	}
+	if len(body) > cfg.Routing.MaxBodyMB<<20 {
+		return nil, errors.New("Factory embeddings request exceeds configured request-body limit")
+	}
+	return &factoryRequestPlan{body: body, model: model}, nil
+}
+
+// resolveFactoryAuto implements the gateway's virtual auto/auto-fast model.
+// Droid chooses auto on the client; a downstream client that sends it here
+// needs a concrete route, so auto picks the first configured model for this
+// downstream protocol and auto-fast picks the first fast variant.
+func resolveFactoryAuto(cfg *config.Config, model, protocol string) (string, bool) {
+	if model != "auto" && model != "auto-fast" {
+		return model, true
+	}
+	fallback := ""
+	for _, m := range cfg.Factory.Models {
+		if m.ID == "auto" || m.ID == "auto-fast" || m.Protocol != protocol {
+			continue
+		}
+		if model == "auto-fast" && !strings.HasSuffix(m.ID, "-fast") {
+			continue
+		}
+		if fallback == "" {
+			fallback = m.ID
+		}
+	}
+	return fallback, fallback != ""
+}
+
+// replaceFactoryModel keeps every other JSON value as raw bytes, including
+// integers a float64 round-trip would corrupt.
+func replaceFactoryModel(body []byte, model string) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil || m == nil {
+		return nil, errors.New("Factory request must be a JSON object")
+	}
+	b, _ := json.Marshal(model)
+	m["model"] = b
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// prepareFactoryCountTokens mirrors the generate body opening so the count
+// matches what the generate request would carry, but targets /countTokens.
+func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*factoryRequestPlan, error) {
+	requested := model
+	resolved, ok := resolveFactoryAuto(cfg, model, "generate")
+	if !ok {
+		return nil, fmt.Errorf("Factory %s has no configured generate model; add one to the Factory model routes", requested)
+	}
+	if resolved != requested {
+		rewritten, err := replaceFactoryModel(body, resolved)
+		if err != nil {
+			return nil, err
+		}
+		body, model = rewritten, resolved
+	}
+	route, ok := cfg.Factory.Model(model)
+	if !ok || route.Protocol != "generate" || route.Upstream != "google" {
+		return nil, errors.New("Factory model is not a Google generate route")
+	}
+	b, err := factory.OpenGeminiBody(model, body)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > cfg.Routing.MaxBodyMB<<20 {
+		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
+	}
+	return &factoryRequestPlan{body: b, model: model, countTokens: true}, nil
 }
 
 func factoryFastModel(m config.FactoryModel) bool {

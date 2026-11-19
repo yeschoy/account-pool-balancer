@@ -13,6 +13,8 @@ import (
 // protocolOf names the inbound API protocol by request path.
 func protocolOf(path string) string {
 	switch {
+	case strings.HasPrefix(path, "/v1beta/") || strings.HasPrefix(path, "/v1/models/"):
+		return "gemini-generate"
 	case strings.HasPrefix(path, "/v1/messages"):
 		return "anthropic-messages"
 	case strings.HasPrefix(path, "/v1/responses"):

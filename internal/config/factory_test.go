@@ -24,6 +24,9 @@ func TestFactoryConfigIsolationAndRoundTrip(t *testing.T) {
 	c.FactoryErrorRules = c.FactoryErrorRules[:0]
 	c.FactoryRetryRules = c.FactoryRetryRules[:0]
 	c.Factory.DetailLog = true
+	c.Factory.InferenceURL = "https://prem.example.test"
+	c.Factory.RequestSurface = FactorySurfaceExec
+	c.Factory.OpenAIPlatform = "org-abc_DEF-123"
 	if err := c.Normalize(); err != nil {
 		t.Fatal(err)
 	}
@@ -67,5 +70,112 @@ func TestFactoryConfigIsolationAndRoundTrip(t *testing.T) {
 	x.Factory.Routing = &rr
 	if x.Normalize() == nil {
 		t.Fatal("unvalidated nested routing")
+	}
+	// The management origin defaults to prem for inference; a custom or mock
+	// origin is reused, and an explicit inference origin wins.
+	if got := Default().Factory.EffectiveInferenceBase(); got != FactoryDefaultInferenceBase {
+		t.Fatal("default inference host", got)
+	}
+	custom := Default()
+	custom.Factory.BaseURL = "http://127.0.0.1:9999"
+	if got := custom.Factory.EffectiveInferenceBase(); got != "http://127.0.0.1:9999" {
+		t.Fatal("custom base not reused", got)
+	}
+	custom.Factory.InferenceURL = "https://prem.example.test/"
+	custom.Factory.RequestSurface = ""
+	custom.Factory.OpenAIPlatform = "abc"
+	if err := custom.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if custom.Factory.EffectiveInferenceBase() != "https://prem.example.test" || custom.Factory.EffectiveRequestSurface() != FactorySurfaceTUI || custom.Factory.OpenAIPlatform != "org-abc" {
+		t.Fatal("defaults/prefix", custom.Factory)
+	}
+	for _, bad := range []string{"https://example.com/v1", "ftp://example.com"} {
+		y := Default()
+		y.Factory.InferenceURL = bad
+		if y.Normalize() == nil {
+			t.Fatal("bad inference origin", bad)
+		}
+	}
+	y := Default()
+	y.Factory.RequestSurface = "desktop"
+	if y.Normalize() == nil {
+		t.Fatal("unsupported surface accepted")
+	}
+	y = Default()
+	y.Factory.OpenAIPlatform = "org-<bad>"
+	if y.Normalize() == nil {
+		t.Fatal("bad openai platform accepted")
+	}
+	if got := (Factory{}).EffectiveRequestSurface(); got != FactorySurfaceTUI {
+		t.Fatal("empty surface", got)
+	}
+}
+
+func TestFactoryOAuthAccountValidationAndStableSource(t *testing.T) {
+	c := Default()
+	c.Accounts = []Account{{ID: "f", Provider: ProviderFactory, Group: "factory", RuntimeKey: "eyJhbGciOiJSUzI1NiJ9.e30.sig", FactoryRefreshToken: "refresh", UserID: "workos-user", Email: "a@example.com", FactoryOrgID: "org"}}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	a := c.Accounts[0]
+	src := c.NativeBindingSource(a)
+	if src == "" {
+		t.Fatal("oauth source empty")
+	}
+	a.RuntimeKey = "another-access"
+	if got := c.NativeBindingSource(a); got != src {
+		t.Fatal("access token rotation changed the account source")
+	}
+	a.FactoryOrgID = "org2"
+	if got := c.NativeBindingSource(a); got != src {
+		t.Fatal("organization changed the account source")
+	}
+	c.Accounts[0].FactoryRefreshToken = " bad token"
+	if c.Normalize() == nil {
+		t.Fatal("invalid refresh token accepted")
+	}
+}
+
+func TestFactoryCustomListGetsMissingGeminiRoutes(t *testing.T) {
+	c := Default()
+	c.Factory.Models = []FactoryModel{{ID: "mine", Protocol: "chat", Upstream: "openai"}}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	found, gemini := false, false
+	for _, m := range c.Factory.Models {
+		if m.ID == "mine" {
+			found = true
+		}
+		if m.ID == "gemini-4-carbon" && m.Protocol == "generate" && m.Upstream == "google" {
+			gemini = true
+		}
+	}
+	if !found || !gemini {
+		t.Fatalf("custom list not merged: %+v", c.Factory.Models)
+	}
+}
+
+func TestFactoryProxyPoolAndUserAgentValidation(t *testing.T) {
+	c := Default()
+	c.Factory.ProxyPool = []string{"http://p1:8080", "http://p1:8080", "socks5://p2:1080"}
+	c.Factory.UserAgents = []string{"factory-cli/1.14.0", "factory-cli/1.15.0"}
+	c.Accounts = []Account{{ID: "f", Provider: ProviderFactory, Group: "factory", RuntimeKey: "fk-valid_key_123", UserAgent: "factory-cli/1.15.0"}}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Factory.ProxyPool) != 2 || len(c.Factory.UserAgents) != 2 {
+		t.Fatalf("dedupe: %+v %+v", c.Factory.ProxyPool, c.Factory.UserAgents)
+	}
+	c.Factory.ProxyPool = []string{"ftp://bad:21"}
+	if c.Normalize() == nil {
+		t.Fatal("bad proxy scheme accepted")
+	}
+	c = Default()
+	c.Factory.ProxyPool = []string{"http://p1:8080"}
+	c.Factory.UserAgents = []string{"bad\nua"}
+	if c.Normalize() == nil {
+		t.Fatal("newline UA accepted")
 	}
 }

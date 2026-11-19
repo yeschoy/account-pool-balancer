@@ -2,11 +2,13 @@ package quota
 
 import (
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/factory"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,12 +32,20 @@ func TestFactoryRefreshPermissionHistoryAndPersistence(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer fk-mock_test_key" {
 			t.Error("wrong credential")
 		}
-		if r.Header.Get("X-Factory-Client") != "" {
-			t.Error("impersonated client")
+		// The capture separates the plans: whoami is the Bun runtime with the
+		// extended flag only, while billing carries the business headers.
+		if r.Header.Get("User-Agent") != "Bun/"+factory.BunVersion {
+			t.Error("management read without the Bun runtime identity")
 		}
 		if r.URL.Path == "/api/cli/whoami" {
+			if r.Header.Get("X-Factory-Whoami-Extended") != "true" || r.Header.Get("X-Factory-Client") != "" || r.Header.Get("X-Client-Version") != "" || r.Header.Get("X-Factory-Request-Surface") != "" {
+				t.Error("whoami headers do not match droid")
+			}
 			fmt.Fprint(w, `{"userId":"mock-user","orgId":"mock-org"}`)
 			return
+		}
+		if r.Header.Get("X-Factory-Client") != "cli" || r.Header.Get("X-Client-Version") != factory.DroidVersion || r.Header.Get("X-Factory-Request-Surface") != config.FactorySurfaceTUI || r.Header.Get("X-Factory-Org-Id") != "mock-org" || !strings.HasPrefix(r.Header.Get("Traceparent"), "00-") {
+			t.Error("billing read without droid's business identity")
 		}
 		reads.Add(1)
 		w.WriteHeader(int(status.Load()))

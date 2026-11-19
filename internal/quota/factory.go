@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/factory"
+	"account-pool-balancer/internal/factoryauth"
 )
 
-const FactoryQuotaReason = "Factory fk- Key可做身份验证；billing/limits是否开放取决于凭据权限。401/403表示额度不可读，不代表推理Key失效或余额为0。Standard/Core为共享百分比窗口，多Key不累加；不自动开启Extra usage。"
+const FactoryQuotaReason = "Factory fk- Key 或 WorkOS OAuth 会话可做身份验证；billing/limits是否开放取决于凭据权限。401/403表示额度不可读，不代表推理凭据失效或余额为0。Standard/Core为共享百分比窗口，多账号不累加；不自动开启Extra usage。"
 
 type FactoryWindow struct {
 	Pool        string    `json:"pool"`
@@ -87,9 +89,11 @@ func (f *FactoryState) Exhausted(cfg *config.Config, model string, now time.Time
 	return false
 }
 
-// The credential is sent only to the configured origin; upstream-provided
-// region/private-host values are diagnostic metadata, never redirect targets.
-func factoryRead(ctx context.Context, hc *http.Client, cfg *config.Config, a config.Account, path string) ([]byte, int, error) {
+// The credential is sent only to the configured management origin;
+// upstream-provided region/private-host values are diagnostic metadata, never
+// redirect targets. The caller supplies the organization whoami last
+// established, so concurrent accounts never share one.
+func factoryRead(ctx context.Context, hc *http.Client, cfg *config.Config, a config.Account, path, org string) ([]byte, int, error) {
 	client := *hc
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.RuntimeBase(a)+path, nil)
@@ -97,10 +101,22 @@ func factoryRead(ctx context.Context, hc *http.Client, cfg *config.Config, a con
 		return nil, 0, errors.New("Factory invalid request")
 	}
 	req.Header.Set("Authorization", "Bearer "+a.RuntimeKey)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "account-pool-balancer/factory-gateway")
+	// The capture uses a different identity per plane. whoami sends only the
+	// token, the active organization and X-Factory-Whoami-Extended, under the
+	// Bun runtime; billing carries the business client headers. Both use
+	// Bun/…, never the factory-cli/<version> model-plane User-Agent.
+	req.Header.Set("Accept", "*/*")
 	if path == "/api/cli/whoami" {
-		req.Header.Set("X-Factory-Whoami-Extended", "true")
+		factory.ApplyWhoamiHeaders(req.Header)
+	} else {
+		factory.ApplyManagementHeaders(req.Header, cfg.Factory.EffectiveRequestSurface())
+		if tp := factory.RandomTraceparent(); tp != "" {
+			req.Header.Set("Traceparent", tp)
+		}
+	}
+	req.Header.Set("User-Agent", cfg.Factory.EffectiveManagementUserAgent())
+	if org != "" {
+		req.Header.Set("X-Factory-Org-Id", org)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -195,6 +211,29 @@ func parseFactoryLimits(b []byte) (*FactoryState, error) {
 }
 
 func (p *Poller) fetchFactory(ctx context.Context, cfg *config.Config, a config.Account, force bool) error {
+	if p.FactoryToken != nil && a.Provider == config.ProviderFactory && a.FactoryRefreshToken != "" {
+		next, terr := p.FactoryToken(ctx, p.Cfg(), a)
+		if terr != nil {
+			p.mu.Lock()
+			s := p.snaps[a.ID].clone()
+			p.mu.Unlock()
+			if s == nil {
+				s = &Snapshot{}
+			}
+			if s.Factory == nil {
+				s.Factory = &FactoryState{Windows: []FactoryWindow{}}
+			}
+			now := time.Now()
+			s.Factory.QuotaState, s.Factory.QuotaError = "failed", "Factory OAuth token refresh failed"
+			s.LastError, s.LastErrorAt = "Factory OAuth token refresh failed", now
+			s.AuthFailed = errors.Is(terr, factoryauth.ErrDenied)
+			s.Failures++
+			s.NextAt = now.Add(backoff(s.Failures))
+			p.store(a.ID, s)
+			return terr
+		}
+		a = next
+	}
 	source := ResponseBindingSource(cfg, a)
 	current := p.Cfg()
 	next, ok := current.Account(a.ID)
@@ -218,7 +257,14 @@ func (p *Poller) fetchFactory(ctx context.Context, cfg *config.Config, a config.
 	if p.FactoryHTTPFor != nil {
 		hc = p.FactoryHTTPFor(cfg, a.ProxyURL)
 	}
-	b, st, err := factoryRead(ctx, hc, cfg, a, "/api/cli/whoami")
+	org := a.FactoryWorkOSOrgID
+	if org == "" {
+		org = f.OrgID
+	}
+	if org == "" {
+		org = a.FactoryOrgID
+	}
+	b, st, err := factoryRead(ctx, hc, cfg, a, "/api/cli/whoami", org)
 	if err == nil {
 		var who struct {
 			UserID string `json:"userId"`
@@ -258,7 +304,14 @@ func (p *Poller) fetchFactory(ctx context.Context, cfg *config.Config, a config.
 	s.LastOKAt = now
 	s.Failures = 0
 	if !f.QuotaDenied || force {
-		b, st, err = factoryRead(ctx, hc, cfg, a, "/api/billing/limits")
+		org := a.FactoryWorkOSOrgID
+		if org == "" {
+			org = f.OrgID
+		}
+		if org == "" {
+			org = a.FactoryOrgID
+		}
+		b, st, err = factoryRead(ctx, hc, cfg, a, "/api/billing/limits", org)
 		if err == nil {
 			var q *FactoryState
 			q, err = parseFactoryLimits(b)
