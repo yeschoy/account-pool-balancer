@@ -60,6 +60,16 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 登录从 token claims 取组织（2026-11-19 13:13 UTC，63fe752）
+
+- 现场：设备授权成功后 whoami 仍 401，错误里写「WorkOS 也没有返回任何组织」。用户从浏览器 `POST /user_management/authenticate` 响应确认该账号**确有组织** `organization_id: org_01M7HKHC275DB7HV6QP4WSCRAV`。
+- 根因：组织写在 token claims / 授权响应里，而我们此前只读 `active_organization_id` 且只查 `/user_management/organizations`（该路径在 User Management 下返回 404）。设备授权返回的 token 不带 active org，于是 whoami 没发 `X-Factory-Org-Id`。
+- 修复 `63fe752`：JWT claims 解析支持 `org_id` / `organization_id` / `external_org_id` 的**字符串与数组**两种形态；whoami 的 `X-Factory-Org-Id` 改为 `active_organization_id → org_id → organization_id` 取值；组织重试候选顺序改为 claims → 池内已有组织 → WorkOS `/organizations`、`/organization_memberships`、`POST /authorize/organization`。
+- 提交 `63fe752` 已推送；`go vet`、`go test ./...`（server 107.034s）通过，新增 `TestJWTClaimsOfShapes`、`TestParseTokenPicksClaimOrganization`、`TestFactoryLoginUsesTokenClaimOrganization`。
+- 部署：镜像 `account-pool-balancer:release-63fe752-20261119T131245Z`；13:13:20Z 停旧，一致备份 `/home/ubuntu/backups/account-pool-balancer/20261119T131245Z-factory-orgclaims-63fe752/data.tgz`；13:13:2x 切换，**13:13:54Z healthy**。
+- 验收：revision `63fe752`、healthy、restarts=0、OOM=false；双内网别名 `{"ok":true}`；`config.json` 字节未变；公网 200。回退镜像 `rollback-20261119T131245Z`。
+- **边界**：仍需用户重试一次设备授权才能确认真实账号能通过 whoami。期间 OVH SSH 两次不可用（`kex_exchange_identification reset` 与 `Connection refused`），均已自行恢复，未做任何服务器配置改动。
+
 ## 当前部署：Factory 登录组织绑定修复（2026-11-19 12:27 UTC，f40ac2e）
 
 - 现场问题：设备授权成功后 whoami 返回 `401 User not affiliated with an organization`（服务器日志 `whoami HTTP 401 (proxy=15.235.123.80:1080)`）。这是 Factory 拒绝未绑定组织的 token，不是请求头问题。
