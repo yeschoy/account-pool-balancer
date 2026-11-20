@@ -1,5 +1,22 @@
 # Factory AI 号池与全局号池启停
 
+## 模型目录补全（2026-11-21，`d684aab`）
+
+droid 模型选择器里的 12 个模型逐个实测（`m.yeschoy.pro`，tiny 请求）：
+
+| 模型 | 原生协议 | 结果 |
+|---|---|---|
+| gemini-4-neon | Gemini stream | 200（此前三处都缺：本池模型表、new-api 渠道模型表、new-api 计费表达式） |
+| gemini-4-hydrogen / carbon / argon | Gemini stream | 200 |
+| gemini-3.1-pro-preview、3.8/3.7/3.6/3.5-flash、3-flash-preview | Gemini stream | 200（本池早有路由，但 new-api 渠道 245 的模型表里没有，此前一律 503） |
+| gpt-5.4-mini / gpt-5.4-mini-fast | Responses | 200（需 OpenAI 类型渠道 247 转发原生 `/v1/responses`） |
+
+要点：
+- **new-api 渠道 245（Gemini 类型）** 的 `channels.models` 已扩到 10 个 Gemini 模型；新增模型必须同时写 `billing_setting.billing_mode`（`tiered_expr`）与 `billing_setting.billing_expr`，否则 relay 直接 400 "has not been priced by the administrator"。
+- **gpt-5.4-mini 系列**不能走 Gemini 类型渠道：new-api 会把请求转成 Gemini 格式，本池对非 `generate` 模型返回 "Factory model is not a Google generate route"。新增 **渠道 247 `Factory-OpenAI-gptmini`**（type=1 OpenAI，base_url 与 245 相同，模型仅这两个），走原生 Responses。
+- `/v1/chat/completions` 调用 gpt 模型仍会被本池的兼容转换策略拒绝（`compatibility=false` 时为明确的 400；开启后会在上游 Responses 回包的 `logprobs` 字段上触发 502，属于既有兼容层的严格字段校验，未在本次改动）。DSH 对 OpenAI 系模型走 Responses，不受影响。
+- droid 截图里的 “GPT-5.4 Mini Fast Mode” 对应模型 ID 是 `gpt-5.4-mini-fast`；`gpt-5.4-mini-fast-mode` 上游直接 400 Invalid model ID。
+
 ## 状态与边界
 
 出口 IP/网络指纹审计见 [factory-egress-privacy.md](factory-egress-privacy.md)。本版本参考 [magpie-community/plugins 的 Factory 插件](https://github.com/magpie-community/plugins/tree/main/packages/factory)，固定研究版本 `d24fd5d1824e1078e7c8c56732813f8263fcf728`。采用认证、模型路由元数据、只读身份/额度接口、Fast Mode字段映射、`anthropic-tools.mjs`的工具schema包装/结果解包，以及Droid客户端请求头与系统提示词开头（`factoryHeaders`/`droidBody`/`anthropicBody`）；不是该插件的完整移植。MIT许可与来源见`THIRD_PARTY_NOTICES.md`。另复用本项目的有限协议桥接，而非将该插件误描述为通用协议桥。

@@ -66,6 +66,15 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 模型目录补全（2026-11-21 04:58 UTC，d684aab）
+
+- 目标：droid 模型选择器里的 12 个模型全部可用。实测缺三处：本池模型表缺 `gemini-4-neon`/`gpt-5.4-mini`/`gpt-5.4-mini-fast`；new-api 渠道 245 只列了 3 个 gemini-4；new-api 计费表达式缺 neon 与 mini。
+- 代码 `d684aab`：默认模型表加入三者，`gemini-4-neon` 计入 USD 估算（按 Pro 档 1.2x 估算，可编辑）。
+- 生产配置：`factory.models` 追加三条（备份 `data/config.json.bak-models-20261120T202715Z`）。
+- new-api（Postgres `new-api` 库）：渠道 245 `models` 扩到 10 个 Gemini 模型；新增渠道 247 `Factory-OpenAI-gptmini`（type=1，模型 `gpt-5.4-mini,gpt-5.4-mini-fast`，备份 `backups/account-pool-balancer/channel-245-backup.json`）；`billing_setting.billing_mode/billing_expr` 增加三个模型（neon：`p*6+c*30+cr*0.3`；mini 两档按 gpt-5.4 的 0.3 比例）。两次 `docker restart new-api` 使配置生效。
+- 验收（`m.yeschoy.pro`）：10 个 Gemini 模型 stream 全部 **200**；`gpt-5.4-mini(-fast)` 原生 `/v1/responses` **200**；`/v1/chat/completions` 仍 400（兼容转换关闭，属既有策略，未改）。
+- 收尾：诊断用的 `factory.detailLog` 已关回 `false`，`factory.compatibility` 保持 `false`（启用后会在 Responses 回包 `logprobs` 处触发 502，记入待修）。
+
 ## 当前部署：Factory 用量与官方价估算（2026-11-21 04:21 UTC，9a03a21）
 
 - 三个问题的处理与验证：
