@@ -270,7 +270,10 @@ func (f Factory) EffectiveQuota() Quota {
 	return factoryQuotaDefaults
 }
 func (f Factory) EffectivePricing() pricing.Config {
-	if f.Pricing != nil {
+	// An empty saved table means "never priced yet" (the console saves the
+	// block with the rest of the settings), so it must not silence the
+	// defaults: only a table with entries replaces them.
+	if f.Pricing != nil && len(f.Pricing.Models) > 0 {
 		return *f.Pricing
 	}
 	return factoryPricingDefaults
