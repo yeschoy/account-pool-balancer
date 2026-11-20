@@ -84,15 +84,17 @@ func TestAliasToolNamesRenamingAll(t *testing.T) {
 		`{"type":"function","function":{"name":"custom_helper","description":"d"}},` +
 		`{"type":"function","function":{"name":"Read","description":"d"}},` +
 		`{"type":"function","function":{"name":"mcp__rea__analyze","description":"d"}}]}`)
+	// mcp__rea__analyze is an MCP name, which Factory refuses as well, so three
+	// names are renamed here; mcp__test-style names and droid's own are kept.
 	out, aliases := AliasToolNamesRenamingAll(body)
-	if len(aliases) != 2 {
+	if len(aliases) != 3 {
 		t.Fatalf("aliases = %v", aliases)
 	}
 	if strings.Contains(string(out), `"name":"todo_write"`) || strings.Contains(string(out), `"name":"custom_helper"`) {
 		t.Fatalf("unmeasured names kept: %s", out)
 	}
-	if !strings.Contains(string(out), `"name":"Read"`) || !strings.Contains(string(out), `"name":"mcp__rea__analyze"`) {
-		t.Fatalf("accepted names renamed: %s", out)
+	if !strings.Contains(string(out), `"name":"Read"`) {
+		t.Fatalf("droid name renamed: %s", out)
 	}
 	// Restoring by alias returns the caller's names.
 	var reply []byte = []byte(`{"calls":[{"name":"` + func() string {
@@ -104,5 +106,44 @@ func TestAliasToolNamesRenamingAll(t *testing.T) {
 	restored, changed := RestoreToolNames(reply, aliases)
 	if !changed || !(strings.Contains(string(restored), "todo_write") || strings.Contains(string(restored), "custom_helper")) {
 		t.Fatalf("restore = %s", restored)
+	}
+}
+
+// MCP tool names (mcp__server__tool) are refused by Factory while plain double
+// underscores are not; the caller's names must come back in the reply.
+func TestAliasToolNamesMCP(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[],"tools":[` +
+		`{"type":"function","function":{"name":"mcp__rea__comment","description":"d"}},` +
+		`{"type":"function","function":{"name":"mcp__test","description":"d"}}]}`)
+	out, aliases := AliasToolNames(body)
+	if len(aliases) != 1 {
+		t.Fatalf("aliases = %v", aliases)
+	}
+	var alias string
+	for a, original := range aliases {
+		if original != "mcp__rea__comment" {
+			t.Fatalf("aliases = %v", aliases)
+		}
+		alias = a
+	}
+	if mcpToolNameRE.MatchString(alias) || strings.ContainsAny(alias, "-.") {
+		t.Fatalf("alias still refused: %q", alias)
+	}
+	if !strings.Contains(string(out), `"name":"mcp__test"`) {
+		t.Fatalf("accepted mcp name renamed: %s", out)
+	}
+	restored, changed := RestoreToolNames([]byte(`{"calls":[{"name":"`+alias+`"}]}`), aliases)
+	if !changed || !strings.Contains(string(restored), "mcp__rea__comment") {
+		t.Fatalf("restore = %s", restored)
+	}
+	// The same name always gets the same alias.
+	if _, again := AliasToolNames(body); len(again) != 1 {
+		t.Fatal("no aliases on the second pass")
+	} else {
+		for a := range again {
+			if a != alias {
+				t.Fatalf("unstable alias: %q vs %q", a, alias)
+			}
+		}
 	}
 }

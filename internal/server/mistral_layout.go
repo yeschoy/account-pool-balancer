@@ -52,7 +52,8 @@ type mistralLayoutLog struct {
 	Native             int `json:"native"`
 	Captured           int `json:"captured"`
 	CaptureUnavailable int `json:"captureUnavailable"`
-	Unrecovered        int `json:"unrecovered,omitempty"` // known missing descriptor, old compatibility used
+	Unrecovered        int  `json:"unrecovered,omitempty"` // known missing descriptor, old compatibility used
+	Rejected           bool `json:"rejected,omitempty"`    // internal rejection, never returned in public errors
 }
 
 func (l *mistralLayoutLog) header() string {

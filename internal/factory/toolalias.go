@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -47,24 +48,62 @@ var DroidToolNames = map[string]string{
 	"web_search": "WebSearch", "execute_command": "Execute",
 }
 
+// mcpToolNameRE matches an MCP tool name: mcp__<server>__<tool>. Measured on
+// 2026-11-20: every such name is refused (mcp__rea__comment, mcp__foo__bar),
+// while mcp__test (no second separator) and foo__bar__baz are accepted, so the
+// shape, not the prefix, is what Factory blocks. magpie 0.1.52 still keeps
+// mcp__ names as they are; that is out of date.
+var mcpToolNameRE = regexp.MustCompile(`^mcp__.+__.+$`)
+
 // RefusedToolName reports whether Factory refuses a declared tool with this
-// name, including the same name behind leading underscores.
+// name, including the same name behind leading underscores, and whether it is
+// an MCP tool name.
 func RefusedToolName(name string) bool {
 	if name == "" {
 		return false
 	}
+	if mcpToolNameRE.MatchString(name) {
+		return true
+	}
 	return RefusedToolNames[name] || RefusedToolNames[strings.TrimLeft(name, "_")]
 }
 
-// suffixName gives a refused name Factory's list has no droid equivalent for
-// a stable replacement that no list holds.
-func suffixName(name string) string {
+// mcpAlias turns an MCP tool name into a plain one Factory accepts. The
+// caller's own name is restored in the reply.
+func mcpAlias(name string) string {
+	trimmed := strings.TrimPrefix(strings.TrimLeft(name, "_"), "mcp__")
+	flat := strings.NewReplacer("__", "_").Replace(trimmed)
+	safe := make([]rune, 0, len(flat))
+	for _, r := range flat {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			safe = append(safe, r)
+		default:
+			safe = append(safe, '_')
+		}
+	}
+	out := string(safe)
+	if len(out) > 40 {
+		out = out[:40]
+	}
+	return out + "_" + hashSuffix(name)
+}
+
+// hashSuffix is a stable four-hex fingerprint of a name, so a renamed tool
+// keeps the same alias across requests and a prompt cache still holds.
+func hashSuffix(name string) string {
 	h := uint32(0x811c9dc5)
 	for i := 0; i < len(name); i++ {
 		h ^= uint32(name[i])
 		h *= 0x01000193
 	}
-	return fmt.Sprintf("%s_%04x", strings.TrimLeft(name, "_"), h&0xffff)
+	return fmt.Sprintf("%04x", h&0xffff)
+}
+
+// suffixName gives a refused name Factory's list has no droid equivalent for
+// a stable replacement that no list holds.
+func suffixName(name string) string {
+	return strings.TrimLeft(name, "_") + "_" + hashSuffix(name)
 }
 
 // AliasToolNames renames every declared tool Factory refuses, and every later
@@ -98,7 +137,10 @@ func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
 		if RefusedToolName(name) {
 			return true
 		}
-		return renameAll && name != "" && !TakenToolNames[name] && !strings.HasPrefix(name, "mcp__")
+		if renameAll && name != "" && !TakenToolNames[name] && !strings.HasPrefix(name, "mcp__") {
+			return true
+		}
+		return false
 	}
 	needed := false
 	for _, s := range declared {
@@ -130,6 +172,9 @@ func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
 			}
 			if !ok || taken[alias] {
 				alias = suffixName(name)
+			}
+			if mcpToolNameRE.MatchString(name) {
+				alias = mcpAlias(name)
 			}
 			for taken[alias] || RefusedToolName(alias) {
 				alias += "_"

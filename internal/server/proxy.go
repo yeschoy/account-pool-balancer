@@ -902,16 +902,18 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		body, generatedCacheKey, err = prepareMistralRequest(body, r.URL.Path, cacheKey)
 		if err == nil && rec.mistralLayoutScope != "" {
 			body, err = s.mistralLayouts.restore(originalMistralBody, body, rec.mistralLayoutScope, rec.MistralLayout)
-			w.Header().Set("X-Mistral-Layout", rec.MistralLayout.header())
+			if err == nil {
+				w.Header().Set("X-Mistral-Layout", rec.MistralLayout.header())
+			}
 		}
 		if err != nil {
 			rec.ErrorCategory = "request"
-			code := "invalid_mistral_request"
 			if errors.Is(err, errMistralLayout) {
-				code = "mistral_layout_unavailable"
-				w.Header().Set("X-Mistral-Layout", "error=unavailable")
+				rec.MistralLayout.Rejected = true
+				writeLocalError(w, proto, 400, "invalid_request_error", "invalid_request", "This conversation cannot continue. Start a new conversation and try again.", 0)
+			} else {
+				writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", err.Error(), 0)
 			}
-			writeLocalError(w, proto, 400, "invalid_request_error", code, err.Error(), 0)
 			finish(400, "failed")
 			return
 		}
