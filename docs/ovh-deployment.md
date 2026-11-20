@@ -38,6 +38,12 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 历史布局默认顺序兜底（2026-11-20 14:27 UTC，ce01ca4）
+
+- 用户确认优先精确重建；过期、歧义或无法完整拼回时，受影响历史按原有「先思考、后正文」继续，不再仅因布局本地400。默认顺序仅计管理员日志，不续期/覆盖旧布局；只有真实新回复保存原始结构。未改账号、重试或缓存策略。
+- 提交 `ce01ca4142cd6800e184e5032eeff34213b8b384` 已推送。替换 `f51f5ad`，仅 Mistral 布局及相关代码有运行差异。干净 Git 归档，两个修改源码 SHA256 已核对。OVH UTC 构建 14:25:45.182–14:26:49.154；停旧 14:26:49.241（退出 14:26:49.347）；完整一致备份 14:26:53.104，Compose 仅覆盖 image 切换 14:26:53.106（新启动 14:26:53.334），Docker healthy 14:27:23.888；双内网及宿主机验收 14:27:23.959，紧接公网 `/healthz` 通过。健康确认等待不是服务停机。
+- 镜像 `account-pool-balancer:release-ce01ca4-20261120T142527Z`，restarts=0/OOM=false/Healthcheck 保留，New API 对新旧两个内网入口均成功，配置备份与线上字节一致。回退 `rollback-20261120T142527Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T142527Z-mistral-layout-fallback-ce01ca4/`。未发真实推理或重放，不把健康检查当成用户原会话已验收。
+
 ## 当前部署：Factory 设备登录 401 修复（2026-11-19 09:45 UTC，2dda906）
 
 - 线上第一次真实 Factory 设备登录：浏览器显示 `auth.factory.ai/device/success`，但服务端 `/api/cli/whoami` 返回 **401**。已核实 `api.factory.ai/api/cli/whoami` 对无 token 与任意坏 token 都返回 401（带 `requestId`），生产 API 只接受 Factory 生产 WorkOS client 签发的 token；Factory 存在生产 `client_01HNM792M5G5G1A2THWPXKFMXB` 与 development `client_01HNM7927XNSKCJ4982Z5J3FFZ` 两个 client，`authorize/device` 只传 `client_id`，用 dev client 也能拿到成功页但 token 必被 401。当前代码固定使用生产 client。
