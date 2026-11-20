@@ -17,7 +17,7 @@
 - 已捕获、同scope、完整文字及空白完全匹配、记录有效且无已知歧义时，恢复text/thinking逻辑交错顺序、分段长度、closed及空signature元数据；所有UTF-8切片必须完整消费两个字符串。不得trim或模糊匹配，不能从记录恢复被客户端删除的思考。
 - JSON保存观察到的原生块/嵌套text分段。SSE将相邻同类型跨帧续片合为逻辑块（closed=true是响应片段元数据，不阻止后续连续思考续片；3051证据要求请求至多一个leading ThinkChunk），同帧显式分段保留；这是逻辑内容重建；render还必须把旧checkpoint相邻thinking连续文本合并，不能把流帧当多个request块。此规则只在相邻思考内合并，不跨真实正文、不重排。**不恢复原网络分帧、原JSON属性次序/转义/排版，也无法知道供应商未公开的内部块边界**。不把该功能说成字节级原样重放或token前缀/缓存保证。
 - 旧会话、外部历史、客户端改字/删思考、无可靠identity、未捕获/被LRU回收的布局无法逆推出。保留既有兼容并显式`legacyUnknown`，不冒称这些记录已恢复。上游自身只有两个scalar也记unknown；不得自行断言其原来一定thinking在前。没有客户端响应标识，scope+完整文字匹配也不是不可伪造的原响应归属证明：未观察到的同文不同布局无法检测，不能宣称覆盖任意导入历史或绝对无歧义。
-- 同scope相同两个字符串但原生布局不同，无客户端标识就不可区分：保留ambiguous标记，本地400 `mistral_layout_unavailable`，零上游尝试、零健康处罚、不靠后到记录覆盖。已知过期仍明确拒绝；capture超限只留unavailable标记时，明确legacyUnknown+unrecovered并沿旧兼容（不标restored），不能让没有描述的派生缓存阻断原可用请求；新完整capture可替换unavailable。原生权威历史不受阻。
+- 同scope相同两个字符串但原生布局不同，无客户端标识就不可区分：保留ambiguous标记，本地400 `invalid_request`（只提示另开会话），零上游尝试、零健康处罚、不靠后到记录覆盖。已知过期仍明确拒绝；capture超限只留unavailable标记时，明确legacyUnknown+unrecovered并沿旧兼容（不标restored），不能让没有描述的派生缓存阻断原可用请求；新完整capture可替换unavailable。原生权威历史不受阻。
 - 真实非空引用/未知内容不得因重建被删除；非plain内容沿原验证并记unknown。只支持原有可表达的plain text/thinking与固定元数据，供应商真实非空签名仍沿原兼容错误，不伪造。
 
 ## 4. 状态、持久化与隐私
@@ -30,8 +30,8 @@
 
 ## 5. 可见性
 
-- 号池HTTP响应技术头`X-Mistral-Layout: restored=N; legacy_unknown=N; native=N`或`error=unavailable`，只有计数/枚举。NewAPI或其他中间层是否转发该头不能假定；功能不依赖客户端读头。
-- 管理员原requestLog新增可选`mistralLayout`计数`restored/legacyUnknown/native/captured/captureUnavailable`；沿现有admin/no-store日志权限，不新增正文或公开API。未启用路径/其他池不产生此字段。
+- 非布局拒绝的适配请求保留`X-Mistral-Layout: restored=N; legacy_unknown=N; native=N`兼容头，只有计数/枚举；功能不依赖中间层转发。布局拒绝不得发这个头、内部错误文本或内部错误码；对外 HTTP400 `invalid_request_error` / `invalid_request`，仅提示新建会话再试，不能自动重放或捏造布局。
+- 管理员原requestLog保留可选`mistralLayout`计数；仅在本地布局拒绝时另记`mistralLayout.rejected=true`。沿现有admin/no-store日志权限，不新增正文或公开API。未启用路径/其他池不产生此字段。
 
 ## 6. 必要验证
 

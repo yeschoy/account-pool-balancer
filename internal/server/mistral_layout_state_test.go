@@ -174,9 +174,32 @@ func TestMistralLayoutNoClientFieldsUnknownAndAmbiguousHTTP(t *testing.T) {
 		}
 	}
 	body := `{"model":"zai-glm-5-3","messages":[{"role":"user","content":"original user"},{"role":"assistant","content":"before after","reasoning_content":"private-thought-中文"},{"role":"user","content":"next"}]}`
-	status, reply := e.post(t, "/v1/chat/completions", body, map[string]string{"Session-Id": "local-ambiguous"})
-	if status != 400 || e.count() != 2 || !strings.Contains(reply, "mistral_layout_unavailable") {
-		t.Fatalf("ambiguous history sent upstream or hidden: %d %s", status, reply)
+	req, _ := http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer mistral-client")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Session-Id", "local-ambiguous")
+	rejected, err := e.front.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := io.ReadAll(rejected.Body)
+	rejected.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var public struct {
+		Error struct{ Type, Code, Message string }
+	}
+	if rejected.StatusCode != 400 || e.count() != 2 || rejected.Header.Get("X-Mistral-Layout") != "" || rejected.Header.Get("Retry-After") != "" ||
+		json.Unmarshal(reply, &public) != nil || public.Error.Type != "invalid_request_error" || public.Error.Code != "invalid_request" ||
+		public.Error.Message != "This conversation cannot continue. Start a new conversation and try again." || bytes.Contains(reply, []byte("layout")) || bytes.Contains(reply, []byte("private-thought")) {
+		t.Fatalf("public failure leaked diagnostics or reached upstream: %d %s", rejected.StatusCode, reply)
+	}
+	e.s.requests.Wait()
+	page, err := e.s.logs.Query("requests", map[string]string{"requestId": rejected.Header.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
+	var rec requestLog
+	if err != nil || len(page.Items) != 1 || json.Unmarshal(page.Items[0], &rec) != nil || rec.MistralLayout == nil || !rec.MistralLayout.Rejected || len(rec.Attempts) != 0 {
+		t.Fatal("missing admin-only rejection evidence or local rejection attempted upstream")
 	}
 	// A genuinely native history is authoritative and needs no guessed cache.
 	native := `{"model":"zai-glm-5-3","messages":[{"role":"user","content":"original user"},{"role":"assistant","content":` + layoutNativeFixture + `}]}`
@@ -185,7 +208,7 @@ func TestMistralLayoutNoClientFieldsUnknownAndAmbiguousHTTP(t *testing.T) {
 	}
 	// Imported/older/edited history has no recoverable source layout. Keep
 	// prior compatibility but explicitly expose unknown, never claim restored.
-	req, _ := http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
+	req, _ = http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer mistral-client")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Session-Id", "different-session")

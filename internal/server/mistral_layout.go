@@ -47,11 +47,11 @@ type mistralLayoutRecord struct {
 }
 
 type mistralLayoutLog struct {
-	Restored           int `json:"restored"`
-	Unknown            int `json:"legacyUnknown"`
-	Native             int `json:"native"`
-	Captured           int `json:"captured"`
-	CaptureUnavailable int `json:"captureUnavailable"`
+	Restored           int  `json:"restored"`
+	Unknown            int  `json:"legacyUnknown"`
+	Native             int  `json:"native"`
+	Captured           int  `json:"captured"`
+	CaptureUnavailable int  `json:"captureUnavailable"`
 	Unrecovered        int  `json:"unrecovered,omitempty"` // known missing descriptor, old compatibility used
 	Rejected           bool `json:"rejected,omitempty"`    // internal rejection, never returned in public errors
 }
