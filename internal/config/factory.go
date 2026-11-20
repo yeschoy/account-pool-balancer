@@ -253,6 +253,11 @@ var factoryRoutingDefaults, factoryQuotaDefaults = func() (Routing, Quota) {
 	c := Default()
 	c.Routing.Strategy, c.Routing.WalletFallback = "least-connections", false
 	c.Routing.OnBindingBusy = "reject"
+	// Factory's prompt cache lives per upstream account, so a conversation that
+	// moves accounts loses its cache. Keep both the explicit session binding and
+	// the conversation-fingerprint fallback for a day: a client that pauses
+	// across a lunch break still lands on the account holding its cached prompt.
+	c.Routing.ExplicitTTLSec, c.Routing.FallbackTTLSec = 24*3600, 24*3600
 	c.Quota.IntervalSec = 600
 	return c.Routing, c.Quota
 }()

@@ -189,3 +189,19 @@ func TestFactoryProxyPoolAndUserAgentValidation(t *testing.T) {
 		t.Fatal("newline UA accepted")
 	}
 }
+
+// Factory keeps a conversation on one account for a day, because the prompt
+// cache lives per account and moving loses it.
+func TestFactorySessionBindingTTL(t *testing.T) {
+	c := Default()
+	r := c.Factory.EffectiveRouting()
+	if r.ExplicitTTLSec != 24*3600 || r.FallbackTTLSec != 24*3600 {
+		t.Fatalf("factory TTLs = explicit %d fallback %d", r.ExplicitTTLSec, r.FallbackTTLSec)
+	}
+	// The saved settings must pass the generic bounds check too.
+	c2 := Default()
+	c2.Factory.Routing = &r
+	if err := c2.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+}
