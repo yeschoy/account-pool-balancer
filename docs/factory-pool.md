@@ -1,5 +1,23 @@
 # Factory AI 号池与全局号池启停
 
+## 缓存排查（2026-11-21，`147d4e9`）
+
+结论：**上游隐式缓存正常，问题在统计口径**。
+
+- **实测**（经 `m.yeschoy.pro`，同一 prompt 间隔数秒）：
+  | 请求 | prompt | cachedContentTokenCount |
+  |---|---|---|
+  | 663 tokens 首次 | 663 | 无（低于隐式缓存门槛） |
+  | 8449 tokens 首次 | 8449 | 无 |
+  | 8449 tokens 第二次 | 8449 | **6395（75.7%）** |
+  | 15557 tokens 首次 | 15557 | 无 |
+  | 15557 tokens 第二次 | 15557 | **13503（86.8%）** |
+  真实 DSH 大请求（71619 tokens）在 new-api 侧记录 `cr=69570`（97%），说明 265 工具的请求前缀也确实被缓存。
+- **统计 bug（已修）**：Gemini 只在命中时下发 `cachedContentTokenCount`，缺失时原代码把 `cachedTokens` 留成 nil；而 `stats.Record` 只有在 input 与 cached **都非 nil** 时才计入命中率分母，于是所有未命中样本被排除，控制台看到的「24h 缓存命中率」只按命中样本算，虚高。现在 usageMetadata 有 promptTokenCount 但无 cached 时记 **0**（有测量、命中为 0），无任何用量时仍记未知。
+- **账号隔离**：Factory 的缓存按账号（Google 项目身份）各自独立。本池 `routing.sticky=true`、`explicitTtlSec=7200`、`sessionHeaders=[]`（按 message_hmac 粘性），日志里 `bindingResult` 为 hit 9 / miss 4，长对话不会被随机分到另一个账号而丢缓存。
+- **不会破坏缓存的因素**：本网关的改写（工具改名、schema 收敛、被拒句改写）都是**确定性**的——同一请求连发两次命中 86.8% 就是证明。
+- **会导致缓存失效的操作**（客户端侧）：换模型、增删 MCP 工具、改 system prompt/注入时间、切换账号。prompt 太短（<约 1–2k tokens）也不会进入隐式缓存。
+
 ## 模型目录补全（2026-11-21，`d684aab`）
 
 droid 模型选择器里的 12 个模型逐个实测（`m.yeschoy.pro`，tiny 请求）：

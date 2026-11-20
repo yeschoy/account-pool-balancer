@@ -66,6 +66,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 缓存统计口径修复（2026-11-21 05:08 UTC，147d4e9）
+
+- 排查结论：上游 Gemini 隐式缓存正常（8449 tokens 重复请求命中 6395；15557 命中 13503；真实 71619 tokens 的 DSH 请求在 new-api 侧 `cr=69570`）。真正的 bug 在本池统计：Gemini 缓存未命中时不下发 `cachedContentTokenCount`，原代码留 nil，`stats.Record` 要求 input/cached 同时非 nil 才计入分母，导致未命中样本被排除、控制台命中率虚高。
+- 修复 `147d4e9`：`usageMetadata` 有 promptTokenCount 而无 cached 时记 0（有测量、命中 0）；完全无用量仍记未知。新增 `TestScanUsageGeminiCacheMissCountsAsZero`；`go test ./internal/server ./internal/config` 通过（95.379s / 0.907s）。
+- 线上验证：全新 prompt（15557 tokens）首次 `cached=0 命中率 0`，13 秒后同一 prompt `cached=13503 命中率 86.8%`。
+- 部署：镜像 `account-pool-balancer:release-147d4e9-20261120T210829Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T210829Z-factory-cache-147d4e9/data.tgz`；healthy。
+
 ## 当前部署：Factory 模型目录补全（2026-11-21 04:58 UTC，d684aab）
 
 - 目标：droid 模型选择器里的 12 个模型全部可用。实测缺三处：本池模型表缺 `gemini-4-neon`/`gpt-5.4-mini`/`gpt-5.4-mini-fast`；new-api 渠道 245 只列了 3 个 gemini-4；new-api 计费表达式缺 neon 与 mini。
