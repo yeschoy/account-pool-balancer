@@ -1,9 +1,10 @@
 package factory
 
 import (
+	"bytes"
 	"encoding/json"
-	"regexp"
 	"strings"
+	"sync"
 )
 
 // Factory's usage policy check reads the whole request body, not only the
@@ -113,13 +114,34 @@ func EscapeClientPhrases(body []byte) ([]byte, bool) {
 // containsPhrase is a cheap byte-level pre-check; a phrase inside a JSON string
 // always appears literally unless it was already escaped.
 func containsPhrase(body []byte) bool {
-	s := string(body)
-	for _, phrase := range AllRefusedPhrases() {
-		if strings.Contains(s, phrase) {
+	for _, phrase := range refusedPhraseBytes() {
+		if bytes.Contains(body, phrase) {
 			return true
 		}
 	}
-	return selfDescriptionRE.MatchString(s)
+	return bytes.Contains(body, arnessBytes) && len(selfDescriptionSpans(string(body))) > 0
+}
+
+// arnessBytes is the suffix every harness self-description carries, used as a
+// cheap gate before the sentence scan.
+var arnessBytes = []byte("arness")
+
+var (
+	phraseBytesOnce  sync.Once
+	phraseBytesCache [][]byte
+)
+
+// refusedPhraseBytes returns the phrase list as bytes, built once so the
+// per-request pre-check allocates nothing.
+func refusedPhraseBytes() [][]byte {
+	phraseBytesOnce.Do(func() {
+		phrases := AllRefusedPhrases()
+		phraseBytesCache = make([][]byte, len(phrases))
+		for i, phrase := range phrases {
+			phraseBytesCache[i] = []byte(phrase)
+		}
+	})
+	return phraseBytesCache
 }
 
 // escapeDeep rewrites strings inside a decoded body in place.
@@ -156,13 +178,79 @@ func escapeDeep(v any) bool {
 	return changed
 }
 
-// selfDescriptionRE matches a client describing itself as an AI agent driven by
-// an agent harness, ending its sentence with a full stop. Measured on
-// 2026-11-21: "You are an AI agent powered by DeepSeek Harness." is refused
-// while the same text without the final period, or the product name alone,
-// passes — the refusal is that sentence, and a conversation that quotes it (a
-// tool result reading a file, for example) is refused for every later turn.
-var selfDescriptionRE = regexp.MustCompile(`(?i)You are[^.\n]{0,120}?harness\.`)
+// A client self-description sentence is refused when it ends with
+// "Harness.": measured 2026-11-21, "You are an AI agent powered by DeepSeek
+// Harness." is refused while the same text without the final period, or the
+// product name alone, passes. Matching is done by scanning instead of a
+// regular expression: this runs on every request body, and RE2 over a 300 KB
+// body cost ~3 ms while the scan below costs a few microseconds.
+
+// selfDescriptionSpans returns the byte ranges of every self-description
+// sentence in s. The sentence is "You are" (any case), 0-120 bytes without a
+// period, quote, backslash or newline, then "Harness." or "harness.".
+func selfDescriptionSpans(s string) [][2]int {
+	if !strings.Contains(s, "arness") {
+		return nil
+	}
+	var spans [][2]int
+	for i := 0; ; {
+		idx := strings.Index(s[i:], "arness")
+		if idx < 0 {
+			break
+		}
+		at := i + idx // the 'a'; the word starts one byte earlier
+		i = at + 7
+		if at == 0 {
+			continue
+		}
+		if b := s[at-1]; b != 'H' && b != 'h' {
+			continue
+		}
+		if at+6 >= len(s) || s[at+6] != '.' {
+			continue
+		}
+		// "You are" must sit within the 120 bytes before the word and no
+		// excluded byte may separate them.
+		lo := at - 1 - 120
+		if lo < 0 {
+			lo = 0
+		}
+		window := s[lo : at-1]
+		rel := lastIndexFold(window, "you are")
+		if rel < 0 {
+			continue
+		}
+		between := window[rel+7:]
+		if hasExcludedByte(between) {
+			continue
+		}
+		spans = append(spans, [2]int{lo + rel, at + 7})
+	}
+	return spans
+}
+
+// hasExcludedByte reports a byte the refused sentence may not contain between
+// "You are" and the harness name: a period, a quote, a backslash (JSON escape)
+// or a newline.
+func hasExcludedByte(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.', '"', '\\', '\n':
+			return true
+		}
+	}
+	return false
+}
+
+// lastIndexFold is a case-insensitive strings.LastIndex for the ASCII pattern.
+func lastIndexFold(s, pattern string) int {
+	for i := len(s) - len(pattern); i >= 0; i-- {
+		if strings.EqualFold(s[i:i+len(pattern)], pattern) {
+			return i
+		}
+	}
+	return -1
+}
 
 // RewriteRefusedPhrases replaces every refused phrase in s with wording the
 // gateway accepts, escaping only the phrases that have no measured rewrite.
@@ -185,17 +273,23 @@ func escapeAll(s string) string { return RewriteRefusedPhrases(s) }
 // self-description sentence; the gateway accepts that wording and refuses the
 // sentence ending in "Harness.".
 func rewordSelfDescription(s string) string {
-	if !strings.Contains(strings.ToLower(s), "harness") {
+	spans := selfDescriptionSpans(s)
+	if len(spans) == 0 {
 		return s
 	}
-	return selfDescriptionRE.ReplaceAllStringFunc(s, func(match string) string {
-		for _, tail := range []string{"Harness.", "harness."} {
-			if strings.HasSuffix(match, tail) {
-				return match[:len(match)-len(tail)] + "Runtime."
-			}
-		}
-		return match
-	})
+	var b strings.Builder
+	b.Grow(len(s))
+	last := 0
+	for _, span := range spans {
+		b.WriteString(s[last:span[0]])
+		// The span ends with "Harness."; keep the sentence and name the
+		// harness "Runtime" instead.
+		b.WriteString(s[span[0] : span[1]-8])
+		b.WriteString("Runtime.")
+		last = span[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // AllRefusedPhrases returns both groups ordered longest first, so a full
