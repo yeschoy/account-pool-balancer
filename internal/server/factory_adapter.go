@@ -244,6 +244,14 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if err != nil {
 		return nil, err
 	}
+	// Google's Schema message has no room for the draft keywords agent tool
+	// schemas carry ($schema, additionalProperties, …) and refuses the request
+	// with 400, so the declarations are trimmed first.
+	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
+		if trimmed, changed := factory.SanitizeGeminiTools(b); changed {
+			b = trimmed
+		}
+	}
 	// Factory's policy reads the whole body, so a refused sentence is escaped
 	// here too; JSON decoding gives the model the original characters.
 	if cfg.Factory.EffectiveEscapeClientPhrases() && cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
