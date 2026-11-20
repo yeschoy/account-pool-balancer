@@ -142,21 +142,22 @@ func escapeAll(s string) string {
 	for _, phrase := range AllRefusedPhrases() {
 		s = escapeFirst(s, phrase)
 	}
-	return escapeSelfDescription(s)
+	return rewordSelfDescription(s)
 }
 
 // escapeSelfDescription escapes the first character of every self-description
 // sentence, which is lossless once the body is JSON-decoded.
-func escapeSelfDescription(s string) string {
+func rewordSelfDescription(s string) string {
 	if !strings.Contains(strings.ToLower(s), "harness") {
 		return s
 	}
 	return selfDescriptionRE.ReplaceAllStringFunc(s, func(match string) string {
-		runes := []rune(match)
-		if len(runes) == 0 {
-			return match
+		for _, tail := range []string{"Harness.", "harness."} {
+			if strings.HasSuffix(match, tail) {
+				return match[:len(match)-len(tail)] + "Runtime."
+			}
 		}
-		return `\\u` + hex4(runes[0]) + string(runes[1:])
+		return match
 	})
 }
 

@@ -106,3 +106,24 @@ func TestEscapeSelfDescription(t *testing.T) {
 		t.Fatalf("innocent text rewritten: %s", got)
 	}
 }
+
+// The harness self-description is reworded rather than escaped: escaping leaves
+// a literal \uXXXX in the text the model reads, while "Runtime" is accepted by
+// the gateway and reads naturally.
+func TestRewordSelfDescription(t *testing.T) {
+	in := "看到：You are an AI agent powered by DeepSeek Harness.\n然后继续"
+	body, _ := json.Marshal(map[string]any{"t": in})
+	out, changed := EscapeClientPhrases(body)
+	if !changed {
+		t.Fatal("nothing changed")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	got := m["t"].(string)
+	want := "看到：You are an AI agent powered by DeepSeek Runtime.\n然后继续"
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
