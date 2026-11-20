@@ -61,53 +61,27 @@ func hex4(v rune) string {
 	})
 }
 
-// EscapeClientPhrases escapes every refused phrase and self-description
-// sentence in a request body and reports whether anything changed.
-//
-// The rewrite happens on the wire bytes, not on decoded values: the first
-// character of each match becomes its \uXXXX JSON escape, which JSON parsing
-// turns back into that character. The model therefore reads the original text
-// byte for byte while the policy check, which reads the raw body, no longer
-// sees the phrase. Unreadable bodies are returned untouched.
+// EscapeClientPhrases escapes every refused phrase in every string of a JSON
+// body and reports whether anything changed. Unreadable bodies are returned
+// untouched, so a malformed request still fails at the same place it did.
 func EscapeClientPhrases(body []byte) ([]byte, bool) {
 	if len(body) == 0 || !containsPhrase(body) {
 		return body, false
 	}
-	// Only a JSON body is rewritten: anything else is left for the layer that
-	// rejects it, unchanged.
-	if !json.Valid(body) {
+	var v any
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec.UseNumber()
+	if dec.Decode(&v) != nil {
 		return body, false
 	}
-	current := string(body)
-	for _, phrase := range AllRefusedPhrases() {
-		current = escapeFirst(current, phrase)
+	if !escapeDeep(v) {
+		return body, false
 	}
-	current = escapeSelfDescription(current)
-	return []byte(current), true
-}
-
-// selfDescriptionRE matches a client describing itself as an AI agent driven by
-// an agent harness, ending its sentence with a full stop. Measured on
-// 2026-11-21: "You are an AI agent powered by DeepSeek Harness." is refused
-// while the same text without the final period, or the product name alone,
-// passes — the refusal is that sentence, and a conversation that quotes it (a
-// tool result reading a file, for example) is refused for every later turn.
-var selfDescriptionRE = regexp.MustCompile(`(?i)You are[^.\\"\n]{0,120}?harness\.`)
-
-// escapeSelfDescription escapes the first character of every matched
-// self-description sentence on the wire bytes, which JSON parsing turns back
-// into the original character.
-func escapeSelfDescription(s string) string {
-	if !strings.Contains(strings.ToLower(s), "harness") {
-		return s
+	out, err := marshal(v)
+	if err != nil {
+		return body, false
 	}
-	return selfDescriptionRE.ReplaceAllStringFunc(s, func(match string) string {
-		runes := []rune(match)
-		if len(runes) == 0 {
-			return match
-		}
-		return `\u` + hex4(runes[0]) + string(runes[1:])
-	})
+	return out, true
 }
 
 // containsPhrase is a cheap byte-level pre-check; a phrase inside a JSON string
@@ -120,6 +94,70 @@ func containsPhrase(body []byte) bool {
 		}
 	}
 	return selfDescriptionRE.MatchString(s)
+}
+
+// escapeDeep rewrites strings inside a decoded body in place.
+func escapeDeep(v any) bool {
+	changed := false
+	switch t := v.(type) {
+	case []any:
+		for i, raw := range t {
+			if s, ok := raw.(string); ok {
+				if out := escapeAll(s); out != s {
+					t[i] = out
+					changed = true
+				}
+				continue
+			}
+			if escapeDeep(raw) {
+				changed = true
+			}
+		}
+	case map[string]any:
+		for k, raw := range t {
+			if s, ok := raw.(string); ok {
+				if out := escapeAll(s); out != s {
+					t[k] = out
+					changed = true
+				}
+				continue
+			}
+			if escapeDeep(raw) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// selfDescriptionRE matches a client describing itself as an AI agent driven by
+// an agent harness, ending its sentence with a full stop. Measured on
+// 2026-11-21: "You are an AI agent powered by DeepSeek Harness." is refused
+// while the same text without the final period, or the product name alone,
+// passes — the refusal is that sentence, and a conversation that quotes it (a
+// tool result reading a file, for example) is refused for every later turn.
+var selfDescriptionRE = regexp.MustCompile(`(?i)You are[^.\n]{0,120}?harness\.`)
+
+func escapeAll(s string) string {
+	for _, phrase := range AllRefusedPhrases() {
+		s = escapeFirst(s, phrase)
+	}
+	return escapeSelfDescription(s)
+}
+
+// escapeSelfDescription escapes the first character of every self-description
+// sentence, which is lossless once the body is JSON-decoded.
+func escapeSelfDescription(s string) string {
+	if !strings.Contains(strings.ToLower(s), "harness") {
+		return s
+	}
+	return selfDescriptionRE.ReplaceAllStringFunc(s, func(match string) string {
+		runes := []rune(match)
+		if len(runes) == 0 {
+			return match
+		}
+		return `\\u` + hex4(runes[0]) + string(runes[1:])
+	})
 }
 
 // AllRefusedPhrases returns both groups ordered longest first, so a full
