@@ -191,13 +191,18 @@ func prepareMistralRequest(body []byte, path, cacheKey string) ([]byte, string, 
 	}
 	o := scanMistralObject(body)
 	model := mistralString(o.get("model"))
+	reasoningModel := mistralReasoningModel(model)
+	if path == "/v1/chat/completions" && reasoningModel {
+		if err := adaptMistralChatStore(o); err != nil {
+			return nil, "", err
+		}
+	}
 	deepSeek := path == "/v1/chat/completions" && model == "deepseek-v4-1-flash-1017"
 	if deepSeek {
 		if err := adaptMistralDeepSeekParameters(o); err != nil {
 			return nil, "", err
 		}
 	}
-	reasoningModel := mistralReasoningModel(model)
 	if reasoningModel {
 		if err := adaptMistralReasoningParameters(o, path == "/v1/responses"); err != nil {
 			return nil, "", err
@@ -232,6 +237,21 @@ func mistralString(raw []byte) string {
 	return s
 }
 
+// Native Chat rejects even store:false for the three exact reasoning models.
+// Only omit values that don't request persistence; leave metadata and history untouched.
+func adaptMistralChatStore(o *mistralWireObject) error {
+	if err := o.unique("store"); err != nil {
+		return errors.New("Mistral Chat is stateless: duplicate store is not supported")
+	}
+	if store := o.get("store"); store != nil {
+		if !bytes.Equal(store, []byte("false")) && !bytes.Equal(store, []byte("null")) {
+			return errors.New("Mistral Chat is stateless: omit store or use false/null; store=true is not supported")
+		}
+		o.set("store", nil)
+	}
+	return nil
+}
+
 func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 	// Observed DeepSeek Chat schema: temperature=1.62 is rejected with
 	// less_than_equal/ctx.le=1.5. Validate before admission, never silently
@@ -244,16 +264,6 @@ func adaptMistralDeepSeekParameters(o *mistralWireObject) error {
 		if json.Unmarshal(raw, &temperature) != nil || temperature > 1.5 {
 			return errors.New("Mistral DeepSeek Chat temperature must be a number no greater than 1.5 or null; lower temperature or omit it; sampling was not changed")
 		}
-	}
-	// Keep the existing stateless error contract, including duplicate store.
-	if err := o.unique("store"); err != nil {
-		return errors.New("Mistral Chat is stateless: duplicate store is not supported")
-	}
-	if store := o.get("store"); store != nil {
-		if !bytes.Equal(store, []byte("false")) && !bytes.Equal(store, []byte("null")) {
-			return errors.New("Mistral Chat is stateless: omit store or use false/null; store=true is not supported")
-		}
-		o.set("store", nil)
 	}
 	if err := o.unique("messages", "seed", "random_seed", "logit_bias", "verbosity", "user", "safety_identifier", "prompt_cache_retention", "prompt_cache_key", "metadata"); err != nil {
 		return err
@@ -321,8 +331,8 @@ func mistralReasoningModel(model string) bool {
 	}
 }
 
-// Only shared reasoning controls belong here. Do not extend DeepSeek's
-// store/image/developer/seed exceptions to GLM or rewrite native Responses input.
+// Only shared reasoning controls belong here. Keep Chat store compatibility
+// separate, and don't apply unrelated DeepSeek fields or rewrite Responses input.
 func adaptMistralReasoningParameters(o *mistralWireObject, responses bool) error {
 	if err := o.unique("reasoning_effort", "reasoning", "prompt_cache_key", "metadata"); err != nil {
 		return err

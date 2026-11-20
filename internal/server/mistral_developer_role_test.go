@@ -20,7 +20,7 @@ func TestMistralGLMDeveloperRoleWirePreservation(t *testing.T) {
 	for _, model := range []string{"zai-glm-5-3", "zai-glm-5-3-flash"} {
 		for _, cache := range []string{`"caller-cache"`, `null`, `""`} {
 			t.Run(model+"/cache="+cache, func(t *testing.T) {
-				body := []byte(fmt.Sprintf(` { "model":%q, "reasoning_effort":"high", "store":false,"seed":9007199254740993,"verbosity":"high","logit_bias":{"1":1},"user":"native-label","prompt_cache_retention":"24h","prompt_cache_key":%s,"metadata":{"session_id":"role-session","n":9007199254740993},"tools":[{"type":"function","function":{"name":"run","parameters":{"role":"developer","n":9007199254740993}}}], "messages":%s } `, model, cache, messages))
+				body := []byte(fmt.Sprintf(` { "model":%q, "reasoning_effort":"high", "seed":9007199254740993,"verbosity":"high","logit_bias":{"1":1},"user":"native-label","prompt_cache_retention":"24h","prompt_cache_key":%s,"metadata":{"session_id":"role-session","store":false,"n":9007199254740993},"tools":[{"type":"function","function":{"name":"run","parameters":{"role":"developer","n":9007199254740993}}}], "messages":%s } `, model, cache, messages))
 				original := append([]byte(nil), body...)
 				out, generated, err := prepareMistralRequest(body, "/v1/chat/completions", "must-not-replace-cache")
 				want := bytes.Replace(body, []byte(messages), []byte(wantMessages), 1)
@@ -127,10 +127,10 @@ func TestMistralGLMDeveloperRoleScope(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body := fmt.Sprintf(` {"model":%q,"messages":[{"role":"developer","content":"keep"}]} `, model)
+			body := fmt.Sprintf(` {"model":%q,"store":false,"messages":[{"role":"developer","content":"keep"}]} `, model)
 			status, reply := e.post(t, "/v1/chat/completions", body, map[string]string{"Authorization": "Bearer other-client"})
 			if status != 200 || e.count() != 1 || e.call(0).body != body {
-				t.Fatalf("role adaptation escaped Mistral pool: %d %s", status, reply)
+				t.Fatalf("Chat adaptation escaped Mistral pool: %d %s", status, reply)
 			}
 		})
 	}

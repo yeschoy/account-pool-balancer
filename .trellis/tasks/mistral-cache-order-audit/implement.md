@@ -1,5 +1,11 @@
 # 执行计划
 
+## 渠道 182：GLM Chat store 与缓存复查（2026-11-20）
+
+- [x] 两层只读核对，定位 36 条 GLM HTTP422 为 `body.store / extra_forbidden` 且入参为 false。复用 Mistral 三模型精确 Chat 兼容；流式、非流式与越界回归见 [182 诊断记录](research/channel-182-errors-cache-20261120.md)。
+- [ ] 新镜像上线与自然 GLM 流量验收；当前无发布或生产重放。
+- [ ] 缓存短窗下滑主要来自缺显式会话标识的调用组；验证真实会话标识透传以及同会话旧前缀，不能把粘性相关性或历史总体高命中当作缓存已修复。
+
 ## 3051最小修复或回退（2026-11-11 UTC17:30）
 
 - [x] 用户授权继续修复、不行回滚；既有错误完整模板精确确认为code3051/Expected at most one leading ThinkChunk，capture将closed=true的连续流token错误拆成5–248块。

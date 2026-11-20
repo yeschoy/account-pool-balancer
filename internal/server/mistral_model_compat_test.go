@@ -143,9 +143,9 @@ func TestMistralApplyPatchRefusalDoesNotStripOrReplay(t *testing.T) {
 
 func TestMistralGLMDoesNotInheritDeepSeekParameters(t *testing.T) {
 	for _, model := range []string{"zai-glm-5-3", "zai-glm-5-3-flash"} {
-		body := []byte(fmt.Sprintf(` {"model":%q,"reasoning_effort":"high","store":false,"seed":42,"verbosity":"high","logit_bias":{"1":1},"user":"native-label","messages":[{"role":"developer","content":"native"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png","MimeType":""}}]}]} `, model))
+		body := []byte(fmt.Sprintf(` {"model":%q,"reasoning_effort":"high","seed":42,"verbosity":"high","logit_bias":{"1":1},"user":"native-label","messages":[{"role":"developer","content":"native"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/image.png","MimeType":""}}]}]} `, model))
 		out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
-		// The instruction-role alias is shared, not DeepSeek's seed/store,
+		// The instruction-role alias is shared, not DeepSeek's seed,
 		// image metadata, verbosity, logit-bias or user-label adaptation.
 		want := bytes.Replace(body, []byte(`"role":"developer"`), []byte(`"role":"system"`), 1)
 		if err != nil || !bytes.Equal(out, want) {
