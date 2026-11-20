@@ -95,6 +95,11 @@ Factory 设置新增：
   - **Gemini 路由删除 body 级 `stream` 字段**：流式与否由路径 `:streamGenerateContent` 决定，droid 不发该字段（magpie `geminiBody` 的 `delete m.stream`）。
   - **Responses 路由对 OpenAI 系模型删除 `temperature`/`top_p`**：OpenAI reasoning 模型会以 400 拒绝这两个参数，droid 从不发送（magpie `droidBody` 同名逻辑）。
   - 未采纳的部分：magpie 仍把 `mcp__` 工具名视为安全、且黑名单里没有 `todo_write`，本仓库实测两者都会被拒，已按实测处理（比 magpie 更严）；其余 Claude Code/ZCode 专用适配器（`undeferredTools`、skill/reminder 改写）与本池客户端无关，未移植。
+- **用量与费用（2026-11-21，`4dd5c58`/`c5a6811`/`9a03a21`）**：
+  - **Gemini 用量没记录的原因**：`scanUsage` 先判断有没有 `usage` 对象，没有就直接 return，而 Gemini 只在顶层 `usageMetadata` 报用量，所以每次都被丢掉。已改为先读 `usageMetadata`（promptTokenCount/candidatesTokenCount/cachedContentTokenCount/thoughtsTokenCount）。
+  - **计价**：`Factory.EffectivePricing()` 现在自带 Google 官方价（USD/1M token，见 `internal/config/factory.go` 的 `factoryPricingDefaults`）。保存过但为空的 `factory.pricing` 视为"未配置"，回落到默认表；有内容的表则覆盖默认。单请求计价改用**各池自己的价格表**（`cfg.ForProvider(provider).Pricing`），否则 Factory 的价永远用不上。
+  - **估算口径**：`GET /api/factory/usage` 与 `/api/overview` 的 `factoryUsage` 扫描请求日志，按请求时间对应的单价 × 记录到的 token 计算（日志里有 cost 时以它为准），返回累计 USD、请求数、token 与分模型明细；未配价/无用量计入 `unpriced`。控制台 Factory 页新增「累计官方价估算」卡片。**这是按官方单价估算，不是上游账单**。
+  - **注意**：Google 未公开 `gemini-4-carbon/hydrogen/argon` 的价格，默认表按同类已公开档位（3.1 Pro / 3.8 Flash / 3.8 Flash-Lite）预填并在 `note` 标注，可在「价格设置」逐条改。
 - **第四轮实测（2026-11-21，用 DSH 失败会话的完整轮次复现）**：`content_policy_rejected` 还有一类触发源——**对话里引用了客户端自述句**。实测："`You are an AI agent powered by DeepSeek Harness.`"（**带句号**）→ 403；同文本去掉句号、或只出现产品名 "DeepSeek Harness" → 200。也就是说 Factory 拒的是"某个 agent 自述句 + 句号"这个完整句子，出现在 user 文本、system、tool 输出里都会让整轮请求被拒。处理：`internal/factory/phrases.go` 增加 `selfDescriptionRE = (?i)You are[^.\n]{0,120}?harness\.`，把命中句子里的 `Harness.` **改写为 `Runtime.`**（实测该改写被网关接受，句子其余部分不动，可读性优于转义），并在 `containsPhrase` 预检里也检查该正则，保证任何位置的引用都能被处理。
 - **被拒短语改为语义改写**（2026-11-21，`f4fc226`）：9 条 magpie 短语全部换成网关实测接受的措辞，逐条验证过（字面 403 → 改写 200）：
   | 字面（被拒） | 改写（接受） |

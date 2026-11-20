@@ -66,6 +66,16 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 用量与官方价估算（2026-11-21 04:21 UTC，9a03a21）
+
+- 三个问题的处理与验证：
+  1. **卡顿排查**：请求日志统计 factory `durationMs` p50 1.5s / p95 19.4s（其他池 p50 7.1s），慢点在上游：`gemini-4-carbon` 在 69k/71k prompt token 时 TTFT 7.4s/11.9s。本网关适配开销实测 **12.9ms/请求**（345KB body、265 工具、26.7MB/s），不是瓶颈。根因是 DSH 会话把 265 个工具（229 个 `mcp__rea__*`）全塞进每次请求，prompt 达 70k。建议在不用 REA 的会话里关掉该 MCP。
+  2. **输入输出没记录**：`scanUsage` 提前 return 丢掉 Gemini 顶层 `usageMetadata`，已修（`4dd5c58`），线上实测新请求 `in 54 / out 5` 已入库。
+  3. **官方价 USD 估算**：新增 `factoryPricingDefaults`（USD/1M，Google 公开价）、空保存表回落默认（`9a03a21`）、单请求计价改用各池价格表（`c5a6811`），并新增 `GET /api/factory/usage` + 总览 `factoryUsage` + 控制台 Factory 页「累计官方价估算」卡片。实测一条 54in/5out 的请求记为 `cost=0.000168 USD`（54×2/1M + 5×12/1M），与单价一致。
+- 提交 `4dd5c58`、`c5a6811`、`9a03a21` 已推送；`go vet` 与 `go test ./...` 通过（server 94.465s），新增 `TestScanUsageGeminiMetadata`、`TestScanFactoryUsage`、factory 价格默认值断言。
+- 部署：镜像 `account-pool-balancer:release-9a03a21-20261120T202116Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T202116Z-factory-cost2-9a03a21/data.tgz`；healthy、restarts=0。
+- **待确认**：Google 未公开 `gemini-4-*` 官方价，默认按同类档位估算；若按 12-01 后的调价表计费，把该表给我，我加 `from` 生效日期条目。
+
 ## 当前部署：被拒短语语义改写（2026-11-21 02:49 UTC，f4fc226）
 
 - 按用户要求，把 magpie 的 9 条被拒短语从"首字符转义（模型读到字面 \uXXXX）"改为"语义改写"。改写措辞**逐条实测**通过（`prem.factory.ai` 真账号、DroidLine 开场）：字面 403、改写 200。
