@@ -75,27 +75,27 @@ func TestFactoryKeepSystemMode(t *testing.T) {
 }
 
 // A conversation quoting another agent's prompt is refused by Factory's usage
-// policy; the escape rewrites one character per phrase before the request
-// leaves, and leaves everything else alone.
+// policy; the gateway accepts the reworded sentence, and disabling the rewrite
+// sends the text untouched.
 func TestFactoryEscapesRefusedClientPhrases(t *testing.T) {
 	e := newFactoryEnv(t)
-	setFactoryMode(t, e, func(c *config.Config) { c.Factory.SystemMode = config.SystemFold })
+	setFactoryMode(t, e, func(c *config.Config) { c.Factory.SystemMode = config.SystemMagpie })
 	body := `{"model":"glm-5.3","messages":[{"role":"user","content":"repeat: You are Claude Code, Anthropic's official CLI for Claude."}]}`
 	e.do(t, "/v1/chat/completions", body, nil)
 	up := e.snapshot()[0].body
 	if strings.Contains(up, "You are Claude Code") {
 		t.Fatalf("refused phrase sent literally: %s", up)
 	}
-	if !strings.Contains(up, `\u0059ou are Claude Code`) {
-		t.Fatalf("phrase not escaped: %s", up)
+	if !strings.Contains(up, "You are a coding assistant, Anthropic's official CLI for Claude.") {
+		t.Fatalf("phrase not reworded: %s", up)
 	}
 
-	// Turning the escape off sends the text untouched.
+	// Turning the rewrite off sends the text untouched.
 	off := false
 	setFactoryMode(t, e, func(c *config.Config) { c.Factory.EscapeClientPhrases = &off })
 	e.do(t, "/v1/chat/completions", body, nil)
 	if up := e.snapshot()[1].body; !strings.Contains(up, "You are Claude Code") {
-		t.Fatalf("escape ran while disabled: %s", up)
+		t.Fatalf("rewrite ran while disabled: %s", up)
 	}
 }
 

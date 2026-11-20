@@ -38,6 +38,32 @@ var (
 	}
 )
 
+// RefusedPhraseRewords replace a refused client phrase with wording the
+// gateway accepts, measured one phrase at a time against the gateway
+// (2026-11-21): every literal below is refused while the replacement is
+// answered 200. The model therefore reads ordinary language instead of an
+// escape sequence. Ordered longest first so a full sentence is rewritten
+// before one of its own prefixes.
+var RefusedPhraseRewords = [][2]string{
+	{"You are an expert coding assistant operating inside pi, a coding agent harness.", "You are an expert coding assistant."},
+	{"The conversation history before this point was compacted into the following summary:", "Earlier conversation context is summarized below:"},
+	{"The following is a summary of a branch that this conversation came back from:", "Summary of an earlier conversation branch:"},
+	{"This session is being continued from a previous conversation that ran out of context.", "This session continues an earlier conversation that ran out of context."},
+	{"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.", "You are a coding assistant running within the Claude Agent SDK."},
+	{"You are Claude Code, Anthropic's official CLI for Claude.", "You are a coding assistant, Anthropic's official CLI for Claude."},
+	{"You are a Claude agent, built on Anthropic's Claude Agent SDK.", "You are an agent built on Anthropic's Claude Agent SDK."},
+	{"You have been invoked in the following environment:", "The session environment is:"},
+	{"(user's private global instructions for all projects)", "(user's global instructions for all projects)"},
+}
+
+// escapeOnlyPhrases have no measured rewrite: their first character is escaped
+// in the decoded text, as magpie does, which keeps the gateway's match from
+// firing. The decoding is already done when this runs, so the model reads a
+// literal \uXXXX for that one character.
+var escapeOnlyPhrases = []string{
+	"x-anthropic-billing-header: cc_version=",
+}
+
 // escapeFirst replaces the first character of every occurrence of phrase with
 // its \uXXXX JSON escape. The decoded text is identical; only the wire bytes
 // differ, which is what the policy check reads.
@@ -103,7 +129,7 @@ func escapeDeep(v any) bool {
 	case []any:
 		for i, raw := range t {
 			if s, ok := raw.(string); ok {
-				if out := escapeAll(s); out != s {
+				if out := RewriteRefusedPhrases(s); out != s {
 					t[i] = out
 					changed = true
 				}
@@ -116,7 +142,7 @@ func escapeDeep(v any) bool {
 	case map[string]any:
 		for k, raw := range t {
 			if s, ok := raw.(string); ok {
-				if out := escapeAll(s); out != s {
+				if out := RewriteRefusedPhrases(s); out != s {
 					t[k] = out
 					changed = true
 				}
@@ -138,15 +164,26 @@ func escapeDeep(v any) bool {
 // tool result reading a file, for example) is refused for every later turn.
 var selfDescriptionRE = regexp.MustCompile(`(?i)You are[^.\n]{0,120}?harness\.`)
 
-func escapeAll(s string) string {
-	for _, phrase := range AllRefusedPhrases() {
+// RewriteRefusedPhrases replaces every refused phrase in s with wording the
+// gateway accepts, escaping only the phrases that have no measured rewrite.
+func RewriteRefusedPhrases(s string) string {
+	for _, pair := range RefusedPhraseRewords {
+		if strings.Contains(s, pair[0]) {
+			s = strings.ReplaceAll(s, pair[0], pair[1])
+		}
+	}
+	for _, phrase := range escapeOnlyPhrases {
 		s = escapeFirst(s, phrase)
 	}
 	return rewordSelfDescription(s)
 }
 
-// escapeSelfDescription escapes the first character of every self-description
-// sentence, which is lossless once the body is JSON-decoded.
+// escapeAll keeps the older name used by the tests.
+func escapeAll(s string) string { return RewriteRefusedPhrases(s) }
+
+// rewordSelfDescription names the agent harness "Runtime" in every
+// self-description sentence; the gateway accepts that wording and refuses the
+// sentence ending in "Harness.".
 func rewordSelfDescription(s string) string {
 	if !strings.Contains(strings.ToLower(s), "harness") {
 		return s

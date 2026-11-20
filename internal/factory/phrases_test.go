@@ -15,37 +15,33 @@ func decodeBody(t *testing.T, b []byte) map[string]any {
 	return m
 }
 
-// Factory refuses a conversation that quotes another agent's prompt. Escaping
-// the phrase's first character keeps the check from matching while the model
-// still reads the same characters after JSON decoding.
+// Factory refuses a conversation that quotes another agent's prompt. Each
+// refused phrase is replaced with wording the gateway accepts, so the model
+// reads ordinary language rather than an escape sequence.
 func TestEscapeClientPhrases(t *testing.T) {
 	body := []byte(`{"model":"deepseek-v4.1-flash-1017","messages":[` +
 		`{"role":"user","content":"You are Claude Code, Anthropic's official CLI for Claude. now help"},` +
 		`{"role":"tool","content":[{"type":"text","text":"(user's private global instructions for all projects)"}]}]}`)
 	out, changed := EscapeClientPhrases(body)
 	if !changed {
-		t.Fatal("no phrase escaped")
+		t.Fatal("no phrase rewritten")
 	}
-	if strings.Contains(string(out), "You are Claude Code") || strings.Contains(string(out), "(user's private") {
-		t.Fatalf("literal phrase still present: %s", out)
+	for _, phrase := range AllRefusedPhrases() {
+		if strings.Contains(string(out), phrase) {
+			t.Fatalf("refused phrase still present: %q in %s", phrase, out)
+		}
 	}
-	if !strings.Contains(string(out), `\u0059ou are Claude Code`) {
-		t.Fatalf("first character not escaped: %s", out)
+	if !strings.Contains(string(out), "You are a coding assistant, Anthropic's official CLI for Claude.") {
+		t.Fatalf("identity not reworded: %s", out)
 	}
-	// After JSON decoding the text differs only in one character: the escaped
-	// first rune is the literal escape on the wire, exactly as the middleware
-	// sends it. Everything else, including the model, is unchanged.
-	orig := decodeBody(t, body)
-	got := decodeBody(t, out)
-	origMsg, _ := orig["messages"].([]any)[0].(map[string]any)["content"].(string)
-	gotMsg, _ := got["messages"].([]any)[0].(map[string]any)["content"].(string)
-	if strings.Replace(gotMsg, `\u0059`, "Y", 1) != origMsg {
-		t.Fatalf("text beyond the escaped rune changed:\n%s\n%s", origMsg, gotMsg)
+	if !strings.Contains(string(out), "(user's global instructions for all projects)") {
+		t.Fatalf("global instructions not reworded: %s", out)
 	}
-	if !strings.Contains(gotMsg, `\u0059ou are Claude Code`) {
-		t.Fatalf("unexpected wire text: %s", gotMsg)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
 	}
-	if got["model"] != "deepseek-v4.1-flash-1017" {
+	if m["model"] != "deepseek-v4.1-flash-1017" {
 		t.Fatal("model changed")
 	}
 }
@@ -63,26 +59,43 @@ func TestEscapeClientPhrasesNoOp(t *testing.T) {
 	}
 }
 
-func TestContainsRefusedPhraseIgnoresEscapedText(t *testing.T) {
+func TestContainsRefusedPhraseIgnoresRewrittenText(t *testing.T) {
 	if !ContainsRefusedPhrase("prefix You have been invoked in the following environment: x") {
 		t.Fatal("literal phrase not detected")
 	}
-	escaped := escapeAll("You have been invoked in the following environment:")
-	if ContainsRefusedPhrase(escaped) {
-		t.Fatal("escaped text reported as refused")
+	rewritten := RewriteRefusedPhrases("You have been invoked in the following environment:")
+	if ContainsRefusedPhrase(rewritten) {
+		t.Fatalf("rewritten text reported as refused: %q", rewritten)
+	}
+	if rewritten != "The session environment is:" {
+		t.Fatalf("rewording = %q", rewritten)
 	}
 	if ContainsRefusedPhrase("nothing refused here") {
 		t.Fatal("false positive")
 	}
 }
 
-func TestEscapedPhraseKeepsLongestFirst(t *testing.T) {
+func TestRewordPrefersLongestPhrase(t *testing.T) {
 	// The "Claude Agent SDK" sentence contains the shorter Claude Code prefix;
-	// the longest must win so neither is left visible.
+	// the longest rewording must win so neither literal remains.
 	text := "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
-	out := escapeAll(text)
-	if ContainsRefusedPhrase(out) {
-		t.Fatalf("phrase remains detectable after escaping: %s", out)
+	body, _ := json.Marshal(map[string]any{"t": text})
+	out, changed := EscapeClientPhrases(body)
+	if !changed {
+		t.Fatal("nothing rewritten")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	got := m["t"].(string)
+	if got != "You are a coding assistant running within the Claude Agent SDK." {
+		t.Fatalf("got %q", got)
+	}
+	for _, phrase := range AllRefusedPhrases() {
+		if strings.Contains(got, phrase) {
+			t.Fatalf("phrase remains: %q", phrase)
+		}
 	}
 }
 
