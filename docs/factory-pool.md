@@ -91,6 +91,10 @@ Factory 设置新增：
 - **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
 - **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。**只接受 CLI 形态**：账号、UA 池、默认 UA 都拒绝 `Mozilla/…` 浏览器 UA（推理请求不发送 Sec-CH-UA/Accept-Language/Sec-Fetch-*，浏览器 UA 会自相矛盾）；运行期若读到旧配置里的浏览器 UA，会回退为 `factory-cli/1.14.0`。
 - **Accept-Encoding**：推理请求发送 droid 的 `gzip, deflate, br, zstd`；上游压缩响应在进入 JSON/SSE/Gemini 聚合前统一解码（gzip/deflate/br/zstd），未知编码返回 502 `upstream_encoding`。
+- **与 magpie 0.1.55 的对齐（2026-11-21）**：逐项比对最新 `@magpie-community/opencode-factory-auth` 0.1.55 后补齐两处——
+  - **Gemini 路由删除 body 级 `stream` 字段**：流式与否由路径 `:streamGenerateContent` 决定，droid 不发该字段（magpie `geminiBody` 的 `delete m.stream`）。
+  - **Responses 路由对 OpenAI 系模型删除 `temperature`/`top_p`**：OpenAI reasoning 模型会以 400 拒绝这两个参数，droid 从不发送（magpie `droidBody` 同名逻辑）。
+  - 未采纳的部分：magpie 仍把 `mcp__` 工具名视为安全、且黑名单里没有 `todo_write`，本仓库实测两者都会被拒，已按实测处理（比 magpie 更严）；其余 Claude Code/ZCode 专用适配器（`undeferredTools`、skill/reminder 改写）与本池客户端无关，未移植。
 - **第四轮实测（2026-11-21，用 DSH 失败会话的完整轮次复现）**：`content_policy_rejected` 还有一类触发源——**对话里引用了客户端自述句**。实测："`You are an AI agent powered by DeepSeek Harness.`"（**带句号**）→ 403；同文本去掉句号、或只出现产品名 "DeepSeek Harness" → 200。也就是说 Factory 拒的是"某个 agent 自述句 + 句号"这个完整句子，出现在 user 文本、system、tool 输出里都会让整轮请求被拒。处理：`internal/factory/phrases.go` 增加 `selfDescriptionRE = (?i)You are[^.\n]{0,120}?harness\.`，对命中句子的**首字符做 JSON 转义**（解码后文本不变），并在 `containsPhrase` 预检里也检查该正则，保证任何位置的引用都能被处理。
 - **第三轮实测（2026-11-20，用 DSH 会话日志里的真实请求体复现）**：从 `~/.dsh/sessions/*/session.v4.jsonl.zstd` 取到 DSH 实际发送的 system prompt（9.2KB）与 265 个工具定义，经 `m.yeschoy.pro` 复现并逐层二分，得到三条新规则：
   - **MCP 工具名被拒**：`mcp__<server>__<tool>` 这种形状全部 403（`mcp__rea__comment`、`mcp__foo__bar`），而 `mcp__test`（只有一个分隔符）、`foo__bar__baz` 可以；不是前缀而是形状。处理：改名为 `server_tool_<4hex>`，响应里还原（含 SSE）。magpie 0.1.52 仍按"mcp__ 保留"处理，已过时。

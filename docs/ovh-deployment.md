@@ -66,6 +66,16 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：与 magpie 0.1.55 对齐（2026-11-21 01:57 UTC，c575273）
+
+- 按用户要求重新比对最新 `@magpie-community/opencode-factory-auth` 0.1.55（此前参考的是 0.1.52）：
+  - 客户端版本常量仍是 `0.242.0`，与本站一致；`client-phrases.json` 仍是 9 条，与本站一致。
+  - `REFUSED_TOOL_NAMES` 与 0.1.52 相同（无 `todo_write`、仍把 `mcp__` 视为安全）——本站实测这两类都会被拒，已按实测处理，比 magpie 更严。
+  - 补齐两处漏移植：Gemini 路由 `delete m.stream`；Responses 路由对 `upstream=openai` 的模型删除 `temperature`/`top_p`（OpenAI reasoning 模型 400）。
+- 提交 `c575273` 已推送；`go vet`、`go test ./...`（server 102.106s）通过，新增 `TestDropGeminiStreamField`、`TestStripOpenAISampling`。
+- 部署：镜像 `account-pool-balancer:release-c575273-20261120T175747Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T175747Z-factory-magpie-parity-c575273/data.tgz`；healthy、restarts=0；双内网别名 ok。
+- 现场确认：自述句修复（`d7107df`，17:30Z 上线）之后，该 DSH 会话在 17:32:03 / 17:32:08 / 17:32:13 连续三次 `gemini-4-carbon` **200**，此前 17:26:50 的两次 403 为其修复前的最后一次失败。
+
 ## 当前部署：Factory 自述句转义（2026-11-21 01:30 UTC，d7107df）
 
 - 现场：DSH 会话（`gemini-4-carbon`）在同一轮里前两次工具调用 200，00:50 第 3 步开始 403；客户端显示 `upstream account unavailable ... code 403`（DSH 归类为 AUTH）。
