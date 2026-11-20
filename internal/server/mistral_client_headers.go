@@ -8,6 +8,41 @@ import (
 	"account-pool-balancer/internal/config"
 )
 
+// sessionHeaderCandidates reports the state of every header this gateway would
+// accept as a session identity. It is small and safe to log for any provider,
+// so a request that fell back to the conversation fingerprint can show whether
+// the client sent a session header at all.
+func sessionHeaderCandidates(cfg *config.Config, h http.Header) map[string]string {
+	candidates := map[string]bool{}
+	for _, name := range cfg.Routing.SessionHeaders {
+		candidates[strings.ToLower(name)] = true
+	}
+	for _, name := range parentHeaders {
+		candidates[strings.ToLower(name)] = true
+	}
+	for _, header := range sessionHeaders {
+		candidates[strings.ToLower(header.name)] = true
+	}
+	for _, name := range []string{"X-Prompt-Cache-Key", "Prompt-Cache-Key"} {
+		candidates[strings.ToLower(name)] = true
+	}
+	states := map[string]string{}
+	for name := range h {
+		if !candidates[strings.ToLower(name)] {
+			continue
+		}
+		state := "invalid"
+		value := headerValue(h, name)
+		if strings.TrimSpace(value) == "" {
+			state = "empty"
+		} else if _, ok := validValue(value); ok {
+			state = "valid"
+		}
+		states[name] = state
+	}
+	return states
+}
+
 // This is the client -> Balancer boundary, before outbound header rewriting.
 // Summary diagnostics remain available when body/detail logging is disabled.
 // The operator explicitly permits original session/cache headers in this

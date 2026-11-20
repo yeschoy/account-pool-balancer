@@ -606,7 +606,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
 				capturedBody = goPrivateBody(reqBody)
 			}
-			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
+			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) || rec.Provider == config.ProviderFactory {
 				d.RequestHeaders = maskHeaders(cfg, thPrivateHeaders(reqHeader))
 				for _, name := range cfg.Routing.SessionHeaders {
 					for key := range d.RequestHeaders {
@@ -864,6 +864,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.CacheControl = bytes.Contains(body, []byte(`"cache_control"`))
 	} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderFactory {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
+		// Record which session headers the client actually sent: a request that
+		// bound by conversation fingerprint should say so, and the console shows
+		// these candidates in its request-header view.
+		if states := sessionHeaderCandidates(cfg, r.Header); len(states) > 0 {
+			rec.ClientSessionHeaderStatus = states
+		}
 		ident = s.tokenHarborIdentity(cfg, identityScope, r.Header, obj)
 		// Gemini has no messages/input history for the shared fallback; use
 		// its first system/user text so a conversation still sticks.
