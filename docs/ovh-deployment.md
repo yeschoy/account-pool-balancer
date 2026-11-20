@@ -60,6 +60,16 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory MCP 工具名 / Gemini schema 适配（2026-11-20 14:12 UTC，f51f5ad）
+
+- 现场：DSH 桌面会话（`provider: yeschoy-factory`，`api: google-generative-ai`，`baseURL: https://m.yeschoy.pro/v1`，默认模型 `gemini-4-carbon`）21:49 仍失败；客户端显示 `{"error":{"message":"upstream account unavailable for this request","type":"upstream_error","code":"AUTH"}}`。
+- 排查：从 DSH 会话文件（zstd）解出真实 system prompt 与 265 个工具定义，经真实路径复现 → 403。二分得到两条策略规则（MCP 工具名形状被拒、`todo_write` 等新名字）+ 三级 schema 400：
+  - 403 → `061b525`：`mcp__<server>__<tool>` 形状改名（`internal/factory/toolalias.go`），响应还原（JSON 与 SSE）。
+  - 400 → `f51f5ad`：新增 `internal/factory/gemini_schema.go`，把声明参数收敛到 Google Schema 接受的键（删 `$schema`/`additionalProperties`/`strict` 等；`items` 数组取首元素；`type` 数组收敛并加 `nullable`；有 `items` 强制 `array`；`anyOf` 独占，`oneOf`/`allOf` 转 `anyOf`；缺类型按约束推断）。
+- 验证：同一份真实 body（9252 字符 system + 265 工具）经 `m.yeschoy.pro`：bare / system-only / tools-only / 两者 均 **200**；强制调用 MCP 工具的响应里名字还原为 `mcp__rea__binary_session`（无别名残留）。直接打 `prem.factory.ai` 的转换后 body 也 200。
+- 提交 `061b525`、`f51f5ad` 已推送；`go vet`、`go test ./...`（server 97.153s）通过，新增 MCP 别名与 4 个 schema 收敛测试。
+- 部署：镜像 `account-pool-balancer:release-f51f5ad-20261120T141235Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T141235Z-factory-schema-f51f5ad/data.tgz`；healthy、restarts=0、双内网别名 ok。诊断用的 `factory.detailLog` 已改回 `false` 并重启。
+
 ## 当前部署：Factory 工具名全量改名 / 句子转义（2026-11-20 13:34 UTC，7e16c3e）
 
 - 现场：DSH 默认模型 `yeschoy-factory`（provider `google-generative-ai`，baseURL `https://m.yeschoy.pro/v1`，模型 `gemini-4-carbon`）仍 403；new-api 日志显示 channel #245 两次重试后 403，balancer 错误日志为 `content_policy_rejected`。

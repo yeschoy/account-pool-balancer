@@ -91,6 +91,10 @@ Factory 设置新增：
 - **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
 - **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。**只接受 CLI 形态**：账号、UA 池、默认 UA 都拒绝 `Mozilla/…` 浏览器 UA（推理请求不发送 Sec-CH-UA/Accept-Language/Sec-Fetch-*，浏览器 UA 会自相矛盾）；运行期若读到旧配置里的浏览器 UA，会回退为 `factory-cli/1.14.0`。
 - **Accept-Encoding**：推理请求发送 droid 的 `gzip, deflate, br, zstd`；上游压缩响应在进入 JSON/SSE/Gemini 聚合前统一解码（gzip/deflate/br/zstd），未知编码返回 502 `upstream_encoding`。
+- **第三轮实测（2026-11-20，用 DSH 会话日志里的真实请求体复现）**：从 `~/.dsh/sessions/*/session.v4.jsonl.zstd` 取到 DSH 实际发送的 system prompt（9.2KB）与 265 个工具定义，经 `m.yeschoy.pro` 复现并逐层二分，得到三条新规则：
+  - **MCP 工具名被拒**：`mcp__<server>__<tool>` 这种形状全部 403（`mcp__rea__comment`、`mcp__foo__bar`），而 `mcp__test`（只有一个分隔符）、`foo__bar__baz` 可以；不是前缀而是形状。处理：改名为 `server_tool_<4hex>`，响应里还原（含 SSE）。magpie 0.1.52 仍按"mcp__ 保留"处理，已过时。
+  - **工具名黑名单继续增长**：`todo_write` 单条即 403 → 默认 `renameAllTools` 已覆盖。
+  - **Gemini 工具 schema 必须适配 Google 的 Schema proto**：带 `$schema` / `additionalProperties` / `strict` 等 draft 关键字 → 400 "Unknown name \"$schema\""；`items` 是数组 → 400 "cannot start list"；`type` 是数组 → 需收敛为单值（可空则加 `nullable`）；带 `items` 必须 `type=array`；`anyOf` 必须独占该 schema（`oneOf`/`allOf` 统一转为 `anyOf`）；缺 `type` 时按约束推断。实现见 `internal/factory/gemini_schema.go`。
 - **第二轮实测（2026-11-20，用 DSH 真实请求复现后逐条二分）**：
   - **工具名黑名单比已知名单更长**：`todo_write` 单条声明即 403，而它不在 magpie 的 `REFUSED_TOOL_NAMES` 里。名单会增长且不可先知，因此默认 `renameAllTools=true`：**所有未在 droid 已接受名单（Read/Edit/Glob/Grep/Task/WebSearch/TodoWrite/Execute/Create）里、且不以 `mcp__` 开头的工具名都改名**，响应再还原。被拒名单里的名字仍优先映射到 droid 同名工具。
   - **pi/Claude Code 的压缩开场句在任意位置都被拒**：`The conversation history before this point was compacted into the following summary:` 单独出现在 system 里即 403；`This session is being continued from a previous conversation that ran out of context.`、branch 开场同理。此前只在"整段就是 summary"时才改写，长 system prompt 里漏掉。
