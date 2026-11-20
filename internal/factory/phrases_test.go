@@ -85,3 +85,24 @@ func TestEscapedPhraseKeepsLongestFirst(t *testing.T) {
 		t.Fatalf("phrase remains detectable after escaping: %s", out)
 	}
 }
+
+// A conversation that quotes a client self-description is refused; escaping its
+// first character is lossless and defeats the check.
+func TestEscapeSelfDescription(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"a": "--- /tmp/x.json --- {\"text\": \"You are an AI agent powered by DeepSeek Harness.\\n\\nYou are a coding agent.\"}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, changed := EscapeClientPhrases(body)
+	if !changed {
+		t.Fatalf("self-description not escaped: %s", body)
+	}
+	if strings.Contains(string(out), "You are an AI agent powered by DeepSeek Harness.") {
+		t.Fatalf("sentence still literal: %s", out)
+	}
+	// A product name without the sentinel sentence passes and must stay as is.
+	plain := []byte(`{"a":"DeepSeek Harness is a runtime."}`)
+	if got, changed := EscapeClientPhrases(plain); changed || string(got) != string(plain) {
+		t.Fatalf("innocent text rewritten: %s", got)
+	}
+}

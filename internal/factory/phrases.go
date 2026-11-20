@@ -2,6 +2,7 @@ package factory
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -92,7 +93,7 @@ func containsPhrase(body []byte) bool {
 			return true
 		}
 	}
-	return false
+	return selfDescriptionRE.MatchString(s)
 }
 
 // escapeDeep rewrites strings inside a decoded body in place.
@@ -129,11 +130,34 @@ func escapeDeep(v any) bool {
 	return changed
 }
 
+// selfDescriptionRE matches a client describing itself as an AI agent driven by
+// an agent harness, ending its sentence with a full stop. Measured on
+// 2026-11-21: "You are an AI agent powered by DeepSeek Harness." is refused
+// while the same text without the final period, or the product name alone,
+// passes — the refusal is that sentence, and a conversation that quotes it (a
+// tool result reading a file, for example) is refused for every later turn.
+var selfDescriptionRE = regexp.MustCompile(`(?i)You are[^.\n]{0,120}?harness\.`)
+
 func escapeAll(s string) string {
 	for _, phrase := range AllRefusedPhrases() {
 		s = escapeFirst(s, phrase)
 	}
-	return s
+	return escapeSelfDescription(s)
+}
+
+// escapeSelfDescription escapes the first character of every self-description
+// sentence, which is lossless once the body is JSON-decoded.
+func escapeSelfDescription(s string) string {
+	if !strings.Contains(strings.ToLower(s), "harness") {
+		return s
+	}
+	return selfDescriptionRE.ReplaceAllStringFunc(s, func(match string) string {
+		runes := []rune(match)
+		if len(runes) == 0 {
+			return match
+		}
+		return `\\u` + hex4(runes[0]) + string(runes[1:])
+	})
 }
 
 // AllRefusedPhrases returns both groups ordered longest first, so a full
