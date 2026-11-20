@@ -66,6 +66,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 会话粘性 24h（2026-11-21 05:41 UTC，57d86e3）
+
+- 需求：会话缓存提升到 24 小时。Factory 的缓存按账号独立，改账号即丢缓存；原先生产 `factory.routing` 为 `explicitTtlSec=7200 / fallbackTtlSec=900`，而 DSH Gemini 走 `message_hmac` 兜底，实际只有 15 分钟粘性。
+- 改动：`factoryRoutingDefaults` 两项均设为 86400；生产 `data/config.json` 同步改为 `86400 / 86400`（备份 `data/config.json.bak-ttl-*`）。`fallbackTtlSec` 的校验上限就是 86400。
+- 验证：线上配置读取确认 `explicitTtlSec: 86400 fallbackTtlSec: 86400 sticky: true`；同 prompt 连发两次日志 `bindingResult=hit`；`go test ./internal/server ./internal/pool ./internal/config` 通过（95.173s / 0.852s / 0.584s），新增 `TestFactorySessionBindingTTL`。
+- 部署：镜像 `account-pool-balancer:release-57d86e3-20261120T214124Z`；备份 `20261120T214124Z-factory-ttl-57d86e3/data.tgz`；healthy、双内网别名 ok。
+
 ## 当前部署：Factory 会话头诊断（2026-11-21 05:36 UTC，4ad3a73）
 
 - 现场疑问：DSH 经 new-api 到本池，为什么没有显示"会话命中头"。抓包（detailLog）显示真实 DSH Gemini 请求 UA 为 `google-genai-sdk/2.21.0 gl-node/v24.21.0, deepseek`，**不带任何 session/conversation 头**；new-api 的渠道亲和规则只匹配 `^gpt-.*$` + `/v1/responses`，不覆盖 Gemini，也不会补会话头。因此本池按设计回落到 `message_hmac` 对话指纹（日志 hit 11 / miss 2）。

@@ -1,5 +1,12 @@
 # Factory AI 号池与全局号池启停
 
+## 会话粘性 TTL 提到 24 小时（2026-11-21，`57d86e3`）
+
+- 原因：Factory 的 prompt 缓存按**账号**（上游 Google 项目身份）各自独立，会话一旦换账号就等于丢缓存。原先 Factory 路由沿用全局默认 `explicitTtlSec=7200`（2h）、`fallbackTtlSec=900`（15min）；DSH 的 Gemini 请求不带会话头，走的是 `message_hmac` 兜底绑定，所以实际只有 **15 分钟**粘性，停顿超过 15 分钟就可能换账号。
+- 改动：`factoryRoutingDefaults` 把两项都设为 **86400（24h）**，生产配置 `factory.routing` 同步改为 `explicitTtlSec=86400`、`fallbackTtlSec=86400`（备份 `data/config.json.bak-ttl-*`）。已在线上生效。
+- 边界：配置校验里 `explicitTtlSec` 允许 60–7×86400，`fallbackTtlSec` 允许 60–86400（24h 是**上限**）。池内绑定总数上限 4096 条、LRU 淘汰，内存有界。
+- 验证：同一 prompt 连发两次，日志 `bindingResult=hit`、`sessionSource=message_hmac`；`go test ./internal/server ./internal/pool ./internal/config` 通过；新增 `TestFactorySessionBindingTTL` 锁定默认值。
+
 ## 会话头为什么没有命中（2026-11-21，`4ad3a73`）
 
 现场：DSH（Gemini 协议）请求日志里 `sessionSource=message_hmac`、`affinityKeyType=message_hmac`、`affinityConfidence=fallback`，看不到"会话头命中"。
