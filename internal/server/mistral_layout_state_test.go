@@ -112,10 +112,16 @@ func TestMistralLayoutLimitsTTLAndAmbiguity(t *testing.T) {
 	recordLayoutFixture(s, scope, layoutNativeFixture)
 	key := s.textKey(scope, "before after", "private-thought-中文")
 	now = now.Add(23 * time.Hour)
-	if _, ok, err := s.get(key); !ok || err != nil {
+	active, ok, err := s.get(key)
+	if !ok || err != nil {
 		t.Fatal("active layout expired too soon")
 	}
-	now = now.Add(25 * time.Hour)
+	s.refresh(active)
+	now = now.Add(2 * time.Hour)
+	if _, ok, err := s.get(key); !ok || err != nil {
+		t.Fatal("verified replay did not renew TTL")
+	}
+	now = now.Add(23 * time.Hour)
 	if _, _, err := s.get(key); !errors.Is(err, errMistralLayout) {
 		t.Fatal("known expired layout silently guessed")
 	}
@@ -157,69 +163,114 @@ func TestMistralLayoutLimitsTTLAndAmbiguity(t *testing.T) {
 	}
 }
 
-func TestMistralLayoutNoClientFieldsUnknownAndAmbiguousHTTP(t *testing.T) {
-	e := newMistralEnv(t)
-	e.setHandler(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		content := layoutNativeFixture
-		if e.count() == 2 {
-			content = `[{"type":"thinking","thinking":[{"type":"text","text":"private-thought-中文"}],"closed":true},{"type":"text","text":"before after"}]`
-		}
-		fmt.Fprintf(w, `{"choices":[{"message":{"content":%s},"finish_reason":"stop"}]}`, content)
-	})
-	initial := `{"model":"zai-glm-5-3","messages":[{"role":"user","content":"original user"}]}`
-	for i := 0; i < 2; i++ {
-		if status, _ := e.post(t, "/v1/chat/completions", initial, map[string]string{"Session-Id": "local-ambiguous"}); status != 200 {
-			t.Fatal("first response failed")
-		}
-	}
-	body := `{"model":"zai-glm-5-3","messages":[{"role":"user","content":"original user"},{"role":"assistant","content":"before after","reasoning_content":"private-thought-中文"},{"role":"user","content":"next"}]}`
-	req, _ := http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer mistral-client")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Session-Id", "local-ambiguous")
-	rejected, err := e.front.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reply, err := io.ReadAll(rejected.Body)
-	rejected.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var public struct {
-		Error struct{ Type, Code, Message string }
-	}
-	if rejected.StatusCode != 400 || e.count() != 2 || rejected.Header.Get("X-Mistral-Layout") != "" || rejected.Header.Get("Retry-After") != "" ||
-		json.Unmarshal(reply, &public) != nil || public.Error.Type != "invalid_request_error" || public.Error.Code != "invalid_request" ||
-		public.Error.Message != "This conversation cannot continue. Start a new conversation and try again." || bytes.Contains(reply, []byte("layout")) || bytes.Contains(reply, []byte("private-thought")) {
-		t.Fatalf("public failure leaked diagnostics or reached upstream: %d %s", rejected.StatusCode, reply)
-	}
-	e.s.requests.Wait()
-	page, err := e.s.logs.Query("requests", map[string]string{"requestId": rejected.Header.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
-	var rec requestLog
-	if err != nil || len(page.Items) != 1 || json.Unmarshal(page.Items[0], &rec) != nil || rec.MistralLayout == nil || !rec.MistralLayout.Rejected || len(rec.Attempts) != 0 {
-		t.Fatal("missing admin-only rejection evidence or local rejection attempted upstream")
-	}
-	// A genuinely native history is authoritative and needs no guessed cache.
-	native := `{"model":"zai-glm-5-3","messages":[{"role":"user","content":"original user"},{"role":"assistant","content":` + layoutNativeFixture + `}]}`
-	if status, _ := e.post(t, "/v1/chat/completions", native, map[string]string{"Session-Id": "local-ambiguous"}); status != 200 || e.count() != 3 {
-		t.Fatal("native authoritative history rejected")
-	}
-	// Imported/older/edited history has no recoverable source layout. Keep
-	// prior compatibility but explicitly expose unknown, never claim restored.
-	req, _ = http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer mistral-client")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Session-Id", "different-session")
-	resp, err := e.front.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("X-Mistral-Layout"), "legacy_unknown=1") || strings.Contains(resp.Header.Get("X-Mistral-Layout"), "restored=1") {
-		t.Fatal("unknown history silently advertised as lossless")
+func TestMistralLayoutUntrustedHistoryFallsBackOverHTTP(t *testing.T) {
+	const model = "zai-glm-5-3"
+	const nativeNext = `[{"type":"text","text":"fresh "},{"type":"thinking","thinking":[{"type":"text","text":"new thought"}]},{"type":"text","text":"reply"}]`
+	const fallbackContent = `[{"thinking":[{"text":"private-thought-中文","type":"text"}],"type":"thinking"},{"text":"before after","type":"text"}]`
+	const tools = `[ {"type":"function","function":{"name":"run","parameters":{"type":"object","default":9007199254740993}}} ]`
+	const toolCalls = `[{"id":"call-1","type":"function","function":{"name":"run","arguments":"{}"}}]`
+	const history = `{"role":"user","content":"original user"},{"role":"assistant","content":"before after","reasoning_content":"private-thought-中文","tool_calls":` + toolCalls + `},{"role":"tool","tool_call_id":"call-1","content":"result"},{"role":"user","content":"continue"}`
+	for _, mode := range []string{"ambiguous", "expired", "bad-descriptor", "unavailable", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			e := newMistralEnv(t)
+			s := e.s.mistralLayouts
+			h := http.Header{"Session-Id": {"fallback-session"}}
+			cfg := e.s.cfg.Get().ForProvider("mistral")
+			ck := config.ClientKey{ID: "client1", Group: "mistral", KeyHash: config.HashKey("mistral-client")}
+			ident := e.s.mistralIdentity(cfg, "mistral\x00client1", h, nil)
+			scope := s.scope(cfg, ck, ident, model, "/v1/chat/completions")
+			key := s.textKey(scope, "before after", "private-thought-中文")
+			if mode != "missing" {
+				recordLayoutFixture(s, scope, layoutNativeFixture)
+				switch mode {
+				case "ambiguous":
+					recordLayoutFixture(s, scope, fallbackContent)
+				case "expired", "bad-descriptor", "unavailable":
+					s.mu.Lock()
+					el := s.entries[key]
+					r := cloneMistralLayout(el.Value.(mistralLayoutRecord))
+					switch mode {
+					case "expired":
+						r.Expires = time.Now().Add(-time.Hour)
+					case "bad-descriptor":
+						r.Blocks[0].Bytes = 0
+					case "unavailable":
+						r.State, r.Blocks = "unavailable", nil
+					}
+					el.Value = r
+					s.mu.Unlock()
+				}
+			}
+			checkpoints := s.export()
+			e.setHandler(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"choices":[{"message":{"content":%s},"finish_reason":"stop"}]}`, nativeNext)
+			})
+			send := func(msgs string, wantCount int) (*http.Response, requestLog) {
+				t.Helper()
+				body := fmt.Sprintf(`{"model":%q,"messages":[%s],"tools":%s,"prompt_cache_key":"same-cache"}`, model, msgs, tools)
+				req, _ := http.NewRequest(http.MethodPost, e.front.URL+"/v1/chat/completions", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer mistral-client")
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Session-Id", "fallback-session")
+				resp, err := e.front.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reply, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil || resp.StatusCode != 200 || e.count() != wantCount {
+					t.Fatalf("continue failed or retried: status=%d attempts=%d reply=%s err=%v", resp.StatusCode, e.count(), reply, err)
+				}
+				if strings.Contains(resp.Header.Get("X-Mistral-Layout"), "fallback") || resp.Header.Get("Retry-After") != "" {
+					t.Fatal("public response exposed internal fallback or suggested retry")
+				}
+				e.s.requests.Wait()
+				page, err := e.s.logs.Query("requests", map[string]string{"requestId": resp.Header.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
+				var rec requestLog
+				if err != nil || len(page.Items) != 1 || json.Unmarshal(page.Items[0], &rec) != nil || rec.MistralLayout == nil || len(rec.Attempts) != 1 {
+					t.Fatal("missing admin-only layout evidence or incorrect attempt count")
+				}
+				return resp, rec
+			}
+			assertUpload := func(idx int, wantOld, wantNew string) {
+				t.Helper()
+				call := e.call(idx)
+				var root struct {
+					Messages []struct {
+						Content   json.RawMessage
+						ToolCalls json.RawMessage `json:"tool_calls"`
+					}
+					Tools json.RawMessage
+				}
+				if json.Unmarshal([]byte(call.body), &root) != nil || len(root.Messages) < 4 || string(root.Messages[1].Content) != wantOld || string(root.Messages[1].ToolCalls) != toolCalls || string(root.Messages[2].Content) != `"result"` || string(root.Tools) != tools || call.header.Get("X-Affinity") != "same-cache" {
+					t.Fatalf("history order/text/tools/cache changed: %s", call.body)
+				}
+				if wantNew != "" && (len(root.Messages) != 6 || string(root.Messages[4].Content) != wantNew) {
+					t.Fatal("new native reply wasn't preserved for the next turn")
+				}
+			}
+			resp, rec := send(history, 1)
+			if rec.MistralLayout.Fallback != 1 || rec.MistralLayout.Restored != 0 || rec.MistralLayout.Captured != 1 || !strings.Contains(resp.Header.Get("X-Mistral-Layout"), "restored=0") {
+				t.Fatalf("fallback was not labeled distinctly: %+v", rec.MistralLayout)
+			}
+			assertUpload(0, fallbackContent, "")
+			after := s.export()
+			if len(after) != len(checkpoints)+1 || (len(checkpoints) == 1 && after[0].MAC != checkpoints[0].MAC) {
+				t.Fatal("fallback was stored as an original layout or overwrote the old checkpoint")
+			}
+			_, rec = send(history+`,{"role":"assistant","content":"fresh reply","reasoning_content":"new thought"},{"role":"user","content":"next"}`, 2)
+			if rec.MistralLayout.Fallback != 1 || rec.MistralLayout.Restored != 1 {
+				t.Fatalf("mixed history did not use fallback and exact recovery independently: %+v", rec.MistralLayout)
+			}
+			assertUpload(1, fallbackContent, nativeNext)
+			nativeHistory := strings.Replace(history, `"content":"before after","reasoning_content":"private-thought-中文"`, `"content":`+layoutNativeFixture, 1)
+			_, rec = send(nativeHistory, 3)
+			if rec.MistralLayout.Native != 1 || rec.MistralLayout.Fallback != 0 {
+				t.Fatal("authoritative native history was treated as fallback")
+			}
+			assertUpload(2, layoutNativeFixture, "")
+		})
 	}
 }
 
@@ -360,7 +411,9 @@ func TestMistralLayoutConcurrentCaptureExport(t *testing.T) {
 			for j := 0; j < 30; j++ {
 				scope := fmt.Sprint(i)
 				recordLayoutFixture(s, scope, layoutNativeFixture)
-				s.get(s.textKey(scope, "before after", "private-thought-中文"))
+				if r, ok, err := s.get(s.textKey(scope, "before after", "private-thought-中文")); ok && err == nil {
+					s.refresh(r)
+				}
 				s.export()
 			}
 		}(i)

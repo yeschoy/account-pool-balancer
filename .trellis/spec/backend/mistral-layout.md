@@ -17,25 +17,26 @@
 - 已捕获、同scope、完整文字及空白完全匹配、记录有效且无已知歧义时，恢复text/thinking逻辑交错顺序、分段长度、closed及空signature元数据；所有UTF-8切片必须完整消费两个字符串。不得trim或模糊匹配，不能从记录恢复被客户端删除的思考。
 - JSON保存观察到的原生块/嵌套text分段。SSE将相邻同类型跨帧续片合为逻辑块（closed=true是响应片段元数据，不阻止后续连续思考续片；3051证据要求请求至多一个leading ThinkChunk），同帧显式分段保留；这是逻辑内容重建；render还必须把旧checkpoint相邻thinking连续文本合并，不能把流帧当多个request块。此规则只在相邻思考内合并，不跨真实正文、不重排。**不恢复原网络分帧、原JSON属性次序/转义/排版，也无法知道供应商未公开的内部块边界**。不把该功能说成字节级原样重放或token前缀/缓存保证。
 - 旧会话、外部历史、客户端改字/删思考、无可靠identity、未捕获/被LRU回收的布局无法逆推出。保留既有兼容并显式`legacyUnknown`，不冒称这些记录已恢复。上游自身只有两个scalar也记unknown；不得自行断言其原来一定thinking在前。没有客户端响应标识，scope+完整文字匹配也不是不可伪造的原响应归属证明：未观察到的同文不同布局无法检测，不能宣称覆盖任意导入历史或绝对无歧义。
-- 同scope相同两个字符串但原生布局不同，无客户端标识就不可区分：保留ambiguous标记，本地400 `invalid_request`（只提示另开会话），零上游尝试、零健康处罚、不靠后到记录覆盖。已知过期仍明确拒绝；capture超限只留unavailable标记时，明确legacyUnknown+unrecovered并沿旧兼容（不标restored），不能让没有描述的派生缓存阻断原可用请求；新完整capture可替换unavailable。原生权威历史不受阻。
+- 用户确认（2026-11-20）：匹配记录歧义、过期或无法完整重建时，仅对该条历史保留 `prepareMistralRequest` 的既有兼容字节（扁平思考先于正文），不再因布局重建失败本地400，也不新增重放。其他可精确恢复的条目仍逐条恢复；真正的参数/协议错误仍按原策略拒绝。缺失记录且有扁平思考、或已知unavailable，沿既有兼容并计兜底（保留既有unknown/unrecovered计数）；无思考的未知项和不支持的原生内容保留原路径。原生thinking历史为权威，不套用兜底。
+- 同scope同文不同布局仍保留ambiguous标记，不能取后到布局冒充原顺序。兜底只计本次请求，不写入或续期旧布局，不改变原文字/工具/缓存键。后续仅由真实原生响应的现有捕获路径生成新布局；无新响应不造记录。新完整capture仍可替换unavailable。兜底可能改变旧历史的模型缓存前缀，不保证上游成功或命中率。
 - 真实非空引用/未知内容不得因重建被删除；非plain内容沿原验证并记unknown。只支持原有可表达的plain text/thinking与固定元数据，供应商真实非空签名仍沿原兼容错误，不伪造。
 
 ## 4. 状态、持久化与隐私
 
 - mutex保护单LRU最多8192记录；序列化估算加固定开销最多16MiB；单记录32KiB、512块/分段、4choices/响应，单响应完整文本计数≤512MiB；不是整个进程RSS上限。长纯文本SSE续片不能增长为每token一条描述。
-- 保存类型、字节数、分段长度、固定closed/signature枚举、私有key/tag、版本、过期时间；**不保存输入/输出/思考/工具原文、原始会话、凭据或客户端carrier**。作用域摘要与文本摘要都不进业务日志/技术头。并发同键同布局幂等，不同布局fail closed。
-- 可恢复期限24h，完整历史成功命中会续期，与账号绑定TTL无关。这是使用期限而非原文/元数据销毁承诺；到期记录仍可作为不可用标记留在有限LRU中。有限LRU的缺失状态只说明unknown，不能许诺永久保序或已知所有旧布局；已知过期记录仍明确拒绝，避免假恢复。
+- 保存类型、字节数、分段长度、固定closed/signature枚举、私有key/tag、版本、过期时间；**不保存输入/输出/思考/工具原文、原始会话、凭据或客户端carrier**。作用域摘要与文本摘要都不进业务日志/技术头。并发同键同布局幂等，不同布局标为歧义，不作为原生布局重放。
+- 可恢复期限24h，仅在精确重建完成时续期，与账号绑定TTL无关；续期不覆盖并发捕获的新状态。这是使用期限而非原文/元数据销毁承诺；到期记录仍可作为不可用标记留在有限LRU中。有限LRU的缺失状态只说明unknown，不能许诺永久保序或已知所有旧布局；已知过期记录走兼容兜底，不能冒充精确恢复。
 - `metadata.mistralLayouts`是可选派生checkpoint，有版本/完整记录HMAC、严格枚举/尺寸/数量校验、深拷贝。复用现有一分钟合并保存、正常退出强刷；写失败保留metaDirty重试，崩溃可能失去未刷记录并成为unknown，不承诺零丢失。篡改/异密钥/重复/超量记录拒绝加载，不输出私有值。
 - 旧版metadata严格reader可能拒绝新增字段；上线必须考虑断网启动兼容预检和完整备份。降级先备份当前data，仅移除派生mistralLayouts字段，不恢复旧data覆盖上线后业务写入，也不清理其他绑定。
 
 ## 5. 可见性
 
-- 非布局拒绝的适配请求保留`X-Mistral-Layout: restored=N; legacy_unknown=N; native=N`兼容头，只有计数/枚举；功能不依赖中间层转发。布局拒绝不得发这个头、内部错误文本或内部错误码；对外 HTTP400 `invalid_request_error` / `invalid_request`，仅提示新建会话再试，不能自动重放或捏造布局。
-- 管理员原requestLog保留可选`mistralLayout`计数；仅在本地布局拒绝时另记`mistralLayout.rejected=true`。沿现有admin/no-store日志权限，不新增正文或公开API。未启用路径/其他池不产生此字段。
+- 适配请求保留`X-Mistral-Layout`已有兼容计数头；不新增兜底明细、内部错误文本或错误码到对外响应。功能不依赖中间层转发。
+- 管理员 `requestLog.mistralLayout.fallback` 只记录按默认顺序处理的历史条数，与 `restored` 分开；`rejected` 只识别旧日志。沿现有admin/no-store权限，不新增正文或公开API。未启用路径/其他池不产生布局字段。
 
 ## 6. 必要验证
 
 - `mistral_layout_test.go`：三模型×JSON/SSE真实本地HTTP→原客户端两个scalar→下一轮HTTP，无carrier；text→thinking→text、空白/UTF-8、nested parts/closed/null signature、tools/顺序/图片外历史/大数保持；增长历史中的旧恢复字节稳定、X-Affinity与原HMAC稳定。
 - `mistral_layout_3051_test.go`：真实HTTP上游按3051验证至多一个leading ThinkChunk；600帧closed=true只保留一个逻辑块，旧168片段checkpoint不清空即可恢复/新capture等价，无思考文本丢失。
-- `mistral_layout_state_test.go`：Key凭据/ID/group/session/model/协议隔离，未识别identity无全局scope；正常Server重建经真实HTTP恢复、checkpoint不含原文/身份、签名/篡改拒绝、深拷贝；TTL/续期、LRU/字节/节点超限、同文不同布局明确400零attempt、native权威不误拒、旧历史明确unknown；流首帧及时flush、失败/未完成流无可用checkpoint、万帧续片有界、并发capture/get/export race。
+- `mistral_layout_state_test.go`：Key凭据/ID/group/session/model/协议隔离，未识别identity无全局scope；正常Server重建经真实HTTP恢复、checkpoint不含原文/身份、签名/篡改拒绝、深拷贝；TTL/续期、LRU/字节/节点超限、真实 HTTP 中同文不同布局/过期/无效描述/超限/缺失均走既有兜底并单次正常上传，不冒充原始记录；后续真实返回可精确重建；native权威和旧历史unknown不变；流首帧及时flush、失败/未完成流无可用checkpoint、万帧续片有界、并发capture/get/export race。
 - 保留Mistral422空注解、legacy/native去重、图片/推理档位、SSE错误/usage/flush、原HMAC/绑定/隐私与metadata回归。不为此追加生产推理或重放用户私密历史。

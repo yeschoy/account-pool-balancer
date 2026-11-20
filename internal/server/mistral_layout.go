@@ -27,7 +27,7 @@ const (
 	mistralLayoutTTL         = 24 * time.Hour
 )
 
-var errMistralLayout = errors.New("Mistral historical layout is ambiguous, expired or unavailable; send original native history or start a new conversation; no upstream request was sent")
+var errMistralLayout = errors.New("cannot replay saved Mistral history layout")
 
 type mistralLayoutBlock struct {
 	Kind      string `json:"kind"` // text | thinking
@@ -53,7 +53,8 @@ type mistralLayoutLog struct {
 	Captured           int  `json:"captured"`
 	CaptureUnavailable int  `json:"captureUnavailable"`
 	Unrecovered        int  `json:"unrecovered,omitempty"` // known missing descriptor, old compatibility used
-	Rejected           bool `json:"rejected,omitempty"`    // internal rejection, never returned in public errors
+	Rejected           bool `json:"rejected,omitempty"`    // historical logs only
+	Fallback           int  `json:"fallback,omitempty"`    // prepared ordering used instead of exact replay; admin only
 }
 
 func (l *mistralLayoutLog) header() string {
@@ -176,13 +177,27 @@ func (s *mistralLayouts) get(key string) (mistralLayoutRecord, bool, error) {
 	if !s.now().Before(r.Expires) || r.State == "ambiguous" {
 		return mistralLayoutRecord{}, true, errMistralLayout
 	}
-	// Old turns in an actively reused full history stay alive. This expiry is
-	// independent of account TTL and never changes routing or owner state.
-	r.Expires = s.now().Add(mistralLayoutTTL)
+	return r, true, nil // blocks are immutable once put/imported
+}
+
+// Renew only after an exact render, never on fallback. Do not overwrite a
+// concurrently recaptured (possibly now ambiguous) record.
+func (s *mistralLayouts) refresh(used mistralLayoutRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	el := s.entries[used.Key]
+	if el == nil {
+		return
+	}
+	r := el.Value.(mistralLayoutRecord)
+	now := s.now()
+	if r.State != "" || !r.Expires.Equal(used.Expires) || !now.Before(r.Expires) {
+		return
+	}
+	r.Expires = now.Add(mistralLayoutTTL)
 	el.Value = r
 	s.lru.MoveToFront(el)
 	s.changed = true
-	return r, true, nil // blocks are immutable once put/imported
 }
 
 func (s *mistralLayouts) dirty() bool {
@@ -270,8 +285,9 @@ func (s *mistralLayouts) importRecords(records []mistralLayoutRecord) error {
 	return nil
 }
 
-// All values come from the request already in memory. Rebuild only exact full
-// matches; preserve existing native thinking and any genuinely unknown field.
+// Rebuild only trustworthy exact matches. Otherwise keep the already prepared
+// assistant content (thinking first for flattened history), without recording
+// it as original. Only the upstream response capture creates new layouts.
 func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *mistralLayoutLog) ([]byte, error) {
 	if scope == "" {
 		return prepared, nil
@@ -299,19 +315,25 @@ func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *m
 				log.Native++
 			} else if answer, thought, ok := mistralLayoutPlain(m.get("content")); ok {
 				r, found, err := s.get(s.textKey(scope, answer, thought))
-				if err != nil {
-					return nil, err
+				var content []byte
+				if found && err == nil {
+					content, err = r.render(answer, thought)
 				}
-				if !found {
+				switch {
+				case errors.Is(err, errMistralLayout):
+					log.Fallback++ // ambiguous, expired or cannot be rendered exactly
+				case err != nil:
+					return nil, err
+				case !found:
 					log.Unknown++
 					if r.State == "unavailable" {
 						log.Unrecovered++
 					}
-				} else {
-					content, err := r.render(answer, thought)
-					if err != nil {
-						return nil, err
+					if thought != "" || r.State == "unavailable" {
+						log.Fallback++
 					}
+				default:
+					s.refresh(r)
 					m.set("content", content)
 					out.Write(raw[last:i])
 					out.Write(m.render())

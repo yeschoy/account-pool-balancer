@@ -908,12 +908,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			rec.ErrorCategory = "request"
-			if errors.Is(err, errMistralLayout) {
-				rec.MistralLayout.Rejected = true
-				writeLocalError(w, proto, 400, "invalid_request_error", "invalid_request", "This conversation cannot continue. Start a new conversation and try again.", 0)
-			} else {
-				writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", err.Error(), 0)
-			}
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", err.Error(), 0)
 			finish(400, "failed")
 			return
 		}
