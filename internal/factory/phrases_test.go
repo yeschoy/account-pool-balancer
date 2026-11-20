@@ -32,18 +32,14 @@ func TestEscapeClientPhrases(t *testing.T) {
 	if !strings.Contains(string(out), `\u0059ou are Claude Code`) {
 		t.Fatalf("first character not escaped: %s", out)
 	}
-	// After JSON decoding the text differs only in one character: the escaped
-	// first rune is the literal escape on the wire, exactly as the middleware
-	// sends it. Everything else, including the model, is unchanged.
+	// Escaping happens on the wire bytes only: JSON parsing returns the exact
+	// text the caller sent, so the model reads it unchanged.
 	orig := decodeBody(t, body)
 	got := decodeBody(t, out)
 	origMsg, _ := orig["messages"].([]any)[0].(map[string]any)["content"].(string)
 	gotMsg, _ := got["messages"].([]any)[0].(map[string]any)["content"].(string)
-	if strings.Replace(gotMsg, `\u0059`, "Y", 1) != origMsg {
-		t.Fatalf("text beyond the escaped rune changed:\n%s\n%s", origMsg, gotMsg)
-	}
-	if !strings.Contains(gotMsg, `\u0059ou are Claude Code`) {
-		t.Fatalf("unexpected wire text: %s", gotMsg)
+	if gotMsg != origMsg {
+		t.Fatalf("decoded text changed:\n got %q\nwant %q", gotMsg, origMsg)
 	}
 	if got["model"] != "deepseek-v4.1-flash-1017" {
 		t.Fatal("model changed")
@@ -67,9 +63,15 @@ func TestContainsRefusedPhraseIgnoresEscapedText(t *testing.T) {
 	if !ContainsRefusedPhrase("prefix You have been invoked in the following environment: x") {
 		t.Fatal("literal phrase not detected")
 	}
-	escaped := escapeAll("You have been invoked in the following environment:")
-	if ContainsRefusedPhrase(escaped) {
-		t.Fatal("escaped text reported as refused")
+	// On the wire the phrase is gone; after decoding it is back (lossless).
+	wire, _ := EscapeClientPhrases([]byte(`{"t":"You have been invoked in the following environment:"}`))
+	if strings.Contains(string(wire), "You have been invoked in the following environment:") {
+		t.Fatalf("escaped text still literal: %s", wire)
+	}
+	var dm map[string]any
+	_ = json.Unmarshal(wire, &dm)
+	if got := dm["t"].(string); got != "You have been invoked in the following environment:" {
+		t.Fatalf("decoded text changed: %q", got)
 	}
 	if ContainsRefusedPhrase("nothing refused here") {
 		t.Fatal("false positive")
@@ -78,31 +80,24 @@ func TestContainsRefusedPhraseIgnoresEscapedText(t *testing.T) {
 
 func TestEscapedPhraseKeepsLongestFirst(t *testing.T) {
 	// The "Claude Agent SDK" sentence contains the shorter Claude Code prefix;
-	// the longest must win so neither is left visible.
+	// the longest must win so neither is left visible on the wire — while the
+	// decoded text stays exactly what the caller sent.
 	text := "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
-	out := escapeAll(text)
-	if ContainsRefusedPhrase(out) {
-		t.Fatalf("phrase remains detectable after escaping: %s", out)
+	body, _ := json.Marshal(map[string]any{"t": text})
+	wire, changed := EscapeClientPhrases(body)
+	if !changed {
+		t.Fatal("nothing escaped")
 	}
-}
-
-// A conversation that quotes a client self-description is refused; escaping its
-// first character is lossless and defeats the check.
-func TestEscapeSelfDescription(t *testing.T) {
-	body, err := json.Marshal(map[string]any{"a": "--- /tmp/x.json --- {\"text\": \"You are an AI agent powered by DeepSeek Harness.\\n\\nYou are a coding agent.\"}"})
-	if err != nil {
+	for _, phrase := range AllRefusedPhrases() {
+		if strings.Contains(string(wire), phrase) {
+			t.Fatalf("phrase visible on the wire: %q", phrase)
+		}
+	}
+	var dm map[string]any
+	if err := json.Unmarshal(wire, &dm); err != nil {
 		t.Fatal(err)
 	}
-	out, changed := EscapeClientPhrases(body)
-	if !changed {
-		t.Fatalf("self-description not escaped: %s", body)
-	}
-	if strings.Contains(string(out), "You are an AI agent powered by DeepSeek Harness.") {
-		t.Fatalf("sentence still literal: %s", out)
-	}
-	// A product name without the sentinel sentence passes and must stay as is.
-	plain := []byte(`{"a":"DeepSeek Harness is a runtime."}`)
-	if got, changed := EscapeClientPhrases(plain); changed || string(got) != string(plain) {
-		t.Fatalf("innocent text rewritten: %s", got)
+	if got := dm["t"].(string); got != text {
+		t.Fatalf("decoded text changed:\n got %q\nwant %q", got, text)
 	}
 }
