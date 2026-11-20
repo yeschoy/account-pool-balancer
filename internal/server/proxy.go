@@ -568,7 +568,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// The shared price table has no cache-write price. Do not report an
 		// understated Token Harbor bill when the upstream measured writes.
 		unpricedWrites := rec.Provider == config.ProviderTokenHarbor && rec.CacheCreationTokens != nil && *rec.CacheCreationTokens > 0
-		if c, cur, ok := cfg.Pricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok && !unpricedWrites {
+		// Each pool may carry its own price table (Factory ships Google's USD
+		// rates); otherwise this is the global table.
+		poolPricing := cfg.ForProvider(rec.Provider).Pricing
+		if c, cur, ok := poolPricing.Cost(rec.Model, rec.TS, rec.InputTokens, rec.CachedTokens, rec.OutputTokens, anthropic); ok && !unpricedWrites {
 			cost, rec.Cost, rec.Currency = c, &c, cur
 		}
 		if (rec.Provider == config.ProviderOpenCodeGo || rec.Provider == config.ProviderTokenHarbor || config.NativeGateway(rec.Provider)) && result == "failed" && len(rec.Attempts) == 0 && (rec.Provider != config.ProviderX50 || cfg.X50.ErrorsEnabled()) {
