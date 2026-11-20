@@ -96,6 +96,19 @@ Factory 设置新增：
   - **Responses 路由对 OpenAI 系模型删除 `temperature`/`top_p`**：OpenAI reasoning 模型会以 400 拒绝这两个参数，droid 从不发送（magpie `droidBody` 同名逻辑）。
   - 未采纳的部分：magpie 仍把 `mcp__` 工具名视为安全、且黑名单里没有 `todo_write`，本仓库实测两者都会被拒，已按实测处理（比 magpie 更严）；其余 Claude Code/ZCode 专用适配器（`undeferredTools`、skill/reminder 改写）与本池客户端无关，未移植。
 - **第四轮实测（2026-11-21，用 DSH 失败会话的完整轮次复现）**：`content_policy_rejected` 还有一类触发源——**对话里引用了客户端自述句**。实测："`You are an AI agent powered by DeepSeek Harness.`"（**带句号**）→ 403；同文本去掉句号、或只出现产品名 "DeepSeek Harness" → 200。也就是说 Factory 拒的是"某个 agent 自述句 + 句号"这个完整句子，出现在 user 文本、system、tool 输出里都会让整轮请求被拒。处理：`internal/factory/phrases.go` 增加 `selfDescriptionRE = (?i)You are[^.\n]{0,120}?harness\.`，把命中句子里的 `Harness.` **改写为 `Runtime.`**（实测该改写被网关接受，句子其余部分不动，可读性优于转义），并在 `containsPhrase` 预检里也检查该正则，保证任何位置的引用都能被处理。
+- **被拒短语改为语义改写**（2026-11-21，`f4fc226`）：9 条 magpie 短语全部换成网关实测接受的措辞，逐条验证过（字面 403 → 改写 200）：
+  | 字面（被拒） | 改写（接受） |
+  |---|---|
+  | You are an expert coding assistant operating inside pi, a coding agent harness. | You are an expert coding assistant. |
+  | The conversation history before this point was compacted into the following summary: | Earlier conversation context is summarized below: |
+  | The following is a summary of a branch that this conversation came back from: | Summary of an earlier conversation branch: |
+  | This session is being continued from a previous conversation that ran out of context. | This session continues an earlier conversation that ran out of context. |
+  | You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK. | You are a coding assistant running within the Claude Agent SDK. |
+  | You are Claude Code, Anthropic's official CLI for Claude. | You are a coding assistant, Anthropic's official CLI for Claude. |
+  | You are a Claude agent, built on Anthropic's Claude Agent SDK. | You are an agent built on Anthropic's Claude Agent SDK. |
+  | You have been invoked in the following environment: | The session environment is: |
+  | (user's private global instructions for all projects) | (user's global instructions for all projects) |
+  只有 `x-anthropic-billing-header: cc_version=` 无实测可用改写（字面本身 200，仅在工具输出里可能被拒），保留首字符转义兜底。模型现在读到的是自然语言，不再是 `\uXXXX`。
 - **重要教训（实测）**：网关在内容检查前会先 **JSON 解码** 请求体。因此"把首字符写成真正 JSON 转义 `\u0059`"的做法无效——解码后仍是原句，仍 403；必须让**解码后的文本**发生变化。magpie 的 `escapeDeep` 之所以有效，是因为它在**解码后的字符串**里写入字面量 `\uXXXX`，序列化后线上是 `\\uXXXX`，解码得到字面 `\u0059ou…`，从而绕开匹配（代价是模型读到字面转义）。本站对 magpie 已知句子沿用该转义，对 DSH 自述句改用**改写**（更干净）。
 - **第三轮实测（2026-11-20，用 DSH 会话日志里的真实请求体复现）**：从 `~/.dsh/sessions/*/session.v4.jsonl.zstd` 取到 DSH 实际发送的 system prompt（9.2KB）与 265 个工具定义，经 `m.yeschoy.pro` 复现并逐层二分，得到三条新规则：
   - **MCP 工具名被拒**：`mcp__<server>__<tool>` 这种形状全部 403（`mcp__rea__comment`、`mcp__foo__bar`），而 `mcp__test`（只有一个分隔符）、`foo__bar__baz` 可以；不是前缀而是形状。处理：改名为 `server_tool_<4hex>`，响应里还原（含 SSE）。magpie 0.1.52 仍按"mcp__ 保留"处理，已过时。

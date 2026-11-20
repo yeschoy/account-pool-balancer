@@ -66,6 +66,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：被拒短语语义改写（2026-11-21 02:49 UTC，f4fc226）
+
+- 按用户要求，把 magpie 的 9 条被拒短语从"首字符转义（模型读到字面 \uXXXX）"改为"语义改写"。改写措辞**逐条实测**通过（`prem.factory.ai` 真账号、DroidLine 开场）：字面 403、改写 200。
+- 提交 `f4fc226` 已推送；`go vet`、`go test ./...`（server 99.11s）通过，测试改为断言改写结果（`TestEscapeClientPhrases`、`TestRewordPrefersLongestPhrase`、`TestContainsRefusedPhraseIgnoresRewrittenText`、`TestFactoryEscapesRefusedClientPhrases`）。
+- 验证：十条被拒文本（9 条 magpie + DSH 自述句）放在同一个 `streamGenerateContent` 请求里，经 `m.yeschoy.pro` → **200**。
+- 部署：镜像 `account-pool-balancer:release-f4fc226-20261120T184904Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T184904Z-factory-rewords-f4fc226/data.tgz`；healthy、restarts=0。
+
 ## 当前部署：自述句改写为 Runtime（2026-11-21 02:09 UTC，e682602）
 
 - `d7107df` 用"解码后字符串里写字面量 \uXXXX"的方式处理 DSH 自述句，可绕过策略检查但会让模型读到字面转义。随后一次"改成真正 JSON 转义（解码后文本不变）"的尝试（`2cf91b2`）实测 **仍然 403**：网关在检查前先 JSON 解码，解码后还是原句。已回退，并改为**语义改写**：把句子里的 `Harness.` 改成 `Runtime.`（实测被接受，句子其余部分保留）。
