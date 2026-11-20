@@ -66,6 +66,15 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 自述句转义（2026-11-21 01:30 UTC，d7107df）
+
+- 现场：DSH 会话（`gemini-4-carbon`）在同一轮里前两次工具调用 200，00:50 第 3 步开始 403；客户端显示 `upstream account unavailable ... code 403`（DSH 归类为 AUTH）。
+- 排查：解出该会话全部轮次后发现一条工具结果（1747 字节）引用了 `/tmp/real_body.json` 的内容，其中含 `You are an AI agent powered by DeepSeek Harness.`。逐句验证：带句号 → 403；去句号 / 只有产品名 → 200。
+- 修复 `d7107df`：新增自述句正则转义（任何位置、任何角色），`containsPhrase` 预检同步；实测同一段泄露文本放在 user 文本 / system+user / functionResponse 三种位置均 **200**。
+- 顺带清掉了 /tmp 下我此前留下的诊断文件（real_body.json 等），它们正是这次被 agent 读到的污染源。
+- 提交 `d7107df` 已推送；`go vet`、`go test ./...`（server 104.29s）通过，新增 `TestEscapeSelfDescription`。
+- 部署：镜像 `account-pool-balancer:release-d7107df-20261120T173003Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T173003Z-factory-selfdesc-d7107df/data.tgz`；healthy、restarts=0。
+
 ## 当前部署：Factory MCP 工具名 / Gemini schema 适配（2026-11-20 14:12 UTC，f51f5ad）
 
 - 现场：DSH 桌面会话（`provider: yeschoy-factory`，`api: google-generative-ai`，`baseURL: https://m.yeschoy.pro/v1`，默认模型 `gemini-4-carbon`）21:49 仍失败；客户端显示 `{"error":{"message":"upstream account unavailable for this request","type":"upstream_error","code":"AUTH"}}`。
