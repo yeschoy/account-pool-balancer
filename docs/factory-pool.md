@@ -1,5 +1,19 @@
 # Factory AI 号池与全局号池启停
 
+## 每请求扫描的性能（2026-11-21，`ef449d1`）
+
+- **原实现**：每个请求先做 `containsPhrase`，对整包 body 跑 11 条 `strings.Contains`，再用 RE2 正则 `(?i)You are[^.\n]{0,120}?harness\.` 判自述句。实测 237 KB 的 agent 请求体：**3.4 ms/次**（其中正则 2.9 ms），还额外分配 239 KB。
+- **现实现**：自述句改为手写扫描——先用 `bytes.Contains(s, "arness")` 做字节级门控，命中后按"`You are` + ≤120 字节不含 `. \" \` 换行 + `Harness.`"逐字节找句子边界；短语预检改为预算好的 `[]byte` 表 + `bytes.Contains`，不再把 body 拷成 string。实测 **0.13–0.18 ms/次，0 分配**，约 **20 倍**提升。
+- **剩余成本在 JSON 往返，不在匹配**（259 KB body 各阶段实测）：
+  | 阶段 | 耗时 |
+  |---|---|
+  | 工具改名（decode+rename+marshal） | 2.27 ms |
+  | magpie 身体改写 | 1.90 ms |
+  | Droid 开场/模型写入 | 1.54 ms |
+  | Gemini schema 收敛 | 1.52 ms |
+  | 短语扫描（已优化） | 0.13 ms |
+  整条链路约 6 ms。下一步可把"工具改名 + schema 收敛"合并成一次 decode/marshal（预计省 1.5–2 ms，约 25%），但需要重构测试，未在本轮做。
+
 ## 缓存排查（2026-11-21，`147d4e9`）
 
 结论：**上游隐式缓存正常，问题在统计口径**。

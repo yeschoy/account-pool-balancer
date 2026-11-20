@@ -66,6 +66,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 每请求扫描优化（2026-11-21 05:22 UTC，ef449d1）
+
+- 用户疑问：每个请求都跑正则，性能是否太差。实测确认是真问题：237 KB body 上 `containsPhrase` 需 **3.4 ms**（RE2 正则 2.9 ms），另分配 239 KB。
+- 修复 `ef449d1`：自述句匹配由正则改为手写字节扫描（`arness` 门控 + 边界检查），短语预检用预计算 `[]byte` 表 + `bytes.Contains`，去掉 body→string 拷贝。结果 **0.13–0.18 ms、0 分配**，约 20 倍提升；行为由现有短语/自述句测试覆盖。
+- 整条适配链路（259 KB、265 工具）约 6 ms，其中匹配只占 0.13 ms，其余是 4 次 JSON decode/marshal（改名 2.27 / magpie 1.90 / Droid 1.54 / schema 1.52 ms）。合并 decode 的优化已记入 `docs/factory-pool.md` 作为下一步，未在本轮改动。
+- 新增 `internal/factory/adaptation_bench_test.go` 作为回归基准；`go vet` 与 `go test ./...` 通过（server 93.860s）。
+- 部署：镜像 `account-pool-balancer:release-ef449d1-20261120T212149Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T212149Z-factory-scan-ef449d1/data.tgz`；healthy；双内网别名 ok；gemini-4-neon/hydrogen/carbon/argon 实测 200。
+
 ## 当前部署：Factory 缓存统计口径修复（2026-11-21 05:08 UTC，147d4e9）
 
 - 排查结论：上游 Gemini 隐式缓存正常（8449 tokens 重复请求命中 6395；15557 命中 13503；真实 71619 tokens 的 DSH 请求在 new-api 侧 `cr=69570`）。真正的 bug 在本池统计：Gemini 缓存未命中时不下发 `cachedContentTokenCount`，原代码留 nil，`stats.Record` 要求 input/cached 同时非 nil 才计入分母，导致未命中样本被排除、控制台命中率虚高。
