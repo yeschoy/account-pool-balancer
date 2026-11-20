@@ -91,6 +91,10 @@ Factory 设置新增：
 - **代理池**（每行一个 `http://` / `https://` / `socks5://`）：新账号、OAuth 登录、批量导入按池分配；优先使用未被其他启用 Factory 账号占用的代理。账号自己的「出站代理」优先，不会被池覆盖。
 - **UA 池**（每行一个）：新账号/登录按池分配推理 UA；账号自己的「推理 UA」优先。`X-Client-Version` 在 UA 形如 `factory-cli/<version>` 时跟随该版本，否则保持 droid 参考版本 `1.14.0`。**只接受 CLI 形态**：账号、UA 池、默认 UA 都拒绝 `Mozilla/…` 浏览器 UA（推理请求不发送 Sec-CH-UA/Accept-Language/Sec-Fetch-*，浏览器 UA 会自相矛盾）；运行期若读到旧配置里的浏览器 UA，会回退为 `factory-cli/1.14.0`。
 - **Accept-Encoding**：推理请求发送 droid 的 `gzip, deflate, br, zstd`；上游压缩响应在进入 JSON/SSE/Gemini 聚合前统一解码（gzip/deflate/br/zstd），未知编码返回 502 `upstream_encoding`。
+- **第二轮实测（2026-11-20，用 DSH 真实请求复现后逐条二分）**：
+  - **工具名黑名单比已知名单更长**：`todo_write` 单条声明即 403，而它不在 magpie 的 `REFUSED_TOOL_NAMES` 里。名单会增长且不可先知，因此默认 `renameAllTools=true`：**所有未在 droid 已接受名单（Read/Edit/Glob/Grep/Task/WebSearch/TodoWrite/Execute/Create）里、且不以 `mcp__` 开头的工具名都改名**，响应再还原。被拒名单里的名字仍优先映射到 droid 同名工具。
+  - **pi/Claude Code 的压缩开场句在任意位置都被拒**：`The conversation history before this point was compacted into the following summary:` 单独出现在 system 里即 403；`This session is being continued from a previous conversation that ran out of context.`、branch 开场同理。此前只在"整段就是 summary"时才改写，长 system prompt 里漏掉。
+  - **首字符 JSON 转义可绕过内容检查**（实测）：把 `T` 写成 `\u0054`、`Y` 写成 `\u0059` 后同样的句子 200，且 JSON 解析后模型读到原字符。因此策略是**对已知被拒句子做无损转义**（而非改写语义），并在 Gemini 路由上同样执行（此前只在 chat/messages/responses 执行）。
 - **实测的上游准入规则（2026-11-19，真账号直接探测 prem.factory.ai）**：
   - **system 必须以 droid 那句话开头**：完全没有 system → 403；`You are a helpful assistant.` → 403；`You are Droid, an AI software engineering agent built by Factory.` → 200；DroidLine + 换行 + 任意内容 → 200。因此除 `keep` 外的模式都保证开头存在（缺失时新建、block 形态也处理、Gemini 的 `systemInstruction` 同样写入）。
   - **客户端自述里的 harness 会被拒**：`You are an AI agent powered by DeepSeek Harness.` → 403；改写成 `DeepSeek Runtime` → 200（句号前的 `Harness` 也要改写，`harness.rs`/`harness_key` 这类标识符不改）。
