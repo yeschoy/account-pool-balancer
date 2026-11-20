@@ -97,14 +97,17 @@ func TestAliasToolNamesRenamingAll(t *testing.T) {
 		t.Fatalf("droid name renamed: %s", out)
 	}
 	// Restoring by alias returns the caller's names.
-	var reply []byte = []byte(`{"calls":[{"name":"` + func() string {
-		for a := range aliases {
-			return a
+	alias := ""
+	for a, original := range aliases {
+		if original == "todo_write" {
+			alias = a
 		}
-		return ""
-	}() + `"}]}`)
-	restored, changed := RestoreToolNames(reply, aliases)
-	if !changed || !(strings.Contains(string(restored), "todo_write") || strings.Contains(string(restored), "custom_helper")) {
+	}
+	if alias == "" {
+		t.Fatalf("no alias for todo_write: %v", aliases)
+	}
+	restored, changed := RestoreToolNames([]byte(`{"calls":[{"name":"`+alias+`"}]}`), aliases)
+	if !changed || !strings.Contains(string(restored), "todo_write") {
 		t.Fatalf("restore = %s", restored)
 	}
 }

@@ -145,6 +145,13 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	// ordinary prompt, are both 403 content_policy_rejected. Every mode but
 	// keep therefore ends with the opening in place; keep sends what the
 	// caller wrote and accepts that Factory may refuse it.
+	if to == opencode.Responses && route.Upstream == "openai" {
+		// OpenAI's reasoning models refuse temperature/top_p with 400 and droid
+		// sends neither; magpie drops them on this route for the same reason.
+		if stripped, changed := factory.StripOpenAISampling(plan.body); changed {
+			plan.body = stripped
+		}
+	}
 	switch cfg.Factory.EffectiveSystemMode() {
 	case config.SystemFold:
 		plan.body = factory.FoldSystemIntoUser(string(to), plan.body)
@@ -225,6 +232,7 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 			body, aliases = aliased, found
 		}
 	}
+	body = factory.DropGeminiStreamField(body)
 	var b []byte
 	var err error
 	switch cfg.Factory.EffectiveSystemMode() {
@@ -357,6 +365,7 @@ func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*
 	if !ok || route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
+	body = factory.DropGeminiStreamField(body)
 	var b []byte
 	var err error
 	switch cfg.Factory.EffectiveSystemMode() {

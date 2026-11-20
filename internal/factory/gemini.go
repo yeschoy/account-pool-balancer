@@ -151,3 +151,23 @@ func OpenGeminiBodyWith(model string, body []byte, inject bool) ([]byte, error) 
 	}
 	return out, nil
 }
+
+// DropGeminiStreamField removes a body-level stream flag. Google's route takes
+// the streaming variant from the method name (:streamGenerateContent), and
+// droid sends no stream field; a client that sets one would otherwise reach the
+// captured /generate route with a field Factory does not expect.
+func DropGeminiStreamField(body []byte) []byte {
+	var m object
+	if decode(body, &m) != nil || m == nil {
+		return body
+	}
+	if _, ok := m["stream"]; !ok {
+		return body
+	}
+	delete(m, "stream")
+	out, err := marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
+}
