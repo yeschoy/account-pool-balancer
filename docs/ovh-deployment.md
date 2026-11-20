@@ -66,6 +66,12 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory 会话头诊断（2026-11-21 05:36 UTC，4ad3a73）
+
+- 现场疑问：DSH 经 new-api 到本池，为什么没有显示"会话命中头"。抓包（detailLog）显示真实 DSH Gemini 请求 UA 为 `google-genai-sdk/2.21.0 gl-node/v24.21.0, deepseek`，**不带任何 session/conversation 头**；new-api 的渠道亲和规则只匹配 `^gpt-.*$` + `/v1/responses`，不覆盖 Gemini，也不会补会话头。因此本池按设计回落到 `message_hmac` 对话指纹（日志 hit 11 / miss 2）。
+- 变更 `4ad3a73`：Factory 请求记录 `clientSessionHeaderStatus`（候选会话头的状态），并在 detailLog 开启时采集客户端请求头，控制台"客户端请求头"弹窗可看到"未收到支持的会话候选头"。新增 `TestSessionHeaderCandidates`；`go test ./internal/server` 通过（94.214s）。
+- 部署：镜像 `account-pool-balancer:release-4ad3a73-20261120T213637Z`；备份 `20261120T213637Z-factory-sesshdr-4ad3a73/data.tgz`；healthy；诊断用 `factory.detailLog` 已改回 `false`。
+
 ## 当前部署：Factory 每请求扫描优化（2026-11-21 05:22 UTC，ef449d1）
 
 - 用户疑问：每个请求都跑正则，性能是否太差。实测确认是真问题：237 KB body 上 `containsPhrase` 需 **3.4 ms**（RE2 正则 2.9 ms），另分配 239 KB。

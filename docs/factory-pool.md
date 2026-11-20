@@ -1,5 +1,24 @@
 # Factory AI 号池与全局号池启停
 
+## 会话头为什么没有命中（2026-11-21，`4ad3a73`）
+
+现场：DSH（Gemini 协议）请求日志里 `sessionSource=message_hmac`、`affinityKeyType=message_hmac`、`affinityConfidence=fallback`，看不到"会话头命中"。
+
+实测证据（detailLog 抓到的真实 DSH 请求，21:33Z）：
+
+```
+User-Agent: google-genai-sdk/2.21.0 gl-node/v24.21.0, deepseek
+session 类头: 无
+```
+
+结论：
+- **DSH 的 Gemini 路由不发会话头**。它走 pi-ai 的 `google-generative-ai` 适配器，请求只带 `x-goog-api-key`；`x-deepseek-harness-session-id` 只出现在 DSH 的 Anthropic 等客户端路径里，Gemini 路径没有。
+- **new-api 也不会补会话头**。它的渠道亲和规则是 `model_regex: ^gpt-.*$` + `path_regex: /v1/responses`（codex cli trace），`pass_headers` 只在该规则命中时透传 `Session_id`/`Thread_id` 等；Gemini 请求不命中该规则，而且渠道亲和只决定选哪个渠道，不生成会话标识。
+- **本池的头解析是开着的**：`identityWithFallbackHeaders` 内置 30+ 会话头名（含 `X-Deepseek-Harness-Session-Id`）；没收到头才回落到 `message_hmac` 对话指纹。日志里 `bindingResult` 为 hit 11 / miss 2，粘性是工作的；真实 71k token 请求 97% 缓存命中也是间接证据。
+- **新增诊断**：Factory 请求现在会记录 `clientSessionHeaderStatus`（客户端实际带了的候选会话头及其状态 valid/empty/invalid；没有则为空），控制台的"客户端请求头"弹窗可直接看出"未收到支持的会话候选头"。
+
+若一定要走头粘性：需要客户端发头（Claude Code/Codex 类客户端天然会发，本池已支持）；给 DSH 加**静态**头不可取（所有会话会钉到同一账号）；在 new-api 加 Gemini 的 affinity 规则也无效，因为 DSH 的 Gemini 客户端本身不发这些头。
+
 ## 每请求扫描的性能（2026-11-21，`ef449d1`）
 
 - **原实现**：每个请求先做 `containsPhrase`，对整包 body 跑 11 条 `strings.Contains`，再用 RE2 正则 `(?i)You are[^.\n]{0,120}?harness\.` 判自述句。实测 237 KB 的 agent 请求体：**3.4 ms/次**（其中正则 2.9 ms），还额外分配 239 KB。
