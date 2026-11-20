@@ -241,11 +241,11 @@ func DefaultFactoryModels() []FactoryModel {
 	add("chat", "databricks", "kimi-k3.1-pro")
 	add("chat", "baseten", "glm-5.2", "glm-5.2-fast", "deepseek-v4.1-flash-1017", "nemotron-3.5-super", "nemotron-3-ultra", "beam-1.0")
 	add("chat", "mistral", "mistral-large-4", "mistral-medium-3.5")
-	add("generate", "google", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview")
+	add("generate", "google", "gemini-4-neon", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview")
 	add("embeddings", "openai", "text-embedding-3-large")
 	add("messages", "fireworks", "minimax-m2.7")
 	add("messages", "anthropic", "claude-opus-5-5-fast", "claude-opus-5-fast", "claude-opus-4-8-fast")
-	add("responses", "openai", "gpt-5.5-fast", "gpt-5.4-fast", "gpt-5.3-codex-fast", "gpt-6-sol-fast", "gpt-6-luna-fast", "gpt-5.6-sol-fast")
+	add("responses", "openai", "gpt-5.5-fast", "gpt-5.4-fast", "gpt-5.4-mini-fast", "gpt-5.4-mini", "gpt-5.3-codex-fast", "gpt-6-sol-fast", "gpt-6-luna-fast", "gpt-5.6-sol-fast")
 	return out
 }
 
@@ -287,6 +287,7 @@ func (f Factory) EffectivePricing() pricing.Config {
 // replaces this one.
 var factoryPricingDefaults = pricing.Config{
 	Models: []pricing.Entry{
+		{Model: "gemini-4-neon", Currency: "USD", Input: 2.50, CachedInput: 0.25, Output: 15.00, Note: "Factory 1.2x 倍率、Pro 档位估算"},
 		{Model: "gemini-4-carbon", Currency: "USD", Input: 2.00, CachedInput: 0.20, Output: 12.00, Note: "Pro 档位（按 Gemini 3.1 Pro 官方价估算）"},
 		{Model: "gemini-4-hydrogen", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75, Note: "Flash 档位（按 Gemini 3.8 Flash 官方价估算）"},
 		{Model: "gemini-4-argon", Currency: "USD", Input: 0.50, CachedInput: 0.05, Output: 6.00, Note: "Flash-Lite 档位（按 Gemini 3.8 Flash-Lite 官方价估算）"},
