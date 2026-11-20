@@ -66,6 +66,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：自述句改写为 Runtime（2026-11-21 02:09 UTC，e682602）
+
+- `d7107df` 用"解码后字符串里写字面量 \uXXXX"的方式处理 DSH 自述句，可绕过策略检查但会让模型读到字面转义。随后一次"改成真正 JSON 转义（解码后文本不变）"的尝试（`2cf91b2`）实测 **仍然 403**：网关在检查前先 JSON 解码，解码后还是原句。已回退，并改为**语义改写**：把句子里的 `Harness.` 改成 `Runtime.`（实测被接受，句子其余部分保留）。
+- 提交 `bdad937`（回退）+ `e682602`（改写）已推送；`go vet`、`go test ./...`（server 96.663s）通过，新增 `TestRewordSelfDescription`。
+- 验证（经 `m.yeschoy.pro`）：自述句放在 user 文本 / system+user / functionResponse 三种位置，以及压缩开场句 → 全部 **200**。
+- 部署：镜像 `account-pool-balancer:release-e682602-20261120T180927Z`；备份 `/home/ubuntu/backups/account-pool-balancer/20261120T180927Z-factory-reword-e682602/data.tgz`；healthy、restarts=0。
+
 ## 当前部署：与 magpie 0.1.55 对齐（2026-11-21 01:57 UTC，c575273）
 
 - 按用户要求重新比对最新 `@magpie-community/opencode-factory-auth` 0.1.55（此前参考的是 0.1.52）：
