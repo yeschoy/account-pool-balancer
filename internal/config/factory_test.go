@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestFactoryConfigIsolationAndRoundTrip(t *testing.T) {
@@ -13,8 +14,17 @@ func TestFactoryConfigIsolationAndRoundTrip(t *testing.T) {
 	if !KnownProvider(ProviderFactory) || GroupForProvider(ProviderFactory) != "factory" || !WriteOnlyCredentials(ProviderFactory) {
 		t.Fatal("provider registration")
 	}
-	if got := c.ForProvider(ProviderFactory); got.Routing.Strategy != "least-connections" || got.Routing.OnBindingBusy != "reject" || !got.Quota.Enabled || len(got.Pricing.Models) != 0 {
+	got := c.ForProvider(ProviderFactory)
+	if got.Routing.Strategy != "least-connections" || got.Routing.OnBindingBusy != "reject" || !got.Quota.Enabled {
 		t.Fatal("inherited foreign settings")
+	}
+	// Factory ships its own Google rates; they must price its models and none
+	// of the other pools'.
+	if _, ok := got.Pricing.Lookup("gemini-4-carbon", time.Now()); !ok {
+		t.Fatal("factory pricing defaults missing")
+	}
+	if _, ok := got.Pricing.Lookup("claude-sonnet-5-5", time.Now()); ok {
+		t.Fatal("foreign price inherited")
 	}
 	c.Accounts = []Account{{ID: "f", Provider: ProviderFactory, RuntimeKey: "fk-mock_test_key_1", Enabled: true}}
 	r := c.Factory.EffectiveRouting()

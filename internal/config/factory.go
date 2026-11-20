@@ -273,7 +273,28 @@ func (f Factory) EffectivePricing() pricing.Config {
 	if f.Pricing != nil {
 		return *f.Pricing
 	}
-	return pricing.Config{Models: []pricing.Entry{}, Holidays: []string{}}
+	return factoryPricingDefaults
+}
+
+// factoryPricingDefaults prices Factory's Google models in USD per 1M tokens
+// from Google's published rates (ai.google.dev/gemini-api/docs/pricing,
+// 2026-11-21). Google publishes nothing for the gemini-4-* tiers Factory
+// serves, so those carry the rate of the same class of published model and a
+// Note saying so; the settings page edits every rate, and a saved table
+// replaces this one.
+var factoryPricingDefaults = pricing.Config{
+	Models: []pricing.Entry{
+		{Model: "gemini-4-carbon", Currency: "USD", Input: 2.00, CachedInput: 0.20, Output: 12.00, Note: "Pro 档位（按 Gemini 3.1 Pro 官方价估算）"},
+		{Model: "gemini-4-hydrogen", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75, Note: "Flash 档位（按 Gemini 3.8 Flash 官方价估算）"},
+		{Model: "gemini-4-argon", Currency: "USD", Input: 0.50, CachedInput: 0.05, Output: 6.00, Note: "Flash-Lite 档位（按 Gemini 3.8 Flash-Lite 官方价估算）"},
+		{Model: "gemini-3.1-pro-preview", Currency: "USD", Input: 2.00, CachedInput: 0.20, Output: 12.00},
+		{Model: "gemini-3.8-flash", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75},
+		{Model: "gemini-3.7-flash", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75},
+		{Model: "gemini-3.6-flash", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75},
+		{Model: "gemini-3.5-flash", Currency: "USD", Input: 0.75, CachedInput: 0.075, Output: 3.75},
+		{Model: "gemini-3-flash-preview", Currency: "USD", Input: 0.50, CachedInput: 0.05, Output: 3.00},
+	},
+	Holidays: []string{},
 }
 
 // Core models use a separate subscription meter. Hosting vendor alone is

@@ -49,6 +49,7 @@ type Server struct {
 	pool           *pool.Pool
 	quota          *quota.Poller
 	logs           *logstore.Store
+	usageCache     factoryUsageCache
 	stats          *stats.Stats
 	secret         []byte
 	mistralAudit   *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect

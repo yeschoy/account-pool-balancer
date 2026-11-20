@@ -98,6 +98,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("GET /api/pools", s.apiPools)
 	a("PUT /api/pools/{provider}", s.apiSetPool)
 	a("GET /api/overview", s.apiOverview)
+	a("GET /api/factory/usage", s.apiFactoryUsage)
 	a("POST /api/stats/reset-cache-rate", s.apiResetCacheRate)
 	a("GET /api/accounts", s.apiAccounts)
 	a("POST /api/accounts", s.apiCreateAccount)
@@ -1543,7 +1544,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		defaultPrices = c.X50.EffectivePricing().Models
 	}
 	if prov == config.ProviderFactory {
-		defaultPrices = []pricing.Entry{}
+		defaultPrices = c.Factory.EffectivePricing().Models
 	}
 	if prov == config.ProviderDeploy {
 		defaultPrices = config.DefaultDeployPricing().Models
@@ -2064,6 +2065,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		"globalBindings":          s.pool.BindingCount(),
 		"mistralBufferedBytes":    s.mistralBuffered.Load(),
 		"mistralBufferLimitBytes": s.mistralBufferLimit(cfg),
+		"factoryUsage":            s.factoryUsage(cfg),
 		"logQueuedBytes":          s.logs.QueuedBytes(),
 		"logQueueLength":          s.logs.QueueLength(),
 		"stats":                   s.stats.SummaryFor(want),

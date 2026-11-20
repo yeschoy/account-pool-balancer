@@ -523,7 +523,7 @@ async function loadOverview() {
     ['24h ' + (pool === 'opencode-go' ? '价格表估算' : '费用'), costSum(st), pool === 'opencode-go' ? '不是 Go 订阅账单或额外扣费金额' : isTokenHarbor() ? '按手动价格估算；未配价/含缓存写入的不计，不是上游账单' : '按模型价格估算，未配价格的不计'],
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
     ...(pool === 'opencode-go' ? goOverviewCards(o) : []),
-    ...(isFactory() ? [['Factory 身份', `${num(o.factory?.identityFresh || 0)} / ${num(o.accounts)}`, '新鲜身份 / 总账号；身份有效不代表模型推理授权'], ['Factory 额度', `${num(o.factory?.quotaFresh || 0)} 个新鲜`, 'Standard / Core 百分比逐账号展示；多Key共享，不累加']] : []),
+    ...(isFactory() ? [['Factory 身份', `${num(o.factory?.identityFresh || 0)} / ${num(o.accounts)}`, '新鲜身份 / 总账号；身份有效不代表模型推理授权'], ['Factory 额度', `${num(o.factory?.quotaFresh || 0)} 个新鲜`, 'Standard / Core 百分比逐账号展示；多Key共享，不累加'], ['累计官方价估算', usdCost(o.factoryUsage), factoryUsageSub(o.factoryUsage)]] : []),
     ...(isDeploy() ? [['Deploy 余额', '未知', o.deploy?.quotaReason || '仅绑定推理 Key，未绑定组织控制台会话；不按 Key 累加余额'], ['Deploy 模型目录', `${num(o.deploy?.catalogFresh || 0)} / ${num(o.accounts)}`, '新鲜目录账号 / 总数；目录不是 Key 激活或推理授权证明']] : []),
     ...(isALTapi() ? altOverviewCards() : []),
     [pool === 'opencode-go' ? '24h 已报告 Token' : '24h Token', pool === 'opencode-go' ? (!st.ikr && !st.okr ? '—' : num(st.p + st.o)) : num(st.i + st.o), pool === 'opencode-go' ? `提示（含缓存）${st.ikr ? num(st.p) : '未知'} · 输出 ${st.okr ? num(st.o) : '未知'} · 累计缓存读取 ${num(st.k || 0)}（缺失的上游用量不计）` : `输入 ${num(st.i)} · 输出 ${num(st.o)} · 缓存 ${num(st.k)}`],
@@ -1844,6 +1844,12 @@ function cacheRateCell(r) {
 }
 const CUR = { CNY: '¥', USD: '$' };
 function money(v, cur) { return (CUR[cur] || '') + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(4) : v.toFixed(6)); }
+function usdCost(u) { return u && u.costUsd ? '$' + u.costUsd.toFixed(2) : '—'; }
+function factoryUsageSub(u) {
+  if (!u || !u.requests) return '还没有可计价的 Factory 请求；按 Google 官方单价 × 记录到的 token 估算';
+  const unpriced = u.unpriced ? ` · ${num(u.unpriced)} 条未计价` : '';
+  return `按 Google 官方单价估算，不是上游账单 · ${num(u.requests)} 条请求 · 输入 ${num(u.inputTokens)} / 输出 ${num(u.outputTokens)} token${unpriced}`;
+}
 function costSum(b) { return [b.cc ? money(b.cc, 'CNY') : '', b.cu ? money(b.cu, 'USD') : ''].filter(Boolean).join(' + ') || '—'; }
 // Only paired, measured cache/prompt samples contribute. These counters can
 // be reset independently of the original 24h token usage (b.p/b.k).

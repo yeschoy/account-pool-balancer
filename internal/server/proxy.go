@@ -2160,7 +2160,23 @@ func intField(m map[string]any, k string) *int64 {
 
 // scanUsage reads OpenAI Chat, Responses and Anthropic usage shapes; a
 // later event overrides only the fields it carries.
+// setIfPresent keeps the earlier value when the field is absent.
+func setIfPresent(dst **int64, v *int64) {
+	if v != nil {
+		*dst = v
+	}
+}
+
 func scanUsage(m map[string]any, u *usage) {
+	// Gemini reports usage in a top-level usageMetadata and carries no
+	// "usage" object at all, so it is read before the OpenAI/Anthropic shapes
+	// decide whether the event has usage.
+	if gm, ok := m["usageMetadata"].(map[string]any); ok {
+		setIfPresent(&u.in, intField(gm, "promptTokenCount"))
+		setIfPresent(&u.out, intField(gm, "candidatesTokenCount"))
+		setIfPresent(&u.cached, intField(gm, "cachedContentTokenCount"))
+		setIfPresent(&u.reasoning, intField(gm, "thoughtsTokenCount"))
+	}
 	var us map[string]any
 	if x, ok := m["usage"].(map[string]any); ok {
 		us = x
@@ -2193,12 +2209,6 @@ func scanUsage(m map[string]any, u *usage) {
 		if d, ok := us[k].(map[string]any); ok {
 			set(&u.reasoning, intField(d, "reasoning_tokens"))
 		}
-	}
-	if gm, ok := m["usageMetadata"].(map[string]any); ok {
-		set(&u.in, intField(gm, "promptTokenCount"))
-		set(&u.out, intField(gm, "candidatesTokenCount"))
-		set(&u.cached, intField(gm, "cachedContentTokenCount"))
-		set(&u.reasoning, intField(gm, "thoughtsTokenCount"))
 	}
 }
 
