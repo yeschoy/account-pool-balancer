@@ -32,3 +32,22 @@ func TestScanUsageGeminiMetadata(t *testing.T) {
 		t.Fatalf("openai usage = %+v", u2)
 	}
 }
+
+// A Gemini cache miss carries no cachedContentTokenCount; it must still be
+// measured as zero so the hit rate is not computed over hits alone.
+func TestScanUsageGeminiCacheMissCountsAsZero(t *testing.T) {
+	var u usage
+	scanUsage(map[string]any{"usageMetadata": map[string]any{
+		"promptTokenCount":     float64(8449),
+		"candidatesTokenCount": float64(5),
+	}}, &u)
+	if u.cached == nil || *u.cached != 0 {
+		t.Fatalf("cached = %v, want measured zero", u.cached)
+	}
+	// Usage without promptTokenCount stays unmeasured rather than claiming zero.
+	var u2 usage
+	scanUsage(map[string]any{"usageMetadata": map[string]any{"trafficType": "ON_DEMAND"}}, &u2)
+	if u2.cached != nil {
+		t.Fatalf("cached = %v, want nil", u2.cached)
+	}
+}

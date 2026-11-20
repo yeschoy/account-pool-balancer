@@ -241,7 +241,7 @@ func DefaultFactoryModels() []FactoryModel {
 	add("chat", "databricks", "kimi-k3.1-pro")
 	add("chat", "baseten", "glm-5.2", "glm-5.2-fast", "deepseek-v4.1-flash-1017", "nemotron-3.5-super", "nemotron-3-ultra", "beam-1.0")
 	add("chat", "mistral", "mistral-large-4", "mistral-medium-3.5")
-	add("generate", "google", "gemini-4-neon", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview")
+	add("generate", "google", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview")
 	add("embeddings", "openai", "text-embedding-3-large")
 	add("messages", "fireworks", "minimax-m2.7")
 	add("messages", "anthropic", "claude-opus-5-5-fast", "claude-opus-5-fast", "claude-opus-4-8-fast")

@@ -2177,8 +2177,16 @@ func scanUsage(m map[string]any, u *usage) {
 	if gm, ok := m["usageMetadata"].(map[string]any); ok {
 		setIfPresent(&u.in, intField(gm, "promptTokenCount"))
 		setIfPresent(&u.out, intField(gm, "candidatesTokenCount"))
-		setIfPresent(&u.cached, intField(gm, "cachedContentTokenCount"))
 		setIfPresent(&u.reasoning, intField(gm, "thoughtsTokenCount"))
+		// Gemini reports cachedContentTokenCount only on a cache hit; a request
+		// that missed must still count as measured with zero cached tokens,
+		// otherwise the hit rate is computed over hits alone.
+		if cached := intField(gm, "cachedContentTokenCount"); cached != nil {
+			u.cached = cached
+		} else if u.in != nil {
+			var zero int64
+			u.cached = &zero
+		}
 	}
 	var us map[string]any
 	if x, ok := m["usage"].(map[string]any); ok {
