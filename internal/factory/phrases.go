@@ -19,7 +19,12 @@ import (
 var (
 	AnywhereRefusedPhrases = []string{
 		"You are an expert coding assistant operating inside pi, a coding agent harness.",
+		// pi's compaction and branch openings, refused wherever they appear and
+		// not only as a whole summary.
 		"The conversation history before this point was compacted into the following summary:",
+		"The following is a summary of a branch that this conversation came back from:",
+		// Claude Code's continuation opening, refused in the same way.
+		"This session is being continued from a previous conversation that ran out of context.",
 	}
 	ToolOnlyRefusedPhrases = []string{
 		"You are Claude Code, Anthropic's official CLI for Claude.",

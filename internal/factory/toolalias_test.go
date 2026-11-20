@@ -74,3 +74,35 @@ func TestAliasToolNamesResponsesShape(t *testing.T) {
 		t.Fatalf("flat declaration not renamed: %s", out)
 	}
 }
+
+// Rename-all mode renames every tool Factory has not been measured to accept,
+// because the refused list grows: todo_write was refused while our list held
+// only the older names. droid's own names and mcp__ tools are kept.
+func TestAliasToolNamesRenamingAll(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[],"tools":[` +
+		`{"type":"function","function":{"name":"todo_write","description":"d"}},` +
+		`{"type":"function","function":{"name":"custom_helper","description":"d"}},` +
+		`{"type":"function","function":{"name":"Read","description":"d"}},` +
+		`{"type":"function","function":{"name":"mcp__rea__analyze","description":"d"}}]}`)
+	out, aliases := AliasToolNamesRenamingAll(body)
+	if len(aliases) != 2 {
+		t.Fatalf("aliases = %v", aliases)
+	}
+	if strings.Contains(string(out), `"name":"todo_write"`) || strings.Contains(string(out), `"name":"custom_helper"`) {
+		t.Fatalf("unmeasured names kept: %s", out)
+	}
+	if !strings.Contains(string(out), `"name":"Read"`) || !strings.Contains(string(out), `"name":"mcp__rea__analyze"`) {
+		t.Fatalf("accepted names renamed: %s", out)
+	}
+	// Restoring by alias returns the caller's names.
+	var reply []byte = []byte(`{"calls":[{"name":"` + func() string {
+		for a := range aliases {
+			return a
+		}
+		return ""
+	}() + `"}]}`)
+	restored, changed := RestoreToolNames(reply, aliases)
+	if !changed || !(strings.Contains(string(restored), "todo_write") || strings.Contains(string(restored), "custom_helper")) {
+		t.Fatalf("restore = %s", restored)
+	}
+}

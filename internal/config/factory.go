@@ -78,8 +78,14 @@ type Factory struct {
 	// usage policy refuses, so a conversation that quotes another agent's
 	// prompt is not rejected. The model still reads the same characters after
 	// JSON decoding; only the wire bytes differ.
-	EscapeClientPhrases *bool          `json:"escapeClientPhrases,omitempty"`
-	Models              []FactoryModel `json:"models"`
+	EscapeClientPhrases *bool `json:"escapeClientPhrases,omitempty"`
+	// RenameAllTools renames every declared tool Factory has not been measured
+	// to accept, not only the names already known to be refused. The refused
+	// list grows without notice and a missed name refuses the whole request,
+	// while a renamed name is restored in the reply. droid's own names and
+	// mcp__ tools are kept. Unset means yes.
+	RenameAllTools *bool          `json:"renameAllTools,omitempty"`
+	Models         []FactoryModel `json:"models"`
 	// ProxyPool and UserAgents provide distinct per-account egress and
 	// inference identity. They are assignment sources only; an account's own
 	// ProxyURL/UserAgent always wins. Empty pools preserve the old behavior.
@@ -161,6 +167,12 @@ func (f Factory) EffectiveSystemMode() string {
 // injected, i.e. the resolved mode is open.
 func (f Factory) EffectiveDroidBody() bool {
 	return f.EffectiveSystemMode() == SystemOpen
+}
+
+// EffectiveRenameAllTools reports whether every tool name Factory has not been
+// measured to accept is renamed. Unset means yes.
+func (f Factory) EffectiveRenameAllTools() bool {
+	return f.RenameAllTools == nil || *f.RenameAllTools
 }
 
 // EffectiveEscapeClientPhrases reports whether refused client phrases are

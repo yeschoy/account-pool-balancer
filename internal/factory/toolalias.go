@@ -72,7 +72,19 @@ func suffixName(name string) string {
 // the alias → original names to restore in the reply. Task instructions, call
 // arguments and unrelated fields are untouched; a body that declares no
 // refused name comes back byte for byte.
+// AliasToolNamesRenamingAll also renames every declared tool Factory's list
+// does not hold yet: the list grows, so a name missed refuses the whole
+// request while a renamed name costs nothing (the reply is renamed back).
+// droid's own names and mcp__ tools are kept.
+func AliasToolNamesRenamingAll(body []byte) ([]byte, map[string]string) {
+	return aliasToolNames(body, true)
+}
+
 func AliasToolNames(body []byte) ([]byte, map[string]string) {
+	return aliasToolNames(body, false)
+}
+
+func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
 	var request object
 	if decode(body, &request) != nil || request == nil {
 		return body, nil
@@ -82,7 +94,12 @@ func AliasToolNames(body []byte) ([]byte, map[string]string) {
 		key    string
 	}
 	declared := declaredTools(request)
-	rename := func(name string) bool { return RefusedToolName(name) }
+	rename := func(name string) bool {
+		if RefusedToolName(name) {
+			return true
+		}
+		return renameAll && name != "" && !TakenToolNames[name] && !strings.HasPrefix(name, "mcp__")
+	}
 	needed := false
 	for _, s := range declared {
 		if rename(text(s.holder[s.key])) {

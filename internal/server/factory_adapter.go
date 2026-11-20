@@ -162,7 +162,11 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 		// Factory refuses a request declaring certain tool names outright, so a
 		// refused tool is renamed before the opening and renamed back in the
 		// reply. This is independent of the prompt adapters.
-		if aliased, aliases := factory.AliasToolNames(plan.body); len(aliases) > 0 {
+		aliased, aliases := factory.AliasToolNames(plan.body)
+		if cfg.Factory.EffectiveRenameAllTools() {
+			aliased, aliases = factory.AliasToolNamesRenamingAll(plan.body)
+		}
+		if len(aliases) > 0 {
 			plan.body = aliased
 			plan.toolAliases = aliases
 		}
@@ -213,7 +217,11 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
 		// Factory refuses a function declaration whose name it blocks, so the
 		// tool is renamed here and renamed back in the reply.
-		if aliased, found := factory.AliasToolNames(body); len(found) > 0 {
+		aliased, found := factory.AliasToolNames(body)
+		if cfg.Factory.EffectiveRenameAllTools() {
+			aliased, found = factory.AliasToolNamesRenamingAll(body)
+		}
+		if len(found) > 0 {
 			body, aliases = aliased, found
 		}
 	}
@@ -235,6 +243,13 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	}
 	if err != nil {
 		return nil, err
+	}
+	// Factory's policy reads the whole body, so a refused sentence is escaped
+	// here too; JSON decoding gives the model the original characters.
+	if cfg.Factory.EffectiveEscapeClientPhrases() && cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
+		if escaped, changed := factory.EscapeClientPhrases(b); changed {
+			b = escaped
+		}
 	}
 	if len(b) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
