@@ -1,5 +1,11 @@
 package factory
 
+import (
+	"encoding/json"
+	"math"
+	"strconv"
+)
+
 // GeminiToolSchemaKeys are the JSON-Schema keys Google's generateContent
 // parameters accept. Google's Schema message has no place for the draft
 // keywords a JSON-Schema generator emits ($schema, additionalProperties,
@@ -183,7 +189,75 @@ func sanitizeGeminiSchema(schema map[string]any) bool {
 			changed = true
 		}
 	}
+	if normalizeGeminiEnum(schema) {
+		changed = true
+	}
 	return changed
+}
+
+// formatEnumNumber prints a numeric enum member the way JSON would have, so an
+// integer stays "3" rather than "3.000000".
+func formatEnumNumber(v float64) string {
+	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+		return strconv.FormatInt(int64(v), 10)
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
+// normalizeGeminiEnum makes every enum member match the declared type. Google
+// answers a mismatched member with 400 "Invalid value at
+// …parameters.properties[0].value.enum[0] (TYPE_STRING)": its Schema takes an
+// enum of the field's own type, so an integer/bool member of a string enum —
+// or null, which nullable already expresses — has to become a string or go.
+func normalizeGeminiEnum(schema map[string]any) bool {
+	members, ok := schema["enum"].([]any)
+	if !ok || len(members) == 0 {
+		return false
+	}
+	typ, _ := schema["type"].(string)
+	changed := false
+	out := make([]any, 0, len(members))
+	for _, raw := range members {
+		switch typ {
+		case "number", "integer":
+			switch v := raw.(type) {
+			case json.Number:
+				out = append(out, v)
+			case float64:
+				out = append(out, json.Number(formatEnumNumber(v)))
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					out, changed = append(out, f), true
+				} else {
+					changed = true
+				}
+			default:
+				changed = true
+			}
+		default: // string is Google's default and the only other scalar
+			switch v := raw.(type) {
+			case string:
+				out = append(out, v)
+			case json.Number:
+				out, changed = append(out, v.String()), true
+			case bool:
+				out, changed = append(out, strconv.FormatBool(v)), true
+			case nil:
+				changed = true // null belongs to nullable, not to the enum
+			default:
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return false
+	}
+	if len(out) == 0 {
+		delete(schema, "enum")
+		return true
+	}
+	schema["enum"] = out
+	return true
 }
 
 // inferGeminiType names a schema from the constraints it already carries.
@@ -207,8 +281,12 @@ func inferGeminiType(schema map[string]any) string {
 	if enum, ok := schema["enum"].([]any); ok && len(enum) > 0 {
 		allNumbers := true
 		for _, v := range enum {
-			if _, ok := v.(float64); !ok {
+			switch v.(type) {
+			case json.Number, float64:
+			default:
 				allNumbers = false
+			}
+			if !allNumbers {
 				break
 			}
 		}

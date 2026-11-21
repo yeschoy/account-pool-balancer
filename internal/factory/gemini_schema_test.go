@@ -121,3 +121,40 @@ func TestSanitizeGeminiComposition(t *testing.T) {
 		t.Fatalf("b = %v", b)
 	}
 }
+
+// Google rejects an enum member whose type differs from the field's: an
+// integer in a string enum is 400 "(TYPE_STRING)". Members are coerced or
+// dropped so the declaration is accepted.
+func TestSanitizeGeminiEnumTypes(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"tools": []any{map[string]any{"functionDeclarations": []any{
+		map[string]any{"name": "x", "parameters": map[string]any{"type": "object", "properties": map[string]any{
+			"a": map[string]any{"type": "string", "enum": []any{float64(1), "two", true, nil}},
+			"b": map[string]any{"type": "integer", "enum": []any{float64(1), "2", "x"}},
+			"c": map[string]any{"enum": []any{float64(1), float64(2)}},
+		}}},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, changed := SanitizeGeminiTools(body)
+	if !changed {
+		t.Fatal("nothing normalized")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	props := m["tools"].([]any)[0].(map[string]any)["functionDeclarations"].([]any)[0].(map[string]any)["parameters"].(map[string]any)["properties"].(map[string]any)
+	a := props["a"].(map[string]any)
+	if enum := a["enum"].([]any); len(enum) != 3 || enum[0] != "1" || enum[1] != "two" || enum[2] != "true" {
+		t.Fatalf("string enum = %v", enum)
+	}
+	b := props["b"].(map[string]any)
+	if enum := b["enum"].([]any); len(enum) != 2 || enum[0] != float64(1) || enum[1] != float64(2) {
+		t.Fatalf("integer enum = %v", enum)
+	}
+	c := props["c"].(map[string]any)
+	if enum, ok := c["enum"].([]any); !ok || len(enum) != 2 || c["type"] != "number" {
+		t.Fatalf("inferred enum = %v type=%v", enum, c["type"])
+	}
+}
