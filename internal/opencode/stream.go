@@ -289,6 +289,12 @@ func ReadStream(p Protocol, rd io.Reader) (*Reply, error) {
 // Stream encodes a complete validated reply with deterministic event ordering.
 // Tool call_id / tool_use.id values remain exactly those the upstream issued.
 func (r *Reply) Stream(p Protocol) ([]byte, error) {
+	return r.StreamWithChatUsage(p, true)
+}
+
+// StreamWithChatUsage honors Chat's include_usage option for callers that
+// track it separately. Responses and Messages carry their normal usage shape.
+func (r *Reply) StreamWithChatUsage(p Protocol, includeUsage bool) ([]byte, error) {
 	full, err := r.Encode(p)
 	if err != nil {
 		return nil, err
@@ -323,7 +329,9 @@ func (r *Reply) Stream(p Protocol) ([]byte, error) {
 		}
 		reason := obj(arr(full["choices"])[0])["finish_reason"]
 		chunk(object{}, reason)
-		emit("", object{"id": r.ID, "object": "chat.completion.chunk", "model": r.Model, "created": full["created"], "choices": []any{}, "usage": full["usage"]})
+		if includeUsage {
+			emit("", object{"id": r.ID, "object": "chat.completion.chunk", "model": r.Model, "created": full["created"], "choices": []any{}, "usage": full["usage"]})
+		}
 		out.WriteString("data: [DONE]\n\n")
 	case Messages:
 		start := object{"id": r.ID, "type": "message", "role": "assistant", "model": r.Model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": r.Usage.Encode(Messages)}

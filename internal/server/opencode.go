@@ -79,7 +79,10 @@ func (s *Server) openCodeCompatibility(w http.ResponseWriter, r *http.Request, c
 	}
 	var reply *opencode.Reply
 	var err error
-	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+	isSSE := strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	if from == opencode.Gemini {
+		reply, err = opencode.ReadGeminiReply(resp.Body, isSSE)
+	} else if isSSE {
 		reply, err = opencode.ReadStream(from, resp.Body)
 	} else {
 		var b []byte
@@ -102,8 +105,20 @@ func (s *Server) openCodeCompatibility(w http.ResponseWriter, r *http.Request, c
 		}
 		return fail(err)
 	}
+	if from == opencode.Gemini {
+		// These are gateway response IDs, never native Responses bindings.
+		prefix := map[opencode.Protocol]string{opencode.Chat: "chatcmpl-", opencode.Responses: "resp_", opencode.Messages: "msg_"}[to]
+		if reply.ID == "" {
+			reply.ID = res.goRecord.RequestID
+		}
+		reply.ID = prefix + reply.ID
+		reply.Model = res.goRecord.Model
+		reply.RestoreFunctionNames(res.goRecord.factoryPlan.toolAliases)
+	}
 	var b []byte
-	if stream {
+	if stream && from == opencode.Gemini {
+		b, err = reply.StreamWithChatUsage(to, res.goRecord.factoryPlan.chatUsage)
+	} else if stream {
 		b, err = reply.Stream(to)
 	} else {
 		var m map[string]any

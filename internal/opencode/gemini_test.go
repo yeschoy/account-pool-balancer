@@ -1,0 +1,100 @@
+package opencode
+
+import (
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+)
+
+func TestGeminiCompatibleRequestHistory(t *testing.T) {
+	for _, tc := range []struct {
+		protocol Protocol
+		fields   string
+	}{
+		{Chat, `"messages":[{"role":"user","content":[{"type":"text","text":"看图"},{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}]},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"n\":900719925474099312345}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result"}],"stop":"END"`},
+		{Responses, `"input":[{"role":"user","content":[{"type":"input_text","text":"看图"},{"type":"input_image","image_url":"data:image/png;base64,YQ=="}]},{"type":"function_call","id":"fc_original","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\"n\":900719925474099312345}"},{"type":"function_call_output","call_id":"call_1","output":"result"}],"text":{"format":{"type":"text"}}`},
+		{Messages, `"max_tokens":100,"messages":[{"role":"user","content":[{"type":"text","text":"看图"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YQ=="}}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"n":900719925474099312345}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"result"}]}],"stop_sequences":["END"]`},
+	} {
+		t.Run(string(tc.protocol), func(t *testing.T) {
+			raw, stream, _, err := ConvertGeminiRequest(tc.protocol, []byte(`{"model":"g","top_p":0.7,"temperature":0.4,`+tc.fields+`}`))
+			const contents = `"contents":[{"parts":[{"text":"看图"},{"inlineData":{"data":"YQ==","mimeType":"image/png"}}],"role":"user"},{"parts":[{"functionCall":{"args":{"n":900719925474099312345},"id":"call_1","name":"lookup"}}],"role":"model"},{"parts":[{"functionResponse":{"id":"call_1","name":"lookup","response":{"output":"result"}}}],"role":"user"}]`
+			if err != nil || stream || !strings.Contains(string(raw), contents) || !strings.Contains(string(raw), `"temperature":0.4,"topP":0.7`) || (tc.protocol != Responses && !strings.Contains(string(raw), `"stopSequences":["END"]`)) {
+				t.Fatal(string(raw), stream, err)
+			}
+		})
+	}
+}
+
+func TestGeminiCompatibleRequestRejectsUnsupported(t *testing.T) {
+	for _, body := range []string{
+		`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/a.png"}}]}]`,
+		`"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,%%%"}}]}]`,
+		`"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"pre-fill"}]`,
+		`"messages":[{"role":"user","content":"x"}],"stop":["one",3]`,
+		`"messages":[{"role":"user","content":"x"}],"n":2`,
+		`"messages":[{"role":"user","content":"x"}],"top_p":1.1`,
+		`"messages":[{"role":"user","content":"x"}],"stream_options":{"include_usage":true}`,
+		`"messages":[{"role":"user","content":"x"}],"parallel_tool_calls":false`,
+	} {
+		if _, _, _, err := ConvertGeminiRequest(Chat, []byte(`{"model":"g",`+body+`}`)); err == nil {
+			t.Fatal("unexpected success", body)
+		}
+	}
+}
+
+func TestGeminiCompatibilityReplyMaxTokens(t *testing.T) {
+	const body = `{"responseId":"g1","candidates":[{"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":7,"thoughtsTokenCount":3,"totalTokenCount":10}}`
+	r, err := ReadGeminiReply(strings.NewReader(body), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Usage.Known || !r.Usage.CachedKnown || r.Usage.Input != 7 || r.Usage.Cached != 0 || r.Usage.Output != 3 || r.Usage.Reasoning != 3 {
+		t.Fatal(r.Usage)
+	}
+	for _, tc := range []struct {
+		protocol Protocol
+		ending   string
+	}{{Chat, `"finish_reason":"length"`}, {Responses, "event: response.incomplete"}, {Messages, `"stop_reason":"max_tokens"`}} {
+		raw, err := r.Stream(tc.protocol)
+		if err != nil || !strings.Contains(string(raw), tc.ending) {
+			t.Fatal(string(raw), err)
+		}
+	}
+}
+
+func TestGeminiCompatibilityReplyRejectsInvalid(t *testing.T) {
+	for _, body := range []string{
+		`{"promptFeedback":{"blockReason":"SAFETY"}}`,
+		`{"candidates":[{"finishReason":"SAFETY"}]}`,
+		`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok"}]}},{"finishReason":"STOP"}]}`,
+		`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok"}]} }],"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3}}`,
+		`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok"}]} }],"usageMetadata":{"candidatesTokenCount":-1}}`,
+		`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok","thoughtSignature":"sig"},{"functionCall":{"name":"lookup","args":{}}}]}}]}`,
+	} {
+		if _, err := ReadGeminiReply(strings.NewReader(body), false); err == nil {
+			t.Fatal("unexpected success", body)
+		}
+	}
+}
+
+func TestGeminiCompatibilityStreamLimits(t *testing.T) {
+	const final = "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}\n\n"
+	largeLine := ":" + strings.Repeat("0", maxGeminiEventBytes/2) + "\n"
+	for _, tc := range []struct {
+		name string
+		r    io.Reader
+		want string
+	}{
+		{"large event (multiple short lines)", strings.NewReader(largeLine + largeLine + "\n" + final), "exceeds 2 MiB"},
+		{"large total", io.MultiReader(strings.NewReader(strings.Repeat(largeLine+"\n", maxGeminiReplyBytes/(maxGeminiEventBytes/2)+1)), strings.NewReader(final)), "exceeds 16 MiB"},
+		{"incomplete frame", strings.NewReader(strings.TrimSuffix(final, "\n")), "incomplete event"},
+		{"changed ID", strings.NewReader(fmt.Sprintf("data: {\"responseId\":\"first\"}\n\ndata: {\"responseId\":\"changed\"}\n\n%s", final)), "changed response ID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ReadGeminiReply(tc.r, true); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatal(err)
+			}
+		})
+	}
+}

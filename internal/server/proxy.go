@@ -1973,7 +1973,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return factoryAdaptationFailure(res)
 		}
 	}
-	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil && len(rec.factoryPlan.toolAliases) > 0 {
+	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil && ocTo != opencode.Gemini && len(rec.factoryPlan.toolAliases) > 0 {
 		// The request declared tool names Factory refuses under aliases; the
 		// caller must see its own names back in the calls the model returns.
 		resp.Header.Del("Content-Length")
@@ -1989,7 +1989,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
 	}
-	if rec.factoryPlan != nil && rec.factoryPlan.generate && !rec.factoryPlan.stream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+	if rec.factoryPlan != nil && rec.factoryPlan.generate && ocTo != opencode.Gemini && !rec.factoryPlan.stream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		// Factory's one /generate endpoint is a stream; a non-streaming
 		// :generateContent caller gets the merged GenerateContentResponse.
 		merged, aggErr := aggregateGeminiSSE(resp.Body, 512<<20)

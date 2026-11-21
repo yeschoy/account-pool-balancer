@@ -1,5 +1,19 @@
 # Factory AI 号池与全局号池启停
 
+## Gemini 模型的三个兼容入口
+
+在 **Factory AI → 路由设置 → 有限协议转换** 开启 `factory.compatibility` 后，配置为 `generate` / `google` 的 Gemini 模型可以通过下列三个 HTTP 入口调用。模型名保持不变（例如 `gemini-4-carbon`），使用 Factory 池的下游密钥，不要把上游 `fk-` Key 发给下游。仍由同一个 Factory 池选账号，发往 `/api/llm/g/v1/generate`，再按调用入口返回 JSON 或 SSE。
+
+| 下游入口 | 最小 JSON 请求体 |
+|---|---|
+| `POST /v1/chat/completions` | `{"model":"gemini-4-carbon","messages":[{"role":"user","content":"你好"}]}` |
+| `POST /v1/responses` | `{"model":"gemini-4-carbon","input":"你好","store":false}` |
+| `POST /v1/messages` | `{"model":"gemini-4-carbon","max_tokens":256,"messages":[{"role":"user","content":"你好"}]}` |
+
+- 支持单候选的文本多轮历史、前置系统指令、内联 Base64 图片输入、常用生成参数，以及 schema 可直接表示且不需要 Gemini 回放签名的函数调用与纯文本工具结果。远程图片、必须改写语义的 schema、原生托管工具、签名推理和 Responses 服务端续传不在子集内，请用原生接口。普通文本上的可选 Gemini 回放签名不返回给兼容客户端；需要保留该推理上下文或执行带签名的工具续轮时必须走 Gemini 原生入口。Gemini `STOP` 不报告命中的停止序列，Messages 将其映射为 `end_turn`，不会伪造 `stop_sequence`。
+- SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
+- 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
+
 ## DSH 到底会不会发 x-deepseek-harness-session-id（2026-11-21 实测）
 
 - **代码位置**：DSH 只在 **Anthropic Messages 客户端**构造该头，且仅当 `options.sessionId` 有值：
@@ -257,7 +271,7 @@ Factory 设置新增：
 - **参考插件的工具schema转换**：Messages工具根级`anyOf/oneOf/allOf`整体包到必填`arguments`对象里，改写schema位置的本地`$ref/$dynamicRef`指针；独立`$id`、anchor以及`const/default/examples`中的普通数据不误改。历史`tool_use.input`、`input_examples`同步包装；调用ID、用户指令和工具结果保持。无`$id`的递归资源拒绝而非错误搬移。
 - **返回还原**：仅当前请求确实包装的工具解包；真实调用者字段`arguments`不误拆。JSON与原生Messages SSE均保留原工具ID、Unicode、大整数及上游usage。SSE只缓存包装工具参数，文本/推理/普通工具继续流式输出；每工具参数4MiB、并行总16MiB、单帧8MiB上限。无效/截断参数不能当作完成，也不换号重放或降健康；已提交HTTP200时追加错误事件，不伪造终止成功。
 - **Fast Mode**：参考模型列表包含Opus/GPT的Fast条目。显式Fast模型补`speed=fast`及Anthropic beta，或`service_tier=priority`；对基座模型显式请求fast/priority且对应Fast模型已配置时映射。普通请求不自动升级；GLM-5.2 Fast是独立Chat模型，不由priority切换。Fast可能更贵，不自动接受新付费条件。已有自定义模型列表不自动覆写。
-- **本项目协议桥**：`factory.compatibility`控制Chat/Responses/Messages之间六个方向的有限转换，保存/重载后生效；新建默认配置开启，旧已保存但缺该字段的配置保留关闭，需在UI显式启用。按模型原生协议选择路径/x-api-provider，再转回调用者协议。复用已有工具/图像/完整历史桥，数字解码改用保真number token避免>2^53舍入。**Gemini不参与该转换**：只能从 `/v1beta` 原生路径调用，不做Chat→Gemini或Gemini→Chat的有损映射。
+- **本项目协议桥**：`factory.compatibility` 控制 Chat/Responses/Messages 间的六个有限转换方向，也控制这三个入口调用 Gemini 模型（见上文）；保存/重载后生效。新建默认配置开启，旧已保存但缺该字段的配置保留关闭，需在 UI 显式启用。按模型原生协议选择路径与 `x-api-provider`，再转回调用者协议。Gemini 入站路径仍只接受 `generate` 模型。
 - **跨协议SSE是缓冲模式**：总响应16MiB、单事件2MiB上限，等完整成功响应后输出目标SSE，返回`X-Compatibility-Mode: buffered`；不是实时首Token流。原生SSE不进入整包缓冲。签名thinking、服务端续传引用、hosted tools等不能无损表示的字段本地400；响应不能表示则502且不重放，不悄悄删字段或编造usage。`previous_response_id`只能留在原生Responses，虚拟转换出的Responses ID不承诺上游续传。
 
 原生请求除显式Fast/工具schema适配和上节Droid固定开头外保持原始JSON字节、指令及原生字段；Gemini请求只补`model`与Droid `systemInstruction`开头，`contents`、`tools`、`generationConfig`、安全设置和大整数原样保留；调用方身份头被替换为Droid客户端身份（见上节），不再使用balancer自报User-Agent。`X-Factory-Org-Id` 取该账号whoami读到的组织，不转发客户端自带值；whoami提供的region/private-host只作诊断，不自动将凭据送往返回域名。不跟随重定向，不在代理失败后直连。

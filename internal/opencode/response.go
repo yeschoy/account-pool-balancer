@@ -19,6 +19,17 @@ type Reply struct {
 	ID, Model, Stop string
 	Parts           []part
 	Usage           Tokens
+	gemini          bool // Gemini's billed thinking tokens are already included in Output.
+}
+
+// RestoreFunctionNames reverses only declared aliases on decoded tool calls.
+func (r *Reply) RestoreFunctionNames(aliases map[string]string) {
+	for i := range r.Parts {
+		p := &r.Parts[i]
+		if name := aliases[p.name]; p.kind == "call" && name != "" {
+			p.name = name
+		}
+	}
 }
 
 func number(v any) int64 {
@@ -261,7 +272,7 @@ func (r *Reply) Encode(p Protocol) (object, error) {
 		if !r.Usage.Known {
 			return nil, unsupported("missing usage cannot be represented as a measured Messages token count")
 		}
-		if r.Usage.Reasoning > 0 {
+		if r.Usage.Reasoning > 0 && !r.gemini {
 			return nil, unsupported("reasoning token accounting in Messages conversion")
 		}
 		blocks, err := encodeParts(p, r.Parts)

@@ -35,11 +35,11 @@ type factoryRequestPlan struct {
 	// refuses requests declaring certain tool names, so a refused tool goes out
 	// under a name it takes and the reply is renamed back.
 	toolAliases map[string]string
-	// generate routes a Google generateContent body to /api/llm/g/v1/generate;
-	// the model comes from the path and the body is not converted.
+	// generate sends a native or converted GenerateContentRequest to Factory.
 	generate    bool
 	countTokens bool
 	stream      bool
+	chatUsage   bool // Converted Chat SSE includes usage only when requested.
 }
 
 // prepareFactory is run before leasing an account. Unsupported/lossy conversions
@@ -53,7 +53,7 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 		return prepareFactoryCountTokens(cfg, model, body)
 	}
 	if model, stream, ok := factory.ParseGeminiPath(path); ok {
-		return prepareFactoryGenerate(cfg, model, stream, body)
+		return prepareFactoryGenerate(cfg, model, stream, body, "")
 	}
 	if path == "/v1/embeddings" {
 		return prepareFactoryEmbeddings(cfg, body)
@@ -83,8 +83,20 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	if !ok {
 		return nil, errors.New("Factory model is not configured")
 	}
-	if route.Protocol == "generate" {
-		return nil, errors.New("Factory Gemini models require /v1beta/models/{model}:generateContent or :streamGenerateContent")
+	if route.Protocol == string(opencode.Gemini) {
+		if !cfg.Factory.Compatibility {
+			return nil, errors.New("Factory cross-protocol conversion is disabled; use /v1beta/models/{model}:generateContent or :streamGenerateContent")
+		}
+		converted, stream, chatUsage, err := opencode.ConvertGeminiRequest(from, body)
+		if err != nil {
+			return nil, fmt.Errorf("Factory Gemini conversion: %w", err)
+		}
+		plan, err := prepareFactoryGenerate(cfg, model, stream, converted, from)
+		if err != nil {
+			return nil, err
+		}
+		plan.chatUsage = chatUsage
+		return plan, nil
 	}
 	to := opencode.Protocol(route.Protocol)
 	plan := &factoryRequestPlan{from: from, to: to, body: body, model: model}
@@ -196,11 +208,10 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	return plan, nil
 }
 
-// prepareFactoryGenerate validates a Gemini native request and maps it to
-// Factory's captured /generate endpoint. The body keeps every field (tools,
-// generationConfig, safety settings, history); only the model and droid's
-// systemInstruction opening are written.
-func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body []byte) (*factoryRequestPlan, error) {
+// prepareFactoryGenerate applies the same Factory wire processing to native
+// Gemini requests and requests already converted to GenerateContentRequest.
+// A nonempty from marks cross-protocol requests, which reject lossy schemas.
+func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body []byte, from opencode.Protocol) (*factoryRequestPlan, error) {
 	requested := model
 	resolved, ok := resolveFactoryAuto(cfg, model, "generate")
 	if !ok {
@@ -255,8 +266,11 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	// Google's Schema message has no room for the draft keywords agent tool
 	// schemas carry ($schema, additionalProperties, …) and refuses the request
 	// with 400, so the declarations are trimmed first.
-	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
+	if from != "" || cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
 		if trimmed, changed := factory.SanitizeGeminiTools(b); changed {
+			if from != "" {
+				return nil, errors.New("Factory Gemini conversion: unsupported tool schema; use the model's native protocol")
+			}
 			b = trimmed
 		}
 	}
@@ -270,7 +284,11 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if len(b) > cfg.Routing.MaxBodyMB<<20 {
 		return nil, errors.New("Factory adapted request exceeds configured request-body limit")
 	}
-	return &factoryRequestPlan{body: b, model: model, generate: true, stream: stream, toolAliases: aliases}, nil
+	plan := &factoryRequestPlan{body: b, model: model, generate: true, stream: stream, toolAliases: aliases}
+	if from != "" {
+		plan.from, plan.to = from, opencode.Gemini
+	}
+	return plan, nil
 }
 
 // prepareFactoryEmbeddings accepts OpenAI's embeddings body unchanged. Factory

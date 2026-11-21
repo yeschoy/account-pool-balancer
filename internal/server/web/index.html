@@ -1359,7 +1359,7 @@
       </div>
       <div class="panel hidden" id="factory-settings">
         <h2>Factory AI 独立设置</h2>
-        <p class="muted small">参考magpie的模型路由、Fast Mode与工具schema转换，并按droid 1.14.0本地抓包对齐客户端身份。原生协议保留字节，跨协议支持有限Chat/Responses/Messages互转，JSON/SSE结果还原；不改写任务指令/历史/工具schema，不删历史附件绕过413。目录不是账号授权，content_policy_rejected停止。</p>
+        <p class="muted small">参考magpie的模型路由、Fast Mode与工具schema转换，并按droid 1.14.0本地抓包对齐客户端身份。Chat / Responses / Messages 支持有限互转，也可调用 Gemini 模型并以入站协议返回 JSON / SSE。目录不是账号授权，content_policy_rejected停止。</p>
         <div class="form">
           <label for="factory-base">管理/额度源站（不含路径）</label><input id="factory-base" autocomplete="off" placeholder="https://api.factory.ai">
           <span></span><span class="hint">whoami、billing/limits与工具接口的源站；默认https://api.factory.ai，可明确设为https://api.eu.factory.ai。不会自动向whoami返回的私有域名发送Key，也不跟随重定向或代理失败后直连。</span>
@@ -1398,7 +1398,7 @@
           <label for="factory-escape-phrases">转义被拒短语</label><label class="check"><input id="factory-escape-phrases" type="checkbox">开启</label>
           <span></span><span class="hint">Factory 的 usage policy 会读整个对话：出现其它 agent 的 system 提示词（如 <code>You are Claude Code…</code>、<code>You have been invoked in the following environment:</code>）时整条对话都会被 403 <code>content_policy_rejected</code>。开启后把这些短语的首字符写成 JSON <code>\u0059</code> 转义，JSON 解析后模型读到的仍是原字符，只有线上字节不同。关闭则原样发送。</span>
           <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
-          <span></span><span class="hint">可从Chat/Responses/Messages调用不同原生协议模型；跨协议流完整缓冲（16MiB）后输出，不是低延迟流。不支持的字段/签名推理/续传引用本地400，不静默丢弃；关闭后只允许原生协议。工具根级composition包装/解包不受此开关影响。Fast仅在显式选择Fast模型或请求fast/priority时映射，可能花更多额度。</span>
+          <span></span><span class="hint">开启后可从 Chat / Responses / Messages 调用非原生协议模型（含 Gemini）。Gemini 签名工具续轮须走原生接口；不支持的请求本地 400。跨协议 SSE 缓冲完整上游响应后输出（上限 16 MiB），不是低延迟流。关闭后只允许原生协议，不影响原生工具 schema 适配。Fast 仅在显式选择 Fast 模型或请求 fast/priority 时映射，可能花更多额度。</span>
           <label for="factory-standard-only">仅使用Standard额度</label><label class="check"><input id="factory-standard-only" type="checkbox">开启</label>
           <span></span><span class="hint">默认关闭。开启后任一新鲜、仍有效的Standard窗口达到100%即暂停本号所有模型（不改官网消费开关）；关闭时按Standard/Core模型分类，官网已允许且有真实Extra余额时不因窗口耗尽暂停。未知/失败/到期/未激活不当作补满或零余额；数据有延迟，要保证不花Extra须在官网关闭。</span>
           <label for="factory-detail">本池详情日志</label><label class="check"><input id="factory-detail" type="checkbox">开启</label>

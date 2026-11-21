@@ -323,11 +323,6 @@ func TestFactoryGeminiModelTestAndProtocolGuard(t *testing.T) {
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "not a Google generate route") {
 		t.Fatal("protocol guard", rec.Code, rec.Body.String())
 	}
-	before := len(e.snapshot())
-	rsp, out := e.do(t, "/v1/chat/completions", `{"model":"gemini-4-carbon","messages":[{"role":"user","content":"hi"}]}`, nil)
-	if rsp.StatusCode != 400 || len(e.snapshot()) != before || !strings.Contains(out, "generateContent") {
-		t.Fatal("Gemini chat route should be refused locally", rsp.StatusCode, out)
-	}
 }
 
 func TestFactoryGeminiNonStreamAggregatesSSE(t *testing.T) {
