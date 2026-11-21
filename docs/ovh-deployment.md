@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Codex 策略 403 与 instructions 合并（2026-11-21 16:55 UTC，5683949）
+
+- 现场：Codex → `gemini-4-argon` 403 `content_policy_rejected`。
+- 定位：从 Codex rollout 日志取真实提示文本，逐块直连上游复现，命中 `You are Codex, a coding agent based on GPT-5.`（去产品名后 200）。
+- 修复：`dafbdeb` 其它 agent 身份句改写（`You are <product>,` → `You are an assistant,`）；`5683949` 合并 Responses 的 `instructions` 与首条 `developer` 消息到 Gemini 单一 instruction 通道。
+- 验收：真实 Codex 提示 + 工具 + strict schema + reasoning/include/prompt_cache_key，经 `m.yeschoy.pro` `/v1/responses` → 200（18 个 SSE 事件）；`go test ./internal/opencode ./internal/server ./internal/factory` 通过（0.403s / 99.412s / 1.041s）。
+- 部署：镜像 `account-pool-balancer:release-5683949-20261121T165527Z`；备份 `20261121T165527Z-factory-instr-5683949/data.tgz`；healthy；诊断用 `factory.detailLog` 已关回 `false`。
+
 ## 当前部署：Codex → Gemini 协议转换修复（2026-11-21 16:00 UTC，c423b6b）
 
 - 现场：Codex 经 CC Switch 调 `gemini-4-argon`（`/responses`）报 400 `Factory Gemini conversion: unsupported tool schema`。

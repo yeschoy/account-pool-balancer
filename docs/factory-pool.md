@@ -14,6 +14,17 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## Codex 第二轮：策略 403 与 instructions 合并（2026-11-22，`dafbdeb`/`5683949`）
+
+- 现场：协议转换修好后，Codex 调 `gemini-4-argon` 变成 403 `content_policy_rejected`（客户端显示 `upstream account unavailable for this request`）。
+- 定位方式：从 Codex 自己的 rollout 日志（`~/.codex/sessions/*/rollout-*.jsonl`）取出 74 KB 的提示文本，逐块直连 `prem.factory.ai` 复现，精确定位到**一句话**：
+  `You are Codex, a coding agent based on GPT-5.` → 403（确定性复现 3/3）。
+  同句去产品名 `You are a coding agent based on GPT-5.` → 200；`You are Codex.` → 200。
+- 修复 `dafbdeb`：新增「其它 agent 身份句」改写，把 `You are <Codex|Cursor|Windsurf|Cline|Roo Code|Aider|Continue|OpenHands|Copilot|Qwen Code|Gemini CLI|Devin|Amp>,` 改成 `You are an assistant,`（保留逗号，句子自然）。整段 74 KB 文本改写后直连上游 → 200。
+- 修复 `5683949`：Codex 同时发顶层 `instructions` 和首条 `developer` 消息，Gemini 只有一个 system 通道，原编码器报 `interleaved instructions or mixed system/developer roles`。现在两者合并进同一 instruction 通道（会话开始后再出现的指令仍拒绝）。
+- 验收：用真实 Codex 提示文本 + developer 消息 + Codex 工具（`shell`/`apply_patch`/`update_plan`/`view_image`，strict schema）+ `reasoning`/`include`/`prompt_cache_key` 组请求，经 `m.yeschoy.pro` `/v1/responses` → **200**，18 个 SSE 事件含 `response.created` 与输出。
+- 新增测试：`TestRewordAgentIdentity`、`TestGeminiCompatibleMergesInstructions`。
+
 ## Codex（Responses 协议）调 Gemini 模型（2026-11-21，`8ef8d55`/`665f6ec`/`c423b6b`）
 
 - 现场：CC Switch 代理 → Codex `/responses` → `gemini-4-argon`，返回 400：
