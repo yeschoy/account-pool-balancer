@@ -1,5 +1,17 @@
 # Factory AI 号池与全局号池启停
 
+## DSH 到底会不会发 x-deepseek-harness-session-id（2026-11-21 实测）
+
+- **代码位置**：DSH 只在 **Anthropic Messages 客户端**构造该头，且仅当 `options.sessionId` 有值：
+  ```js
+  ...options.sessionId === undefined ? {} : { 'x-deepseek-harness-session-id': String(options.sessionId) },
+  ```
+  该处同时写 `anthropic-version` / `anthropic-beta`，挂在 `POST {baseURL}/messages` 上；Gemini（`google-generative-ai`）与 OpenAI 协议的客户端分支没有这段。
+- **对 Factory 池的实际行为**：DSH 当前 profile（`~/.dsh/profiles/desktop/cordis.patch.yml`）里 `yeschoy-factory` 是 `api: google-generative-ai`（只有 gemini-4-argon/carbon/hydrogen/neon），所以走 Factory 的请求全部由 Gemini 适配器发出，**不会带该头**；真实抓包（21:33Z，UA `google-genai-sdk/2.21.0 gl-node/v24.21.0, deepseek`）确认无任何会话头。`yeschoy-altapi` 才是 `anthropic-messages`（那是 ALTAPI 池，不是 Factory）。
+- **带上我们的池子会不会用**：会。实测向本池 `/v1/messages` 发一条带 `x-deepseek-harness-session-id: probe-sess-1` 的 `claude-sonnet-5` 请求，200，日志记录：
+  `sessionSource=header`、`affinityKeyType=session_id`、`clientSessionHeaderStatus={'X-Deepseek-Harness-Session-Id':'valid'}`（explicit 绑定）。
+- **想让 Factory 也走头粘性**：需要在 DSH 里为 messages 协议的模型（claude 系）单独加一个 `api: anthropic-messages` 的 provider 指向同一 baseURL；gemini 模型无法（协议本身不带该头）。好处是会话被压缩后仍保持同一绑定（`message_hmac` 会因为历史前缀变化而换指纹）。
+
 ## 会话粘性 TTL 提到 24 小时（2026-11-21，`57d86e3`）
 
 - 原因：Factory 的 prompt 缓存按**账号**（上游 Google 项目身份）各自独立，会话一旦换账号就等于丢缓存。原先 Factory 路由沿用全局默认 `explicitTtlSec=7200`（2h）、`fallbackTtlSec=900`（15min）；DSH 的 Gemini 请求不带会话头，走的是 `message_hmac` 兜底绑定，所以实际只有 **15 分钟**粘性，停顿超过 15 分钟就可能换账号。
