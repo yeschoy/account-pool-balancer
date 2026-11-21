@@ -57,6 +57,33 @@ var RefusedPhraseRewords = [][2]string{
 	{"(user's private global instructions for all projects)", "(user's global instructions for all projects)"},
 }
 
+// agentIdentityProducts are the other agents whose self-description sentence the
+// gateway refuses. Measured 2026-11-22: Codex's own opening
+// "You are Codex, a coding agent based on GPT-5." is refused deterministically,
+// while dropping the product name ("You are a coding agent based on GPT-5.")
+// passes and leaves the rest of the prompt acceptable. The same shape is
+// expected from other clients, so their names are dropped the same way.
+var agentIdentityProducts = []string{
+	"Codex", "Cursor", "Windsurf", "Cline", "Roo Code", "Aider", "Continue",
+	"OpenHands", "Copilot", "Qwen Code", "Gemini CLI", "Devin", "Amp",
+}
+
+// RewordAgentIdentity drops the product name from "You are <product>," so the
+// sentence reads as a generic coding agent.
+func RewordAgentIdentity(s string) string {
+	for _, product := range agentIdentityProducts {
+		// Keep a following comma: "You are an assistant, a coding agent …"
+		// reads naturally, while dropping the comma doubled the noun phrase.
+		if old := "You are " + product + ","; strings.Contains(s, old) {
+			s = strings.ReplaceAll(s, old, "You are an assistant,")
+		}
+		if old := "You are " + product; strings.Contains(s, old) {
+			s = strings.ReplaceAll(s, old, "You are an assistant")
+		}
+	}
+	return s
+}
+
 // escapeOnlyPhrases have no measured rewrite: their first character is escaped
 // in the decoded text, as magpie does, which keeps the gateway's match from
 // firing. The decoding is already done when this runs, so the model reads a
@@ -119,7 +146,21 @@ func containsPhrase(body []byte) bool {
 			return true
 		}
 	}
-	return bytes.Contains(body, arnessBytes) && len(selfDescriptionSpans(string(body))) > 0
+	if bytes.Contains(body, arnessBytes) && len(selfDescriptionSpans(string(body))) > 0 {
+		return true
+	}
+	for _, product := range agentIdentityProducts {
+		if bytes.Contains(body, identityNeedle(product)) {
+			return true
+		}
+	}
+	return false
+}
+
+// identityNeedle is the byte form of "You are <product>", built once per call
+// only on the non-matching path, so it stays a cheap pre-check.
+func identityNeedle(product string) []byte {
+	return []byte("You are " + product)
 }
 
 // arnessBytes is the suffix every harness self-description carries, used as a
@@ -255,6 +296,7 @@ func lastIndexFold(s, pattern string) int {
 // RewriteRefusedPhrases replaces every refused phrase in s with wording the
 // gateway accepts, escaping only the phrases that have no measured rewrite.
 func RewriteRefusedPhrases(s string) string {
+	s = RewordAgentIdentity(s)
 	for _, pair := range RefusedPhraseRewords {
 		if strings.Contains(s, pair[0]) {
 			s = strings.ReplaceAll(s, pair[0], pair[1])

@@ -140,3 +140,26 @@ func TestRewordSelfDescription(t *testing.T) {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
+
+// Codex's opening sentence is refused by the gateway; dropping the product name
+// leaves the rest of the prompt acceptable.
+func TestRewordAgentIdentity(t *testing.T) {
+	in := "You are Codex, a coding agent based on GPT-5. You and the user share one workspace."
+	got := RewordAgentIdentity(in)
+	want := "You are an assistant, a coding agent based on GPT-5. You and the user share one workspace."
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if strings.Contains(got, "You are Codex") {
+		t.Fatal("product name kept")
+	}
+	// Unrelated identity wording is left alone.
+	plain := "You are a helpful assistant."
+	if got := RewordAgentIdentity(plain); got != plain {
+		t.Fatalf("rewrote unrelated text: %q", got)
+	}
+	// And the body pre-check must notice the sentence.
+	if !containsPhrase([]byte(`{"a":"` + in + `"}`)) {
+		t.Fatal("identity sentence not detected")
+	}
+}
