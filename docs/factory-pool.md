@@ -14,6 +14,16 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## Codex（Responses 协议）调 Gemini 模型（2026-11-21，`8ef8d55`/`665f6ec`/`c423b6b`）
+
+- 现场：CC Switch 代理 → Codex `/responses` → `gemini-4-argon`，返回 400：
+  `Factory Gemini conversion: unsupported tool schema; use the model's native protocol`。
+- 根因有两处，都是跨协议转换过严：
+  1. **工具 schema 被"检测到需要收敛"就整体拒绝**。Codex 的 function 声明带 draft 关键字（`$schema`、`additionalProperties`、`strict`），转换后 `SanitizeGeminiTools` 发现要修剪就 return 错误。原生 Gemini 路径一直是修剪后继续，转换路径却直接失败。
+  2. **`parallel_tool_calls` 只删 `true` 的情况**。Codex 发 `false`，字段存活后被严格解码器拒绝（`unsupported compatibility field: parallel_tool_calls`）。
+- 修复：转换路径同样按 Google Schema 接受范围修剪；`parallel_tool_calls` 无论 true/false 都删除；Responses 客户端特有的续话/缓存/推理提示（`include`、`prompt_cache_key`、`truncation`、`reasoning`、`background`、`service_tier`、`metadata`、`user`、`safety_identifier`、`max_tool_calls`）在 Gemini 转换时忽略，不再整单拒绝。
+- 验收：Codex 形状的 `/v1/responses` 请求（strict schema + 全部上述字段）经 `m.yeschoy.pro` → **200**，首个事件 `response.created`，正文正常。新增 `TestGeminiCompatibleCodexRequest`、`TestFactoryGeminiConversionTrimsToolSchema`。
+
 ## DSH 到底会不会发 x-deepseek-harness-session-id（2026-11-21 实测）
 
 - **代码位置**：DSH 只在 **Anthropic Messages 客户端**构造该头，且仅当 `options.sessionId` 有值：

@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Codex → Gemini 协议转换修复（2026-11-21 16:00 UTC，c423b6b）
+
+- 现场：Codex 经 CC Switch 调 `gemini-4-argon`（`/responses`）报 400 `Factory Gemini conversion: unsupported tool schema`。
+- 根因：① 转换路径对"需要修剪的 Gemini 工具 schema"直接报错（原生路径是修剪后继续）；② `parallel_tool_calls` 只处理 `true`，Codex 发 `false` 时字段残留并被严格解码器拒绝。
+- 修复：`8ef8d55`（修剪代替拒绝）、`665f6ec`（两个值都删 `parallel_tool_calls`）、`c423b6b`（Codex 形状回归测试）。另在 Gemini 转换中忽略 Responses 的续话/缓存/推理提示字段（`include`/`prompt_cache_key`/`truncation`/`reasoning`/`store`/`background`/`service_tier`/`metadata`/`user`/`safety_identifier`/`max_tool_calls`）。
+- 验收：Codex 形状请求经 `m.yeschoy.pro` → 200（`response.created` + 正文）；`go test ./internal/opencode ./internal/server` 通过（0.415s / 94.484s）。
+- 部署：镜像 `account-pool-balancer:release-c423b6b-20261121T160055Z`；备份 `20261121T160055Z-factory-codex-c423b6b/data.tgz`；healthy。
+
 ## 当前部署：Factory 会话粘性 24h（2026-11-21 05:41 UTC，57d86e3）
 
 - 需求：会话缓存提升到 24 小时。Factory 的缓存按账号独立，改账号即丢缓存；原先生产 `factory.routing` 为 `explicitTtlSec=7200 / fallbackTtlSec=900`，而 DSH Gemini 走 `message_hmac` 兜底，实际只有 15 分钟粘性。
