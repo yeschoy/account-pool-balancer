@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -23,6 +24,12 @@ type geminiReply struct {
 	calls      map[string]bool
 	finished   bool
 	signedText bool
+	// Upstream accounting for a stream that ends without a finish reason: it
+	// distinguishes "the gateway sent nothing" from "it sent frames we could not
+	// read", which the caller cannot tell apart from the error alone.
+	frames      int
+	bytes       int
+	lastPayload string
 }
 
 // ReadGeminiReply buffers a single bounded GenerateContentResponse or Gemini
@@ -54,7 +61,7 @@ func ReadGeminiReply(r io.Reader, stream bool) (*Reply, error) {
 		// event arrives. Content that already streamed is real, so deliver it as
 		// truncated instead of failing the whole call after minutes of waiting.
 		if g.text.Len() == 0 && len(g.calls) == 0 {
-			return nil, errors.New("Gemini compatibility response missing finishReason and produced no content")
+			return nil, fmt.Errorf("Gemini compatibility response missing finishReason and produced no content (read %d bytes, %d frames, last event %q)", g.bytes, g.frames, g.lastPayload)
 		}
 		g.reply.Stop = "length"
 	}
@@ -87,6 +94,7 @@ func (g *geminiReply) readStream(r io.Reader) error {
 	isError, done := false, false
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		g.bytes += len(line) + 1
 		eventBytes += len(line) + 1
 		if eventBytes > maxGeminiEventBytes {
 			return errors.New("Gemini compatibility stream event exceeds 2 MiB")
@@ -104,6 +112,12 @@ func (g *geminiReply) readStream(r io.Reader) error {
 				case bytes.Equal(payload, []byte("[DONE]")):
 					done = true // Not a substitute for Gemini's finishReason.
 				default:
+					g.frames++
+					if len(payload) > 200 {
+						g.lastPayload = string(payload[:200])
+					} else {
+						g.lastPayload = string(payload)
+					}
 					if err := g.consume(payload); err != nil {
 						return err
 					}
