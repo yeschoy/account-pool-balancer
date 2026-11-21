@@ -30,8 +30,10 @@ func ConvertGeminiRequest(from Protocol, body []byte) (wire []byte, stream, chat
 		}
 		normalizeGeminiResponsesHistory(m)
 	}
-	if (from == Chat || from == Responses) && m["parallel_tool_calls"] == true {
-		delete(m, "parallel_tool_calls") // Gemini may also return multiple calls.
+	if from == Chat || from == Responses {
+		// Gemini may return several calls per turn and has no switch for it;
+		// a client that sends the field at all (either value) must not fail.
+		delete(m, "parallel_tool_calls")
 	}
 	if from == Responses {
 		// Codex and other Responses clients send continuation, caching and

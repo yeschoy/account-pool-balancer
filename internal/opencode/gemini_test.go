@@ -35,7 +35,6 @@ func TestGeminiCompatibleRequestRejectsUnsupported(t *testing.T) {
 		`"messages":[{"role":"user","content":"x"}],"n":2`,
 		`"messages":[{"role":"user","content":"x"}],"top_p":1.1`,
 		`"messages":[{"role":"user","content":"x"}],"stream_options":{"include_usage":true}`,
-		`"messages":[{"role":"user","content":"x"}],"parallel_tool_calls":false`,
 	} {
 		if _, _, _, err := ConvertGeminiRequest(Chat, []byte(`{"model":"g",`+body+`}`)); err == nil {
 			t.Fatal("unexpected success", body)
