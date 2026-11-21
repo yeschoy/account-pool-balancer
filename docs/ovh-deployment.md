@@ -73,6 +73,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Gemini→Chat 逐帧流式转换（2026-11-21 19:44 UTC，558c385）
+
+- 现场：new-api 面板首字 5.7–13.7s，接近总耗时。分层实测：上游基线约 2s、网关 ≈0、new-api 一跳 +1s、prompt 长度（107k token）是主要增量；另发现 Gemini→Chat 转换是缓冲整包返回，导致首字≈总耗时。
+- 修复 `558c385`：新增 `internal/opencode/gemini_stream.go`，逐帧把 Gemini SSE 转成 Chat chunk（内容/工具调用/usage/[DONE]，截断按 length 收尾），服务端 `geminiToChatStream` 边读边写并 flush；Responses/Messages 仍走缓冲。
+- 验收：单测 4 条（渐进输出、工具名还原、截断收尾、usage 形状）通过；线上同一请求首字节 4.45s、总耗时 10.64s；`go test ./internal/server ./internal/opencode` 通过（90.908s / 1.187s）。
+- 部署：镜像 `account-pool-balancer:release-558c385-20261121T194402Z`；备份 `20261121T194402Z-factory-gemstream-558c385/data.tgz`；healthy。
+
 ## 当前部署：Gemini 流终止帧诊断（2026-11-21 19:19 UTC，ac2a757）
 
 - 用户疑问：5m22s 那次是不是"收到了停止帧但没识别"。

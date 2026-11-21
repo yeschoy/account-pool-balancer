@@ -14,6 +14,22 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## 首字延迟（TTFT）实测与优化（2026-11-22，`558c385`）
+
+- 现象：new-api 面板首字 5.7–13.7s，且"首字≈总耗时"。
+- 分层实测（`gemini-4-neon`，输出 8 token）：
+  | 链路 | 首字节 |
+  |---|---|
+  | 直连 `prem.factory.ai/api/llm/g/v1/generate` | **1.8–2.2s** |
+  | 直连本池（`127.0.0.1:8790`） | 1.9–2.7s（网关开销 ≈0） |
+  | 经 `m.yeschoy.pro`（new-api → 本池） | **3.1s**（new-api 一跳约 +1s） |
+  | 34k token prompt（缓存命中）经 new-api | 4.0s |
+  | 107k token prompt（缓存 106k）真实流量 | 5.7–13.7s |
+  - 结论：**基线 TTFT ≈2s 在上游**；网关适配只占 6–15ms；new-api 再加约 1s；**大头是 prompt 长度**——缓存命中 106k/107k 也只省计费、基本不省首字时间（上游仍要按长度预填充）。
+- 已修的一处真实缺陷：Gemini→Chat 的兼容转换原来是**缓冲整包**再返回（`X-Compatibility-Mode: buffered`），导致客户端首字≈总耗时。`558c385` 新增**逐帧流式转换**（`internal/opencode/gemini_stream.go`）：首个上游帧立即产出 `role` 块与内容 delta，工具调用/usage/`[DONE]` 依次补上，流被截断时按 `length` 收尾。实测同一条请求：首字节 **4.45s** / 总耗时 **10.64s**（此前会等 10.64s 才吐第一个字）。
+- 未改的部分：Responses / Messages 目标的转换仍是缓冲（Codex 经 CC Switch 走 chat 路径，优先保障这条）。
+- 可继续优化的方向（按收益排序）：① 减少 prompt：DSH 会话一次带 265 个工具（229 个 `mcp__rea__*`），关掉不用 MCP 能把 107k 降到几万 token；② 简单任务用更轻模型（hydrogen p50 2.1s vs neon/carbon 4.4s）；③ 绕过 new-api 一跳可再省约 1s（但会失去鉴权与计费）。
+
 ## 是否"收到停止帧但没识别"（2026-11-22，`ac2a757`）
 
 - 验证解析器认得标准形状：直连 `prem.factory.ai/api/llm/g/v1/generate` 抓原始帧，正常完成的最后一帧包含 `"finishReason":"STOP"` + `usageMetadata`（实测 2 帧、902 字节）；本池转换后的 chat 流也稳定出现 `finish_reason:"stop"`。
