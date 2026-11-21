@@ -14,6 +14,21 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## Codex 第三轮：enum 必须是字符串（2026-11-22，`f7e1586`/`7e105ed`）
+
+- 现场：`Invalid value at 'tools[0].function_declarations[N].parameters.properties[0].value.enum[0]' (TYPE_STRING)`。
+- 根因：**Google Schema 的 `enum` 是 `repeated string`**，枚举成员必须是 JSON 字符串，与字段本身是 string/integer/boolean 无关。实测：
+  | schema | 结果 |
+  |---|---|
+  | `{"type":"string","enum":["fast","slow"]}` | 200 |
+  | `{"type":"integer","enum":[1,2,3]}` | **400** |
+  | `{"type":"integer","enum":["1","2","3"]}` | 200 |
+  | `{"type":"boolean","enum":[true,false]}` | **400** |
+  Codex 的工具声明里有 integer/boolean 枚举，因此被拒。
+- 修复：`normalizeGeminiEnum` 把所有成员转成字符串（数字按 JSON 数字原文，布尔 `true`/`false`），`null` 丢弃（可空由 `nullable` 表达），空枚举删除；类型推断同时识别 `json.Number`。
+- 验收：本地拼出 Codex 形状的 enum 请求，经 `m.yeschoy.pro` `/v1/responses` → **200**（18 个 SSE 事件）；同一上游 body 直连 `prem.factory.ai` 也 200。
+- 新增测试：`TestSanitizeGeminiEnumTypes`。
+
 ## Codex 第二轮：策略 403 与 instructions 合并（2026-11-22，`dafbdeb`/`5683949`）
 
 - 现场：协议转换修好后，Codex 调 `gemini-4-argon` 变成 403 `content_policy_rejected`（客户端显示 `upstream account unavailable for this request`）。

@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Factory enum 字符串化 + 详情日志常开（2026-11-21 18:37 UTC，7e105ed）
+
+- 现场：Codex → `gemini-4-argon` 400 `Invalid value at …enum[0] (TYPE_STRING)`。
+- 根因：Google Schema 的 `enum` 是 `repeated string`；integer/boolean 枚举成员被拒（实测 integer `[1,2,3]` 400、`["1","2","3"]` 200）。修复 `f7e1586`（按类型归一）不足以覆盖，最终 `7e105ed` 统一把所有枚举成员字符串化、丢弃 null。
+- 按用户要求**常开 Factory 详情日志**：`data/config.json` 的 `factory.detailLog=true`，已随本次部署生效；`details-*.jsonl` 实测写入。边界：单条请求体最多 64 KB、最多 500 条、日志总量上限 512 MB、保留 7 天（`logs` 段）。
+- 验收：Codex 形状 enum 请求经 `m.yeschoy.pro` → 200；`go test ./internal/factory ./internal/server ./internal/opencode` 通过（0.347s / 100.276s / 0.398s）。
+- 部署：镜像 `account-pool-balancer:release-7e105ed-20261121T183701Z`；备份 `20261121T183701Z-factory-enum2-7e105ed/data.tgz`；healthy。
+
 ## 当前部署：Codex 策略 403 与 instructions 合并（2026-11-21 16:55 UTC，5683949）
 
 - 现场：Codex → `gemini-4-argon` 403 `content_policy_rejected`。
