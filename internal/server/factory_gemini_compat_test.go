@@ -115,6 +115,28 @@ func TestFactoryGeminiCompatibilityToolRoundTrip(t *testing.T) {
 	}
 }
 
+// A Responses client (Codex) sends draft JSON-Schema keywords Gemini refuses;
+// the request must be trimmed and delivered, not failed.
+func TestFactoryGeminiConversionTrimsToolSchema(t *testing.T) {
+	e := newFactoryEnv(t)
+	body := `{"model":"gemini-4-carbon","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],` +
+		`"include":["reasoning.encrypted_content"],"prompt_cache_key":"cache-1","reasoning":{"effort":"medium"},` +
+		`"tools":[{"type":"function","name":"read","parameters":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,"properties":{"p":{"type":"string"}},"strict":false}}]}`
+	rsp, out := e.do(t, "/v1/responses", body, nil)
+	if rsp.StatusCode != 200 {
+		t.Fatal(rsp.StatusCode, out)
+	}
+	wire := e.snapshot()[0].body
+	for _, bad := range []string{"$schema", "additionalProperties", "strict", `"include"`, "prompt_cache_key", `"reasoning"`} {
+		if strings.Contains(wire, bad) {
+			t.Fatalf("%s reached the upstream body: %s", bad, wire)
+		}
+	}
+	if !strings.Contains(wire, `"functionDeclarations"`) || !strings.Contains(wire, `"name":"Read"`) {
+		t.Fatalf("declarations lost: %s", wire)
+	}
+}
+
 func TestFactoryGeminiCompatibilityLocalGuards(t *testing.T) {
 	e := newFactoryEnv(t)
 	for _, tc := range []struct{ path, body string }{
@@ -122,7 +144,6 @@ func TestFactoryGeminiCompatibilityLocalGuards(t *testing.T) {
 		{"/v1/responses", `{"model":"gemini-4-carbon","input":"hi","store":true}`},
 		{"/v1/messages", `{"model":"gemini-4-carbon","max_tokens":64,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hello"}]}`},
 		{"/v1/chat/completions", `{"model":"gemini-4-carbon","messages":[{"role":"system","content":"one"},{"role":"developer","content":"two"},{"role":"user","content":"hi"}]}`},
-		{"/v1/chat/completions", `{"model":"gemini-4-carbon","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object","additionalProperties":false}}}]}`},
 	} {
 		rsp, out := e.do(t, tc.path, tc.body, nil)
 		if rsp.StatusCode != 400 || !strings.Contains(out, "Factory Gemini conversion") {

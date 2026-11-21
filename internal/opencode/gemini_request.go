@@ -33,6 +33,15 @@ func ConvertGeminiRequest(from Protocol, body []byte) (wire []byte, stream, chat
 	if (from == Chat || from == Responses) && m["parallel_tool_calls"] == true {
 		delete(m, "parallel_tool_calls") // Gemini may also return multiple calls.
 	}
+	if from == Responses {
+		// Codex and other Responses clients send continuation, caching and
+		// reasoning hints that Gemini has no field for. They are client-side
+		// aids, not conversation content: dropping them keeps the request (and
+		// its history) intact instead of failing the call.
+		for _, key := range []string{"include", "prompt_cache_key", "truncation", "reasoning", "background", "service_tier", "metadata", "user", "safety_identifier", "max_tool_calls"} {
+			delete(m, key)
+		}
+	}
 	if from == Chat {
 		if m["n"] == json.Number("1") {
 			delete(m, "n") // Gemini defaults to a single candidate.

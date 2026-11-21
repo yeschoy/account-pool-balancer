@@ -266,13 +266,12 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	// Google's Schema message has no room for the draft keywords agent tool
 	// schemas carry ($schema, additionalProperties, …) and refuses the request
 	// with 400, so the declarations are trimmed first.
-	if from != "" || cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
-		if trimmed, changed := factory.SanitizeGeminiTools(b); changed {
-			if from != "" {
-				return nil, errors.New("Factory Gemini conversion: unsupported tool schema; use the model's native protocol")
-			}
-			b = trimmed
-		}
+	// Trim to the keys Google's Schema accepts. A converted client (Codex and
+	// other Responses callers) carries the same draft keywords a native Gemini
+	// client does, so trimming applies to both; refusing the request instead
+	// made every Responses client unable to use a Gemini model.
+	if trimmed, changed := factory.SanitizeGeminiTools(b); changed {
+		b = trimmed
 	}
 	// Factory's policy reads the whole body, so a refused sentence is escaped
 	// here too; JSON decoding gives the model the original characters.
