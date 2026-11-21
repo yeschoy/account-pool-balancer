@@ -190,3 +190,23 @@ func TestSanitizeGeminiParametersAreObject(t *testing.T) {
 		}
 	}
 }
+
+// An enum on an array or object schema is refused by Google; it is dropped.
+func TestSanitizeGeminiEnumOnNonScalar(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"tools": []any{map[string]any{"functionDeclarations": []any{
+		map[string]any{"name": "x", "parameters": map[string]any{"type": "object", "properties": map[string]any{
+			"list":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "enum": []any{"a", "b"}},
+			"thing": map[string]any{"type": "object", "enum": []any{"a"}},
+		}}},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, changed := SanitizeGeminiTools(body)
+	if !changed {
+		t.Fatal("nothing dropped")
+	}
+	if strings.Contains(string(out), `"enum"`) {
+		t.Fatalf("enum kept on a non-scalar: %s", out)
+	}
+}

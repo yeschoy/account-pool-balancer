@@ -229,6 +229,12 @@ func normalizeGeminiEnum(schema map[string]any) bool {
 	if !ok || len(members) == 0 {
 		return false
 	}
+	// Google refuses an enum on a non-scalar schema ("specified incorrect
+	// schema type field"): an array or object has nothing to enumerate.
+	if typ, _ := schema["type"].(string); typ == "array" || typ == "object" {
+		delete(schema, "enum")
+		return true
+	}
 	// Google's Schema declares enum as "repeated string": a numeric or boolean
 	// member is refused with 400 "Invalid value at …enum[0] (TYPE_STRING)" even
 	// when the field itself is integer or boolean. Measured against the gateway
