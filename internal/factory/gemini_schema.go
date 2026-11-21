@@ -48,6 +48,12 @@ func SanitizeGeminiTools(body []byte) ([]byte, bool) {
 				if sanitizeGeminiSchema(schema) {
 					changed = true
 				}
+				// Google requires a function declaration's parameters to be an
+				// object schema: a composition-only or scalar root is refused
+				// with "parameters schema should be of type OBJECT".
+				if enforceGeminiObjectSchema(schema) {
+					changed = true
+				}
 			}
 		}
 		// Some clients wrap the same declarations per function.
@@ -190,6 +196,24 @@ func sanitizeGeminiSchema(schema map[string]any) bool {
 		}
 	}
 	if normalizeGeminiEnum(schema) {
+		changed = true
+	}
+	return changed
+}
+
+// enforceGeminiObjectSchema makes a function declaration's parameter root an
+// object schema. Google checks the root type and refuses anything else, while a
+// client may describe a single-argument tool with a composition or a scalar.
+func enforceGeminiObjectSchema(schema map[string]any) bool {
+	changed := false
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if _, ok := schema[key]; ok {
+			delete(schema, key)
+			changed = true
+		}
+	}
+	if typ, _ := schema["type"].(string); typ != "object" {
+		schema["type"] = "object"
 		changed = true
 	}
 	return changed

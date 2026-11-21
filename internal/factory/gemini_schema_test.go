@@ -158,3 +158,35 @@ func TestSanitizeGeminiEnumTypes(t *testing.T) {
 		t.Fatalf("inferred enum = %v type=%v", enum, c["type"])
 	}
 }
+
+// Google requires a declaration's parameters root to be an object schema; a
+// composition-only or scalar root is refused with "should be of type OBJECT".
+func TestSanitizeGeminiParametersAreObject(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"tools": []any{map[string]any{"functionDeclarations": []any{
+		map[string]any{"name": "a", "parameters": map[string]any{"anyOf": []any{map[string]any{"type": "string"}}}},
+		map[string]any{"name": "b", "parameters": map[string]any{"type": "string"}},
+		map[string]any{"name": "c", "parameters": map[string]any{"properties": map[string]any{"x": map[string]any{"type": "string"}}}},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, changed := SanitizeGeminiTools(body)
+	if !changed {
+		t.Fatal("nothing enforced")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	decls := m["tools"].([]any)[0].(map[string]any)["functionDeclarations"].([]any)
+	for _, raw := range decls {
+		d := raw.(map[string]any)
+		params := d["parameters"].(map[string]any)
+		if params["type"] != "object" {
+			t.Fatalf("%s parameters type = %v", d["name"], params["type"])
+		}
+		if _, ok := params["anyOf"]; ok {
+			t.Fatalf("%s kept a composition at the root", d["name"])
+		}
+	}
+}
