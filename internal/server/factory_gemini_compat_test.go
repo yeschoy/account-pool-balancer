@@ -143,7 +143,6 @@ func TestFactoryGeminiCompatibilityLocalGuards(t *testing.T) {
 		{"/v1/responses", `{"model":"gemini-4-carbon","input":"hi","previous_response_id":"resp_old"}`},
 		{"/v1/responses", `{"model":"gemini-4-carbon","input":"hi","store":true}`},
 		{"/v1/messages", `{"model":"gemini-4-carbon","max_tokens":64,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hello"}]}`},
-		{"/v1/chat/completions", `{"model":"gemini-4-carbon","messages":[{"role":"system","content":"one"},{"role":"developer","content":"two"},{"role":"user","content":"hi"}]}`},
 	} {
 		rsp, out := e.do(t, tc.path, tc.body, nil)
 		if rsp.StatusCode != 400 || !strings.Contains(out, "Factory Gemini conversion") {

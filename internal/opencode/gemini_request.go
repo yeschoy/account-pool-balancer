@@ -98,17 +98,18 @@ func normalizeGeminiResponsesHistory(m object) {
 func encodeGeminiRequest(r request) (object, error) {
 	out := object{"model": r.model}
 	var contents, system []any
-	var systemRole string
 	pending := map[string]string{}
 	seenCalls := map[string]bool{}
 	for _, msg := range r.messages {
 		if msg.role == "system" || msg.role == "developer" {
-			// Gemini has only one instruction channel. A leading developer-only
-			// prompt is representable, but never collapse different priorities.
-			if len(contents) > 0 || systemRole != "" && systemRole != msg.role {
-				return nil, unsupported("interleaved instructions or mixed system/developer roles")
+			// Gemini has one instruction channel. Responses clients send both
+			// the top-level instructions (system) and leading developer messages;
+			// both are instructions, so they are appended to the same channel.
+			// An instruction that arrives after conversation started is still
+			// not representable.
+			if len(contents) > 0 {
+				return nil, unsupported("instructions after the conversation started")
 			}
-			systemRole = msg.role
 			for _, p := range msg.parts {
 				if p.kind != "text" {
 					return nil, unsupported("non-text system instruction")

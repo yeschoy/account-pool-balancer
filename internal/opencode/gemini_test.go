@@ -125,3 +125,24 @@ func TestGeminiCompatibleCodexRequest(t *testing.T) {
 		t.Fatalf("tools lost: %s", wire)
 	}
 }
+
+// Responses clients (Codex) send both top-level instructions and a leading
+// developer message; both are instructions and must merge into one channel.
+func TestGeminiCompatibleMergesInstructions(t *testing.T) {
+	body := []byte(`{"model":"g","instructions":"You are an assistant.","input":[
+		{"type":"message","role":"developer","content":[{"type":"input_text","text":"workspace context"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	wire, _, _, err := ConvertGeminiRequest(Responses, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(wire)
+	if !strings.Contains(got, `"systemInstruction"`) || !strings.Contains(got, "workspace context") || !strings.Contains(got, "You are an assistant.") {
+		t.Fatalf("instructions lost: %s", got)
+	}
+	// An instruction after the conversation started stays unsupported.
+	bad := []byte(`{"model":"g","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},{"type":"message","role":"developer","content":[{"type":"input_text","text":"late"}]}]}`)
+	if _, _, _, err := ConvertGeminiRequest(Responses, bad); err == nil {
+		t.Fatal("late instruction accepted")
+	}
+}
