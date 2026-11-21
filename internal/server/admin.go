@@ -1611,6 +1611,7 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 				c.Factory.DroidVersion = strings.TrimSpace(in.Factory.DroidVersion)
 				c.Factory.SystemMode = strings.TrimSpace(in.Factory.SystemMode)
 				c.Factory.EscapeClientPhrases = in.Factory.EscapeClientPhrases
+				c.Factory.ThinkingLevel = strings.ToLower(strings.TrimSpace(in.Factory.ThinkingLevel))
 				c.Factory.RenameAllTools = in.Factory.RenameAllTools
 				c.Factory.Models = in.Factory.Models
 				c.Factory.ProxyPool = in.Factory.ProxyPool

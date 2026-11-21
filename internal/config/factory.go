@@ -79,6 +79,13 @@ type Factory struct {
 	// prompt is not rejected. The model still reads the same characters after
 	// JSON decoding; only the wire bytes differ.
 	EscapeClientPhrases *bool `json:"escapeClientPhrases,omitempty"`
+	// ThinkingLevel writes generationConfig.thinkingConfig.thinkingLevel on
+	// Gemini requests that carry no thinking setting of their own. Measured
+	// 2026-11-22 against the gateway: "minimal" drops time-to-first-token on
+	// gemini-4-neon/carbon from 5-10 s to about 1 s because no thought tokens
+	// are generated; low/medium/high keep thinking and stay slow. Empty leaves
+	// the upstream default (thinking on).
+	ThinkingLevel string `json:"thinkingLevel,omitempty"`
 	// RenameAllTools renames every declared tool Factory has not been measured
 	// to accept, not only the names already known to be refused. The refused
 	// list grows without notice and a missed name refuses the whole request,
@@ -268,6 +275,19 @@ func (f Factory) EffectiveRouting() Routing {
 	}
 	return factoryRoutingDefaults
 }
+
+// factoryThinkingLevels are the values Google accepts for thinkingLevel.
+var factoryThinkingLevels = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true}
+
+// NormalizeThinkingLevel validates the configured level and returns it.
+func (f Factory) NormalizeThinkingLevel() (string, bool) {
+	level := strings.ToLower(strings.TrimSpace(f.ThinkingLevel))
+	if level == "" {
+		return "", true
+	}
+	return level, factoryThinkingLevels[level]
+}
+
 func (f Factory) EffectiveQuota() Quota {
 	if f.Quota != nil {
 		return *f.Quota

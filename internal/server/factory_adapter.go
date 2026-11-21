@@ -263,6 +263,13 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if err != nil {
 		return nil, err
 	}
+	// A configured thinking level keeps interactive first-token latency low; a
+	// caller that set its own thinkingConfig keeps its choice.
+	if level, ok := cfg.Factory.NormalizeThinkingLevel(); ok && level != "" {
+		if applied, changed := factory.ApplyGeminiThinkingLevel(b, level); changed {
+			b = applied
+		}
+	}
 	// Google's Schema message has no room for the draft keywords agent tool
 	// schemas carry ($schema, additionalProperties, …) and refuses the request
 	// with 400, so the declarations are trimmed first.
