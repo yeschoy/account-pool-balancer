@@ -14,6 +14,24 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## 首字慢的真正原因：思考 token（2026-11-22，`20d4f2a`）
+
+- 直连上游逐项实测（`prem.factory.ai`，输出上限 1500，提示"写两段话介绍缓存"）：
+  | 模型 | 设置 | 首字 | thoughtsTokenCount |
+  |---|---|---|---|
+  | gemini-4-neon | 默认 | 5.3s | 408 |
+  | gemini-4-neon | `thinkingLevel=minimal` | **1.0s** | 0 |
+  | gemini-4-neon | `low` | 7.5s | 445 |
+  | gemini-4-neon | `medium` | 7.4s | 427 |
+  | gemini-4-carbon | 默认 | 10.6s | 468 |
+  | gemini-4-carbon | `thinkingLevel=minimal` | **1.3s** | 0 |
+  | gemini-4-carbon | `low` | 2.5s | 0 |
+  | gemini-4-carbon | `medium` | 14.1s | 459 |
+  - 结论：**Gemini 4 默认开启思考**，思考 token 在可见文本之前生成（真实请求里观察到 400–650 thoughts token），所以首字 5–14s；`thinkingBudget` 对该模型不支持（400，提示改用 thinkingLevel）。
+- 实现 `20d4f2a`：`factory.thinkingLevel` 配置（`minimal|low|medium|high|空`），在 **Gemini 原生 generate 请求**上注入 `generationConfig.thinkingConfig.thinkingLevel`，**仅当客户端自己没有 thinkingConfig/thinkingBudget** 时生效；控制台 Factory 设置新增「思考等级（Gemini）」下拉，保存即生效、无需发版。
+- 线上取值 `minimal`，实测经 `m.yeschoy.pro` 原生流：首字 **2.5–2.9s**（优化前同条件 5–14s），`thoughtsTokenCount` 不再出现。
+- 权衡：`minimal` 不产生思考，简单任务/前端生成基本无损，复杂推理会掉质量；复杂任务可在控制台改回 `medium/high` 或"不干预"。
+
 ## 首字延迟（TTFT）实测与优化（2026-11-22，`558c385`）
 
 - 现象：new-api 面板首字 5.7–13.7s，且"首字≈总耗时"。

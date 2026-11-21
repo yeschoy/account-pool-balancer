@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Gemini 思考等级 minimal（2026-11-21 20:00 UTC，20d4f2a）
+
+- 首字慢的根因是 Gemini 4 默认开启思考：上游实测默认 5.3–10.6s / 400–470 thoughts token，`thinkingLevel=minimal` 降到 1.0–1.3s 且无 thoughts；`thinkingBudget` 该模型不支持。
+- 实现：新增 `factory.thinkingLevel`（minimal/low/medium/high/空），原生 Gemini generate 请求注入 `generationConfig.thinkingConfig.thinkingLevel`，客户端自带思考设置时不覆盖；控制台 Factory 设置新增「思考等级（Gemini）」下拉。
+- 线上设为 `minimal`，经 `m.yeschoy.pro` 原生流实测首字 **2.5–2.9s**（同条件此前 5–14s）。
+- 验收：`TestApplyGeminiThinkingLevel`（注入/尊重客户端/空值）；`go test ./internal/config ./internal/factory ./internal/server` 通过（0.365s / 0.665s / 97.942s）。
+- 部署：镜像 `account-pool-balancer:release-20d4f2a-20261121T200028Z`；备份 `20261121T200028Z-factory-thinking-20d4f2a/data.tgz`；healthy。
+
 ## 当前部署：Gemini→Chat 逐帧流式转换（2026-11-21 19:44 UTC，558c385）
 
 - 现场：new-api 面板首字 5.7–13.7s，接近总耗时。分层实测：上游基线约 2s、网关 ≈0、new-api 一跳 +1s、prompt 长度（107k token）是主要增量；另发现 Gemini→Chat 转换是缓冲整包返回，导致首字≈总耗时。
