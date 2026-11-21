@@ -195,15 +195,6 @@ func sanitizeGeminiSchema(schema map[string]any) bool {
 	return changed
 }
 
-// formatEnumNumber prints a numeric enum member the way JSON would have, so an
-// integer stays "3" rather than "3.000000".
-func formatEnumNumber(v float64) string {
-	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
-		return strconv.FormatInt(int64(v), 10)
-	}
-	return strconv.FormatFloat(v, 'g', -1, 64)
-}
-
 // normalizeGeminiEnum makes every enum member match the declared type. Google
 // answers a mismatched member with 400 "Invalid value at
 // …parameters.properties[0].value.enum[0] (TYPE_STRING)": its Schema takes an
@@ -214,39 +205,29 @@ func normalizeGeminiEnum(schema map[string]any) bool {
 	if !ok || len(members) == 0 {
 		return false
 	}
-	typ, _ := schema["type"].(string)
+	// Google's Schema declares enum as "repeated string": a numeric or boolean
+	// member is refused with 400 "Invalid value at …enum[0] (TYPE_STRING)" even
+	// when the field itself is integer or boolean. Measured against the gateway
+	// on 2026-11-22: integer enum [1,2,3] is refused, ["1","2","3"] is accepted.
 	changed := false
 	out := make([]any, 0, len(members))
 	for _, raw := range members {
-		switch typ {
-		case "number", "integer":
-			switch v := raw.(type) {
-			case json.Number:
-				out = append(out, v)
-			case float64:
-				out = append(out, json.Number(formatEnumNumber(v)))
-			case string:
-				if f, err := strconv.ParseFloat(v, 64); err == nil {
-					out, changed = append(out, f), true
-				} else {
-					changed = true
-				}
-			default:
-				changed = true
-			}
-		default: // string is Google's default and the only other scalar
-			switch v := raw.(type) {
-			case string:
-				out = append(out, v)
-			case json.Number:
-				out, changed = append(out, v.String()), true
-			case bool:
-				out, changed = append(out, strconv.FormatBool(v)), true
-			case nil:
-				changed = true // null belongs to nullable, not to the enum
-			default:
-				changed = true
-			}
+		if text, ok := raw.(string); ok {
+			out = append(out, text)
+			continue
+		}
+		changed = true
+		switch v := raw.(type) {
+		case json.Number:
+			out = append(out, v.String())
+		case float64:
+			out = append(out, formatEnumNumber(v))
+		case bool:
+			out = append(out, strconv.FormatBool(v))
+		case nil:
+			// null belongs to nullable, not to the enum
+		default:
+			// An object or array cannot be an enum member at all.
 		}
 	}
 	if !changed {
@@ -260,7 +241,15 @@ func normalizeGeminiEnum(schema map[string]any) bool {
 	return true
 }
 
-// inferGeminiType names a schema from the constraints it already carries.
+// formatEnumNumber prints a numeric enum member the way JSON would have, so an
+// integer stays "3" rather than "3.000000".
+func formatEnumNumber(v float64) string {
+	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+		return strconv.FormatInt(int64(v), 10)
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
 func inferGeminiType(schema map[string]any) string {
 	if _, ok := schema["properties"]; ok {
 		return "object"

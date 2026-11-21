@@ -150,11 +150,11 @@ func TestSanitizeGeminiEnumTypes(t *testing.T) {
 		t.Fatalf("string enum = %v", enum)
 	}
 	b := props["b"].(map[string]any)
-	if enum := b["enum"].([]any); len(enum) != 2 || enum[0] != float64(1) || enum[1] != float64(2) {
+	if enum := b["enum"].([]any); len(enum) != 3 || enum[0] != "1" || enum[1] != "2" || enum[2] != "x" {
 		t.Fatalf("integer enum = %v", enum)
 	}
 	c := props["c"].(map[string]any)
-	if enum, ok := c["enum"].([]any); !ok || len(enum) != 2 || c["type"] != "number" {
+	if enum, ok := c["enum"].([]any); !ok || len(enum) != 2 || enum[0] != "1" || c["type"] != "number" {
 		t.Fatalf("inferred enum = %v type=%v", enum, c["type"])
 	}
 }
