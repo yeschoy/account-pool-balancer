@@ -73,6 +73,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：截断内容保留 + 缓冲转换看门狗（2026-11-21 19:14 UTC，0f733ef）
+
+- 现场：`502 Gemini compatibility response missing finishReason`，new-api 记录响应 5m22s。本池日志：`durationMs=322374`、`ttft=null`——上游接受后 322 秒未发送任何字节即关闭。
+- 修复：① 缓冲转换读加看门狗（首字节 120s、静默 360s），超时取消并按 timeout 归类以允许换账号重试；② 已产出内容但缺 `finishReason` 时按 `length` 返回截断结果，不再整单 502。
+- 验收：三条新测试通过；`go test ./internal/opencode ./internal/server`（0.368s / 91.988s）；部署后 chat 请求复测 200。
+- 部署：镜像 `account-pool-balancer:release-0f733ef-20261121T191357Z`；备份 `20261121T191357Z-factory-stall-0f733ef/data.tgz`；healthy、双内网别名 ok；`factory.detailLog` 仍为 true（512 KB/条）。
+
 ## 当前部署：parameters 根强制 OBJECT + 详情体上限 512 KB（2026-11-21 18:48 UTC，234b590）
 
 - 现场：Codex 调 `gemini-4-argon` 报 `functionDeclaration parameters schema should be of type OBJECT`。详情日志已记录该请求（chat 路径、138691 字节），确认走的是 chat→Gemini 转换。

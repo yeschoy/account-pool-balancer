@@ -14,6 +14,15 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## Codex 第五轮：上游长回答被截断 / 卡 5 分钟（2026-11-22，`0f733ef`）
+
+- 现场：new-api 日志 `status_code=502, Gemini compatibility response missing finishReason`，响应时间 **5m22s**。
+- 本池日志对应请求：`19:03:50Z gemini-4-argon stream=true durationMs=322374 ttft=null status=502 result=failed`——上游接了请求，**一个字节都没发**，322 秒后流关闭，转换层因拿不到 `finishReason` 判定失败。
+- 两个问题一起修：
+  1. **转换必须缓冲全文**（`X-Compatibility-Mode: buffered`），原先该路径只受 `requestTimeoutSec=900` 约束，所以能卡 5 分钟以上。现在给缓冲读加进度看门狗：`FirstEventSec`（120s）内没有任何字节、或字节流静默超过 `IdleSec`（360s），就取消上游请求 → 归类 timeout（504）并允许换账号重试。
+  2. **截断但仍有效的内容不再丢**：Gemini 流在最终事件前关闭时，若已经产出文本或 function call，按 `finish_reason=length` 返回已生成内容；只有"完全没有内容"才报错（错误文案改为 `missing finishReason and produced no content`）。
+- 验收：新测试 `TestGuardCompatibilityReadStalls`、`TestGuardCompatibilityReadNoStall`、`TestGeminiCompatibleTruncatedStreamKeepsContent`；`go test ./internal/opencode ./internal/server` 通过（0.368s / 91.988s）；部署后 chat 复测 200。
+
 ## Codex 第四轮：functionDeclaration parameters 必须是 OBJECT（2026-11-22，`7ad1a5b`/`234b590`）
 
 - 现场：`Unable to submit request because '…' functionDeclaration parameters schema should be of type OBJECT`。
