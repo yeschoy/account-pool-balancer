@@ -2014,6 +2014,11 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			func() { timedOut.Store(true); cancel() })
 		defer stop()
 		resp.Body = guarded
+		// Gemini -> Chat is converted frame by frame so the client sees the
+		// upstream's first token instead of waiting for the whole answer.
+		if ocFrom == opencode.Gemini && ocTo == opencode.Chat && rec.Stream && rec.factoryPlan != nil {
+			return s.geminiToChatStream(w, r, resp, res, attemptNo, start)
+		}
 		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses") && acct.Provider != config.ProviderMistral
