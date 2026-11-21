@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Gemini 流终止帧诊断（2026-11-21 19:19 UTC，ac2a757）
+
+- 用户疑问：5m22s 那次是不是"收到了停止帧但没识别"。
+- 结论：不是。直连上游抓帧验证正常完成的最后一帧带 `finishReason:STOP`（2 帧、902 字节），且解析器对未识别的形状会报其它错误；`missing finishReason` 只在上游真的没发终止帧时出现。
+- 变更：`geminiReply` 记录 `bytes/frames/最后一帧 200 字节`，无内容且无终止帧的错误附带这些值，便于下次直接判定。
+- 验收：普通请求复测 200 且 `finish_reason:"stop"`；`go test ./internal/opencode` 通过。
+- 部署：镜像 `account-pool-balancer:release-ac2a757-20261121T191855Z`；备份 `20261121T191855Z-factory-framediag-ac2a757/data.tgz`；healthy。
+
 ## 当前部署：截断内容保留 + 缓冲转换看门狗（2026-11-21 19:14 UTC，0f733ef）
 
 - 现场：`502 Gemini compatibility response missing finishReason`，new-api 记录响应 5m22s。本池日志：`durationMs=322374`、`ttft=null`——上游接受后 322 秒未发送任何字节即关闭。

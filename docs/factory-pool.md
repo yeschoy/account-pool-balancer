@@ -14,6 +14,13 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## 是否"收到停止帧但没识别"（2026-11-22，`ac2a757`）
+
+- 验证解析器认得标准形状：直连 `prem.factory.ai/api/llm/g/v1/generate` 抓原始帧，正常完成的最后一帧包含 `"finishReason":"STOP"` + `usageMetadata`（实测 2 帧、902 字节）；本池转换后的 chat 流也稳定出现 `finish_reason:"stop"`。
+- 因此那次 5m22s 的 502 **确实是没有收到终止帧**：解析器对"帧收到但形状不认识"会给出别的错误（`incomplete event`、`unsupported Gemini finishReason (blocked or unsupported output)` 等），不会报 `missing finishReason`。
+- 为下次可证伪，`geminiReply` 现在记录 `bytes` / `frames` / 最后一帧前 200 字节；"无内容且无终止帧"的错误会带出这三个值，能一眼区分"上游什么都没发"还是"发了没认出来"。
+- 部署 `ac2a757` 后普通请求复测：200、`finish_reason:"stop"` 正常。
+
 ## Codex 第五轮：上游长回答被截断 / 卡 5 分钟（2026-11-22，`0f733ef`）
 
 - 现场：new-api 日志 `status_code=502, Gemini compatibility response missing finishReason`，响应时间 **5m22s**。
