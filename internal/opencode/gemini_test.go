@@ -97,3 +97,31 @@ func TestGeminiCompatibilityStreamLimits(t *testing.T) {
 		})
 	}
 }
+
+// A Codex Responses request carries fields Gemini has no place for: strict-mode
+// tool schemas, parallel_tool_calls, reasoning, include, prompt_cache_key and
+// store. The conversion drops the client-side hints and keeps the content.
+func TestGeminiCompatibleCodexRequest(t *testing.T) {
+	body := []byte(`{"model":"gemini-4-argon","stream":true,
+		"instructions":"You are Codex.",
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],
+		"tools":[{"type":"function","name":"shell","parameters":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","strict":false,"additionalProperties":false,"properties":{"cmd":{"type":"string"}},"required":["cmd"]}}],
+		"tool_choice":"auto","parallel_tool_calls":false,"store":false,
+		"include":["reasoning.encrypted_content"],"prompt_cache_key":"ck-1",
+		"reasoning":{"effort":"medium","summary":"auto"},"max_output_tokens":32}`)
+	wire, stream, _, err := ConvertGeminiRequest(Responses, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stream {
+		t.Fatal("stream flag lost")
+	}
+	for _, bad := range []string{"parallel_tool_calls", `"include"`, "prompt_cache_key", `"reasoning"`, `"store"`} {
+		if strings.Contains(string(wire), bad) {
+			t.Fatalf("%s survived conversion: %s", bad, wire)
+		}
+	}
+	if !strings.Contains(string(wire), `"functionDeclarations"`) {
+		t.Fatalf("tools lost: %s", wire)
+	}
+}
