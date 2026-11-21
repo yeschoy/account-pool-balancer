@@ -38,6 +38,13 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory Gemini 三协议适配（2026-11-21 14:50 UTC，615ff3b）
+
+- `615ff3bd002ff779c9b6ce22823fb4c8b45d2752` 已推送 `origin/master` 并部署 OVH；开启 Factory 有限协议转换后，Chat Completions、Responses、Messages 可调用原生 Gemini 模型并获得目标格式 JSON/缓冲 SSE。原生 Gemini 不变。本地 Mock 矩阵、全仓测试及竞态、vet、构建与前端回归通过。
+- 旧 `57d86e3` 健康，Compose 与 `ai-internal` 两别名校验通过。未在分叉的旧工作树构建；干净 Git 归档从 14:47:31.477 至 14:47:40.933 UTC 构建完成。旧实例 14:49:43.972 正常退出；全量一致备份 14:49:46.849 完成并通过 gzip 校验；Compose 仅切换 image，新实例 14:49:47.072 启动，14:50:17.658 确认 Docker healthy、零重启、无 OOM。健康等待不是停机时间。
+- 14:50:17.750 完成核心验收：`new-api` 容器到 `account-pool-balancer:8790/healthz` 和 `opendesign-balancer:8790/healthz` 均返回 `{"ok":true}`；宿主机和公网 `/healthz` 通过，公网浏览器打开管理页，`/assets/app.js?v=f2114fa742` 返回 200，SHA-256 与镜像来源源码一致。线上配置逐字节未变，`factory.compatibility` 仍关闭；未改 NewAPI 渠道、未发生产推理。部署验收不等于三协议线上推理验收。
+- 镜像 `account-pool-balancer:release-615ff3b-20261121T144714Z`，同名 release 源码目录 `/home/ubuntu/project/account-pool-balancer-releases/20261121T144714Z-615ff3b/` 内有 image override。回退镜像 `account-pool-balancer:rollback-20261121T144714Z`；一致备份 `/home/ubuntu/backups/account-pool-balancer/20261121T144714Z-factory-gemini-compat-615ff3b/`。回退只切镜像，不自动用旧数据覆盖上线后写入。
+
 ## 当前部署：Mistral 历史布局默认顺序兜底（2026-11-20 14:27 UTC，ce01ca4）
 
 - 用户确认优先精确重建；过期、歧义或无法完整拼回时，受影响历史按原有「先思考、后正文」继续，不再仅因布局本地400。默认顺序仅计管理员日志，不续期/覆盖旧布局；只有真实新回复保存原始结构。未改账号、重试或缓存策略。
