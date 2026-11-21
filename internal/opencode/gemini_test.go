@@ -146,3 +146,24 @@ func TestGeminiCompatibleMergesInstructions(t *testing.T) {
 		t.Fatal("late instruction accepted")
 	}
 }
+
+// A long generation cut off before the final event still carries real content;
+// it is delivered as truncated rather than failing the request.
+func TestGeminiCompatibleTruncatedStreamKeepsContent(t *testing.T) {
+	stream := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"<!doctype html>\"}]}}]}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"<html>\"}]}}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":2}}\n\n"
+	r, err := ReadGeminiReply(strings.NewReader(stream), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Stop != "length" {
+		t.Fatalf("stop = %q", r.Stop)
+	}
+	if len(r.Parts) == 0 {
+		t.Fatal("content lost")
+	}
+	// An empty stream still fails: there is nothing to deliver.
+	if _, err := ReadGeminiReply(strings.NewReader(""), true); err == nil {
+		t.Fatal("empty stream accepted")
+	}
+}

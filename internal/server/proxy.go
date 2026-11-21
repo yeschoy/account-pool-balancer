@@ -2005,6 +2005,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	if ocTo != "" && ocFrom != ocTo {
 		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
+		// Conversion buffers the whole reply, so a gateway that accepts and then
+		// stalls would otherwise hold the caller until RequestSec. Watch the read
+		// and treat a stalled stream as a timeout so another account can serve it.
+		guarded, stop := guardCompatibilityRead(resp.Body,
+			time.Duration(cfg.Routing.FirstEventSec)*time.Second,
+			time.Duration(cfg.Routing.IdleSec)*time.Second,
+			func() { timedOut.Store(true); cancel() })
+		defer stop()
+		resp.Body = guarded
 		return s.openCodeCompatibility(w, r, cfg, resp, res, ocTo, ocFrom, rec.Stream, attemptNo, start)
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses") && acct.Provider != config.ProviderMistral

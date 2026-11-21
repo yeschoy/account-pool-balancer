@@ -50,7 +50,13 @@ func ReadGeminiReply(r io.Reader, stream bool) (*Reply, error) {
 		return nil, errors.New("Gemini compatibility response exceeds 16 MiB")
 	}
 	if !g.finished {
-		return nil, errors.New("Gemini compatibility response missing finishReason")
+		// The gateway can close a long generation before the final candidate
+		// event arrives. Content that already streamed is real, so deliver it as
+		// truncated instead of failing the whole call after minutes of waiting.
+		if g.text.Len() == 0 && len(g.calls) == 0 {
+			return nil, errors.New("Gemini compatibility response missing finishReason and produced no content")
+		}
+		g.reply.Stop = "length"
 	}
 	g.flushText()
 	if len(g.reply.Parts) == 0 && g.reply.Stop == "stop" {
