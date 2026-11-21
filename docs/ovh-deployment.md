@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：parameters 根强制 OBJECT + 详情体上限 512 KB（2026-11-21 18:48 UTC，234b590）
+
+- 现场：Codex 调 `gemini-4-argon` 报 `functionDeclaration parameters schema should be of type OBJECT`。详情日志已记录该请求（chat 路径、138691 字节），确认走的是 chat→Gemini 转换。
+- 修复：`7ad1a5b` 声明级强制参数根为 object（删根上的 anyOf/oneOf/allOf、type 置 object），复刻请求修复前 400 → 修复后 200；`234b590` 删除 array/object 上的 `enum`（Google 报 incorrect schema type field）。
+- 配置：`logs.detailBodyKB` 64 → **512**，`factory.detailLog` 保持 true（按用户要求常开排查）。
+- 验收：anyOf-root 工具请求 200（5 个事件）、enum 请求 200（18 个事件）；`go test ./internal/factory ./internal/server` 通过（0.335s / 93.158s）。
+- 部署：镜像 `account-pool-balancer:release-234b590-20261121T184833Z`；备份 `20261121T184833Z-factory-enumarr-234b590/data.tgz`；healthy、双内网别名 ok。
+
 ## 当前部署：Factory enum 字符串化 + 详情日志常开（2026-11-21 18:37 UTC，7e105ed）
 
 - 现场：Codex → `gemini-4-argon` 400 `Invalid value at …enum[0] (TYPE_STRING)`。

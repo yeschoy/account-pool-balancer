@@ -14,6 +14,14 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## Codex 第四轮：functionDeclaration parameters 必须是 OBJECT（2026-11-22，`7ad1a5b`/`234b590`）
+
+- 现场：`Unable to submit request because '…' functionDeclaration parameters schema should be of type OBJECT`。
+- 根因：Google 要求 function 声明的 `parameters` 根是 object schema。客户端的单参数工具常用组合式根（`{"anyOf":[{"type":"string"},{"type":"null"}]}`）或标量根，转换后根类型不是 OBJECT，被拒。
+- 修复 `7ad1a5b`：声明级强制根为 object —— 删掉根上的 `anyOf/oneOf/allOf`，`type` 不为 object 时置为 object。已用复刻请求验证：修复前 400（与用户报错完全一致），修复后 200。
+- 修复 `234b590`：顺带发现 array/object 上的 `enum` 也被拒（`specified incorrect schema type field`），改为直接删除。
+- 详情日志实测有效：用户那次失败请求已被 `details-*.jsonl` 记录（`/v1/chat/completions`，body 138691 字节），据此确认是 chat→Gemini 转换路径；同时把 `logs.detailBodyKB` 从 64 提到 **512**，避免大 body 被截断（500 条 × 512 KB 仍低于 512 MB 总量上限）。
+
 ## Codex 第三轮：enum 必须是字符串（2026-11-22，`f7e1586`/`7e105ed`）
 
 - 现场：`Invalid value at 'tools[0].function_declarations[N].parameters.properties[0].value.enum[0]' (TYPE_STRING)`。
