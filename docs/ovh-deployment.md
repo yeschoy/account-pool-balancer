@@ -73,6 +73,14 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：Google 响应形态（alt=sse）与增量 JSON 数组（2026-11-22 07:15 UTC，189ee62）
+
+- 需求：客户端不应被迫写 `alt=sse`，同时不能破坏已有聚合方（new-api）。
+- 实现：`alt=sse` → SSE；无 `alt=sse` 且 `Accept` 含 `text/event-stream` → SSE（保持 new-api 旧行为）；其余 → `application/json` 的 JSON 数组，边收边写（`[` + `,chunk` + `]`），断开时补 `]` 并标记 `incomplete_stream`。
+- 中途两次修正：首次 dispatch 放在通用 SSE 分支之后导致不生效（`7def8c5`）；协议常量比较用错（`opencode.Gemini=="generate"`）导致永不触发（`f46b013`）；最后按 `Accept` 收口（`189ee62`）。
+- 验收（直连本池）：`Accept:*/*` 得合法 JSON 数组并逐步到达；`Accept: text/event-stream`、`alt=sse` 均为 SSE；经 new-api chat 流仍有 `finish_reason` 与 `[DONE]`；双内网别名 healthy。
+- 部署：镜像 `account-pool-balancer:release-189ee62-20261122T071528Z`；备份 `20261122T071528Z-factory-array4-189ee62/`。
+
 ## 当前部署：逐事件转发延迟指标（2026-11-22 06:40 UTC，65ef144）
 
 - 目的：用可持证数据回答"号池是否缓存中间事件"。新增请求日志字段 `streamEvents`（实际转发事件数）与 `streamMaxLagUs`（读到上游事件 → flush 给客户端的最大耗时，µs）。

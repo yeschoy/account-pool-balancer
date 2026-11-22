@@ -14,6 +14,18 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## alt=sse 与响应形态（2026-11-22，`189ee62`）
+
+- `alt=sse` 是 Google 的**流式传输编码**开关：`streamGenerateContent` 默认返回**一个 JSON 数组**（`Array<GenerateContentResponse>`），加 `?alt=sse` 才返回 SSE 帧。之前的实现无论客户端有没有写 `alt=sse` 都返回 SSE，于是"不带 alt=sse 的严格客户端"会拿到它没请求的格式。
+- 现在按 Google 语义并保持流式：
+  | 客户端 | 响应 |
+  |---|---|
+  | `?alt=sse` | SSE 帧 |
+  | 无 `alt=sse` 但 `Accept` 含 `text/event-stream`（new-api 就是这种） | SSE 帧（保持旧行为，避免破坏上游聚合） |
+  | 无 `alt=sse`、`Accept` 不是 event-stream | `Content-Type: application/json` 的 JSON 数组，**边收边写**（先写 `[`，每帧追加 `,<chunk>`，结束写 `]`） |
+- 实测（直连本池）：`Accept: */*` 得到合法 JSON 数组（5001 字节），按 urllib 读取 53 次逐步到达；`Accept: text/event-stream` 与 `alt=sse` 都仍是 SSE；经 new-api 的 chat 请求仍带 `finish_reason`（`length`/`stop`）与 `[DONE]`。
+- 边界：数组模式下若上游中途断开，会补齐 `]` 让 JSON 可解析，但结果标记 `incomplete_stream`，不冒充成功；错误信封仍以 JSON 错误体返回。
+
 ## 逐事件转发延迟（可持证，2026-11-22，`65ef144`）
 
 - 新增两个请求日志字段，让"是否缓存"变成可测量事实：
