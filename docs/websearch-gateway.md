@@ -1,10 +1,10 @@
-# 独立 WebSearch 兼容网关（第一阶段，本地原型）
+# 独立 WebSearch 兼容网关（第二阶段，受控真上游验证）
 
 ## 状态与边界
 
-2026-11-22：独立 Go 服务、受控路由、Tavily HTTP 后端、Responses JSON/SSE 工具循环与本地 Mock 验证已实现。**没有部署生产、没有修改 NewAPI 渠道、没有以真实 Codex Desktop/真实模型完成端到端验收。** 本地 Docker daemon 查询12秒未响应，因此没有声称容器镜像已构建/运行。
+2026-11-22：独立 Go 服务、受控路由、Tavily HTTP 后端、Responses JSON/SSE 工具循环与本地 Mock 已实现。第二阶段按Codex0.167.0公开源码修复显式联网选项、合法省略sources的历史回放、函数完成后的文本流；补域名限制和真实URL引用。**没有部署生产、没有修改 NewAPI 渠道、没有以真实 Codex Desktop 完成端到端验收。** 本地 Docker daemon此前查询12秒未响应，容器镜像仍未构建/运行。
 
-Tavily Hikari 的实际 `POST /api/tavily/search` 此前已用用户授权的凭据做一次公共文档查询，HTTP200、约2.7秒、有标题/URL/content；这不等于下面兼容链路已真实验收。用户凭据未写入源码、配置示例或测试。
+受控真实验证：OVH运行一次opt-in测试二进制，以一个最近成功、无代理的固定Mistral账号直接请求官方Responses，再调用用户指定Tavily Hikari。强制一次搜索并以low上下文限制到`docs.mistral.ai`，两轮流式约4.652秒完成、46事件、一个真实url_citation、累计usage存在；按Codex会省略sources的历史重发后续问成功。整次约5.04秒，3次固定账号模型调用、1次真实搜索，均HTTP200。密钥仅内存/SSH stdin/子进程env，未写入源码/配置/测试/日志；没有重放真实用户历史。这是**网关→真实搜索与固定上游**验证，不是号池多账号连续性或Codex/NewAPI验收。
 
 ## 架构
 
@@ -71,20 +71,26 @@ compat必须显式列出 `allowedModels`。调用方不能指定上游URL、路�
 
 ## 支持的搜索合同
 
-最小声明：`tools:[{"type":"web_search"}]`。支持对应的 `tool_choice:{"type":"web_search"}`，首次执行后内部续轮改为auto，避免强制无限搜索。支持 `include:["web_search_call.action.sources"]`，来源只取真实结果URL。普通function声明、参数和大整数保留；内部保留名 `apb_web_search` 不能由客户端重复定义。
+最小声明：`tools:[{"type":"web_search"}]`，也支持固定版本`web_search_2025_08_26`及对应tool_choice。首次执行后内部续轮改为auto，避免强制无限搜索。支持 `include:["web_search_call.action.sources"]`，来源只取真实结果URL。普通function声明、参数和大整数保留；内部保留名 `apb_web_search` 不能由客户端重复定义。
 
-**第一阶段不是OpenAI hosted search的全量替代：**
+第二阶段支持：
+- `external_web_access:true`（省略也允许联网）；`indexed_web_access:false`；只含text的`search_content_types`。
+- `filters.allowed_domains`：最多100个纯DNS域名，映射为Tavily include_domains，并复核返回URL必须落在域名或其子域；越域结果整次明确失败，不把偏好伪装成硬限制。大小写归一，拒绝URL/路径/通配/IP。
+- `search_context_size:low|medium|high`是上下文空间提示：low最多3结果/每来源4000字节，medium为配置结果上限/8000字节，high为配置结果上限/12000字节；仍受服务端硬上限约束，不承诺OpenAI内部token量等价。省略保持原12000字节上限。
+- `user_location:null`或仅`{"type":"approximate"}`表示不指定位置；非空country/city/region/timezone仍明确拒绝，不以国家boost冒充完整地理定位。
 
-- 不支持 `web_search_preview`、打开网页/页内查找、域名过滤、地理位置、搜索上下文大小、cached/live等额外工具选项；无法保持的意图本地400，不能静默忽略。尤其不能把cached-only请求当成live搜索。真实Codex默认声明可能带这些字段，须在生产前检查并补适配或明确配置支持范围。
+**仍不是OpenAI hosted search的全量替代：**
+
+- cached-only (`external_web_access:false`) 和indexed-only、image、preview、打开网页/页内查找及未知选项仍本地400，不能静默忽略。Codex默认cached会发送false；**因此尚不能承诺默认Codex零配置可用**。Tavily公开文档虽有max_age_hours=-1，当前自定义代理/上游未完成cache-only保证核验，不擅自将其改为实时联网。
 - 仅支持完整input历史，拒绝 `previous_response_id` / conversation续传、store=true、background和客户端max_tool_calls；不存完整提示词。
 - JSON与逐帧SSE都可执行多轮；上游JSON/终态单包中的完整文本会发对应文本事件。各轮统一公开response ID/事件序号/output_index；内部completed不会提前终止整个请求。
-- 普通函数与搜索混用时，执行本服务搜索后将普通函数交还客户端，不在缺少客户端函数结果时继续生成。JSON及工具流支持保持原顺序；SSE在尚未完成的函数之后又流出新的文本/思考item，当前明确报 `unsupported_interleaved_tool_stream`，不静默重排或丢失内容。
-- 返回真实搜索项与来源，模型被要求引用真实链接；**不保证模型一定引用，也未实现网关自动生成标准url_citation注解/原生搜索引用UI**。普通上游已有注解原样保留。
+- 普通函数与搜索混用时，执行本服务搜索后将普通函数交还客户端，不在缺少客户端函数结果时继续生成。函数完整item.done后立即分类为公开搜索或普通function并解除顺序屏障，后续文本/思考继续逐帧输出。尚未完成函数前就出现后续item仍明确报 `unfinished_tool_before_output`；不静默重排或整轮缓冲。
+- 从实际搜索来源及回答中**真正出现的精确URL**生成标准url_citation（Unicode字符偏移、exclusive end），JSON/逐帧annotation事件/最终output一致；来源不能只作为假URL前缀或嵌套URL的一部分。保留已有注解、不改正文、不为模型未引用的结果造引用。真实链路已观察到一个引用，但仍不保证模型每次引用或真实Codex原生引用UI已验收。
 - 普通function的参数流在完整item确认后交还客户端；不把内部function名称/参数事件泄露为需要客户端执行的未知工具。
 
 ## 历史、资源与安全
 
-- 搜索原生function_call/result保存到有界的内存LRU，默认30分钟绝对TTL、1024条、32MiB；只存搜索call、结果与公开item，不存整段对话。公开搜索ID随机生成，按路由/路由凭据/会话HMAC隔离；客户端历史被修改、过期、重启或跨作用域时409，不能重新搜索伪造旧结果。
+- 搜索原生function_call/result保存到有界的内存LRU，默认30分钟绝对TTL、1024条、32MiB；只存搜索call、结果与公开item，不存整段对话。公开搜索ID随机生成，按路由/路由凭据/模型/会话HMAC隔离；允许Codex合法省略action.sources与添加null元数据，也允许相同单query/queries表示；ID、status、真实动作、查询不一致、过期、重启或跨作用域时409，不能重新搜索伪造旧结果。
 - 优先使用稳定 `X-Session-Id` / `Session-Id` / `X-Codex-Session-Id` / `Thread-Id` / `X-Pi-Session-Id`。缺少会话头时保守按首条原始input形成弱作用域：表示形式或首条输入变化可能409，不是强会话保证。建议接入前确认稳定会话头透传。多副本需额外会话亲和/共享受限历史；本版只建议单实例实验。
 - 默认每请求最多3次搜索、最多4轮模型调用；16并发、总deadline180秒、入站/续轮body4MiB、单轮模型响应8MiB、单SSE事件1MiB。来源每条最多12000字节、搜索HTTP响应1MiB、默认5条结果。持续写入受服务端WriteTimeout约束。
 - 带凭据请求不跟随重定向，不自动重试任何模型轮次，不向请求方指定的目标转发认证。模型请求和搜索请求的凭据各自独立。搜索查询命中已配置凭据时阻止发送；未知私密内容无法保证由模型自动识别，使用者仍须考虑关键词会交第三方处理。
@@ -109,4 +115,6 @@ go vet ./internal/websearch ./internal/searchgateway ./cmd/websearch-gateway
 go build -o .gotmp/websearch-gateway ./cmd/websearch-gateway
 ```
 
-HTTP Mock覆盖真实HTTP两轮调用、第二上游、完整搜索历史还原/隔离/过期、混合函数、流式首字在上游完成前可见、单公开终态和全局序号、JSON回包合成文本事件、强制搜索与总输出预算、全部轮次usage合并/缺失未知、搜索失败与超时/重定向/取消/并发/body上限、无搜索/native原字节透传、配置重复键与鉴权/模型零调用拒绝。未跑与本任务无关的号池回归或发送真实生产推理。
+HTTP Mock覆盖真实HTTP两轮调用、第二上游、完整搜索历史还原/隔离/过期、混合函数、流式首字在上游完成前可见、单公开终态和全局序号、JSON回包合成文本事件、强制搜索与总输出预算、全部轮次usage合并/缺失或null未知、第二轮失败不冒充前轮用量为总计、搜索失败与超时/重定向/取消/并发/body上限、无搜索/native原字节透传、配置重复键与鉴权/模型零调用拒绝，以及第二阶段的联网选项/域名限制/跨模型历史/字符引用/函数后文本顺序。
+
+`TestLiveResponsesSearch`默认跳过，必须显式提供`SEARCH_GATEWAY_LIVE_BASE`、`SEARCH_GATEWAY_LIVE_MODEL_KEY`、`SEARCH_GATEWAY_LIVE_SEARCH_KEY`和`SEARCH_GATEWAY_LIVE_SEARCH_ENDPOINT`；测试固定一次搜索和至多3个模型请求，不使用现有用户历史。不要在日志或shell参数中展开这些凭据。正式实测记录见任务`validation-phase2.md`。未跑与本任务无关的号池回归。

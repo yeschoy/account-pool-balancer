@@ -43,7 +43,7 @@ func TestJSONUpstreamEmitsRealTextForStreamCaller(t *testing.T) {
 		t.Fatalf("delta=%d complete=%d %s", delta, completed, w.Body.String())
 	}
 }
-func TestUnsupportedInterleavedFunctionStreamFailsExplicitly(t *testing.T) {
+func TestUnfinishedFunctionBeforeNextItemFailsExplicitly(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		call, _ := decodeObject(searchCall("a"))
@@ -54,7 +54,7 @@ func TestUnsupportedInterleavedFunctionStreamFailsExplicitly(t *testing.T) {
 	g := startGateway(t, configFor(t, s.URL, "compat"), searchFunc(searchOK))
 	body := strings.Replace(requestJSON, `"input":"question"`, `"input":"question","stream":true`, 1)
 	w := do(t, g, "route0", body, "s")
-	if !strings.Contains(w.Body.String(), "unsupported_interleaved_tool_stream") || strings.Contains(w.Body.String(), "event: response.completed") {
+	if !strings.Contains(w.Body.String(), "unfinished_tool_before_output") || strings.Contains(w.Body.String(), "event: response.completed") {
 		t.Fatal(w.Body.String())
 	}
 }

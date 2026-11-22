@@ -18,5 +18,8 @@ LRU+TTL+字节上限的内存缓存，仅存搜索call/output/public item，随�
 ## 失败/运维
 兼容服务是新故障域，默认仅本机监听、每路由鉴权、全局并发上限、全局请求deadline。Tavily错误返回安全类别，不透出任意body/Location/密钥。流已提交时response.failed，不补completed；非流式明确HTTP错误。可切渠道回原入口绕过；当前阶段不改线上容器/网络别名。
 
+## 第二阶段合同收敛
+依据Codex0.167.0公开hosted_spec/models：显式live=true、text-only、context hint与allowed_domains可表示；域名必须传Tavily并复核来源边界，context hint仅控制既有硬上限内片段/条数。cached-only/indexed-only/精确location/preview/open/find仍不兼容。历史校验只允许省略sources和null元数据，严格保留id/status/action/query与scope，模型也纳入HMAC。实际回答里的独立真实来源URL才生成引用，字符offset，不改正文。函数done后即时分类并解除顺序屏障；仅未完成函数前出现后续item明确失败。源done与terminal.output必须一致。
+
 ## 已知限制与发布门禁
-网关不是 OpenAI hosted search 的完整等价实现（只搜索，未实现open/find、地域/域名/preview等选项）。历史内存而非跨实例共享；滚动升级/多副本需亲和或后续共享受限存储。现有号池普通粘性不是跨多轮原子租约，服务不能凭空承诺账号不换；上线前验证并按需实现受信任的请求级固定所有者协议。不要因本地Mock通过就启用生产渠道。
+网关不是 OpenAI hosted search 的完整等价实现。Codex默认cached仍被明确拒绝，没有后端cache-only保证就不能承诺客户端零配置。历史内存而非跨实例共享；滚动升级/多副本需亲和或后续共享受限存储。现有号池普通粘性不是跨多轮原子租约，服务不能凭空承诺账号不换；上线前验证并按需实现受信任的请求级固定所有者协议。已通过一次固定账号+真实搜索合成验证不等于多账号/NewAPI/Codex桌面验收，不能直接启用生产渠道。

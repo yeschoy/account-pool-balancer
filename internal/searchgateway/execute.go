@@ -19,7 +19,7 @@ type usageSum struct {
 func newUsageSum() usageSum { return usageSum{valid: true, allCached: true, allReasoning: true} }
 func intField(o object, k string) (int64, bool) {
 	var n int64
-	if json.Unmarshal(o[k], &n) != nil || n < 0 {
+	if len(o[k]) == 0 || string(o[k]) == "null" || json.Unmarshal(o[k], &n) != nil || n < 0 {
 		return 0, false
 	}
 	return n, true
@@ -79,6 +79,8 @@ func (u usageSum) json() json.RawMessage {
 
 func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 	totals := newUsageSum()
+	e.sources = append(e.sources, p.sources...)
+	e.privateValues = []string{route.token, route.upstreamKey, g.cfg.Search.key}
 	searches := 0
 	var remaining int64
 	if raw := p.body["max_output_tokens"]; raw != nil && string(raw) != "null" {
@@ -96,6 +98,9 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 			p.body["max_output_tokens"] = marshal(remaining)
 		}
 		re := newRoundEmitter(e)
+		// If this round fails or never reports usage, a previous partial sum is
+		// not a measured total for the aggregate request.
+		e.usage = nil
 		e.modelCalls++
 		result, err := g.round(r, route, p, re)
 		if err != nil {
@@ -152,21 +157,16 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 				re.finalItem(i, call)
 				continue
 			}
-			args, err := decodeObject([]byte(str(call["arguments"])))
-			if err != nil || len(args) != 1 || args["query"] == nil || str(call["call_id"]) == "" {
-				return upstream("invalid_search_arguments")
+			query, err := searchQuery(call, e.privateValues)
+			if err != nil {
+				return err
 			}
-			query := str(args["query"])
-			for _, secret := range []string{route.token, route.upstreamKey, g.cfg.Search.key} {
-				if secret != "" && strings.Contains(query, secret) {
-					return invalid("sensitive_search_query", "Search query contained a configured credential and was not sent")
-				}
+			public := re.searchItems[i]
+			index, exists := re.indices[i]
+			if !exists {
+				public = object{"id": marshal(id("ws_apb_")), "type": marshal("web_search_call"), "status": marshal("in_progress"), "action": marshal(map[string]any{"type": "search", "query": query})}
+				index = e.add(public)
 			}
-			if strings.TrimSpace(query) == "" || len(query) > 4096 {
-				return upstream("invalid_search_arguments")
-			}
-			public := object{"id": marshal(id("ws_apb_")), "type": marshal("web_search_call"), "status": marshal("in_progress"), "action": marshal(map[string]any{"type": "search", "query": query})}
-			index := e.add(public)
 			eventFields := object{"output_index": marshal(index), "item_id": public["id"]}
 			e.event("response.web_search_call.in_progress", eventFields)
 			e.event("response.web_search_call.searching", eventFields)
@@ -174,7 +174,7 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 				return e.writeErr
 			}
 			e.searchCalls++
-			found, err := g.search.Search(r.Context(), websearch.Request{Query: query})
+			found, err := g.search.Search(r.Context(), websearch.Request{Query: query, AllowedDomains: p.options.domains, ContextSize: p.options.contextSize})
 			if err != nil {
 				e.creditsComplete = false
 				return err
@@ -185,6 +185,7 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 			} else {
 				e.searchCredits += *found.Credits
 			}
+			e.sources = append(e.sources, found.Sources...)
 			payload := marshal(map[string]any{"untrusted_web_results": found.Sources})
 			output := marshal(map[string]any{"type": "function_call_output", "call_id": str(call["call_id"]), "output": string(payload)})
 			public["status"] = marshal("completed")
@@ -228,4 +229,21 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 		}
 	}
 	return &gatewayError{502, "search_round_limit", "Maximum model rounds reached"}
+}
+
+func searchQuery(call object, privateValues []string) (string, error) {
+	args, err := decodeObject([]byte(str(call["arguments"])))
+	if err != nil || len(args) != 1 || args["query"] == nil || str(call["call_id"]) == "" {
+		return "", upstream("invalid_search_arguments")
+	}
+	query := str(args["query"])
+	if strings.TrimSpace(query) == "" || len(query) > 4096 {
+		return "", upstream("invalid_search_arguments")
+	}
+	for _, secret := range privateValues {
+		if secret != "" && strings.Contains(query, secret) {
+			return "", invalid("sensitive_search_query", "Search query contained a configured credential and was not sent")
+		}
+	}
+	return query, nil
 }

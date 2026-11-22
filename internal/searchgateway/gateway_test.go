@@ -194,7 +194,7 @@ func TestRequestGatesNoBackendCalls(t *testing.T) {
 	}{
 		{"disabled", "route1", requestJSON, 400}, {"model", "route0", strings.Replace(requestJSON, "test-model", "other-model", 1), 400},
 		{"duplicate", "route0", `{"model":"test-model","mo\u0064el":"test-model"}`, 400},
-		{"search-options", "route0", strings.Replace(requestJSON, `{"type":"web_search"}`, `{"type":"web_search","filters":{"allowed_domains":["example.com"]}}`, 1), 400},
+		{"search-options", "route0", strings.Replace(requestJSON, `{"type":"web_search"}`, `{"type":"web_search","filters":{"unknown_domains":["example.com"]}}`, 1), 400},
 		{"preview", "route0", strings.Replace(requestJSON, "web_search\"", "web_search_preview\"", 1), 400},
 		{"continuation", "route0", strings.Replace(requestJSON, `"input":"question"`, `"input":"question","previous_response_id":"old"`, 1), 400},
 		{"reserved", "route0", strings.Replace(requestJSON, `[{"type":"web_search"}]`, `[{"type":"web_search"},{"type":"function","name":"apb_web_search"}]`, 1), 400},

@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "第一阶段独立服务原型实现并通过本地normal/race/vet/build与假配置-check；未部署、未改NewAPI、未发本轮真实模型推理。保留in_progress等待真实客户端/账号连续性验收。并发Factory窗口曾误收本任务开发文件，未重写历史；后续定向提交。",
-  "meta": {"codeStatus":"phase1-prototype","localValidation":"passed","realClient":"not-tested","containerBuild":"not-run-daemon-unresponsive","deployment":"not-deployed"}
+  "notes": "第二阶段完成Codex源码合同选项/历史往返/流式顺序/真实URL引用；normal/race/vet/build通过，固定同一Mistral账号+Tavily合成实测3模型调用/1搜索约5.04秒成功。未部署、未改NewAPI、未做真实Codex操作；cached-only和多账号owner仍是门禁，保留in_progress。并发Factory窗口曾误收开发文件，未重写历史，后续定向提交。",
+  "meta": {"codeStatus":"phase2-controlled-live","localValidation":"passed","realUpstream":"synthetic-fixed-account-passed","realClient":"not-tested","containerBuild":"not-run-daemon-unresponsive","deployment":"not-deployed"}
 }

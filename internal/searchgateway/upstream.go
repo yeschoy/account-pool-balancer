@@ -68,6 +68,16 @@ func (g *Gateway) round(r *http.Request, route Route, p plan, re *roundEmitter) 
 			if (typ == "response.incomplete") != (result.status == "incomplete") {
 				return result, upstream("conflicting_upstream_terminal")
 			}
+			for index, native := range re.nativeDone {
+				if index >= len(result.output) || !jsonEqual(native, result.output[index]) {
+					return result, upstream("conflicting_terminal_output")
+				}
+			}
+			for index := range re.indices {
+				if index >= len(result.output) {
+					return result, upstream("missing_terminal_output")
+				}
+			}
 			return result, nil
 		}
 		if typ == "error" || typ == "response.failed" {

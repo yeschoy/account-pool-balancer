@@ -46,7 +46,7 @@ func id(prefix string) string {
 }
 func (h *historyStore) scope(route Route, r *http.Request, o object) string {
 	m := hmac.New(sha256.New, h.secret[:])
-	m.Write([]byte(route.ID + "\x00" + route.token + "\x00"))
+	m.Write([]byte(route.ID + "\x00" + route.token + "\x00" + str(o["model"]) + "\x00"))
 	for _, k := range []string{"X-Session-Id", "Session-Id", "X-Codex-Session-Id", "Thread-Id", "X-Pi-Session-Id"} {
 		if v := r.Header.Get(k); v != "" && len(v) <= 512 {
 			m.Write([]byte(k + "\x00" + v))
@@ -101,15 +101,85 @@ func (h *historyStore) get(key, scope string, public json.RawMessage) (historyEn
 		h.remove(e)
 		return historyEntry{}, miss
 	}
-	// Structural equality tolerates normal JSON property ordering, not edits.
-	var a, b any
-	da := json.NewDecoder(bytes.NewReader(public))
-	da.UseNumber()
-	db := json.NewDecoder(bytes.NewReader(v.public))
-	db.UseNumber()
-	if da.Decode(&a) != nil || db.Decode(&b) != nil || !reflect.DeepEqual(a, b) || !hmac.Equal([]byte(v.scope), []byte(scope)) {
+	// Codex legitimately drops action.sources and serializes optional metadata as
+	// null. Compare authority-bearing fields, never require unsupported carriers.
+	if !matchingSearchHistory(public, v.public) || !hmac.Equal([]byte(v.scope), []byte(scope)) {
 		return historyEntry{}, miss
 	}
 	h.lru.MoveToFront(e)
 	return v, nil
+}
+
+func matchingSearchHistory(got, want json.RawMessage) bool {
+	a, err := decodeObject(got)
+	if err != nil {
+		return false
+	}
+	b, err := decodeObject(want)
+	if err != nil {
+		return false
+	}
+	for k, v := range a {
+		switch k {
+		case "id", "type", "status", "action":
+		case "encrypted_content", "internal_chat_message_metadata_passthrough":
+			if !bytes.Equal(v, []byte("null")) {
+				return false
+			}
+			delete(a, k)
+		default:
+			return false
+		}
+	}
+	for _, k := range []string{"id", "type", "status"} {
+		if str(a[k]) != str(b[k]) || a[k] == nil {
+			return false
+		}
+	}
+	x, err := decodeObject(a["action"])
+	if err != nil {
+		return false
+	}
+	y, err := decodeObject(b["action"])
+	if err != nil {
+		return false
+	}
+	for k, v := range x {
+		switch k {
+		case "type", "query", "queries":
+		case "sources":
+			if !jsonEqual(v, y[k]) {
+				return false
+			}
+			delete(x, k)
+		default:
+			return false
+		}
+	}
+	delete(y, "sources")
+	// Both single-query and queries-array spellings must agree if supplied.
+	q := str(y["query"])
+	if str(x["type"]) != "search" {
+		return false
+	}
+	if raw := x["queries"]; raw != nil && !bytes.Equal(raw, []byte("null")) {
+		var queries []string
+		if json.Unmarshal(raw, &queries) != nil || len(queries) != 1 || queries[0] != q {
+			return false
+		}
+	} else if str(x["query"]) != q {
+		return false
+	}
+	if raw := x["query"]; raw != nil && !bytes.Equal(raw, []byte("null")) && str(raw) != q {
+		return false
+	}
+	return true
+}
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	da := json.NewDecoder(bytes.NewReader(a))
+	da.UseNumber()
+	db := json.NewDecoder(bytes.NewReader(b))
+	db.UseNumber()
+	return da.Decode(&x) == nil && db.Decode(&y) == nil && reflect.DeepEqual(x, y)
 }
