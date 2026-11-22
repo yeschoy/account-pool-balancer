@@ -276,8 +276,12 @@ func (f Factory) EffectiveRouting() Routing {
 	return factoryRoutingDefaults
 }
 
-// factoryThinkingLevels are the values Google accepts for thinkingLevel.
-var factoryThinkingLevels = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true}
+// factoryThinkingLevels are the thinking levels the gateway accepted when last
+// measured (2026-11-22). "minimal" is deliberately absent: the upstream began
+// answering 400 "Thinking level is unsupported: THINKING_LEVEL_MINIMAL" after it
+// had accepted it earlier the same day, and an injected level that is refused
+// fails the whole request.
+var factoryThinkingLevels = map[string]bool{"low": true, "medium": true, "high": true}
 
 // NormalizeThinkingLevel validates the configured level and returns it.
 func (f Factory) NormalizeThinkingLevel() (string, bool) {

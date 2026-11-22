@@ -1397,12 +1397,11 @@
           </span>
           <label for="factory-thinking-level">思考等级（Gemini）</label><select id="factory-thinking-level" class="small">
             <option value="">不干预（上游默认，开启思考）</option>
-            <option value="minimal">minimal · 最快（无思考，首字约 1s）</option>
             <option value="low">low</option>
             <option value="medium">medium</option>
             <option value="high">high</option>
           </select>
-          <span></span><span class="hint">实测（gemini-4-neon/carbon，2026-11-22）：<code>minimal</code> 不产生思考 token，首字从 5–10s 降到约 1s；<code>low/medium</code> 仍会思考，首字依旧 2–14s。只写入客户端没有自带 <code>thinkingConfig</code>/<code>thinkingBudget</code> 的 Gemini 请求；模型/客户端自己指定时以它为准。复杂编码任务可改回高等级。</span>
+          <span></span><span class="hint">实测（gemini-4-neon/carbon，2026-11-22）：上游曾接受 <code>minimal</code>（无思考、首字约 1s），当天晚些时候改为拒绝 <code>THINKING_LEVEL_MINIMAL</code>（400），因此这里不再提供该档，注入被拒会整条请求失败。目前可用的 <code>low/medium/high</code> 效果不稳定（neon 默认 4.8s、medium 3.0s、high 5.6s；carbon 默认 2.5s、high 19.8s）。只写入客户端没有自带 <code>thinkingConfig</code>/<code>thinkingBudget</code> 的 Gemini 请求；模型/客户端自己指定时以它为准。复杂编码任务可改回高等级。</span>
           <label for="factory-escape-phrases">转义被拒短语</label><label class="check"><input id="factory-escape-phrases" type="checkbox">开启</label>
           <span></span><span class="hint">Factory 的 usage policy 会读整个对话：出现其它 agent 的 system 提示词（如 <code>You are Claude Code…</code>、<code>You have been invoked in the following environment:</code>）时整条对话都会被 403 <code>content_policy_rejected</code>。开启后把这些短语的首字符写成 JSON <code>\u0059</code> 转义，JSON 解析后模型读到的仍是原字符，只有线上字节不同。关闭则原样发送。</span>
           <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
