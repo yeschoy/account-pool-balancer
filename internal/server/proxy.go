@@ -67,6 +67,7 @@ type requestLog struct {
 	InboundProtocol     string              `json:"inboundProtocol"`
 	Protocol            string              `json:"protocol"`
 	Model               string              `json:"model"`
+	RequestOwner        string              `json:"requestOwner,omitempty"` // start | pinned, never token/account identity
 	Stream              bool                `json:"stream"`
 	AccountID           string              `json:"accountId,omitempty"`
 	AccountName         string              `json:"accountName,omitempty"`
@@ -960,6 +961,24 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	owner, ownerErr := s.readRequestOwner(cfg, ck, rec.Model, r.URL.Path, r.Header, time.Now())
+	if ownerErr != nil {
+		rec.ErrorCategory = "request-owner"
+		writeLocalError(w, proto, 409, "invalid_request_error", "request_owner_unavailable", errRequestOwner.Error(), 0)
+		finish(409, "failed")
+		return
+	}
+	if owner.token != "" {
+		detailIdentities = append(detailIdentities, owner.token)
+	}
+	pinnedAccount := ""
+	if owner.enabled {
+		rec.RequestOwner = "start"
+		if owner.claims != nil {
+			pinnedAccount = owner.claims.Account
+			rec.RequestOwner = "pinned"
+		}
+	}
 	excluded := map[string]bool{}
 	if config.IsOpenCode(rec.Provider) {
 		for _, a := range cfg.Accounts {
@@ -975,6 +994,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var last *attemptResult
 	strippedTools := 0
 	maxAttempts := rootCfg.ForProvider(keyPool(rootCfg, ck)).Routing.MaxAccounts
+	if owner.enabled {
+		maxAttempts = 1
+	} // Owner mode never sweeps accounts after failure.
 	for i := 0; i < maxAttempts; i++ {
 		if !s.cfg.Get().PoolEnabled(rec.Provider) {
 			if last != nil {
@@ -997,7 +1019,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			wait = 0
 		} // switches never queue behind the first attempt
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
-			Group: routeGroup, Model: rec.Model, RequestID: rid,
+			PinnedAccountID: pinnedAccount,
+			Group:           routeGroup, Model: rec.Model, RequestID: rid,
 			Affinity: ident.Fingerprint, CacheAffinity: cacheAffinity, Explicit: ident.Confidence == "explicit", ClientKeyID: ck.ID,
 			Excluded: excluded, Wait: wait, MaxWaiters: maxWaiters,
 			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider) && (rec.Provider != config.ProviderFactory || stateful),
@@ -1115,6 +1138,17 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			acct, lease.Account = next, next
 		}
 
+		if owner.enabled {
+			token, ownerErr := s.ownerForLease(s.cfg.Get(), cfg, ck, rec.Model, acct, owner, time.Now())
+			if ownerErr != nil {
+				lease.Release()
+				rec.ErrorCategory = "request-owner"
+				writeLocalError(w, proto, 409, "invalid_request_error", "request_owner_unavailable", errRequestOwner.Error(), 0)
+				finish(409, "failed")
+				return
+			}
+			w.Header().Set(requestOwnerHeader, token)
+		}
 		res = s.attempt(w, r, cfg, lease, body, proto, rec, i+1, start, identityScope, ident, detailIdentities)
 		res.privateIdentities = detailIdentities
 		if rec.Provider == config.ProviderMistral && len(rec.upstreamIdentities) > 0 {
@@ -1565,7 +1599,7 @@ var skipRequestHeaders = map[string]bool{
 func copyRequestHeaders(dst, src http.Header) {
 	for k, vs := range src {
 		lk := strings.ToLower(k)
-		if skipRequestHeaders[lk] || strings.HasPrefix(lk, "x-forwarded-") || strings.HasPrefix(lk, "cf-") ||
+		if lk == "x-apb-owner-token" || skipRequestHeaders[lk] || strings.HasPrefix(lk, "x-forwarded-") || strings.HasPrefix(lk, "cf-") ||
 			strings.HasPrefix(lk, "x-original-") || strings.HasPrefix(lk, "x-envoy-") ||
 			strings.HasPrefix(lk, "x-azure-") || strings.HasPrefix(lk, "x-ms-") ||
 			strings.HasPrefix(lk, "x-proxy-") {

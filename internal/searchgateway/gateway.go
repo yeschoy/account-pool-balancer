@@ -152,6 +152,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, err)
 		return
 	}
+	if route.RequirePoolOwner {
+		if err := g.checkPoolOwner(r, route); err != nil {
+			g.writeError(w, err)
+			return
+		}
+		p.owner = &ownerTokenState{token: "start"}
+	}
 	emit := newEmitter(w, p.stream, str(o["model"]))
 	emit.publicFields = o
 	err = g.run(r, route, p, emit)
@@ -187,6 +194,11 @@ func (g *Gateway) request(r *http.Request, route Route, path string, body []byte
 	req.Header.Set("Authorization", "Bearer "+route.upstreamKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
+	if route.RequirePoolOwner && path == "/v1/responses" {
+		if state, ok := r.Context().Value(ownerContextKey{}).(*ownerTokenState); ok {
+			req.Header.Set(ownerHeader, state.token)
+		}
+	}
 	resp, err := g.client.Do(req)
 	if err != nil {
 		if r.Context().Err() != nil {

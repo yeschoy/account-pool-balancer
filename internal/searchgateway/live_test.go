@@ -17,8 +17,21 @@ import (
 )
 
 // Opt-in synthetic integration. No credentials/default network access in tests.
-// Run against ONE fixed upstream account, never a public production client route.
+// The direct variant uses one fixed account; the pool variant must explicitly
+// use a designated test client key and is observed, not claimed as a strict pin.
 func TestLiveResponsesSearch(t *testing.T) {
+	if os.Getenv("SEARCH_GATEWAY_LIVE_POOL") == "1" {
+		t.Skip("use the explicit pool test")
+	}
+	runLiveSearch(t, false)
+}
+func TestLivePoolResponsesSearch(t *testing.T) {
+	if os.Getenv("SEARCH_GATEWAY_LIVE_POOL") != "1" {
+		t.Skip("explicit pool test authorization/environment required")
+	}
+	runLiveSearch(t, true)
+}
+func runLiveSearch(t *testing.T, poolMode bool) {
 	base, key := os.Getenv("SEARCH_GATEWAY_LIVE_BASE"), os.Getenv("SEARCH_GATEWAY_LIVE_MODEL_KEY")
 	searchKey := os.Getenv("SEARCH_GATEWAY_LIVE_SEARCH_KEY")
 	if base == "" || key == "" || searchKey == "" {
@@ -32,7 +45,7 @@ func TestLiveResponsesSearch(t *testing.T) {
 	if endpoint == "" {
 		t.Fatal("explicit search endpoint required")
 	}
-	c := Config{RequestTimeoutSec: 90, MaxSearches: 1, Search: SearchConfig{Endpoint: endpoint, APIKeyEnv: "SEARCH", TimeoutSec: 20, MaxResults: 3}, Routes: []Route{{ID: "live", TokenEnv: "ROUTE", UpstreamBaseURL: base, UpstreamKeyEnv: "MODEL", Mode: "compat", AllowedModels: []string{model}}}}
+	c := Config{RequestTimeoutSec: 90, MaxSearches: 1, Search: SearchConfig{Endpoint: endpoint, APIKeyEnv: "SEARCH", TimeoutSec: 20, MaxResults: 3}, Routes: []Route{{ID: "live", TokenEnv: "ROUTE", UpstreamBaseURL: base, UpstreamKeyEnv: "MODEL", Mode: "compat", AllowedModels: []string{model}, RequirePoolOwner: os.Getenv("SEARCH_GATEWAY_LIVE_REQUIRE_OWNER") == "1"}}}
 	env := func(k string) string {
 		switch k {
 		case "ROUTE":
@@ -61,7 +74,12 @@ func TestLiveResponsesSearch(t *testing.T) {
 		defer cancel()
 		req := httptest.NewRequest("POST", "/r/live/v1/responses", bytes.NewReader(marshal(payload))).WithContext(ctx)
 		req.Header.Set("Authorization", "Bearer fake-live-only-route-token")
-		req.Header.Set("Session-Id", "synthetic-live-docs-test")
+		session := os.Getenv("SEARCH_GATEWAY_LIVE_SESSION")
+		if session == "" {
+			session = "synthetic-live-docs-test"
+		}
+		req.Header.Set("Session-Id", session)
+		req.Header.Set("User-Agent", "account-pool-balancer/websearch-synthetic-qa")
 		w := httptest.NewRecorder()
 		g.ServeHTTP(w, req)
 		return w
@@ -107,6 +125,7 @@ func TestLiveResponsesSearch(t *testing.T) {
 		t.Fatalf("live output shape: searches=%d texts=%d citations=%d modelCalls=%d", searches, texts, citations, calls.Load())
 	}
 	t.Logf("synthetic live search passed: events=%d calls=%d citations=%d elapsedMs=%d usagePresent=%t", events, calls.Load(), citations, time.Since(start).Milliseconds(), final["usage"] != nil)
+	t.Logf("LIVE_QA_USAGE_FIRST=%s", final["usage"])
 	// Model the actual Codex public schema: it omits action.sources on replay.
 	for i, raw := range output {
 		o, _ := decodeObject(raw)
@@ -128,7 +147,12 @@ func TestLiveResponsesSearch(t *testing.T) {
 	if str(follow["status"]) != "completed" || calls.Load() != 3 {
 		t.Fatal("live history follow-up failed")
 	}
-	t.Log("synthetic live history replay passed; exactly 3 fixed-account model calls, no real client or NewAPI claimed")
+	t.Logf("LIVE_QA_USAGE_FOLLOW=%s", follow["usage"])
+	if poolMode {
+		t.Log("synthetic live pool history replay passed; exactly 3 calls through the configured pool test key; inspect pool logs for actual ownership")
+	} else {
+		t.Log("synthetic live history replay passed; exactly 3 fixed-account model calls, no real client or NewAPI claimed")
+	}
 }
 
 type liveTransport struct {
@@ -139,14 +163,21 @@ type liveTransport struct {
 }
 
 func (l liveTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if strings.HasPrefix(r.URL.String(), l.modelHost) {
+	isModel := strings.HasPrefix(r.URL.String(), l.modelHost) && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/responses")
+	if isModel {
 		if l.calls.Add(1) > 3 {
 			return nil, fmt.Errorf("live test model request cap")
 		}
 	}
 	resp, e := l.base.RoundTrip(r)
 	if resp != nil {
-		l.t.Logf("live HTTP diagnostic: model=%t status=%d contentType=%s", strings.HasPrefix(r.URL.String(), l.modelHost), resp.StatusCode, resp.Header.Get("Content-Type"))
+		l.t.Logf("live HTTP diagnostic: model=%t status=%d contentType=%s", isModel, resp.StatusCode, resp.Header.Get("Content-Type"))
+		if isModel {
+			rid := resp.Header.Get("X-Request-Id")
+			if strings.HasPrefix(rid, "req_") && safeDiagnosticCode(marshal(rid)) == rid {
+				l.t.Logf("LIVE_POOL_REQUEST_ID=%s", rid)
+			}
+		}
 		if resp.StatusCode >= 400 { // Only coordinates/types/codes, never free-form messages or inputs.
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()

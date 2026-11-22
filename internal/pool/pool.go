@@ -229,6 +229,9 @@ type BindingError struct{ Reason string }
 func (e *BindingError) Error() string { return "stateful binding " + e.Reason }
 
 type Request struct {
+	// PinnedAccountID is set only after server-side owner-token validation.
+	// It never bypasses group/eligibility/health/concurrency/RPM admission.
+	PinnedAccountID string
 	// RequireBinding forbids choosing a fresh account for server-side state.
 	RequireBinding bool
 	// PreserveBinding disallows temporary overflow when the bound account is busy.
@@ -823,6 +826,9 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*Lease, error) {
 	now := p.now()
 	p.expireBindingsLocked(now, 64)
+	if req.PinnedAccountID != "" {
+		return p.ownerLeaseLocked(cfg, req, now)
+	}
 	if l, err, handled := p.mistralHitLocked(cfg, req, now); handled {
 		return l, err
 	}

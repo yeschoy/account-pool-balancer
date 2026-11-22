@@ -19,6 +19,7 @@ type plan struct {
 	includeSources bool
 	options        searchOptions
 	sources        []websearch.Source
+	owner          *ownerTokenState
 }
 
 func hasSearch(o object) (bool, error) {

@@ -21,6 +21,7 @@
       "upstreamBaseUrl": "http://account-pool-balancer:8790/v1",
       "upstreamKeyEnv": "SEARCH_GATEWAY_MISTRAL_UPSTREAM_KEY",
       "mode": "compat",
+      "requirePoolOwner": true,
       "allowedModels": ["deepseek-v4-1-flash-1017"]
     }
   ]

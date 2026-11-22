@@ -15,6 +15,7 @@
 - 未发送普通绑定不checkpoint；同一provisional偏好的任一真正发送者都可确认，只有创建者可撤销未确认偏好。迟到回调必须校验generation，不能复活已淘汰绑定。
 - 分组等待上限及定向唤醒；账号换组后旧lease释放也唤醒当前已发布组，但不唤醒无关组。队列满/禁止排队时需要排队的请求本地429，不靠borrow绕过队列准入。`pool.Request.MaxWaiters=0`对旧调用方保持不增加限制；server把Mistral配置的0映射为禁止排队。
 - 延续原MarkSent、source校验、绝对TTL、普通绑定采样合并和退出强刷；不恢复活跃/RPM预约；Mistral Responses仍无状态，不新增previous_response_id服务端续传。
+- 显式请求级owner（合同见websearch-gateway.md）：只有服务端验证加密令牌后才可设置`pool.Request.PinnedAccountID`。同Pool.mu内重验group/provider/启用/资格/健康/排除，再复用admitLocked/leaseLocked；不得绕过并发/RPM、忙时overflow、失败重选或改写长期会话绑定。无该字段的旧调用路径不变。owner不是锁住整个搜索期的并发lease；每轮仍独立MarkSent/Release，只保证同一外部请求内不换账号。
 
 ## 不可变快照与统计
 - Normalize最后创建账号/组/下游Key/native-source索引；Normalize开始及Store.Update调用可变callback前清除旧索引。请求只读发布快照。Clone不共享可变索引map。

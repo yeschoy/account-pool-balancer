@@ -17,6 +17,9 @@ type roundResult struct {
 }
 
 func (g *Gateway) round(r *http.Request, route Route, p plan, re *roundEmitter) (roundResult, error) {
+	if p.owner != nil {
+		r = withOwner(r, p.owner)
+	}
 	resp, err := g.request(r, route, "/v1/responses", marshal(p.body))
 	if err != nil {
 		return roundResult{}, err
@@ -24,6 +27,11 @@ func (g *Gateway) round(r *http.Request, route Route, p plan, re *roundEmitter) 
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return roundResult{}, upstream("upstream_http_error")
+	}
+	if p.owner != nil {
+		if err := acceptPoolOwner(resp, p.owner); err != nil {
+			return roundResult{}, err
+		}
 	}
 	if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		b, err := io.ReadAll(io.LimitReader(resp.Body, g.cfg.MaxResponseBytes+1))

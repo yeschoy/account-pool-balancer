@@ -563,6 +563,7 @@ func (s *Server) httpClient(proxyURL string) *http.Client {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", s.handleV1)
+	mux.HandleFunc("GET /v1/pool-capabilities", s.handlePoolCapabilities)
 	mux.HandleFunc("/v1/responses/ws", s.handleFactoryResponsesWS)
 	mux.HandleFunc("/v1beta/", s.handleV1Beta)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

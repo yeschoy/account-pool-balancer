@@ -39,6 +39,7 @@ type Route struct {
 	UpstreamKeyEnv     string   `json:"upstreamKeyEnv"`
 	Mode               string   `json:"mode"` // native | compat | disabled
 	AllowedModels      []string `json:"allowedModels,omitempty"`
+	RequirePoolOwner   bool     `json:"requirePoolOwner,omitempty"`
 	token, upstreamKey string
 }
 
@@ -104,6 +105,9 @@ func (c *Config) resolve(getenv func(string) string) error {
 		}
 		if r.Mode != "native" && r.Mode != "compat" && r.Mode != "disabled" {
 			return fmt.Errorf("route %s requires explicit native/compat/disabled mode", r.ID)
+		}
+		if r.RequirePoolOwner && r.Mode != "compat" {
+			return fmt.Errorf("requirePoolOwner is supported only on compat routes")
 		}
 		if r.Mode == "compat" {
 			needSearch = true

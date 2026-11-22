@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "第二阶段完成Codex源码合同选项/历史往返/流式顺序/真实URL引用；normal/race/vet/build通过，固定同一Mistral账号+Tavily合成实测3模型调用/1搜索约5.04秒成功。未部署、未改NewAPI、未做真实Codex操作；cached-only和多账号owner仍是门禁，保留in_progress。并发Factory窗口曾误收开发文件，未重写历史，后续定向提交。",
-  "meta": {"codeStatus":"phase2-controlled-live","localValidation":"passed","realUpstream":"synthetic-fixed-account-passed","realClient":"not-tested","containerBuild":"not-run-daemon-unresponsive","deployment":"not-deployed"}
+  "notes": "第三阶段真实经过在线Mistral号池的3轮合成请求全部单attempt200/同账号/累计usage逐项匹配，线上config hash未变。请求内加密owner协议已实现并通过本地网关→原Pool正常/忙/源变化等HTTP测试及全仓normal/race/vet/build；线上旧版capability405未支持，仍未部署/改NewAPI/做真实Codex操作。等待明确部署授权及新协议/客户端验收，保持in_progress。",
+  "meta": {"codeStatus":"phase3-pool-owner-implemented","localValidation":"full-repo-normal-race-vet-build-passed","realUpstream":"online-mistral-pool-synthetic-passed","ownerProtocol":"local-passed-not-deployed","realClient":"not-tested","containerBuild":"not-run-daemon-unresponsive","deployment":"not-deployed"}
 }
