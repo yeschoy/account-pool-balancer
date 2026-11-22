@@ -200,8 +200,8 @@ func TestFactoryGeminiCompatibilityFailureNoReplay(t *testing.T) {
 func TestStreamRelayRecordsForwardLag(t *testing.T) {
 	res := &attemptResult{}
 	res.streamEvents = 3
-	res.streamMaxLagMs = 2
-	if res.streamEvents != 3 || res.streamMaxLagMs != 2 {
+	res.streamMaxLagUs = 450
+	if res.streamEvents != 3 || res.streamMaxLagUs != 450 {
 		t.Fatal("fields not assigned")
 	}
 }

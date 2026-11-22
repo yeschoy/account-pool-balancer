@@ -96,7 +96,7 @@ type requestLog struct {
 	AverageTPS          *float64            `json:"averageTps,omitempty"`
 	TTFTMs              *int64              `json:"ttftMs"`
 	StreamEvents        int                 `json:"streamEvents,omitempty"`
-	StreamMaxLagMs      int64               `json:"streamMaxLagMs,omitempty"`
+	StreamMaxLagUs      int64               `json:"streamMaxLagUs,omitempty"`
 	UpstreamDurationMs  *int64              `json:"upstreamDurationMs,omitempty"`
 	UpstreamOutputMs    *int64              `json:"upstreamOutputMs,omitempty"`
 	UpstreamTPS         *float64            `json:"upstreamTps,omitempty"`
@@ -251,11 +251,11 @@ type attemptResult struct {
 	downstreamStatus int
 	ruleID           string
 	ttft             *int64
-	// streamEvents counts delivered upstream events and streamMaxLagMs is the
+	// streamEvents counts delivered upstream events and streamMaxLagUs is the
 	// worst delay between reading an event and flushing it downstream. Together
 	// they show the relay forwards each event instead of batching replies.
 	streamEvents    int
-	streamMaxLagMs  int64
+	streamMaxLagUs  int64
 	upstreamStarted time.Time
 	upstreamFirst   time.Time
 	upstreamLast    time.Time
@@ -547,7 +547,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				rec.CacheHit = &hit
 			}
 			rec.TTFTMs = res.ttft
-			rec.StreamEvents, rec.StreamMaxLagMs = res.streamEvents, res.streamMaxLagMs
+			rec.StreamEvents, rec.StreamMaxLagUs = res.streamEvents, res.streamMaxLagUs
 			if rec.Provider == config.ProviderMistral {
 				applyUpstreamTiming(rec, res)
 			}
@@ -2588,6 +2588,12 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		return res // Preserve received bytes; never synthesize DONE or replay.
 	}
 	firstDone := mistralResponses && mistralResponsesTerminal(firstEvent, firstData) || deployStream && isTerminalEvent(firstEvent, firstData) || geminiStream && geminiTerminal(firstData)
+	if lag := time.Since(res.upstreamFirst).Microseconds(); lag >= 0 {
+		res.streamEvents++
+		if lag > res.streamMaxLagUs {
+			res.streamMaxLagUs = lag
+		}
+	}
 	if !write(first) {
 		if firstDone {
 			return res
@@ -2651,10 +2657,10 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				if isErr, _, _ := sseError(event, data); isErr {
 					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
 				}
-				if lag := time.Since(m.at).Milliseconds(); lag >= 0 {
+				if lag := time.Since(m.at).Microseconds(); lag >= 0 {
 					res.streamEvents++
-					if lag > res.streamMaxLagMs {
-						res.streamMaxLagMs = lag
+					if lag > res.streamMaxLagUs {
+						res.streamMaxLagUs = lag
 					}
 				}
 				if !write(outEvent) {
