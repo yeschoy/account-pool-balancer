@@ -25,11 +25,16 @@ var GeminiToolSchemaKeys = map[string]bool{
 // keys Google accepts and reports whether anything changed. Non-schema fields
 // of the declaration (name, description) are untouched.
 func SanitizeGeminiTools(body []byte) ([]byte, bool) {
-	var m object
-	if decode(body, &m) != nil || m == nil {
+	m, err := decodeTop(body)
+	if err != nil {
 		return body, false
 	}
-	tools, ok := m["tools"].([]any)
+	// Only the declarations are decoded; contents keep their original bytes.
+	raw, _, err := m.field("tools")
+	if err != nil {
+		return body, false
+	}
+	tools, ok := raw.([]any)
 	if !ok {
 		return body, false
 	}
@@ -68,7 +73,10 @@ func SanitizeGeminiTools(body []byte) ([]byte, bool) {
 	if !changed {
 		return body, false
 	}
-	out, err := marshal(m)
+	if m.set("tools", tools) != nil {
+		return body, false
+	}
+	out, err := m.marshal()
 	if err != nil {
 		return body, false
 	}

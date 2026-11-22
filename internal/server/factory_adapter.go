@@ -207,9 +207,14 @@ func prepareFactoryPlan(cfg *config.Config, path string, body []byte, trusted bo
 		// Factory refuses a request declaring certain tool names outright, so a
 		// refused tool is renamed before the opening and renamed back in the
 		// reply. This is independent of the prompt adapters.
-		aliased, aliases := factory.AliasToolNames(plan.body)
+		// One pass: renaming all is a superset of the refused-name pass, and
+		// each pass decodes and re-encodes the whole conversation.
+		var aliased []byte
+		var aliases map[string]string
 		if cfg.Factory.EffectiveRenameAllTools() {
 			aliased, aliases = factory.AliasToolNamesRenamingAll(plan.body)
+		} else {
+			aliased, aliases = factory.AliasToolNames(plan.body)
 		}
 		if len(aliases) > 0 {
 			plan.body = aliased
@@ -261,9 +266,12 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
 		// Factory refuses a function declaration whose name it blocks, so the
 		// tool is renamed here and renamed back in the reply.
-		aliased, found := factory.AliasToolNames(body)
+		var aliased []byte
+		var found map[string]string
 		if cfg.Factory.EffectiveRenameAllTools() {
 			aliased, found = factory.AliasToolNamesRenamingAll(body)
+		} else {
+			aliased, found = factory.AliasToolNames(body)
 		}
 		if len(found) > 0 {
 			body, aliases = aliased, found

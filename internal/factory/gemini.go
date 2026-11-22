@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"regexp"
@@ -49,30 +50,55 @@ func ParseGeminiCountTokens(path string) (model string, ok bool) {
 // safety settings) are kept as they arrived. A malformed body is rejected
 // before any account is leased, rather than forwarded to a wrong path.
 func OpenGeminiBody(model string, body []byte) ([]byte, error) {
-	var m object
-	if decode(body, &m) != nil || m == nil {
-		return nil, errors.New("Factory Gemini request must be a JSON object")
+	m, err := openGeminiTop(body)
+	if err != nil {
+		return nil, err
 	}
-	contents, ok := m["contents"].([]any)
-	if !ok || contents == nil {
-		return nil, errors.New("Factory Gemini request requires a contents array")
+	changed, err := placeGeminiModel(m, model)
+	if err != nil {
+		return nil, err
 	}
-	changed := false
-	if existing, ok := m["model"].(string); !ok || existing != model {
-		m["model"] = model
-		changed = true
+	// Only the instruction is decoded; contents stay as their original bytes.
+	si, present, err := m.field("systemInstruction")
+	if err != nil {
+		return nil, errNotObject
 	}
-	if openGeminiSystem(m) {
+	holder := object{}
+	if present {
+		holder["systemInstruction"] = si
+	}
+	if openGeminiSystem(holder) {
+		if err := m.set("systemInstruction", holder["systemInstruction"]); err != nil {
+			return nil, err
+		}
 		changed = true
 	}
 	if !changed {
 		return body, nil
 	}
-	out, err := marshal(m)
+	return m.marshal()
+}
+
+// openGeminiTop decodes a generateContent body's top level and requires the
+// contents array.
+func openGeminiTop(body []byte) (topObject, error) {
+	m, err := decodeTop(body)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Factory Gemini request must be a JSON object")
 	}
-	return out, nil
+	if !m.isArray("contents") {
+		return nil, errors.New("Factory Gemini request requires a contents array")
+	}
+	return m, nil
+}
+
+// placeGeminiModel writes the path's model into the body unless it is there.
+func placeGeminiModel(m topObject, model string) (bool, error) {
+	var existing string
+	if raw, ok := m["model"]; ok && json.Unmarshal(raw, &existing) == nil && existing == model {
+		return false, nil
+	}
+	return true, m.set("model", model)
 }
 
 // openGeminiSystem mirrors the plugin's geminiBody: the system instruction's
@@ -134,22 +160,15 @@ func OpenGeminiBodyWith(model string, body []byte, inject bool) ([]byte, error) 
 	if inject {
 		return OpenGeminiBody(model, body)
 	}
-	var m object
-	if decode(body, &m) != nil || m == nil {
-		return nil, errors.New("Factory Gemini request must be a JSON object")
-	}
-	if contents, ok := m["contents"].([]any); !ok || contents == nil {
-		return nil, errors.New("Factory Gemini request requires a contents array")
-	}
-	if existing, ok := m["model"].(string); ok && existing == model {
-		return body, nil
-	}
-	m["model"] = model
-	out, err := marshal(m)
+	m, err := openGeminiTop(body)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	changed, err := placeGeminiModel(m, model)
+	if err != nil || !changed {
+		return body, err
+	}
+	return m.marshal()
 }
 
 // DropGeminiStreamField removes a body-level stream flag. Google's route takes
@@ -157,15 +176,15 @@ func OpenGeminiBodyWith(model string, body []byte, inject bool) ([]byte, error) 
 // droid sends no stream field; a client that sets one would otherwise reach the
 // captured /generate route with a field Factory does not expect.
 func DropGeminiStreamField(body []byte) []byte {
-	var m object
-	if decode(body, &m) != nil || m == nil {
+	m, err := decodeTop(body)
+	if err != nil {
 		return body
 	}
 	if _, ok := m["stream"]; !ok {
 		return body
 	}
 	delete(m, "stream")
-	out, err := marshal(m)
+	out, err := m.marshal()
 	if err != nil {
 		return body
 	}

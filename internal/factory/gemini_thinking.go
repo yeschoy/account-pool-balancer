@@ -7,11 +7,15 @@ func ApplyGeminiThinkingLevel(body []byte, level string) ([]byte, bool) {
 	if level == "" {
 		return body, false
 	}
-	var m object
-	if decode(body, &m) != nil || m == nil {
+	m, err := decodeTop(body)
+	if err != nil {
 		return body, false
 	}
-	gen := obj(m["generationConfig"])
+	raw, _, err := m.field("generationConfig")
+	if err != nil {
+		return body, false
+	}
+	gen := obj(raw)
 	if gen == nil {
 		gen = object{}
 	}
@@ -19,8 +23,10 @@ func ApplyGeminiThinkingLevel(body []byte, level string) ([]byte, bool) {
 		return body, false
 	}
 	gen["thinkingConfig"] = object{"thinkingLevel": level}
-	m["generationConfig"] = gen
-	out, err := marshal(m)
+	if m.set("generationConfig", gen) != nil {
+		return body, false
+	}
+	out, err := m.marshal()
 	if err != nil {
 		return body, false
 	}

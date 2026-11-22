@@ -6,11 +6,15 @@ package factory
 // the first visible text only arrives when thinking finishes (27 s for a long
 // answer), so a client that renders thoughts sees progress immediately.
 func ApplyGeminiIncludeThoughts(body []byte) ([]byte, bool) {
-	var m object
-	if decode(body, &m) != nil || m == nil {
+	m, err := decodeTop(body)
+	if err != nil {
 		return body, false
 	}
-	gen := obj(m["generationConfig"])
+	raw, _, err := m.field("generationConfig")
+	if err != nil {
+		return body, false
+	}
+	gen := obj(raw)
 	if gen == nil {
 		gen = object{}
 	}
@@ -26,8 +30,10 @@ func ApplyGeminiIncludeThoughts(body []byte) ([]byte, bool) {
 	}
 	tc["includeThoughts"] = true
 	gen["thinkingConfig"] = tc
-	m["generationConfig"] = gen
-	out, err := marshal(m)
+	if m.set("generationConfig", gen) != nil {
+		return body, false
+	}
+	out, err := m.marshal()
 	if err != nil {
 		return body, false
 	}
