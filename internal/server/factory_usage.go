@@ -22,6 +22,12 @@ type factoryUsageModel struct {
 	CachedTokens int64   `json:"cachedTokens"`
 	CostUSD      float64 `json:"costUsd"`
 	Priced       bool    `json:"priced"` // false: the model has no rate
+	// TTFTP50/TTFTP95 are the measured time-to-first-token of this model's
+	// successful streaming requests, so a caller can tell in advance what to
+	// expect instead of watching a blank screen.
+	TTFTP50     int64 `json:"ttftP50Ms,omitempty"`
+	TTFTP95     int64 `json:"ttftP95Ms,omitempty"`
+	TTFTSamples int64 `json:"ttftSamples,omitempty"`
 }
 
 // factoryUsageTotals is what Google's published rates make of the requests the
@@ -67,6 +73,7 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 	price := cfg.Factory.EffectivePricing()
 	totals := factoryUsageTotals{ScannedAt: time.Now().Format(time.RFC3339)}
 	byModel := map[string]*factoryUsageModel{}
+	ttft := map[string][]int64{}
 	paths, _ := filepath.Glob(filepath.Join(s.dataDir, "logs", "requests-*.jsonl"))
 	sort.Strings(paths)
 	for _, path := range paths {
@@ -85,6 +92,8 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 				OutputTokens *int64   `json:"outputTokens"`
 				CachedTokens *int64   `json:"cachedTokens"`
 				Cost         *float64 `json:"cost"`
+				TTFTMs       *int64   `json:"ttftMs"`
+				Status       int      `json:"status"`
 				Currency     string   `json:"currency"`
 			}
 			if json.Unmarshal(sc.Bytes(), &rec) != nil {
@@ -108,6 +117,9 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 			}
 			if rec.CachedTokens != nil {
 				totals.CachedTokens += *rec.CachedTokens
+			}
+			if rec.TTFTMs != nil && *rec.TTFTMs > 0 && rec.Status == 200 {
+				ttft[rec.Model] = append(ttft[rec.Model], *rec.TTFTMs)
 			}
 			m := byModel[rec.Model]
 			if m == nil {
@@ -143,6 +155,20 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 			totals.CostUSD += cost
 		}
 		f.Close()
+	}
+	for name, values := range ttft {
+		if len(values) == 0 {
+			continue
+		}
+		sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+		m := byModel[name]
+		if m == nil {
+			m = &factoryUsageModel{Model: name}
+			byModel[name] = m
+		}
+		m.TTFTSamples = int64(len(values))
+		m.TTFTP50 = values[(len(values)-1)*50/100]
+		m.TTFTP95 = values[(len(values)-1)*95/100]
 	}
 	models := make([]factoryUsageModel, 0, len(byModel))
 	for _, m := range byModel {
