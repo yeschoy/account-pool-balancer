@@ -593,54 +593,28 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			s.logs.Append("requests", rec.TS, rec)
 		}
 		if cw != nil && detailEnabled && ((rec.Provider != config.ProviderTokenHarbor && !config.NativeGateway(rec.Provider)) || result != "failed" || len(rec.failureDetails) == 0) {
+			// Everything request-local that can still change is captured here;
+			// the body walk, redaction and encoding run in buildDetail, off
+			// the request path for pools whose body is not a pooled buffer.
 			max := cw.max
 			d := &detailLog{TS: rec.TS, RequestID: rid, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model,
-				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestHeaders: maskHeaders(cfg, reqHeader), RequestBodyBytes: len(reqBody),
-				ResponseHeaders: maskHeaders(cfg, cw.Header()), ResponseBodyBytes: cw.n}
+				ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: result, RequestBodyBytes: len(reqBody),
+				ResponseBodyBytes: cw.n}
 			if rec.Provider == config.ProviderMistral {
 				d.WireVersion, d.UpstreamAttempts = 1, rec.upstreamDetails
 				detailIdentities = append(detailIdentities, rec.upstreamIdentities...)
 			}
 			d.RequestBodyTruncated = reqBodyIncomplete
-			capturedBody := reqBody
-			if rec.Provider == config.ProviderOpenCodeGo {
-				d.RequestHeaders = maskHeaders(cfg, goPrivateHeaders(reqHeader))
-				for _, name := range cfg.Routing.SessionHeaders {
-					for key := range d.RequestHeaders {
-						if strings.EqualFold(key, name) {
-							d.RequestHeaders[key] = []string{"[REDACTED]"}
-						}
-					}
-				}
-				d.ResponseHeaders = maskHeaders(cfg, goPrivateHeaders(cw.Header()))
-				capturedBody = goPrivateBody(reqBody)
+			respBody, respCut := cw.body() // a copy, at most max bytes
+			in := detailInput{cfg: cfg, d: d, max: max, reqHeader: reqHeader, respHeader: cw.Header().Clone(), reqBody: reqBody,
+				respBody: respBody, respCut: respCut, identities: append([]string(nil), detailIdentities...)}
+			// Token Harbor and Mistral read the body into a pooled, budgeted
+			// buffer released when the handler returns: build those now.
+			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral {
+				s.buildDetail(in)
+			} else {
+				s.deferDetail(int64(cap(reqBody)+cap(respBody)), func() { s.buildDetail(in) })
 			}
-			if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) || rec.Provider == config.ProviderFactory {
-				d.RequestHeaders = maskHeaders(cfg, thPrivateHeaders(reqHeader))
-				for _, name := range cfg.Routing.SessionHeaders {
-					for key := range d.RequestHeaders {
-						if strings.EqualFold(key, name) {
-							d.RequestHeaders[key] = []string{"[REDACTED]"}
-						}
-					}
-				}
-				d.ResponseHeaders = maskHeaders(cfg, thPrivateHeaders(cw.Header()))
-				var cut bool
-				capturedBody, cut = thBodyPreview(reqBody, detailIdentities, max)
-				d.RequestBodyTruncated = d.RequestBodyTruncated || cut
-			}
-			var reqCut bool
-			d.RequestBody, reqCut = maskBody(cfg, capturedBody, max)
-			d.RequestBodyTruncated = d.RequestBodyTruncated || reqCut
-			respBody, cut := cw.body()
-			if rec.Provider == config.ProviderOpenCodeGo {
-				respBody = goPrivateBody(respBody)
-			} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderMistral || config.NativeGateway(rec.Provider) {
-				respBody = thPrivateBody(respBody, detailIdentities)
-			}
-			d.ResponseBody, _ = maskBody(cfg, respBody, len(respBody))
-			d.ResponseBodyTruncated = cut
-			s.logs.Append("details", rec.TS, d)
 		}
 		var prompt int64
 		if rec.InputTokens != nil {

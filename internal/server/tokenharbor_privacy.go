@@ -263,10 +263,6 @@ func (s *Server) thFailureDetail(cfg *config.Config, rec *requestLog, r *http.Re
 	}
 	rec.failureDetails[index] = true
 	limit := nativeDetailBodyLimit(cfg, rec.Provider)
-	req, reqCut := thBodyPreview(body, res.privateIdentities, limit)
-	resp, respCut := thBodyPreview(res.body, res.privateIdentities, limit)
-	requestText, requestCut := maskBody(cfg, req, limit)
-	responseText, responseCut := maskBody(cfg, resp, limit)
 	headers := maskHeaders(cfg, thPrivateHeaders(r.Header))
 	for _, name := range cfg.Routing.SessionHeaders {
 		for key := range headers {
@@ -279,5 +275,24 @@ func (s *Server) thFailureDetail(cfg *config.Config, rec *requestLog, r *http.Re
 	if status < 100 {
 		status = 502
 	}
-	s.logs.Append("details", rec.TS, &detailLog{TS: rec.TS, RequestID: rec.RequestID, AttemptIndex: index, Context: "failed_attempt", Terminal: res.terminal, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: "failed", RequestHeaders: headers, RequestBody: requestText, RequestBodyBytes: len(body), RequestBodyTruncated: reqCut || requestCut, ResponseHeaders: maskHeaders(cfg, thPrivateHeaders(res.header)), ResponseBody: responseText, ResponseBodyBytes: len(res.body), ResponseBodyTruncated: respCut || responseCut})
+	d := &detailLog{TS: rec.TS, RequestID: rec.RequestID, AttemptIndex: index, Context: "failed_attempt", Terminal: res.terminal, Protocol: rec.Protocol, Method: r.Method, Path: r.URL.Path, Model: rec.Model, ClientKeyID: rec.ClientKeyID, ClientKeyName: rec.ClientKeyName, Provider: rec.Provider, AccountID: rec.AccountID, Status: status, Result: "failed", RequestHeaders: headers, RequestBodyBytes: len(body), ResponseHeaders: maskHeaders(cfg, thPrivateHeaders(res.header)), ResponseBodyBytes: len(res.body)}
+	identities := append([]string(nil), res.privateIdentities...)
+	respBody := bytes.Clone(res.body) // the attempt result outlives this call and may be rewritten
+	build := func() {
+		req, reqCut := thBodyPreview(body, identities, limit)
+		resp, respCut := thBodyPreview(respBody, identities, limit)
+		requestText, requestCut := maskBody(cfg, req, limit)
+		responseText, responseCut := maskBody(cfg, resp, limit)
+		d.RequestBody, d.RequestBodyTruncated = requestText, reqCut || requestCut
+		d.ResponseBody, d.ResponseBodyTruncated = responseText, respCut || responseCut
+		s.logs.Append("details", d.TS, d)
+	}
+	// A failed attempt is recorded before the retry is sent; building it
+	// inline would delay the next attempt. Token Harbor's body is a pooled
+	// buffer released with the handler, so only that pool builds inline.
+	if rec.Provider == config.ProviderTokenHarbor {
+		build()
+		return
+	}
+	s.deferDetail(int64(cap(body)+cap(respBody)), build)
 }

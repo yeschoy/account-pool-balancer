@@ -177,7 +177,12 @@ func Open(dir string, limits func() Limits) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) Dropped() int64     { return s.dropped.Load() }
+func (s *Store) Dropped() int64 { return s.dropped.Load() }
+
+// NoteDropped counts a record the caller discarded before Append (a detail
+// build shed under load), so Dropped reports every lost record.
+func (s *Store) NoteDropped() { s.dropped.Add(1) }
+
 func (s *Store) QueuedBytes() int64 { return s.queued.Load() }
 func (s *Store) QueueLength() int   { return len(s.ch) }
 func (s *Store) reserveQueue(n, limit int64) bool {

@@ -49,6 +49,7 @@ type Server struct {
 	pool           *pool.Pool
 	quota          *quota.Poller
 	logs           *logstore.Store
+	details        detailQueue // background detail-log builds; see detail_async.go
 	usageCache     factoryUsageCache
 	stats          *stats.Stats
 	secret         []byte
@@ -500,7 +501,8 @@ func (s *Server) Run(ctx context.Context) {
 			s.stopPerch()
 			s.stopTokenHarbor()
 			s.stopX50()
-			s.stopTelnyx() // cancels in-flight registrations and flushes the store
+			s.stopTelnyx()   // cancels in-flight registrations and flushes the store
+			s.closeDetails() // queued detail builds append to logs
 			s.logs.Close()
 			return
 		case <-counters.C:
