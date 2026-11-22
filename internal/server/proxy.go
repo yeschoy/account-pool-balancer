@@ -813,7 +813,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.Model, rec.Stream = gmodel, gstream
 	}
 	if rec.Provider == config.ProviderFactory {
-		rec.factoryPlan, err = prepareFactory(cfg, r.URL.Path, body)
+		trusted := cfg.Factory.EffectiveAmpSkipPromptRewrite() && factory.IsAmpClient(r.Header)
+		rec.factoryPlan, err = prepareFactoryFor(cfg, r.URL.Path, body, trusted)
 		if err != nil {
 			rec.ErrorCategory = "request"
 			writeLocalError(w, proto, 400, "invalid_request_error", "factory_model_protocol", err.Error(), 0)
@@ -883,6 +884,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.CacheControl = bytes.Contains(body, []byte(`"cache_control"`))
 	} else if rec.Provider == config.ProviderTokenHarbor || rec.Provider == config.ProviderFactory {
 		rec.ClientFamily = goClientFamily(r.Header, obj)
+		if rec.factoryPlan != nil && rec.factoryPlan.trustedPrompt {
+			rec.ClientFamily = "amp" // prompt adapters skipped for this request
+		}
 		// Record which session headers the client actually sent: a request that
 		// bound by conversation fingerprint should say so, and the console shows
 		// these candidates in its request-header view.

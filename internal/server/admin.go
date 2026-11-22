@@ -1611,6 +1611,9 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 				c.Factory.DroidVersion = strings.TrimSpace(in.Factory.DroidVersion)
 				c.Factory.SystemMode = strings.TrimSpace(in.Factory.SystemMode)
 				c.Factory.EscapeClientPhrases = in.Factory.EscapeClientPhrases
+				if in.Factory.AmpSkipPromptRewrite != nil {
+					c.Factory.AmpSkipPromptRewrite = in.Factory.AmpSkipPromptRewrite
+				}
 				c.Factory.ThinkingLevel = strings.ToLower(strings.TrimSpace(in.Factory.ThinkingLevel))
 				c.Factory.IncludeThoughts = in.Factory.IncludeThoughts
 				c.Factory.RenameAllTools = in.Factory.RenameAllTools

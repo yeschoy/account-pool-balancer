@@ -1406,6 +1406,8 @@
           <span></span><span class="hint">开启后对**原生 Gemini** 调用注入 <code>thinkingConfig.includeThoughts=true</code>（客户端自己设过则不覆盖）。实测 2026-11-22：开启后第一帧思考内容约 <strong>2.3s</strong> 到达，可见正文仍要等思考结束（长回答约 27s 才开始），所以它让"等待期有进展可见"，不会让正文提前。Chat/Responses 转换路径不受此开关影响。</span>
           <label for="factory-escape-phrases">转义被拒短语</label><label class="check"><input id="factory-escape-phrases" type="checkbox">开启</label>
           <span></span><span class="hint">Factory 的 usage policy 会读整个对话：出现其它 agent 的 system 提示词（如 <code>You are Claude Code…</code>、<code>You have been invoked in the following environment:</code>）时整条对话都会被 403 <code>content_policy_rejected</code>。开启后把这些短语的首字符写成 JSON <code>\u0059</code> 转义，JSON 解析后模型读到的仍是原字符，只有线上字节不同。关闭则原样发送。</span>
+          <label for="factory-amp-skip-rewrite">Amp 跳过提示词改写</label><label class="check"><input id="factory-amp-skip-rewrite" type="checkbox">开启</label>
+          <span></span><span class="hint">按请求头 <code>X-Amp-*</code>（如 <code>X-Amp-Thread-Id</code>）识别 Amp CLI，只看请求头名、不扫正文。开启后 Amp 请求不做 magpie 提示词改写和"转义被拒短语"的全文字符串匹配，省掉长对话每次一整轮 JSON 解码/编码；工具改名、droid 开头行和协议适配照常。请求日志的客户端列显示 <code>amp</code>。若 Factory 对 Amp 请求返回 403 <code>content_policy_rejected</code>，关闭此项即恢复全文匹配。</span>
           <label for="factory-compatibility">有限协议转换</label><label class="check"><input id="factory-compatibility" type="checkbox">开启</label>
           <span></span><span class="hint">开启后可从 Chat / Responses / Messages 调用非原生协议模型（含 Gemini）。Gemini 签名工具续轮须走原生接口；不支持的请求本地 400。跨协议 SSE 缓冲完整上游响应后输出（上限 16 MiB），不是低延迟流。关闭后只允许原生协议，不影响原生工具 schema 适配。Fast 仅在显式选择 Fast 模型或请求 fast/priority 时映射，可能花更多额度。</span>
           <label for="factory-standard-only">仅使用Standard额度</label><label class="check"><input id="factory-standard-only" type="checkbox">开启</label>

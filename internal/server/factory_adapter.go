@@ -31,6 +31,9 @@ type factoryRequestPlan struct {
 	// adapted marks a body magpie's adapters rewrote (identity lines, pi
 	// openings, harness wording); the task instructions are unchanged.
 	adapted bool
+	// trustedPrompt marks an Amp request opting out of prompt string adapters;
+	// it does not guarantee upstream policy acceptance.
+	trustedPrompt bool
 	// toolAliases maps a renamed tool (alias) to the caller's own name. Factory
 	// refuses requests declaring certain tool names, so a refused tool goes out
 	// under a name it takes and the reply is renamed back.
@@ -53,11 +56,30 @@ type factoryRequestPlan struct {
 // the one body change beyond routing is droid's fixed system opening (see
 // factory.OpenBody), which Factory requires of every caller.
 func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryRequestPlan, error) {
+	return prepareFactoryFor(cfg, path, body, false)
+}
+
+// prepareFactoryFor lets Amp callers opt out of prompt string matching
+// (see factory.IsAmpClient). The header is a performance hint, not client
+// authentication or a guarantee that Factory accepts the prompt.
+// Trusted bodies skip magpie's prompt adapters and the refused-phrase escape:
+// both scan every string in the body and, on a long agent conversation, cost a
+// full decode/encode per request. Tool aliasing, droid's opening and every
+// protocol adapter still apply.
+func prepareFactoryFor(cfg *config.Config, path string, body []byte, trusted bool) (*factoryRequestPlan, error) {
+	plan, err := prepareFactoryPlan(cfg, path, body, trusted)
+	if plan != nil {
+		plan.trustedPrompt = trusted
+	}
+	return plan, err
+}
+
+func prepareFactoryPlan(cfg *config.Config, path string, body []byte, trusted bool) (*factoryRequestPlan, error) {
 	if model, ok := factory.ParseGeminiCountTokens(path); ok {
-		return prepareFactoryCountTokens(cfg, model, body)
+		return prepareFactoryCountTokens(cfg, model, body, trusted)
 	}
 	if model, stream, ok := factory.ParseGeminiPath(path); ok {
-		return prepareFactoryGenerate(cfg, model, stream, body, "")
+		return prepareFactoryGenerate(cfg, model, stream, body, "", trusted)
 	}
 	if path == "/v1/embeddings" {
 		return prepareFactoryEmbeddings(cfg, body)
@@ -95,7 +117,7 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 		if err != nil {
 			return nil, fmt.Errorf("Factory Gemini conversion: %w", err)
 		}
-		plan, err := prepareFactoryGenerate(cfg, model, stream, converted, from)
+		plan, err := prepareFactoryGenerate(cfg, model, stream, converted, from, trusted)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +196,7 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	case config.SystemKeep:
 		// unchanged
 	default:
-		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie && !trusted {
 			// magpie's adapters rewrite only the fixed client sentences and
 			// keep every task instruction.
 			if adapted, changed := factory.MagpieAdapt(string(to), plan.body); changed {
@@ -200,7 +222,7 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 	}
 	// A conversation that quotes another agent's prompt is refused wherever it
 	// appears, so the phrases are escaped before the request leaves.
-	if cfg.Factory.EffectiveEscapeClientPhrases() {
+	if cfg.Factory.EffectiveEscapeClientPhrases() && !trusted {
 		if escaped, changed := factory.EscapeClientPhrases(plan.body); changed {
 			plan.body = escaped
 			plan.escaped = true
@@ -215,7 +237,7 @@ func prepareFactory(cfg *config.Config, path string, body []byte) (*factoryReque
 // prepareFactoryGenerate applies the same Factory wire processing to native
 // Gemini requests and requests already converted to GenerateContentRequest.
 // A nonempty from marks cross-protocol requests, which reject lossy schemas.
-func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body []byte, from opencode.Protocol) (*factoryRequestPlan, error) {
+func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body []byte, from opencode.Protocol, trusted bool) (*factoryRequestPlan, error) {
 	requested := model
 	resolved, ok := resolveFactoryAuto(cfg, model, "generate")
 	if !ok {
@@ -259,7 +281,7 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	default:
 		// Factory requires the opening on this route too, so open mode and
 		// magpie mode both keep the systemInstruction.
-		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie && !trusted {
 			body = factory.MagpieAdaptGemini(body)
 		}
 		b, err = factory.OpenGeminiBodyWith(model, body, true)
@@ -293,7 +315,7 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	}
 	// Factory's policy reads the whole body, so a refused sentence is escaped
 	// here too; JSON decoding gives the model the original characters.
-	if cfg.Factory.EffectiveEscapeClientPhrases() && cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
+	if cfg.Factory.EffectiveEscapeClientPhrases() && cfg.Factory.EffectiveSystemMode() != config.SystemKeep && !trusted {
 		if escaped, changed := factory.EscapeClientPhrases(b); changed {
 			b = escaped
 		}
@@ -383,7 +405,7 @@ func replaceFactoryModel(body []byte, model string) ([]byte, error) {
 
 // prepareFactoryCountTokens mirrors the generate body opening so the count
 // matches what the generate request would carry, but targets /countTokens.
-func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*factoryRequestPlan, error) {
+func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte, trusted bool) (*factoryRequestPlan, error) {
 	requested := model
 	resolved, ok := resolveFactoryAuto(cfg, model, "generate")
 	if !ok {
@@ -412,7 +434,7 @@ func prepareFactoryCountTokens(cfg *config.Config, model string, body []byte) (*
 	default:
 		// Factory requires the opening on this route too, so open mode and
 		// magpie mode both keep the systemInstruction.
-		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie {
+		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie && !trusted {
 			body = factory.MagpieAdaptGemini(body)
 		}
 		b, err = factory.OpenGeminiBodyWith(model, body, true)

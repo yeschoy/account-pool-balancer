@@ -79,6 +79,13 @@ type Factory struct {
 	// prompt is not rejected. The model still reads the same characters after
 	// JSON decoding; only the wire bytes differ.
 	EscapeClientPhrases *bool `json:"escapeClientPhrases,omitempty"`
+	// AmpSkipPromptRewrite sends requests from the Amp CLI (identified by its
+	// X-Amp-* headers) without the prompt string adapters: magpie's prompt
+	// rewrites and the refused-phrase escape both scan every text in the body,
+	// and are deliberately bypassed for Amp. This is not a guarantee of upstream
+	// policy acceptance; disable on content_policy_rejected. Tool-name aliasing
+	// and droid's required opening still apply. Unset means yes.
+	AmpSkipPromptRewrite *bool `json:"ampSkipPromptRewrite,omitempty"`
 	// ThinkingLevel writes generationConfig.thinkingConfig.thinkingLevel on
 	// Gemini requests that carry no thinking setting of their own. Measured
 	// 2026-11-22 against the gateway: "minimal" drops time-to-first-token on
@@ -191,6 +198,12 @@ func (f Factory) EffectiveRenameAllTools() bool {
 // escaped. Unset means yes: it only rewrites text Factory already refuses.
 func (f Factory) EffectiveEscapeClientPhrases() bool {
 	return f.EscapeClientPhrases == nil || *f.EscapeClientPhrases
+}
+
+// EffectiveAmpSkipPromptRewrite reports whether Amp CLI requests bypass the
+// prompt string adapters. Unset means yes.
+func (f Factory) EffectiveAmpSkipPromptRewrite() bool {
+	return f.AmpSkipPromptRewrite == nil || *f.AmpSkipPromptRewrite
 }
 
 // EffectiveUserAgent resolves the inference UA: account override, pool

@@ -1712,6 +1712,7 @@ async function loadSettings() {
   $('#factory-thinking-level').value = s.factory?.thinkingLevel || '';
   $('#factory-include-thoughts').checked = s.factory?.includeThoughts === true;
   $('#factory-escape-phrases').checked = s.factory?.escapeClientPhrases !== false;
+  $('#factory-amp-skip-rewrite').checked = s.factory?.ampSkipPromptRewrite !== false;
   $('#factory-models').value = JSON.stringify(s.factory?.models || [], null, 2);
   $('#deploy-settings').classList.toggle('hidden', !isDeploy());
   $('#deploy-base').value = s.deploy?.baseUrl || 'https://api.deploy.com/api/v1';
@@ -1791,6 +1792,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
       droidVersion: $('#factory-droid-version').value.trim(),
       systemMode: $('#factory-system-mode').value,
       escapeClientPhrases: $('#factory-escape-phrases').checked,
+      ampSkipPromptRewrite: $('#factory-amp-skip-rewrite').checked,
       thinkingLevel: $('#factory-thinking-level').value,
       includeThoughts: $('#factory-include-thoughts').checked, models,
       proxyPool: lines($('#factory-proxy-pool').value), userAgents: lines($('#factory-ua-pool').value), userAgent: $('#factory-user-agent').value.trim(), managementUserAgent: $('#factory-management-user-agent').value.trim() };

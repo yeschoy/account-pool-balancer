@@ -1,5 +1,12 @@
 # Factory AI 号池与全局号池启停
 
+## Amp 提示词快速通道（本地验证，未部署）
+
+- `factory.ampSkipPromptRewrite` 默认开启。仅按请求头名是否有 `X-Amp-*`（如 `X-Amp-Thread-Id`）识别，不读取或匹配提示词正文；它是客户端可声明的性能提示，不是身份认证。
+- 命中后跳过 magpie 提示词字符串改写和 `escapeClientPhrases` 全文匹配；工具名称别名、droid 固定开头和协议适配仍执行。命中的请求日志标为 `clientFamily=amp`。其他客户端保持原行为。
+- 控制台 **Factory AI → 路由设置 → Amp 跳过提示词改写** 可关闭。关闭后 Amp 恢复原有全文匹配；保存、重载、旧客户端省略字段和其他池保存的隔离均有回归测试，旧客户端省略不会重置已保存的关闭值。
+- **尚未完成生产 Amp 验收**：Amp 的身份句可能触发 Factory `403 content_policy_rejected`，不能因识别到请求头便保证上游接受。遇到该错误先关闭本开关；不要换账号/出口绕过策略拒绝。
+
 ## Gemini 模型的三个兼容入口
 
 在 **Factory AI → 路由设置 → 有限协议转换** 开启 `factory.compatibility` 后，配置为 `generate` / `google` 的 Gemini 模型可以通过下列三个 HTTP 入口调用。模型名保持不变（例如 `gemini-4-carbon`），使用 Factory 池的下游密钥，不要把上游 `fk-` Key 发给下游。仍由同一个 Factory 池选账号，发往 `/api/llm/g/v1/generate`，再按调用入口返回 JSON 或 SSE。
