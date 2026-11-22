@@ -30,39 +30,59 @@ type factoryUsageModel struct {
 	TTFTSamples int64 `json:"ttftSamples,omitempty"`
 }
 
+// factoryUsageAccount is one Factory account's share of the scanned request log.
+type factoryUsageAccount struct {
+	AccountID    string  `json:"accountId"`
+	AccountName  string  `json:"accountName,omitempty"`
+	Email        string  `json:"email,omitempty"`
+	Configured   bool    `json:"configured"`
+	Enabled      bool    `json:"enabled"`
+	Requests     int64   `json:"requests"`
+	Success      int64   `json:"success"`
+	InputTokens  int64   `json:"inputTokens"`
+	OutputTokens int64   `json:"outputTokens"`
+	CachedTokens int64   `json:"cachedTokens"`
+	CostUSD      float64 `json:"costUsd"`
+	Unpriced     int64   `json:"unpriced,omitempty"`
+	LastAt       string  `json:"lastAt,omitempty"`
+}
+
 // factoryUsageTotals is what Google's published rates make of the requests the
 // Factory pool served. It is an estimate from the recorded token counts, not an
 // upstream invoice: a request whose usage was never reported cannot be priced.
 type factoryUsageTotals struct {
-	From         string              `json:"from"` // first timestamp in the logs
-	To           string              `json:"to"`
-	Requests     int64               `json:"requests"`
-	InputTokens  int64               `json:"inputTokens"`
-	OutputTokens int64               `json:"outputTokens"`
-	CachedTokens int64               `json:"cachedTokens"`
-	CostUSD      float64             `json:"costUsd"`
-	Unpriced     int64               `json:"unpriced"` // requests with no rate or no usage
-	Models       []factoryUsageModel `json:"models"`
-	ScannedAt    string              `json:"scannedAt"`
+	From         string                `json:"from"` // first timestamp in the logs
+	To           string                `json:"to"`
+	Requests     int64                 `json:"requests"`
+	InputTokens  int64                 `json:"inputTokens"`
+	OutputTokens int64                 `json:"outputTokens"`
+	CachedTokens int64                 `json:"cachedTokens"`
+	CostUSD      float64               `json:"costUsd"`
+	Unpriced     int64                 `json:"unpriced"` // requests with no rate or no usage
+	Models       []factoryUsageModel   `json:"models"`
+	Accounts     []factoryUsageAccount `json:"accounts,omitempty"`
+	ScannedAt    string                `json:"scannedAt"`
 }
 
 type factoryUsageCache struct {
 	mu     sync.Mutex
 	at     time.Time
+	rev    int64
 	totals factoryUsageTotals
 }
 
-// factoryUsage recomputes the totals at most once a minute: the request log is
-// append-only and its segments are small, so a full scan is cheap, but the
-// console refreshes often.
+// factoryUsage recomputes the totals at most once a minute (or when config
+// changes): the request log is append-only and its segments are small, so a
+// full scan is cheap, but the console refreshes often.
 func (s *Server) factoryUsage(cfg *config.Config) factoryUsageTotals {
 	s.usageCache.mu.Lock()
 	defer s.usageCache.mu.Unlock()
-	if time.Since(s.usageCache.at) < time.Minute {
+	if !s.usageCache.at.IsZero() && s.usageCache.rev == cfg.Revision && time.Since(s.usageCache.at) < time.Minute {
 		return s.usageCache.totals
 	}
 	totals := s.scanFactoryUsage(cfg)
 	s.usageCache.at = time.Now()
+	s.usageCache.rev = cfg.Revision
 	s.usageCache.totals = totals
 	return totals
 }
@@ -73,9 +93,25 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 	price := cfg.Factory.EffectivePricing()
 	totals := factoryUsageTotals{ScannedAt: time.Now().Format(time.RFC3339)}
 	byModel := map[string]*factoryUsageModel{}
+	byAccount := map[string]*factoryUsageAccount{}
+	for _, a := range cfg.Accounts {
+		if a.Provider != config.ProviderFactory {
+			continue
+		}
+		byAccount[a.ID] = &factoryUsageAccount{
+			AccountID:   a.ID,
+			AccountName: a.Name,
+			Email:       a.Email,
+			Configured:  true,
+			Enabled:     a.Enabled,
+		}
+	}
 	ttft := map[string][]int64{}
-	paths, _ := filepath.Glob(filepath.Join(s.dataDir, "logs", "requests-*.jsonl"))
-	sort.Strings(paths)
+	var paths []string
+	if s.dataDir != "" {
+		paths, _ = filepath.Glob(filepath.Join(s.dataDir, "logs", "requests-*.jsonl"))
+		sort.Strings(paths)
+	}
 	for _, path := range paths {
 		f, err := os.Open(path)
 		if err != nil {
@@ -88,6 +124,8 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 				TS           string   `json:"ts"`
 				Provider     string   `json:"provider"`
 				Model        string   `json:"model"`
+				AccountID    string   `json:"accountId"`
+				AccountName  string   `json:"accountName"`
 				InputTokens  *int64   `json:"inputTokens"`
 				OutputTokens *int64   `json:"outputTokens"`
 				CachedTokens *int64   `json:"cachedTokens"`
@@ -136,6 +174,32 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 			if rec.CachedTokens != nil {
 				m.CachedTokens += *rec.CachedTokens
 			}
+			var acc *factoryUsageAccount
+			if rec.AccountID != "" {
+				acc = byAccount[rec.AccountID]
+				if acc == nil {
+					acc = &factoryUsageAccount{AccountID: rec.AccountID, AccountName: rec.AccountName}
+					byAccount[rec.AccountID] = acc
+				} else if acc.AccountName == "" && rec.AccountName != "" {
+					acc.AccountName = rec.AccountName
+				}
+				acc.Requests++
+				if rec.Status >= 200 && rec.Status < 300 {
+					acc.Success++
+				}
+				if rec.InputTokens != nil {
+					acc.InputTokens += *rec.InputTokens
+				}
+				if rec.OutputTokens != nil {
+					acc.OutputTokens += *rec.OutputTokens
+				}
+				if rec.CachedTokens != nil {
+					acc.CachedTokens += *rec.CachedTokens
+				}
+				if rec.TS > acc.LastAt {
+					acc.LastAt = rec.TS
+				}
+			}
 			// A recorded cost is authoritative; otherwise price the tokens with
 			// the rate in force at the request's time.
 			cost, currency, ok := 0.0, "", false
@@ -148,11 +212,17 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 			}
 			if !ok || currency != "USD" {
 				totals.Unpriced++
+				if acc != nil {
+					acc.Unpriced++
+				}
 				continue
 			}
 			m.CostUSD += cost
 			m.Priced = true
 			totals.CostUSD += cost
+			if acc != nil {
+				acc.CostUSD += cost
+			}
 		}
 		f.Close()
 	}
@@ -176,6 +246,25 @@ func (s *Server) scanFactoryUsage(cfg *config.Config) factoryUsageTotals {
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].CostUSD > models[j].CostUSD })
 	totals.Models = models
+	if len(byAccount) > 0 {
+		accounts := make([]factoryUsageAccount, 0, len(byAccount))
+		for _, a := range byAccount {
+			accounts = append(accounts, *a)
+		}
+		sort.Slice(accounts, func(i, j int) bool {
+			if accounts[i].CostUSD != accounts[j].CostUSD {
+				return accounts[i].CostUSD > accounts[j].CostUSD
+			}
+			if accounts[i].Requests != accounts[j].Requests {
+				return accounts[i].Requests > accounts[j].Requests
+			}
+			if accounts[i].AccountName != accounts[j].AccountName {
+				return accounts[i].AccountName < accounts[j].AccountName
+			}
+			return accounts[i].AccountID < accounts[j].AccountID
+		})
+		totals.Accounts = accounts
+	}
 	return totals
 }
 

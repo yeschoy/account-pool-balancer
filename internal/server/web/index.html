@@ -97,6 +97,10 @@
       <div id="ov-cards" class="cards"></div>
       <div class="panel"><h2>各模型 24 小时概况</h2>
         <div class="table-wrap"><table class="table" id="ov-models"><thead><tr><th>模型</th><th>请求</th><th>成功率</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>首字 p50 / p95</th><th>费用</th></tr></thead><tbody></tbody></table></div></div>
+      <div class="panel hidden" id="ov-factory-accounts-panel">
+        <div class="head-row"><h2>各账号使用额度统计</h2><span class="muted small" id="ov-factory-accounts-sub">按官方单价 × 记录到的 token 估算（非上游账单）</span></div>
+        <div class="table-wrap"><table class="table" id="ov-factory-accounts"><thead><tr><th>账号</th><th>24h 估算 / 请求</th><th>累计请求</th><th>累计输入</th><th>累计输出</th><th>累计缓存</th><th>累计估算额度</th><th>占比</th><th>最近使用</th></tr></thead><tbody></tbody></table></div>
+      </div>
       <div class="panel"><h2 id="ov-egress-title">各出口 IP 24 小时成功率</h2>
         <div class="table-wrap"><table class="table" id="ov-proxies"><thead><tr><th>出口</th><th>请求</th><th>成功率</th><th>成功</th><th>失败</th><th>取消</th></tr></thead><tbody></tbody></table></div></div>
       <div class="grid2">

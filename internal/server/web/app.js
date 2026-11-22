@@ -402,7 +402,7 @@ function renderPoolTabs() {
   $('#oc-batch [data-oc-batch="alt-return"]').classList.toggle('hidden', !isALTapi());
   // the last two columns of the account table mean different things per pool
   const heads = { windows: { opendesign: 'Design Plan 窗口', river: '额度', ollama: '额度（/api/balance）', modal: '可用 Endpoint', mistral: '套餐额度（Studio / Vibe）', tokenharbor: '周限 / 月限余额', modelstudio: '套餐与额度', factory: 'Factory 身份 / 额度', x50: '余额 / 目录', deploy: '额度与模型发现', 'opencode-zen': '额度（未知）', 'opencode-go': 'Go 订阅窗口' },
-    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', factory: '24h 用量', x50: '24h 用量', deploy: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
+    wallet: { opendesign: '钱包 / 套餐模型额度', river: '24h 用量', ollama: '已购额度 / 24h 用量', modal: '24h 用量', mistral: '24h 用量', tokenharbor: '24h 用量', modelstudio: '24h 用量', factory: '使用额度 / 24h 用量', x50: '24h 用量', deploy: '24h 用量', 'opencode-zen': '24h 用量', 'opencode-go': '24h 用量' } };
   $$('#acc-table th[data-head]').forEach((th) => { th.textContent = heads[th.dataset.head][pool] || ''; });
   $('#acc-empty').textContent = {
     x50: '添加 sk-50x-… 或从50X注册机批量入池；管理会话Token用于真实余额刷新，注册/推理代理独立。',
@@ -565,7 +565,50 @@ async function loadOverview() {
   }).join('') : `<p class="muted">${isMistral() ? '已接入 Studio / Vibe 套餐额度与组织订阅，请在账号页刷新查看；额度按用量百分比估算，不是钱包余额。读取失败或过期时标为未知并保留历史值。多个 Key 可能共享组织预算，不可直接相加；缓存命中由上游决定。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
   applyWidths($('#ov-windows'));
   $('#ov-status').innerHTML = Object.entries(o.status).map(([k, v]) => `<span class="badge ${statusClass(k)}">${esc(statusLabel(k))} ${v}</span>`).join('') || '<span class="muted">无账号</span>';
+  renderFactoryAccountUsage(o);
   $('#ov-updated').textContent = '更新于 ' + fmtTime(o.stats.generated);
+}
+
+function renderFactoryAccountUsage(o) {
+  const panel = $('#ov-factory-accounts-panel');
+  if (!panel) return;
+  panel.classList.toggle('hidden', !isFactory());
+  if (!isFactory()) return;
+  const u = o.factoryUsage || {};
+  const list = u.accounts || [];
+  const u24Map = o.stats?.accounts || {};
+  const totalCost = u.costUsd || 0;
+  const totalReq = list.reduce((sum, a) => sum + (a.requests || 0), 0);
+  const range = u.from && u.to ? ` · 日志区间 ${fmtTime(u.from, true)} ~ ${fmtTime(u.to, true)}` : '';
+  const sub = $('#ov-factory-accounts-sub');
+  if (sub) sub.textContent = `${num(list.length)} 个账号 · 累计估算 ${usdCost(u)}（按官方单价 × 记录到的 token，非上游账单${range}）`;
+  const tbody = $('#ov-factory-accounts tbody');
+  if (!tbody) return;
+  tbody.innerHTML = list.map((a) => {
+    const b24 = u24Map[a.accountId] || {};
+    const cost24 = b24.cu ? money(b24.cu, 'USD') : (b24.r ? '—' : '');
+    const cell24 = b24.r
+      ? `${cost24 ? `<div>${esc(cost24)}</div>` : ''}<div class="acc-sub">${num(b24.r)} 次 · ${num((b24.i || 0) + (b24.o || 0))} tokens</div>`
+      : '<span class="muted">—</span>';
+    const share = totalCost > 0 ? (a.costUsd / totalCost) * 100 : (totalReq > 0 ? (a.requests / totalReq) * 100 : 0);
+    const badges = [
+      !a.configured ? '<span class="badge">已删除</span>' : (!a.enabled ? '<span class="badge">已禁用</span>' : ''),
+    ].filter(Boolean).join(' ');
+    const name = a.accountName || a.accountId;
+    const subId = a.email && a.email !== name ? a.email : (a.accountId !== name ? a.accountId : '');
+    return `<tr>
+      <td><div class="acc-name">${esc(name)} ${badges}</div>${subId ? `<div class="acc-sub">${esc(subId)}</div>` : ''}</td>
+      <td class="num">${cell24}</td>
+      <td class="num">${num(a.requests || 0)}${a.unpriced ? `<div class="acc-sub">${num(a.unpriced)} 条未计价</div>` : ''}</td>
+      <td class="num">${num(a.inputTokens || 0)}</td>
+      <td class="num">${num(a.outputTokens || 0)}</td>
+      <td class="num">${num(a.cachedTokens || 0)}</td>
+      <td class="num"><b>${a.costUsd > 0 ? esc(money(a.costUsd, 'USD')) : '—'}</b></td>
+      <td class="num">${share > 0 ? `${share.toFixed(1)}%<div class="bar sm accent"><i data-w="${Math.min(share, 100).toFixed(1)}"></i></div>` : '<span class="muted">—</span>'}</td>
+      <td class="num">${a.lastAt ? esc(fmtTime(a.lastAt, true)) : '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="9" class="empty">暂无 Factory 账号或使用记录</td></tr>';
+  applyWidths(tbody);
 }
 
 // ---- accounts ----
@@ -750,6 +793,20 @@ function modelStudioQuotaHTML(a) {
   return text;
 }
 
+function factoryUsageCellHTML(a) {
+  const fu = a.factoryUsage || {};
+  const ou = a.usage24h || {};
+  const totalTok = (fu.inputTokens || 0) + (fu.outputTokens || 0);
+  const totalCost = fu.costUsd > 0 ? `<div><b>${esc(money(fu.costUsd, 'USD'))}</b></div>` : (fu.requests ? '<div>—</div>' : '');
+  const totalSub = fu.requests
+    ? `<div class="acc-sub" title="按官方单价 × 全部保留日志中的 token 估算，非上游账单">累计 ${num(fu.requests)} 次 · ${num(totalTok)} tokens${fu.unpriced ? ' · ' + num(fu.unpriced) + ' 未计价' : ''}</div>`
+    : '<div class="acc-sub">累计 0 次</div>';
+  const u24Cost = ou.cu ? `${esc(money(ou.cu, 'USD'))} · ` : '';
+  const u24Sub = ou.r
+    ? `<div class="acc-sub">24h ${u24Cost}${num(ou.r)} 次 · ${num((ou.i || 0) + (ou.o || 0))} tokens</div>`
+    : '<div class="acc-sub">24h 0 次</div>';
+  return (totalCost || (ou.r ? '' : '<div>—</div>')) + totalSub + u24Sub;
+}
 function factoryQuotaHTML(a) {
   const f = a.factory || a.quota?.factory;
   if (!f) return '<span class="muted">身份 / 额度未知</span><div class="acc-sub">请刷新；未知不是0</div>';
@@ -859,12 +916,14 @@ function accountRow(a) {
   const openCode = a.provider === 'opencode-zen' || a.provider === 'opencode-go';
   const ou = a.usage24h || {};
   const usage24 = `<div class="acc-sub">24h ${num(ou.r || 0)} 次 · ${num((ou.i || 0) + (ou.o || 0))} tokens</div>`;
-  const wallet = (modal || openCode || a.provider === 'factory' || a.provider === 'tokenharbor' || a.provider === 'mistral' || a.provider === 'deploy' || a.provider === 'x50')
-    ? (ou.r ? num(ou.r) + usage24 : '—')
-    : ollama
-      ? (q && q.ollama && q.ollama.purchasedUsd !== undefined && q.ollama.purchasedUsd !== ''
-        ? usd(q.ollama.purchasedUsd) + usage24 : '—')
-      : (q && q.walletUsd !== undefined && q.walletUsd !== '' ? usd(q.walletUsd) + (q.walletSource === 'preflight' ? '<div class="acc-sub">来源 preflight</div>' : '') : '—');
+  const wallet = a.provider === 'factory'
+    ? factoryUsageCellHTML(a)
+    : (modal || openCode || a.provider === 'tokenharbor' || a.provider === 'mistral' || a.provider === 'deploy' || a.provider === 'x50')
+      ? (ou.r ? num(ou.r) + usage24 : '—')
+      : ollama
+        ? (q && q.ollama && q.ollama.purchasedUsd !== undefined && q.ollama.purchasedUsd !== ''
+          ? usd(q.ollama.purchasedUsd) + usage24 : '—')
+        : (q && q.walletUsd !== undefined && q.walletUsd !== '' ? usd(q.walletUsd) + (q.walletSource === 'preflight' ? '<div class="acc-sub">来源 preflight</div>' : '') : '—');
   const pkg = !ollama && !modal && !openCode && a.provider !== 'mistral' && q && q.summary ? `<div class="acc-sub" title="套餐模型额度：Design Plan 窗口用尽后、以及调用套餐模型（Claude Sonnet、GPT-6 Sol、Gemini 等）时扣这里，按计费周期重置不结转">套餐模型 ${credits(q.summary.subscriptionCredits)}</div><div class="acc-sub">充值 ${credits(q.summary.rechargeCredits)}</div>` : '';
   const cov = !ollama && !modal && !openCode && q && q.coverage ? Object.entries(q.coverage) : [];
   const cat = q && q.catalog ? Object.entries(q.catalog) : [];

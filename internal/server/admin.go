@@ -324,6 +324,7 @@ type accountView struct {
 	ModelStudioQuotaState string                 `json:"modelStudioQuotaState,omitempty"`
 	ModelStudioQuotaNote  string                 `json:"modelStudioQuotaNote,omitempty"`
 	Factory               *quota.FactoryState    `json:"factory,omitempty"`
+	FactoryUsage          *factoryUsageAccount   `json:"factoryUsage,omitempty"`
 	Deploy                *quota.DeployDiagnosis `json:"deploy,omitempty"`
 	// FactoryOAuth marks an account created by the WorkOS device login. Its
 	// access token is not shown through the generic key copy.
@@ -350,9 +351,21 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		}
 	}
 	byWS := map[string][]string{}
+	hasFactory := false
 	for _, a := range cfg.Accounts {
 		if q := snaps[a.ID]; q != nil && q.WorkspaceID != "" {
 			byWS[q.WorkspaceID] = append(byWS[q.WorkspaceID], a.ID)
+		}
+		if a.Provider == config.ProviderFactory {
+			hasFactory = true
+		}
+	}
+	var factoryUsageByAcct map[string]factoryUsageAccount
+	if hasFactory {
+		fu := s.factoryUsage(cfg)
+		factoryUsageByAcct = make(map[string]factoryUsageAccount, len(fu.Accounts))
+		for _, a := range fu.Accounts {
+			factoryUsageByAcct[a.AccountID] = a
 		}
 	}
 	out := make([]accountView, 0, len(cfg.Accounts))
@@ -376,6 +389,10 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		}
 		if a.Provider == config.ProviderFactory {
 			v.Factory = snaps[a.ID].FactoryView()
+			if fu, ok := factoryUsageByAcct[a.ID]; ok {
+				cp := fu
+				v.FactoryUsage = &cp
+			}
 			if a.FactoryRefreshToken != "" {
 				v.FactoryOAuth, v.FactoryAccessExpires, v.FactoryOrgID = true, a.FactoryAccessExpires, a.FactoryOrgID
 				v.RuntimeKey, v.ControlKey, v.HasControlKey = "", "", false
