@@ -826,7 +826,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			// Google answers :streamGenerateContent with a single JSON array
 			// unless the caller adds alt=sse; keep that shape but stream it.
 			if proto == "gemini" && rec.factoryPlan.stream {
-				rec.factoryPlan.arrayStream = !strings.EqualFold(r.URL.Query().Get("alt"), "sse")
+				// Google answers without alt=sse with one JSON array. A client that
+				// explicitly asked for event-stream (new-api forwards that header)
+				// keeps the SSE shape it has always received here.
+				accept := strings.ToLower(r.Header.Get("Accept"))
+				rec.factoryPlan.arrayStream = !strings.EqualFold(r.URL.Query().Get("alt"), "sse") &&
+					!strings.Contains(accept, "text/event-stream")
 			}
 		}
 	}
