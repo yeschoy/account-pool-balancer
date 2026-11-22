@@ -73,6 +73,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：回传 Gemini 思考过程（2026-11-22 07:24 UTC，317cb8a）
+
+- 结论：首字延迟就是思考 token 的生成时间（长回答 25.6–27.5s 才出正文）；思考内容从约 2.3s 起可由上游流式回传。
+- 实现：`factory.includeThoughts`（默认关闭）→ 原生 Gemini 调用注入 `thinkingConfig.includeThoughts=true`，客户端自设不覆盖；控制台新增开关；Chat/Responses 转换路径不注入（其解析目前把 thought part 视为不支持）。
+- 线上已开启，实测：首帧思考 2.51s、首帧正文 25.58s、总耗时 26.62s；双内网别名 healthy。
+- 部署：镜像 `account-pool-balancer:release-317cb8a-20261122T072416Z`；备份 `20261122T072416Z-factory-thoughts-317cb8a/`。
+
 ## 当前部署：Google 响应形态（alt=sse）与增量 JSON 数组（2026-11-22 07:15 UTC，189ee62）
 
 - 需求：客户端不应被迫写 `alt=sse`，同时不能破坏已有聚合方（new-api）。

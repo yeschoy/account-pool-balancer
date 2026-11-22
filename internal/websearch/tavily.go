@@ -15,6 +15,8 @@ import (
 
 type Request struct {
 	Query string `json:"query"`
+	AllowedDomains []string `json:"allowedDomains,omitempty"`
+	ContextSize string `json:"contextSize,omitempty"`
 }
 type Source struct {
 	Title   string `json:"title"`
@@ -57,7 +59,19 @@ func (t *Tavily) Search(ctx context.Context, q Request) (Result, error) {
 	if limit < 1 || limit > 10 {
 		limit = 5
 	}
-	body, _ := json.Marshal(map[string]any{"query": q.Query, "topic": "general", "search_depth": "basic", "include_answer": false, "include_raw_content": false, "max_results": limit})
+	domains, err := NormalizeDomains(q.AllowedDomains)
+	if err != nil { return Result{}, &Error{Code:"invalid_search_domains",Status:400} }
+	contentLimit := 12000
+	switch q.ContextSize {
+	case "":
+	case "low": limit=min(limit,3); contentLimit=4000
+	case "medium": contentLimit=8000
+	case "high":
+	default: return Result{}, &Error{Code:"invalid_search_context",Status:400}
+	}
+	payload := map[string]any{"query": q.Query, "topic": "general", "search_depth": "basic", "include_answer": false, "include_raw_content": false, "include_usage":true, "max_results": limit}
+	if len(domains)>0 { payload["include_domains"]=domains }
+	body, _ := json.Marshal(payload)
 	timeout := t.Timeout
 	if timeout <= 0 {
 		timeout = 20 * time.Second
@@ -104,9 +118,10 @@ func (t *Tavily) Search(ctx context.Context, q Request) (Result, error) {
 		if e != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.User != nil || len(s.URL) > 4096 || len(s.Title) > 4096 {
 			return Result{}, &Error{Code: "invalid_search_source", Status: 502}
 		}
-		// Limit source text, on a UTF-8 boundary, before injecting it into context.
-		if len(s.Content) > 12000 {
-			s.Content = s.Content[:12000]
+		if !DomainAllowed(parsed.Hostname(), domains) { return Result{}, &Error{Code:"search_domain_violation",Status:502} }
+		// The context-size hint maps to bounded text, never an upstream token guarantee.
+		if len(s.Content) > contentLimit {
+			s.Content = s.Content[:contentLimit]
 			for len(s.Content) > 0 && !utf8.ValidString(s.Content) {
 				s.Content = s.Content[:len(s.Content)-1]
 			}

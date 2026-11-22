@@ -6,7 +6,9 @@
 4. [x] JSON/SSE 统一输出、逐帧推进、ID/序号映射与终态失败处理；不支持的函数后文本交错明确失败。
 5. [x] 独立命令、优雅关闭、容器/Compose/无凭据配置示例、文档（镜像未构建）。
 6. [x] HTTP Mock矩阵、race/vet/build、私密值审查；更新spec与任务记录，后续仅定向提交；并发窗口误收本任务文件的历史见validation.md。
-7. [ ] 下一阶段：真实Codex/NewAPI工具声明与流式历史、计费核对、跨轮账号连续性、按需高级参数/引用兼容；生产部署未授权未执行。
+7. [ ] 第二阶段（用户要求继续）：按Codex0.167.0公开hosted_spec.rs/models.rs修复显式external_web_access、往返省略sources/metadata、函数后流式交错；支持有边界的域名过滤/上下文提示、真实链接引用；补光标/用量/历史回放与安全测试。
+8. [ ] 受控真上游合成验证：直接固定一个已授权Mistral账号+Tavily，只验证最小工具/搜索/续轮，不重放用户历史、不修改线上设置；明确与Codex Desktop/NewAPI端到端不同。
+9. [ ] 跨轮账号owner协议及NewAPI测试渠道接入仍是后续生产门禁，不以直接固定上游测试冒充号池多账号验证。生产部署未授权未执行。
 
 验证：go test ./internal/websearch ./internal/searchgateway ./cmd/websearch-gateway；go test -race 同路径；go vet 同路径；go build -o .gotmp/websearch-gateway ./cmd/websearch-gateway。业务构建产物登记 _tmp_artifacts.md，未经同意不清理。
 

@@ -14,6 +14,17 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## 思考 token 就是首字延迟，且可提前回传（2026-11-22，`317cb8a`）
+
+- 实测（上游直连，长回答约 6 个列表）：思考阶段占满首字前的全部时间，不是"思考完才开始计时"。
+  | 设置 | 第一帧思考内容 | 第一帧可见正文 | 总耗时 |
+  |---|---|---|---|
+  | 默认（不回传思考） | — | **25.6–27.5s** | 26.6–33.2s |
+  | `thinkingConfig.includeThoughts=true` | **2.3–2.5s** | 25.6–27.5s（不变） | 26.6–33.2s |
+  - 结论：思考 token 从约 2s 起就产生并**可以流式回传**；可见正文仍要等思考结束（思考是真实计算）。回传思考不会让正文提前，但能让客户端在等待期持续收到数据。
+- 实现 `317cb8a`：配置 `factory.includeThoughts`，对**原生 Gemini** 调用注入 `thinkingConfig.includeThoughts=true`（客户端自己设过则尊重其选择），控制台 Factory 设置新增「回传思考过程（Gemini）」复选框。Chat/Responses 转换路径不注入。
+- 线上已开启，实测原生流：首帧思考 **2.51s**，首帧正文 25.58s，总耗时 26.62s。
+
 ## alt=sse 与响应形态（2026-11-22，`189ee62`）
 
 - `alt=sse` 是 Google 的**流式传输编码**开关：`streamGenerateContent` 默认返回**一个 JSON 数组**（`Array<GenerateContentResponse>`），加 `?alt=sse` 才返回 SSE 帧。之前的实现无论客户端有没有写 `alt=sse` 都返回 SSE，于是"不带 alt=sse 的严格客户端"会拿到它没请求的格式。
