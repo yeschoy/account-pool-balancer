@@ -825,7 +825,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			rec.Stream = rec.factoryPlan.stream
 			// Google answers :streamGenerateContent with a single JSON array
 			// unless the caller adds alt=sse; keep that shape but stream it.
-			if opencode.Protocol(proto) == opencode.Gemini && rec.factoryPlan.stream {
+			if proto == "gemini" && rec.factoryPlan.stream {
 				rec.factoryPlan.arrayStream = !strings.EqualFold(r.URL.Query().Get("alt"), "sse")
 			}
 		}
