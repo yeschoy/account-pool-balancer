@@ -38,6 +38,17 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory Amp 快速通道 / 详情日志性能（2026-11-22 18:05 UTC，c77d549）
+
+- 用户授权“清理，提交推送，部署”。只在独立worktree `/Users/lyh_god/workspaces/factory-amp-log` 的 `perf/factory-amp-log` 提交并推送四项代码改动（`f452720`、`64244ff`、`1c451ef`、`c77d549`）；未改动/合入/推送master。目标完整revision `c77d5490a177efe08844501b995bd62fb1bf72ac`，全仓normal/race/vet/build、17个Node测试、60秒fuzz和本地零账号浏览器已通过，不重复跑同提交完整测试。
+- 一次预检：线上旧镜像`e7eb119` healthy/0重启、磁盘余量278GiB；旧工作树`05e0044`有48项脏改动，未在该树构建。服务器fetch已推送分支后，从目标提交git archive到干净release。镜像`account-pool-balancer:release-c77d549-20261122T180420Z`，UTC构建 **18:04:20.640–18:04:28.439**（约7.80秒）。
+- UTC **18:05:31.690请求停旧，18:05:31.856退出；18:05:35.279完整一致备份完成**（data.tgz=101859035字节，gzip校验通过），沿线上全部Compose文件叠加image-only override切换；**18:05:35.550新实例启动，18:06:05.662首个保留成功健康检查，18:07:21.545核心验收完成并立即反馈**。旧退出至新启动约3.69秒，不将健康等待/验收耗时误报为停机时间。
+- 验收途中严格配置指纹因Compose重排Env列表而暂停；逐键复核所有环境变量名称和值完全相同，其余容器设置、User1000:1000、Healthcheck、8GiB资源、端口/卷/网络均保持。未二次重启、未回滚、未覆盖配置。`ai-internal`保留`account-pool-balancer`和`opendesign-balancer`，从`new-api`分别请求两别名`/healthz`均成功；宿主机健康和7个HTML引用JS（保留`?v=c05b3e3799`）逐字节匹配发布源码。
+- config.json字节完全不变，SHA256 `2f3853cf05eefdb8a8717dbc1308e68a100af45c4615b70dba755e0660635c44`、revision6796/228账号/19Key；Factory仍magpie、escapeClientPhrases=true、detailLog=true、includeThoughts=true、detailBodyKB=512。`ampSkipPromptRewrite`仍未显式保存，因此按新代码默认开启；未改NewAPI渠道或独立WebSearch网关，也未发送测试推理。
+- **18:08:08.404 UTC公网真实未登录浏览器**验证`https://ods.yeschoy.io/`登录页、healthz=200、Amp设置HTML存在，7个脚本均200且SHA256与release一致；18:08:48最终实例healthy/0重启/OOM=false。专用浏览器关闭，未登录管理台、不改WAF。**部署/入口/资源验收通过，不代表真实Amp提示词及负载验收完成**；用户需用Amp实测403 `content_policy_rejected`（若出现则关闭新增开关）并观察`logsDropped`是否增长，未宣称其生产计数为零。
+- 回退镜像`account-pool-balancer:rollback-20261122T180420Z`；release `/home/ubuntu/project/account-pool-balancer-releases/20261122T180420Z-c77d549/`保留干净源码、image override、构建日志和无凭证deployment-receipt；一致数据备份 `/home/ubuntu/backups/account-pool-balancer/20261122T180420Z-factory-amp-log-c77d549/`含原Compose/.env/config和data.tgz，权限受限须保留。回退沿线上Compose仅改image并`up -d --no-build --no-deps account-pool-balancer`，不自动恢复旧数据覆盖新写入。
+- 已依用户授权清理上一轮21项本地诊断/浏览器/测试产物，fuzz种子和Trellis记录保留；本次公网验收临时结果同授权清理。仅补文档不重新部署。
+
 ## 当前部署：WebSearch owner v1 + 独立网关隔离测试渠道（2026-11-22 10:55 UTC，e7eb119）
 
 - 用户明确授权升级Balancer、部署独立搜索网关并接**测试渠道，不切现有业务渠道**。代码`e7eb119ca808766c8ec49f6dd2058c3d712bd766`已推送origin/master；全仓normal/race/vet/两个build在同提交已通过，本次不重复。旧运行`317cb8a` healthy/0重启，线上旧工作树05e0044且大量脏改动，未在该树构建或覆盖分叉。服务器fetch后git archive目标提交生成干净release。

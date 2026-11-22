@@ -1,19 +1,19 @@
 # Factory AI 号池与全局号池启停
 
-## Amp 提示词快速通道（本地验证，未部署）
+## Amp 提示词快速通道（已部署c77d549，生产Amp待验收）
 
 - `factory.ampSkipPromptRewrite` 默认开启。仅按请求头名是否有 `X-Amp-*`（如 `X-Amp-Thread-Id`）识别，不读取或匹配提示词正文；它是客户端可声明的性能提示，不是身份认证。
 - 命中后跳过 magpie 提示词字符串改写和 `escapeClientPhrases` 全文匹配；工具名称别名、droid 固定开头和协议适配仍执行。命中的请求日志标为 `clientFamily=amp`。其他客户端保持原行为。
 - 控制台 **Factory AI → 路由设置 → Amp 跳过提示词改写** 可关闭。关闭后 Amp 恢复原有全文匹配；保存、重载、旧客户端省略字段和其他池保存的隔离均有回归测试，旧客户端省略不会重置已保存的关闭值。
 - **尚未完成生产 Amp 验收**：Amp 的身份句可能触发 Factory `403 content_policy_rejected`，不能因识别到请求头便保证上游接受。遇到该错误先关闭本开关；不要换账号/出口绕过策略拒绝。
 
-## 详情日志和 Gemini 适配性能（本地验证，未部署）
+## 详情日志和 Gemini 适配性能（已部署c77d549，负载待验收）
 
 - 详情构建、正文脱敏和编码放入有界后台队列（2 worker、最多256个排队任务、保留正文容量预算256MiB）。超限或关闭时丢弃详情并计入现有 `logsDropped`，不等待空位；原请求/错误摘要的行为不变。TokenHarbor、Mistral 的完成详情仍同步处理，避免池化缓冲回收后被读取。关闭先排空详情队列再关闭日志。
 - Gemini 适配只解码修改的顶层字段（systemInstruction、generationConfig、tools、model、stream），`contents` 保留原始 JSON 字节和大整数；每次仍用 `json.Valid` 校验完整正文，异常 key/重复 key 回退标准解码。工具别名只运行所选策略一次，不先执行一遍拒绝名称策略再执行全部改名。
 - 「各模型24小时概况」的 TTFT 单元格不再把 `<div class="acc-sub">` 当文本展示；分别转义动态值并保留静态标签。子行改为「累计样本」，因为 TTFT 样本来自保留期内的全部日志，不是24h请求数。
 - 最终代码本地基准（Apple M4、约1MiB Gemini、magpie，3轮）：普通适配 **15.9–16.2ms**，Amp适配 **12.7–12.8ms**，详情构建 **6.96–7.03ms**（已移出Factory请求路径）。交接阶段旧路径约27.7ms/22ms仅作历史对照，非同轮A/B；早期9ms/7ms中间版跳过了逐适配器完整校验，不代表最终实现。以上不包含上游推理或公网开销，不是线上TTFT/吞吐验收。
-- 验证：全仓 `go vet ./...`、`go test ./... -count=1`、`go test -race ./... -count=1`、17个Node web测试、构建通过；无效和有效JSON均参加60秒fuzz（约861万次）。本地零账号、OpenCode关闭的浏览器验证Amp开关保存刷新及TTFT假数据DOM。未部署、未进行生产Amp或负载验收；上线后需检查真实Amp是否403及 `logsDropped` 是否增长。
+- 验证：全仓 `go vet ./...`、`go test ./... -count=1`、`go test -race ./... -count=1`、17个Node web测试、构建通过；无效和有效JSON均参加60秒fuzz（约861万次）。本地零账号、OpenCode关闭的浏览器验证Amp开关保存刷新及TTFT假数据DOM。2026-11-22 18:05 UTC已部署OVH `c77d549`，双内网别名、Docker健康、配置保留与公网资源验收通过，见 `ovh-deployment.md`。未进行生产Amp或负载验收，仍需检查真实Amp是否403及 `logsDropped` 是否增长；未宣称生产丢弃数为零。
 
 ## Gemini 模型的三个兼容入口
 
