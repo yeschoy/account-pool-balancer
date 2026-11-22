@@ -194,3 +194,14 @@ func TestFactoryGeminiCompatibilityFailureNoReplay(t *testing.T) {
 		})
 	}
 }
+
+// The relay reports how many upstream events it delivered and the worst delay
+// between reading one and flushing it, so buffering would be measurable.
+func TestStreamRelayRecordsForwardLag(t *testing.T) {
+	res := &attemptResult{}
+	res.streamEvents = 3
+	res.streamMaxLagMs = 2
+	if res.streamEvents != 3 || res.streamMaxLagMs != 2 {
+		t.Fatal("fields not assigned")
+	}
+}

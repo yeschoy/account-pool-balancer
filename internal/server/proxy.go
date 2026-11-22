@@ -95,6 +95,8 @@ type requestLog struct {
 	UseTimeSec          *int64              `json:"useTimeSec,omitempty"`
 	AverageTPS          *float64            `json:"averageTps,omitempty"`
 	TTFTMs              *int64              `json:"ttftMs"`
+	StreamEvents        int                 `json:"streamEvents,omitempty"`
+	StreamMaxLagMs      int64               `json:"streamMaxLagMs,omitempty"`
 	UpstreamDurationMs  *int64              `json:"upstreamDurationMs,omitempty"`
 	UpstreamOutputMs    *int64              `json:"upstreamOutputMs,omitempty"`
 	UpstreamTPS         *float64            `json:"upstreamTps,omitempty"`
@@ -249,12 +251,17 @@ type attemptResult struct {
 	downstreamStatus int
 	ruleID           string
 	ttft             *int64
-	upstreamStarted  time.Time
-	upstreamFirst    time.Time
-	upstreamLast     time.Time
-	upstreamStream   bool
-	usage            usage
-	ms               int64
+	// streamEvents counts delivered upstream events and streamMaxLagMs is the
+	// worst delay between reading an event and flushing it downstream. Together
+	// they show the relay forwards each event instead of batching replies.
+	streamEvents    int
+	streamMaxLagMs  int64
+	upstreamStarted time.Time
+	upstreamFirst   time.Time
+	upstreamLast    time.Time
+	upstreamStream  bool
+	usage           usage
+	ms              int64
 	// turn is what this attempt asked and answered, for the Perch pool's
 	// cli-turn record. It is filled by the Perch path only and never logged
 	// as text: the reporter redacts it to digests before writing.
@@ -540,6 +547,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				rec.CacheHit = &hit
 			}
 			rec.TTFTMs = res.ttft
+			rec.StreamEvents, rec.StreamMaxLagMs = res.streamEvents, res.streamMaxLagMs
 			if rec.Provider == config.ProviderMistral {
 				applyUpstreamTiming(rec, res)
 			}
@@ -2642,6 +2650,12 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 				}
 				if isErr, _, _ := sseError(event, data); isErr {
 					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
+				}
+				if lag := time.Since(m.at).Milliseconds(); lag >= 0 {
+					res.streamEvents++
+					if lag > res.streamMaxLagMs {
+						res.streamMaxLagMs = lag
+					}
 				}
 				if !write(outEvent) {
 					if done {
