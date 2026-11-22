@@ -86,6 +86,11 @@ type Factory struct {
 	// are generated; low/medium/high keep thinking and stay slow. Empty leaves
 	// the upstream default (thinking on).
 	ThinkingLevel string `json:"thinkingLevel,omitempty"`
+	// IncludeThoughts asks the gateway to stream thinking content ("thought"
+	// parts) back to native Gemini callers that do not choose for themselves.
+	// It makes progress visible early: the first thought frame arrives in about
+	// two seconds while the visible answer waits for thinking to finish.
+	IncludeThoughts *bool `json:"includeThoughts,omitempty"`
 	// RenameAllTools renames every declared tool Factory has not been measured
 	// to accept, not only the names already known to be refused. The refused
 	// list grows without notice and a missed name refuses the whole request,
@@ -282,6 +287,12 @@ func (f Factory) EffectiveRouting() Routing {
 // had accepted it earlier the same day, and an injected level that is refused
 // fails the whole request.
 var factoryThinkingLevels = map[string]bool{"low": true, "medium": true, "high": true}
+
+// EffectiveIncludeThoughts reports whether thinking content is requested for
+// native Gemini callers that do not set it themselves.
+func (f Factory) EffectiveIncludeThoughts() bool {
+	return f.IncludeThoughts != nil && *f.IncludeThoughts
+}
 
 // NormalizeThinkingLevel validates the configured level and returns it.
 func (f Factory) NormalizeThinkingLevel() (string, bool) {

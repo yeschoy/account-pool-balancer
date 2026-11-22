@@ -34,3 +34,42 @@ func TestApplyGeminiThinkingLevel(t *testing.T) {
 		t.Fatal("empty level applied")
 	}
 }
+
+func TestApplyGeminiIncludeThoughts(t *testing.T) {
+	body := []byte(`{"contents":[{"parts":[{"text":"hi"}]}]}`)
+	out, changed := ApplyGeminiIncludeThoughts(body)
+	if !changed {
+		t.Fatal("includeThoughts not applied")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	tc := m["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)
+	if tc["includeThoughts"] != true {
+		t.Fatalf("thinkingConfig = %v", tc)
+	}
+	// An explicit caller choice wins, including false.
+	if _, ch := ApplyGeminiIncludeThoughts([]byte(`{"generationConfig":{"thinkingConfig":{"includeThoughts":false}}}`)); ch {
+		t.Fatal("overwrote an explicit includeThoughts=false")
+	}
+	// A caller that only chose a level keeps it while thoughts are added.
+	levelOnly := []byte(`{"generationConfig":{"thinkingConfig":{"thinkingLevel":"low"}}}`)
+	got, ch := ApplyGeminiIncludeThoughts(levelOnly)
+	if !ch {
+		t.Fatal("level-only request got no includeThoughts")
+	}
+	var lm map[string]any
+	if err := json.Unmarshal(got, &lm); err != nil {
+		t.Fatal(err)
+	}
+	ltc := lm["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)
+	if ltc["thinkingLevel"] != "low" || ltc["includeThoughts"] != true {
+		t.Fatalf("level lost: %v", ltc)
+	}
+	// A level already present keeps it while adding thoughts.
+	both := []byte(`{"generationConfig":{"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"low"}}}`)
+	if _, ch := ApplyGeminiIncludeThoughts(both); ch {
+		t.Fatal("reapplied includeThoughts")
+	}
+}

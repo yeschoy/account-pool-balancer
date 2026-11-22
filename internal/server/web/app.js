@@ -1710,6 +1710,7 @@ async function loadSettings() {
   $('#factory-droid-version').value = s.factory?.droidVersion || '';
   $('#factory-system-mode').value = s.factory?.systemMode || (s.factory?.droidBody === false ? 'keep' : 'open');
   $('#factory-thinking-level').value = s.factory?.thinkingLevel || '';
+  $('#factory-include-thoughts').checked = s.factory?.includeThoughts === true;
   $('#factory-escape-phrases').checked = s.factory?.escapeClientPhrases !== false;
   $('#factory-models').value = JSON.stringify(s.factory?.models || [], null, 2);
   $('#deploy-settings').classList.toggle('hidden', !isDeploy());
@@ -1790,7 +1791,8 @@ $('#btn-save-settings').addEventListener('click', async () => {
       droidVersion: $('#factory-droid-version').value.trim(),
       systemMode: $('#factory-system-mode').value,
       escapeClientPhrases: $('#factory-escape-phrases').checked,
-      thinkingLevel: $('#factory-thinking-level').value, models,
+      thinkingLevel: $('#factory-thinking-level').value,
+      includeThoughts: $('#factory-include-thoughts').checked, models,
       proxyPool: lines($('#factory-proxy-pool').value), userAgents: lines($('#factory-ua-pool').value), userAgent: $('#factory-user-agent').value.trim(), managementUserAgent: $('#factory-management-user-agent').value.trim() };
   }
   if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };

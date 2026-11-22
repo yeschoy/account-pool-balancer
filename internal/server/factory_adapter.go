@@ -269,6 +269,13 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	}
 	// A configured thinking level keeps interactive first-token latency low; a
 	// caller that set its own thinkingConfig keeps its choice.
+	// Native Gemini callers that do not ask for thinking content can still show
+	// progress early when the pool forwards it.
+	if from == "" && cfg.Factory.EffectiveIncludeThoughts() {
+		if applied, changed := factory.ApplyGeminiIncludeThoughts(b); changed {
+			b = applied
+		}
+	}
 	if level, ok := cfg.Factory.NormalizeThinkingLevel(); ok && level != "" {
 		if applied, changed := factory.ApplyGeminiThinkingLevel(b, level); changed {
 			b = applied
