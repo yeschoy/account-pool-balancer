@@ -1,0 +1,27 @@
+{
+  "listen": "0.0.0.0:8791",
+  "requestTimeoutSec": 180,
+  "maxConcurrent": 16,
+  "maxSearches": 3,
+  "maxBodyBytes": 4194304,
+  "maxResponseBytes": 8388608,
+  "historyTtlSec": 1800,
+  "historyMaxBytes": 33554432,
+  "historyMaxEntries": 1024,
+  "search": {
+    "endpoint": "https://tavily.ivanli.cc/api/tavily/search",
+    "apiKeyEnv": "SEARCH_GATEWAY_TAVILY_KEY",
+    "timeoutSec": 20,
+    "maxResults": 5
+  },
+  "routes": [
+    {
+      "id": "mistral",
+      "tokenEnv": "SEARCH_GATEWAY_MISTRAL_TOKEN",
+      "upstreamBaseUrl": "http://account-pool-balancer:8790/v1",
+      "upstreamKeyEnv": "SEARCH_GATEWAY_MISTRAL_UPSTREAM_KEY",
+      "mode": "compat",
+      "allowedModels": ["deepseek-v4-1-flash-1017"]
+    }
+  ]
+}

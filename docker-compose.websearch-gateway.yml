@@ -1,0 +1,30 @@
+# Independent opt-in service; this file never replaces the Balancer Compose.
+# Example only: review route credentials/model allowlist before enabling.
+services:
+  websearch-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.websearch-gateway
+    image: websearch-gateway:local
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8791:8791"
+    volumes:
+      - ./docs/websearch-gateway.example.json:/config/gateway.json:ro
+    environment:
+      SEARCH_GATEWAY_TAVILY_KEY: ${SEARCH_GATEWAY_TAVILY_KEY:?set search backend credential}
+      SEARCH_GATEWAY_MISTRAL_TOKEN: ${SEARCH_GATEWAY_MISTRAL_TOKEN:?set gateway route credential}
+      SEARCH_GATEWAY_MISTRAL_UPSTREAM_KEY: ${SEARCH_GATEWAY_MISTRAL_UPSTREAM_KEY:?set upstream pool client credential}
+    networks:
+      - ai-internal
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+networks:
+  ai-internal:
+    external: true

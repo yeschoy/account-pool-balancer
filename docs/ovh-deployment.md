@@ -73,6 +73,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：逐事件转发延迟指标（2026-11-22 06:40 UTC，65ef144）
+
+- 目的：用可持证数据回答"号池是否缓存中间事件"。新增请求日志字段 `streamEvents`（实际转发事件数）与 `streamMaxLagUs`（读到上游事件 → flush 给客户端的最大耗时，µs）。
+- 生产实测：114 帧请求 `streamEvents=114`、`streamMaxLagUs=70µs`；客户端相邻帧间隔 0.17–0.25s。另有 1 帧请求（lag 40µs），系上游自身只发一块。
+- 部署：镜像 `account-pool-balancer:release-65ef144-20261122T064030Z`；备份 `20261122T064030Z-factory-lagus-65ef144/`；healthy、双内网别名 ok。
+- 部署方式调整：改为「服务器侧 git fetch + git archive」生成 release 目录（SSH 传输大 tar 多次挂起），构建与切换仍用同一套备份/覆盖 image 流程。
+
 ## 当前部署：回退被拒的思考等级（2026-11-22 06:09 UTC，3f335db）
 
 - 事故：`thinkingLevel=minimal` 在 2026-11-21 20:00 部署时上游接受（首字约 1s），2026-11-22 06:01 起上游改为拒绝 `THINKING_LEVEL_MINIMAL`（400），错误日志记录 3 条失败。

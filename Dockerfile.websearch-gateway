@@ -1,0 +1,18 @@
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/websearch-gateway/ ./cmd/websearch-gateway/
+COPY internal/websearch/ ./internal/websearch/
+COPY internal/searchgateway/ ./internal/searchgateway/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /websearch-gateway ./cmd/websearch-gateway
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /websearch-gateway /usr/local/bin/websearch-gateway
+USER 1000:1000
+EXPOSE 8791
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["websearch-gateway", "-healthcheck", "http://127.0.0.1:8791/healthz"]
+ENTRYPOINT ["websearch-gateway"]
+CMD ["-config", "/config/gateway.json"]
