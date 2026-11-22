@@ -41,7 +41,9 @@ func (e *emitter) response(status string) object {
 	// search function or a reduced per-round token budget in those echoes.
 	for _, key := range []string{"tools", "tool_choice", "include", "max_output_tokens", "store"} {
 		delete(o, key)
-		if v := e.publicFields[key]; v != nil { o[key] = v }
+		if v := e.publicFields[key]; v != nil {
+			o[key] = v
+		}
 	}
 	// The upstream's last round is not the aggregate request's measured usage.
 	delete(o, "usage")
@@ -158,6 +160,11 @@ func (r *roundEmitter) frame(typ string, o object) error {
 		if _, ok := r.indices[index]; ok {
 			return upstream("duplicate_output_item")
 		}
+		for heldIndex := range r.held {
+			if heldIndex < index {
+				return upstream("unsupported_interleaved_tool_stream")
+			}
+		}
 		r.indices[index] = r.e.add(r.publicItem(item))
 		return r.e.writeErr
 	}
@@ -199,7 +206,47 @@ func (r *roundEmitter) finalItem(index int, item object) {
 		return
 	}
 	p := r.publicItem(item)
-	g := r.e.add(p)
+	initial := p
+	parts, _ := array(p["content"])
+	if r.e.stream && str(p["type"]) == "message" && len(parts) > 0 {
+		initial = clone(p)
+		initial["status"] = marshal("in_progress")
+		initial["content"] = marshal([]any{})
+	}
+	g := r.e.add(initial)
+	// A JSON response or a terminal-only SSE may contain the whole item without
+	// deltas. Emit actual text, not an empty synthetic stream, for those items.
+	if r.e.stream && str(p["type"]) == "message" {
+		for ci, raw := range parts {
+			part, err := decodeObject(raw)
+			if err != nil || str(part["type"]) != "output_text" {
+				continue
+			}
+			fields := object{"output_index": marshal(g), "item_id": p["id"], "content_index": marshal(ci)}
+			blank := clone(part)
+			blank["text"] = marshal("")
+			blank["annotations"] = marshal([]any{})
+			added := clone(fields)
+			added["part"] = marshal(blank)
+			r.e.event("response.content_part.added", added)
+			text := clone(fields)
+			text["delta"] = part["text"]
+			r.e.event("response.output_text.delta", text)
+			annotations, _ := array(part["annotations"])
+			for ai, annotation := range annotations {
+				a := clone(fields)
+				a["annotation_index"] = marshal(ai)
+				a["annotation"] = annotation
+				r.e.event("response.output_text.annotation.added", a)
+			}
+			done := clone(fields)
+			done["text"] = part["text"]
+			r.e.event("response.output_text.done", done)
+			done = clone(fields)
+			done["part"] = raw
+			r.e.event("response.content_part.done", done)
+		}
+	}
 	r.e.done(g, p)
 	r.indices[index] = g
 	r.done[index] = true

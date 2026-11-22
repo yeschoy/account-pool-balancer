@@ -2036,6 +2036,12 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 	isResponses := strings.HasPrefix(r.URL.Path, "/v1/responses") && acct.Provider != config.ProviderMistral
 	if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+		// A :streamGenerateContent caller without alt=sse asked for the JSON
+		// array shape; stream that array instead of relaying raw SSE frames.
+		if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.arrayStream {
+			timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
+			return s.relayGeminiArray(w, r, cfg, resp, res, cancel, &timedOut, attemptNo, start)
+		}
 		return s.relayStream(w, r, cfg, lease, resp, res, cancel, timer, &timedOut, attemptNo, start, isResponses, group, body, privateIdentities, audit)
 	}
 
@@ -2090,10 +2096,6 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		res.mistralLayout.observe(native, false)
 	}
 	h := w.Header()
-	if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.arrayStream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
-		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
-		return s.relayGeminiArray(w, r, cfg, resp, res, func() { cancel() }, &timedOut, attemptNo, start)
-	}
 	if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.stream && !strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		// A streaming Gemini caller asked for SSE; wrap a JSON answer rather
 		// than making it parse a content type it did not request.

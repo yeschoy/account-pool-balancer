@@ -107,7 +107,7 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 		e.begin()
 		hasClientCall := false
 		calls := []json.RawMessage{}
-		for i, raw := range result.output {
+		for _, raw := range result.output {
 			item, _ := decodeObject(raw)
 			if str(item["type"]) == "function_call" && str(item["name"]) == searchFunction {
 				calls = append(calls, raw)
@@ -116,7 +116,15 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 			if str(item["type"]) == "function_call" {
 				hasClientCall = true
 			}
-			re.finalItem(i, item)
+		}
+		if result.status == "incomplete" || len(calls) == 0 {
+			for i, raw := range result.output {
+				item, _ := decodeObject(raw)
+				if str(item["type"]) == "function_call" && str(item["name"]) == searchFunction {
+					continue
+				}
+				re.finalItem(i, item)
+			}
 		}
 		if e.writeErr != nil {
 			return e.writeErr
@@ -138,15 +146,21 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 		// Preserve original output (including reasoning and ordinary function calls)
 		// for the next model step. Search outputs are appended after the whole round.
 		p.input = append(p.input, result.output...)
-		for _, raw := range calls {
+		for i, raw := range result.output {
 			call, _ := decodeObject(raw)
+			if str(call["type"]) != "function_call" || str(call["name"]) != searchFunction {
+				re.finalItem(i, call)
+				continue
+			}
 			args, err := decodeObject([]byte(str(call["arguments"])))
 			if err != nil || len(args) != 1 || args["query"] == nil || str(call["call_id"]) == "" {
 				return upstream("invalid_search_arguments")
 			}
 			query := str(args["query"])
 			for _, secret := range []string{route.token, route.upstreamKey, g.cfg.Search.key} {
-				if secret != "" && strings.Contains(query, secret) { return invalid("sensitive_search_query", "Search query contained a configured credential and was not sent") }
+				if secret != "" && strings.Contains(query, secret) {
+					return invalid("sensitive_search_query", "Search query contained a configured credential and was not sent")
+				}
 			}
 			if strings.TrimSpace(query) == "" || len(query) > 4096 {
 				return upstream("invalid_search_arguments")
