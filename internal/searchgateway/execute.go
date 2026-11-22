@@ -96,6 +96,7 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 			p.body["max_output_tokens"] = marshal(remaining)
 		}
 		re := newRoundEmitter(e)
+		e.modelCalls++
 		result, err := g.round(r, route, p, re)
 		if err != nil {
 			return err
@@ -144,6 +145,9 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 				return upstream("invalid_search_arguments")
 			}
 			query := str(args["query"])
+			for _, secret := range []string{route.token, route.upstreamKey, g.cfg.Search.key} {
+				if secret != "" && strings.Contains(query, secret) { return invalid("sensitive_search_query", "Search query contained a configured credential and was not sent") }
+			}
 			if strings.TrimSpace(query) == "" || len(query) > 4096 {
 				return upstream("invalid_search_arguments")
 			}
@@ -155,11 +159,18 @@ func (g *Gateway) run(r *http.Request, route Route, p plan, e *emitter) error {
 			if e.writeErr != nil {
 				return e.writeErr
 			}
+			e.searchCalls++
 			found, err := g.search.Search(r.Context(), websearch.Request{Query: query})
 			if err != nil {
+				e.creditsComplete = false
 				return err
 			}
 			searches++
+			if found.Credits == nil || math.IsNaN(*found.Credits) || math.IsInf(*found.Credits, 0) || *found.Credits < 0 {
+				e.creditsComplete = false
+			} else {
+				e.searchCredits += *found.Credits
+			}
 			payload := marshal(map[string]any{"untrusted_web_results": found.Sources})
 			output := marshal(map[string]any{"type": "function_call_output", "call_id": str(call["call_id"]), "output": string(payload)})
 			public["status"] = marshal("completed")

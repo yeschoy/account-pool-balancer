@@ -8,19 +8,23 @@ import (
 )
 
 type emitter struct {
-	w                 http.ResponseWriter
-	stream, started   bool
-	responseID, model string
-	created           int64
-	seq               int
-	output            []json.RawMessage
-	writeErr          error
-	usage             json.RawMessage
-	last              object
+	w                       http.ResponseWriter
+	stream, started         bool
+	responseID, model       string
+	created                 int64
+	seq                     int
+	output                  []json.RawMessage
+	writeErr                error
+	usage                   json.RawMessage
+	last                    object
+	publicFields            object
+	modelCalls, searchCalls int
+	searchCredits           float64
+	creditsComplete         bool
 }
 
 func newEmitter(w http.ResponseWriter, stream bool, model string) *emitter {
-	return &emitter{w: w, stream: stream, responseID: id("resp_apb_"), model: model, created: time.Now().Unix(), output: []json.RawMessage{}}
+	return &emitter{w: w, stream: stream, responseID: id("resp_apb_"), model: model, created: time.Now().Unix(), output: []json.RawMessage{}, creditsComplete: true}
 }
 func (e *emitter) response(status string) object {
 	o := clone(e.last)
@@ -33,6 +37,12 @@ func (e *emitter) response(status string) object {
 	o["created_at"] = marshal(e.created)
 	o["status"] = marshal(status)
 	o["output"] = marshal(e.output)
+	// Responses commonly echo tools and options. Never expose the internal
+	// search function or a reduced per-round token budget in those echoes.
+	for _, key := range []string{"tools", "tool_choice", "include", "max_output_tokens", "store"} {
+		delete(o, key)
+		if v := e.publicFields[key]; v != nil { o[key] = v }
+	}
 	// The upstream's last round is not the aggregate request's measured usage.
 	delete(o, "usage")
 	if e.usage != nil {

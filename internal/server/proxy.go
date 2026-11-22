@@ -823,6 +823,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.Model = rec.factoryPlan.model
 		if rec.factoryPlan.generate {
 			rec.Stream = rec.factoryPlan.stream
+			// Google answers :streamGenerateContent with a single JSON array
+			// unless the caller adds alt=sse; keep that shape but stream it.
+			if opencode.Protocol(proto) == opencode.Gemini && rec.factoryPlan.stream {
+				rec.factoryPlan.arrayStream = !strings.EqualFold(r.URL.Query().Get("alt"), "sse")
+			}
 		}
 	}
 	if rec.Provider == config.ProviderTokenHarbor && rec.Model == "" {
@@ -2085,6 +2090,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		res.mistralLayout.observe(native, false)
 	}
 	h := w.Header()
+	if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.arrayStream && strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+		timer.Reset(time.Duration(cfg.Routing.RequestSec) * time.Second)
+		return s.relayGeminiArray(w, r, cfg, resp, res, func() { cancel() }, &timedOut, attemptNo, start)
+	}
 	if rec.factoryPlan != nil && rec.factoryPlan.generate && rec.factoryPlan.stream && !strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		// A streaming Gemini caller asked for SSE; wrap a JSON answer rather
 		// than making it parse a content type it did not request.

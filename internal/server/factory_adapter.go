@@ -39,6 +39,10 @@ type factoryRequestPlan struct {
 	generate    bool
 	countTokens bool
 	stream      bool
+	// arrayStream is a :streamGenerateContent caller that did not ask for
+	// alt=sse. Google answers that call with one JSON array, so the relay keeps
+	// the array shape while still writing each chunk as it arrives.
+	arrayStream bool
 	chatUsage   bool // Converted Chat SSE includes usage only when requested.
 }
 

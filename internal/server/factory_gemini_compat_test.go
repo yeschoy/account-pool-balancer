@@ -205,3 +205,38 @@ func TestStreamRelayRecordsForwardLag(t *testing.T) {
 		t.Fatal("fields not assigned")
 	}
 }
+
+// A :streamGenerateContent caller without alt=sse expects one JSON array. The
+// relay writes that array incrementally, so each element must join into valid
+// JSON and an upstream error frame must be reported as an envelope.
+func TestGeminiArrayShape(t *testing.T) {
+	parts := []string{
+		`{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"b"}]},"finishReason":"STOP"}]}`,
+	}
+	var out []byte
+	out = append(out, '[')
+	for i, p := range parts {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, p...)
+	}
+	out = append(out, ']')
+	var arr []map[string]any
+	if err := json.Unmarshal(out, &arr); err != nil {
+		t.Fatalf("array is not valid JSON: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("array length = %d", len(arr))
+	}
+	if !geminiTerminal([]byte(parts[1])) {
+		t.Fatal("finishReason not detected as terminal")
+	}
+	if err, st := geminiArrayEnvelope([]byte(`{"error":{"code":400,"message":"x"}}`)); !err || st != 502 {
+		t.Fatalf("envelope = %v/%d", err, st)
+	}
+	if err, _ := geminiArrayEnvelope([]byte(parts[0])); err {
+		t.Fatal("normal chunk treated as envelope")
+	}
+}

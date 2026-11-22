@@ -153,7 +153,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	emit := newEmitter(w, p.stream, str(o["model"]))
-	if err = g.run(r, route, p, emit); err != nil {
+	emit.publicFields = o
+	err = g.run(r, route, p, emit)
+	if g.log != nil {
+		code := "success"
+		if err != nil {
+			code = safeError(err).Code
+		}
+		g.log.Info("search compatibility finished", "route", route.ID, "code", code,
+			"modelCalls", emit.modelCalls, "searchCalls", emit.searchCalls, "usageComplete", emit.usage != nil,
+			"searchCredits", emit.searchCredits, "searchCreditsComplete", emit.creditsComplete)
+	}
+	if err != nil {
 		if emit.started {
 			emit.fail(err)
 		} else {
@@ -178,6 +189,9 @@ func (g *Gateway) request(r *http.Request, route Route, path string, body []byte
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := g.client.Do(req)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return nil, r.Context().Err()
+		}
 		return nil, upstream("upstream_transport_error")
 	}
 	return resp, nil
@@ -193,7 +207,7 @@ func (g *Gateway) passthrough(w http.ResponseWriter, r *http.Request, route Rout
 		g.writeError(w, upstream("upstream_redirect_blocked"))
 		return
 	}
-	for _, k := range []string{"Content-Type", "Retry-After", "X-Request-Id"} {
+	for _, k := range []string{"Content-Type", "Content-Encoding", "Retry-After", "X-Request-Id"} {
 		if v := resp.Header.Get(k); v != "" {
 			w.Header().Set(k, v)
 		}
@@ -201,7 +215,7 @@ func (g *Gateway) passthrough(w http.ResponseWriter, r *http.Request, route Rout
 	w.WriteHeader(resp.StatusCode)
 	// No buffering or protocol rewriting on the native path. A hard transfer cap
 	// closes oversized streams; it never fabricates a protocol terminal.
-	n, e := io.Copy(flushingWriter{w}, io.LimitReader(resp.Body, g.cfg.MaxResponseBytes+1))
+	n, e := io.Copy(flushingWriter{w}, io.LimitReader(resp.Body, g.cfg.MaxResponseBytes))
 	if e != nil || n > g.cfg.MaxResponseBytes {
 		return
 	}

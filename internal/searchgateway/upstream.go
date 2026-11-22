@@ -70,6 +70,9 @@ func (g *Gateway) round(r *http.Request, route Route, p plan, re *roundEmitter) 
 			}
 			return result, nil
 		}
+		if typ == "error" || typ == "response.failed" {
+			return roundResult{}, upstream("upstream_response_failed")
+		}
 		re.e.begin()
 		if err = re.frame(typ, o); err != nil {
 			return roundResult{}, err
