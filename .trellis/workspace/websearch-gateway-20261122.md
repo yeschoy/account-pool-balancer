@@ -23,3 +23,13 @@ OVH执行一次显式opt-in合成测试，固定一个最近成功的直连Mistr
 新owner v1协议本地实现：认证能力GET、5分钟AES-GCM token、Key/hash/group/model/source隔离、续轮原Pool固定账号且正常检查资格/健康/并发/RPM。忙时不overflow、失败不换号、过期/变更失败关闭，header不入官方/搜索/网关调用方/日志或历史。来源校验同时比较选号快照与最新配置，避免Base热变竞态。无header的旧业务保持。
 
 本地网关→实际Server/Pool→Mock上游正常/搜索阶段占满owner两分支通过；全仓normal（server103.188s）、race（155.941s）、vet及Balancer/网关build通过。新增测试的健康/取消分支再定向race通过。线上capability只读probe405，说明新协议尚未部署；QA活跃进程0。**待明确授权生产升级/部署独立网关，再做owner线上/真实Codex/NewAPI验收；本轮没有部署。** 详情validation-phase3.md；任务in_progress，Trellis保留。
+
+## 第四阶段：明确授权部署及NewAPI测试渠道
+
+用户回复「好」同意升级Balancer、部署独立网关并先接隔离测试渠道。e7eb119已推送；服务器fetch+git archive干净release，Balancer构建7.48s、网关4.73s，保留旧镜像和约100.67MB一致备份。原线上Compose只覆盖image，10:54:46.512旧退出/49.770新启动，间隔3.26s；10:55:20 Balancer healthy且NewAPI双别名ok，10:55:25网关healthy/核心验收后立即反馈。配置hash/revision6792/228账号/19Key保持不变，无额外feature开关变化。
+
+私有NewAPI渠道260「WebSearch-Mistral-隔离验收」/websearch-qa，type58，Base内网/r/mistral，模型原生映射、只Responses/models/禁WS。正常API拒绝旧式管理Token后未绕过认证/伪造登录，使用既有本机Postgres运维路径事务创建channel+ability；管理员已有推理Key固定渠道强制single-attempt，不改全局RetryTimes/不重启NewAPI。其他全部渠道配置投影不变，没有加入公开/auto分组。
+
+11:00:40–51 UTC真实NewAPI→常驻网关→原Pool→Mistral/Tavily验证搜索+Codex形状历史续问通过：搜索10997ms、first SSE403ms/26事件/1真实引用，续问763ms/13事件；号池3轮同账号、owner start→pinned→start、均单attempt200/no overflow。网关搜索1887in/108out=池368+1519 /47+61，与NewAPI消费日志一致；续问1605in/19out/cached1536亦一致，NewAPI quota812+62=874，搜索1credit独立。真实验收通过后立即反馈。未反复消费测试二进制。
+
+11:04:25公网真实未登录浏览器healthz及7JS200，版本参数保留、hash逐项匹配源码；两服务有healthcheck且healthy/0重启/无OOM、原8GiB/新256MiB保持，日志无三类凭据。专用浏览器已关闭，运行凭据只远端受控.env、未进Git/日志。发布记录见docs/ovh-deployment.md与validation-phase4.md；只补文档不重建/重启。真实Codex/默认cached-only/业务渠道切换仍未完成，任务in_progress。临时安全浏览器JSON/旧QA目录须用户同意再清理，线上服务/备份和Trellis保留。

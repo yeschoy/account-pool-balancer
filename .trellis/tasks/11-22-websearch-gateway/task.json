@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "第三阶段真实经过在线Mistral号池的3轮合成请求全部单attempt200/同账号/累计usage逐项匹配，线上config hash未变。请求内加密owner协议已实现并通过本地网关→原Pool正常/忙/源变化等HTTP测试及全仓normal/race/vet/build；线上旧版capability405未支持，仍未部署/改NewAPI/做真实Codex操作。等待明确部署授权及新协议/客户端验收，保持in_progress。",
-  "meta": {"codeStatus":"phase3-pool-owner-implemented","localValidation":"full-repo-normal-race-vet-build-passed","realUpstream":"online-mistral-pool-synthetic-passed","ownerProtocol":"local-passed-not-deployed","realClient":"not-tested","containerBuild":"not-run-daemon-unresponsive","deployment":"not-deployed"}
+  "notes": "第四阶段用户明确授权后，e7eb119已推送并在OVH部署Balancer及独立网关，保留一致备份/旧镜像/双别名/原配置。新增私有NewAPI测试渠道260，真实搜索+历史续问3轮单attempt200，owner start→pinned→start、同账号；网关/池/NewAPI用量及计费逐项匹配，既有渠道配置不变。公网healthz/7JS hash验证通过。真实Codex Desktop/CLI、cached-only与业务渠道切换尚未完成，保持in_progress。",
+  "meta": {"codeStatus":"phase4-deployed-isolated-channel","localValidation":"full-repo-normal-race-vet-build-passed","realUpstream":"newapi-gateway-online-mistral-pool-passed","ownerProtocol":"deployed-v1-pinned-round-verified","realClient":"newapi-passed-codex-not-tested","containerBuild":"ovh-both-passed","deployment":"ovh-healthy-private-channel-260"}
 }

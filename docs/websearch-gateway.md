@@ -1,14 +1,16 @@
-# 独立 WebSearch 兼容网关（第三阶段，真实接池验收与固定账号保护）
+# 独立 WebSearch 兼容网关（已部署隔离测试渠道）
 
 ## 状态与边界
 
-2026-11-22：独立 Go 服务、受控路由、Tavily HTTP 后端、Responses JSON/SSE 工具循环与本地 Mock 已实现。第二阶段按Codex0.167.0公开源码修复显式联网选项、合法省略sources的历史回放、函数完成后的文本流；补域名限制和真实URL引用。**没有部署生产、没有修改 NewAPI 渠道、没有以真实 Codex Desktop 完成端到端验收。** 本地 Docker daemon此前查询12秒未响应，容器镜像仍未构建/运行。
+2026-11-22：独立 Go 服务、受控路由、Tavily HTTP 后端、Responses JSON/SSE 工具循环已实现；按Codex0.167.0公开源码兼容显式联网选项、合法省略sources的历史回放、函数后文本流、域名限制与真实URL引用。用户明确授权后，**10:55 UTC Balancer与独立网关已部署OVH，11:00 UTC通过NewAPI隔离渠道260的真实搜索、owner续轮与计费验收**。现有业务渠道没有切换。真实Codex Desktop/CLI仍未验收，cached-only仍不支持，不能称为默认Codex零配置完整交付。镜像已在OVH构建，不再受本地Docker daemon不可用限制。
 
 受控真实验证：OVH运行一次opt-in测试二进制，以一个最近成功、无代理的固定Mistral账号直接请求官方Responses，再调用用户指定Tavily Hikari。强制一次搜索并以low上下文限制到`docs.mistral.ai`，两轮流式约4.652秒完成、46事件、一个真实url_citation、累计usage存在；按Codex会省略sources的历史重发后续问成功。整次约5.04秒，3次固定账号模型调用、1次真实搜索，均HTTP200。密钥仅内存/SSH stdin/子进程env，未写入源码/配置/测试/日志；没有重放真实用户历史。这是**网关→真实搜索与固定上游**验证，不是号池多账号连续性或Codex/NewAPI验收。
 
 第三阶段已于2026-11-22 09:19:01–09:19:08 UTC通过**网关→正在运行的Mistral号池→真实Mistral/Tavily**合成验收：使用已有“自测-test”Key、新隔离会话，3次模型调用均为单attempt200，本次实际同一账号且binding为miss→hit→hit；搜索两轮约4138ms、30事件、1真实引用。网关首轮累计input1887/output117，与号池两次368+1519 / 47+70逐项一致；历史续问input1606/output16、cached1536亦匹配。配置hash未变，没有新建/修改渠道、账号、分组或密钥。**测试进程已退出，并非网关常驻上线。**
 
-固定账号保护已实现并通过本地真实HTTP网关→Balancer→原Pool准入测试（外部模型/搜索为Mock）；线上旧版只读capabilities探针405，尚无该能力。需要另行授权升级Balancer+部署独立网关，再对新协议做线上验收；不能把旧版一次恰好同号的成功样本当成忙时/错误时永不换号的保证。
+固定账号保护已随`e7eb119`部署；线上能力接口返回owner v1/Responses/TTL300。NewAPI→独立网关→Mistral号池实际搜索两轮日志为`start→pinned`，同账号、单attempt200，网关首轮input1887/output108与NewAPI计费完全一致；Codex形状历史续问1605in/19out/cached1536亦匹配。此次搜索1次/1credit，搜索+回答10997ms、首次SSE事件403ms（不是正文首字）、续问763ms。忙/错误/限流等保护来自本地真实HTTP→原Pool矩阵，不通过在线制造账号拥塞来验证。
+
+隔离渠道 **260 / WebSearch-Mistral-隔离验收**，仅私有`websearch-qa`组、模型`deepseek-v4.1-flash-1017`映射原生ID。普通用户分组/自动路由名单没有新增该组；管理员测试沿现有推理Key的固定渠道能力单次尝试，不改全局RetryTimes。除新增此渠道外，部署前所有渠道的配置投影一致，号池config逐字节未变。上线/回退细节见`docs/ovh-deployment.md`与任务`validation-phase4.md`。
 
 ## 架构
 
@@ -92,7 +94,7 @@ compat必须显式列出 `allowedModels`。调用方不能指定上游URL、路�
 - 从实际搜索来源及回答中**真正出现的精确URL**生成标准url_citation（Unicode字符偏移、exclusive end），JSON/逐帧annotation事件/最终output一致；来源不能只作为假URL前缀或嵌套URL的一部分。保留已有注解、不改正文、不为模型未引用的结果造引用。真实链路已观察到一个引用，但仍不保证模型每次引用或真实Codex原生引用UI已验收。
 - 普通function的参数流在完整item确认后交还客户端；不把内部function名称/参数事件泄露为需要客户端执行的未知工具。
 
-## 跨轮固定账号协议（已实现，待生产升级）
+## 跨轮固定账号协议（已部署，隔离渠道实测）
 
 - 网关路由 `requirePoolOwner:true` 仅用于compat的Responses搜索/历史请求。先以配置的号池下游凭据 `GET /v1/pool-capabilities`，要求 `requestOwner:v1 / protocol:responses` 且 `ttlSec` 覆盖总deadline；不产生模型/RPM/额度请求。旧版不支持时503 `pool_owner_unsupported`，**零推理调用**。该能力探针不是搜索/model健康检查。
 - 首轮向号池发 `X-APB-Owner-Token:start`，仍由原调度器正常选号；返回一个AES-GCM加密令牌，不暴露账号ID/原始Key。后续内部模型轮次原样携带该令牌，不能更换/续期；仅整个外部请求内保存，不返回网关客户端、不入历史缓存/正文/Git/日志，也不转发官方上游。
@@ -115,9 +117,9 @@ compat必须显式列出 `allowedModels`。调用方不能指定上游URL、路�
 
 ## 正式接入前的门禁
 
-1. **账号连续性上线**：固定owner协议已实现，本地正常/忙/并发/RPM/取消/健康/源变更/令牌作用域测试及全仓normal/race/vet/build通过；线上旧版尚不支持。先按部署约定升级Balancer，再部署独立网关开启requirePoolOwner，验收新协议；本次普通粘性真实样本不替代新协议生产验收。
+1. **账号连续性上线已通过**：固定owner已部署，requirePoolOwner=true；NewAPI隔离渠道真实首轮/续轮为start→pinned、同账号/单attempt成功，本地忙/并发/RPM/取消/健康/源变更/TTL矩阵通过。不是跨所有外部会话永久固定或缓存命中率承诺。
 2. **真实协议**：从新测试渠道核对真实Codex工具声明、双向流、普通工具/搜索混用、下一轮历史和真实来源展示；本地Mock不能替代。
-3. **计费/重试**：NewAPI需核对多轮累计usage与自身记账；测试渠道先关闭自动重试，防止网关前的组件将失败整单重放。搜索credits不自动纳入NewAPI金额计费；失败轮次上游可能已经收费。
+3. **计费/重试隔离验收已通过**：NewAPI两条消费记录的累计input/output/cache与网关及池日志一致，计费沿现有公式；管理员固定渠道单次尝试，不修改全局重试。搜索credits独立记录（此次1），不自动纳入NewAPI金额；失败轮次可能已收费。将来对普通业务开放前仍需确认该路径不会整单重试。
 4. **能力矩阵**：先验证一个Mistral模型，再验证第二个不同上游。Chat/Messages转换、更多搜索操作、分用户配额、管理UI、持久化/多副本历史均未交付。
 5. **部署边界**：保留旧渠道地址与回退办法，独立部署并检验容器网络/健康；不替换现有Balancer网络别名，不重建已有号池以安装本服务。
 
@@ -132,4 +134,4 @@ go build -o .gotmp/websearch-gateway ./cmd/websearch-gateway
 
 HTTP Mock覆盖真实HTTP两轮调用、第二上游、完整搜索历史还原/隔离/过期、混合函数、流式首字在上游完成前可见、单公开终态和全局序号、JSON回包合成文本事件、强制搜索与总输出预算、全部轮次usage合并/缺失或null未知、第二轮失败不冒充前轮用量为总计、搜索失败与超时/重定向/取消/并发/body上限、无搜索/native原字节透传、配置重复键与鉴权/模型零调用拒绝，以及第二阶段的联网选项/域名限制/跨模型历史/字符引用/函数后文本顺序。
 
-`TestLiveResponsesSearch`默认跳过，必须显式提供`SEARCH_GATEWAY_LIVE_BASE`、`SEARCH_GATEWAY_LIVE_MODEL_KEY`、`SEARCH_GATEWAY_LIVE_SEARCH_KEY`和`SEARCH_GATEWAY_LIVE_SEARCH_ENDPOINT`；测试固定一次搜索和至多3个模型请求，不使用现有用户历史。不要在日志或shell参数中展开这些凭据。正式实测记录见任务`validation-phase2.md`。第三阶段使用显式`SEARCH_GATEWAY_LIVE_POOL=1`运行`TestLivePoolResponsesSearch`，只用指定自测下游Key，记录三个号池请求ID后与安全日志投影核对账号和累计usage；没有下载用户正文。升级后必须额外设置`SEARCH_GATEWAY_LIVE_REQUIRE_OWNER=1`，通过同一测试验证新owner握手；能力预检GET不计入3次模型调用，也不被误算为搜索。第三阶段修改共享准入/代理接线，已执行一次全仓normal/race/vet与两个独立二进制build；没有重复消耗真实搜索以复验后续本地守卫。
+`TestLiveResponsesSearch`默认跳过，必须显式提供`SEARCH_GATEWAY_LIVE_BASE`、`SEARCH_GATEWAY_LIVE_MODEL_KEY`、`SEARCH_GATEWAY_LIVE_SEARCH_KEY`和`SEARCH_GATEWAY_LIVE_SEARCH_ENDPOINT`；测试固定一次搜索和至多3个模型请求，不使用现有用户历史。不要在日志或shell参数中展开这些凭据。正式实测记录见任务`validation-phase2.md`。第三阶段使用显式`SEARCH_GATEWAY_LIVE_POOL=1`运行`TestLivePoolResponsesSearch`，只用指定自测下游Key，记录三个号池请求ID后与安全日志投影核对账号和累计usage；没有下载用户正文。该测试如需再验证owner，应额外设置`SEARCH_GATEWAY_LIVE_REQUIRE_OWNER=1`；本次部署则直接请求常驻网关的NewAPI测试渠道，真实验证了同一owner握手与用量，无需再重复消费运行测试二进制；能力预检GET不计入3次模型调用，也不被误算为搜索。第三阶段修改共享准入/代理接线，已执行一次全仓normal/race/vet与两个独立二进制build；没有重复消耗真实搜索以复验后续本地守卫。

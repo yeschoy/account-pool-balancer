@@ -38,6 +38,19 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：WebSearch owner v1 + 独立网关隔离测试渠道（2026-11-22 10:55 UTC，e7eb119）
+
+- 用户明确授权升级Balancer、部署独立搜索网关并接**测试渠道，不切现有业务渠道**。代码`e7eb119ca808766c8ec49f6dd2058c3d712bd766`已推送origin/master；全仓normal/race/vet/两个build在同提交已通过，本次不重复。旧运行`317cb8a` healthy/0重启，线上旧工作树05e0044且大量脏改动，未在该树构建或覆盖分叉。服务器fetch后git archive目标提交生成干净release。
+- UTC构建 **10:52:30.451–10:52:37.931**（Balancer）、**10:52:37.931–10:52:42.660**（独立网关）；镜像分别`account-pool-balancer:release-e7eb119-20261122T105203Z`与`websearch-gateway:release-e7eb119-20261122T105203Z`，两者revision标签为完整目标SHA。
+- 保留旧镜像`account-pool-balancer:rollback-20261122T105203Z`；**10:54:46.148请求停旧，10:54:46.512退出，10:54:49.531一致备份完成且gzip -t通过**（data.tgz=100672332字节）。沿线上Compose+原override+release的image-only override切换；**新实例10:54:49.770启动，10:55:20.098 Docker healthy，10:55:20.150入口验收通过**。退出至新启动约3.26秒，不把30秒健康确认计为停机。
+- `new-api`容器分别访问`account-pool-balancer:8790/healthz`和`opendesign-balancer:8790/healthz`均200/ok；`ai-internal`两个别名完整、Healthcheck/User1000:1000/8GiB/资源/卷保持。号池config.json SHA256仍`761e076c1f1be2cfe825f5fa4c399238c5201bdbf57f9e50645993fecd1bdffc`，revision6792/228账号/19Key未改。认证GET capabilities返回`requestOwner:v1,protocol:responses,ttlSec:300`。
+- 独立网关路径`/home/ubuntu/project/websearch-gateway/`：仅回环8791与ai-internal、user1000:1000、只读rootfs、256MiB、drop all caps；自带Healthcheck，**10:55:25.486 healthy，10:55:25.533核心验收完成并立即反馈**。requirePoolOwner=true；路由/上游/搜索3种密钥置服务目录0600 .env（目录0700），不回显、不在Git/脚本/日志；复用已有自测-test池Key，未新增/改动号池Key。
+- NewAPI新增**渠道260「WebSearch-Mistral-隔离验收」**，私有`websearch-qa`组、type58，Base `http://websearch-gateway:8791/r/mistral`（不重复/v1），只开放Responses/models、禁止WS、仅`deepseek-v4.1-flash-1017`映射原生连字符ID。不加入公开可用组/自动分组；原渠道配置投影全部保持。旧式管理Token被正常API拒绝（Legacy retired），没有伪造会话/关闭鉴权；沿既有本机Postgres运维路径事务新增channel+ability，备份脱敏配置投影。测试通过现有管理员推理Key固定渠道能力，RetryModeSingleAttempt；全局RetryTimes仍1、未重启NewAPI。
+- **11:00:40–11:00:51 UTC真实NewAPI→常驻网关→号池→Mistral+Tavily验收**：搜索10997ms/首SSE事件403ms/26事件/1搜索/1真实引用；续问763ms/13事件/0搜索。池日志3轮均单attempt200，同账号zxg-13-studio-key，owner **start→pinned→start**（新外部请求重新start）；无换号、无overflow。网关累计搜索1887in/108out与池368+1519、47+61及NewAPI消费日志一致；续问1605in/19out/cached1536亦一致。NewAPI日志5006952/5006954分别quota812/62，按既有公式累计扣874单位；搜索1credit单独日志，不混模型计费。真实验收通过立即反馈。
+- **11:04:25.479 UTC公网真实未登录浏览器**：`https://ods.yeschoy.io/`登录页、healthz与7个HTML引用JS全200；保留?v=495086c684，SHA256与发布源码逐一一致。11:04后最终两服务healthy/0重启/OOM=false，安全日志未含三种凭据。专用浏览器关闭，不登录管理台、不改WAF。
+- 回退：沿线上Compose仅将Balancer image改回上述rollback标签，`up -d --no-build --no-deps account-pool-balancer`，保留网络与配置；**不自动恢复data备份覆盖后续写入**。网关可单独停止，渠道260可单独禁用（需要执行时再操作，未自动清理）。release `/home/ubuntu/project/account-pool-balancer-releases/20261122T105203Z-e7eb119/`有image override与安全deployment-receipt；一致备份 `/home/ubuntu/backups/account-pool-balancer/20261122T105203Z-websearch-owner-e7eb119/`（含原Compose/.env、config.before.json、data.tgz与无密钥NewAPI渠道投影）需保留。
+- **仍未完成**：真实Codex Desktop/CLI、缓存搜索cached-only、普通业务渠道切换；没有把合成协议流当成桌面UI验收。忙/健康/RPM/错误保护经本地矩阵验证，未在线制造拥塞/故障。本轮不新建Trellis部署任务，只更新现有任务。临时产物已登记_tmp_artifacts.md，经同意再清理；Trellis保留。详情见`.trellis/tasks/11-22-websearch-gateway/validation-phase4.md`。
+
 ## 当前部署：Factory Gemini 三协议适配（2026-11-21 14:50 UTC，615ff3b）
 
 - `615ff3bd002ff779c9b6ce22823fb4c8b45d2752` 已推送 `origin/master` 并部署 OVH；开启 Factory 有限协议转换后，Chat Completions、Responses、Messages 可调用原生 Gemini 模型并获得目标格式 JSON/缓冲 SSE。原生 Gemini 不变。本地 Mock 矩阵、全仓测试及竞态、vet、构建与前端回归通过。
