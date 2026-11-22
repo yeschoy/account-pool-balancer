@@ -14,6 +14,19 @@
 - SSE 请求加 `"stream":true`，兼容层在取得完整上游结果后再发送目标事件（`X-Compatibility-Mode: buffered`，上游响应上限 16 MiB、单 SSE 事件上限 2 MiB）。Chat SSE 加 `"stream_options":{"include_usage":true}` 才会发送用量事件。已报告的思考 token 计入输出 token；Chat/Responses 另附推理 token 明细。用量缺失不补造，Messages 需要用量，缺失时返回 502。
 - 不可转换的请求本地 400，不消耗账号请求配额；上游已经生成但无法表示的结果或截断流返回 502，不换号重放。关闭开关后三个入口仍拒绝 Gemini；原生 Gemini 不依赖开关。未增加 Gemini 入站转其他模型、Responses WebSocket 转换，也未改动目录/账号授权。此次三入口桥接由本地 Mock 验证，未在 Factory 或 NewAPI 生产环境实测。
 
+## 事件没有被缓存（逐帧实测，2026-11-22）
+
+- 用「逐帧到达时间」验证各跳是否缓冲（提示"写 500 字介绍缓存"，`gemini-4-neon`，默认思考）：
+  | 链路 | 帧数 | 首帧 | 末帧 | 最大间隔 |
+  |---|---|---|---|---|
+  | 直连本池 `:streamGenerateContent?alt=sse` | 15 | 14.09s | 16.54s | 0.25s |
+  | 经 new-api（`m.yeschoy.pro` 原生路径） | 14 | 13.88s | 17.19s | 0.94s |
+  - 帧按上游节奏到达，网关没有缓存；首帧 14s 是上游思考 token 造成的，不是转发延迟。
+- 两个"看起来像缓存"的真实原因：
+  1. **`alt=sse` 必须带**：`:streamGenerateContent` 不带 `?alt=sse` 时上游返回单个 JSON 数组，整包在结束时才到（实测单帧 14042 字节 @16.77s）。客户端要增量必须用 `?alt=sse`。
+  2. **首事件暂存**：为避免把上游错误包当流转发（并保留换账号重试能力），网关会等第一个**完整事件**再提交响应头，之后逐帧 flush；代价是毫秒级，不是整包缓冲。
+- 定位过程中还发现：`thinkingLevel=minimal` 被上游当天改为拒绝（400 `THINKING_LEVEL_UNSUPPORTED`），生产配置改为"不干预"，UI 选项同步移除（`3f335db`）。
+
 ## 首字慢的真正原因：思考 token（2026-11-22，`20d4f2a`）
 
 - 直连上游逐项实测（`prem.factory.ai`，输出上限 1500，提示"写两段话介绍缓存"）：

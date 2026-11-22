@@ -73,6 +73,13 @@
 | Compose 切换 / 新启动 | 09:45:45.291 / 09:45:45.834 |
 | Docker healthy | 09:46:15.977 |
 
+## 当前部署：回退被拒的思考等级（2026-11-22 06:09 UTC，3f335db）
+
+- 事故：`thinkingLevel=minimal` 在 2026-11-21 20:00 部署时上游接受（首字约 1s），2026-11-22 06:01 起上游改为拒绝 `THINKING_LEVEL_MINIMAL`（400），错误日志记录 3 条失败。
+- 处置：先把生产配置 `factory.thinkingLevel` 改为空（不干预）并重启（06:05，healthy）；再把代码里允许值与 UI 选项去掉 `minimal`（`3f335db`），防止再次选中导致整条请求失败。
+- 验收：原生路径 200、首字 3.7s；`/healthz` 双别名均 ok；镜像 `release-3f335db-20261122T060921Z`，rev=3f335db。
+- 部署插曲：两次 SSH 会话挂起、一次 release 目录因 `git archive | ssh tar` 中断而不完整（构建报 `/tools/mistral: not found`），改为本地打 tar → scp → 服务器解包后构建成功。
+
 ## 当前部署：Gemini 思考等级 minimal（2026-11-21 20:00 UTC，20d4f2a）
 
 - 首字慢的根因是 Gemini 4 默认开启思考：上游实测默认 5.3–10.6s / 400–470 thoughts token，`thinkingLevel=minimal` 降到 1.0–1.3s 且无 thoughts；`thinkingBudget` 该模型不支持。
