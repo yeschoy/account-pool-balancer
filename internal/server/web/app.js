@@ -540,12 +540,12 @@ async function loadOverview() {
   const ttftCell = (name) => {
     const t = ttftByModel[name];
     if (!t) return '—';
-    return `${t.ttftP50Ms}ms / ${t.ttftP95Ms}ms<div class="acc-sub">样本 ${num(t.ttftSamples)}</div>`;
+    return `${esc(t.ttftP50Ms)}ms / ${esc(t.ttftP95Ms)}ms<div class="acc-sub">累计样本 ${esc(num(t.ttftSamples))}</div>`;
   };
   $('#ov-models tbody').innerHTML = models.map(([name, b]) => {
     const done = b.r - b.c;
     const hr = hitRate(b);
-    return `<tr><td>${esc(name)}</td><td class="num">${num(b.r)}</td><td class="num">${done > 0 ? pct(b.s / done) : '—'}</td><td class="num">${pool === 'opencode-go' && !b.ikr ? '—' : num(b.i)}</td><td class="num">${pool === 'opencode-go' && !b.okr ? '—' : num(b.o)}</td><td class="num">${hr === null ? '—' : pct(hr)}</td><td class="num">${esc(ttftCell(name))}</td><td class="num">${esc(costSum(b))}</td></tr>`;
+    return `<tr><td>${esc(name)}</td><td class="num">${num(b.r)}</td><td class="num">${done > 0 ? pct(b.s / done) : '—'}</td><td class="num">${pool === 'opencode-go' && !b.ikr ? '—' : num(b.i)}</td><td class="num">${pool === 'opencode-go' && !b.okr ? '—' : num(b.o)}</td><td class="num">${hr === null ? '—' : pct(hr)}</td><td class="num">${ttftCell(name)}</td><td class="num">${esc(costSum(b))}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="empty">暂无请求</td></tr>';
   const proxies = Object.entries(o.stats.proxies || {}).sort((a, b) => b[1].r - a[1].r);
   $('#ov-proxies tbody').innerHTML = proxies.map(([name, b]) => {
