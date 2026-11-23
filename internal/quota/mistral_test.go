@@ -371,3 +371,55 @@ func TestMistralMetadataNoCredentialRedirect(t *testing.T) {
 		t.Fatal("redirect followed")
 	}
 }
+
+// TestMistralBudgetRecordsWorkspace: whoami's customer_id is the billing
+// workspace, and it is what lets two keys of one organization be shown once.
+func TestMistralBudgetRecordsWorkspace(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/vibe/whoami":
+			fmt.Fprint(w, `{"plan_type":"CHAT","plan_name":"FREE","customer_id":"5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10"}`)
+		case "/v1/billing/budget":
+			fmt.Fprintf(w, `{"vibe_budget":{"initial_budget":10,"usage_percentage":50,"currency":"EUR","reset_at":%q}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+		case "/v1/billing/subscription":
+			fmt.Fprint(w, `{"plan_name":"INDIVIDUAL"}`)
+		default:
+			fmt.Fprintf(w, `{"data":[{"id":"mistral-small-latest","enabled":true}],"base_model_id":"mistral-small-latest","currency":"EUR","reset_at":%q}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+		}
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Mistral.BaseURL = up.URL + "/v1"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Accounts = []config.Account{{ID: "m", Provider: config.ProviderMistral, RuntimeKey: "mstrl_mock_secret", Enabled: true}}
+	p := NewPoller(func() *config.Config { return cfg }, func(string) *http.Client { return up.Client() })
+	if err := p.RefreshNow(context.Background(), cfg.Accounts[0]); err != nil {
+		t.Fatal(err)
+	}
+	got := p.Get("m").Mistral
+	if got == nil || got.Org != "5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10" {
+		t.Fatalf("org not recorded: %+v", got)
+	}
+	if got.KeyType != "CHAT" || got.Budget.Currency != "EUR" {
+		t.Fatalf("state changed: %+v", got)
+	}
+}
+
+func TestMistralOrgIDRejectsUnsafeValues(t *testing.T) {
+	cases := map[string]string{
+		"5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10": "5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10",
+		"  org_1234abc  ":                      "org_1234abc",
+		"":                                     "",
+		"short":                                "",
+		"has space in it ok":                   "",
+		"<script>alert(1)</script>":            "",
+		strings.Repeat("a", 65):                "",
+	}
+	for in, want := range cases {
+		if got := mistralOrgID(in); got != want {
+			t.Fatalf("mistralOrgID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

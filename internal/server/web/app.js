@@ -510,7 +510,7 @@ async function loadOverview() {
   const o = await api('GET', withPool('/api/overview'));
   const st = o.stats.total;
   $('#ov-egress-title').textContent = pool === 'opencode-go' ? '各固定出口路由 24 小时成功率（不是实测 IP）' : '各出口 IP 24 小时成功率';
-  $('#ov-quota-title').textContent = isFactory() ? 'Factory 额度与能力边界' : isX50() ? '50X 余额与能力边界（逐账号查看）' : isDeploy() ? 'Deploy 余额与能力边界' : pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : isMistral() ? 'Mistral 套餐预算（请在账号页查看）' : '套餐窗口（按工作区去重）';
+  $('#ov-quota-title').textContent = isFactory() ? 'Factory 额度与能力边界' : isX50() ? '50X 余额与能力边界（逐账号查看）' : isDeploy() ? 'Deploy 余额与能力边界' : pool === 'opencode-go' ? 'Go 订阅窗口（逐账号展示，共享额度不相加）' : isMistral() ? 'Mistral 套餐总额度（按工作区去重）' : '套餐窗口（按工作区去重）';
   const okRate = st.r ? (st.s / Math.max(1, st.r - st.c)) : null;
   const ok = o.status.ok || 0;
   const cards = [
@@ -519,6 +519,7 @@ async function loadOverview() {
     ...(pool !== 'opendesign' ? [] : [['钱包合计', '$' + o.walletUsd.toFixed(2), `${o.walletAccounts} 个工作区`]]),
     ...(pool === 'ollama' && o.ollamaAccounts ? [['Ollama 额度合计', '$' + o.ollamaCredits.toFixed(2), `${o.ollamaAccounts} 个账号（含赠送额度 + 已购额度，同一团队的 key 会重复计）`]] : []),
     ...(pool === 'modal' && o.modalAccounts ? [['可用 Endpoint', num(o.modalEndpoints), `${o.modalAccounts} 个账号的 token 能访问的 Endpoint 数（同一 Endpoint 会被多个账号各计一次）`]] : []),
+    ...(isMistral() ? mistralOverviewCards(o) : []),
     ['24h 请求', num(st.r), `成功率 ${okRate === null ? '—' : pct(okRate)} · 近 1h ${num(o.stats.lastHour.r)}`],
     ['24h ' + (pool === 'opencode-go' ? '价格表估算' : '费用'), costSum(st), pool === 'opencode-go' ? '不是 Go 订阅账单或额外扣费金额' : isTokenHarbor() ? '按手动价格估算；未配价/含缓存写入的不计，不是上游账单' : '按模型价格估算，未配价格的不计'],
     ['24h ' + (pool === 'opencode-go' ? '缓存 Token 读取占比' : '缓存命中率'), hitRate(st) === null ? '—' : pct(hitRate(st)), `已测缓存 ${num(st.ck || 0)} / 提示 ${num(st.cp || 0)} token · 样本 ${num(st.ckr || 0)} 次` + (pool === 'opencode-go' ? `；24h 写入 ${st.cwkr ? num(st.cw || 0) : '未知'}` : isTokenHarbor() ? `；24h 写入 ${num(st.kw || 0)}` : '')],
@@ -559,10 +560,10 @@ async function loadOverview() {
     return `<div class="col" title="${esc(label)} 请求 ${b.r}，失败 ${b.f}，取消 ${b.c}"><div class="seg ok" data-h="${b.s / peak * 100}"></div><div class="seg bad" data-h="${b.f / peak * 100}"></div><div class="seg cancel" data-h="${b.c / peak * 100}"></div></div>`;
   }).join('');
   applyWidths($('#ov-chart'));
-  $('#ov-windows').innerHTML = isFactory() ? '<p class="muted">Factory模型目录来自配置参考，不证明账号授权。账号页可查看Standard/Core的5小时、周、月共享百分比；读取权限不足、失败、过期显示未知并保留历史。不会自动开启Extra usage或将多Key额度相加。</p><p class="muted small">开启有限协议转换后，Chat / Responses / Messages 可调用 Gemini 模型；跨协议 SSE 先缓冲后输出。content_policy_rejected 立即停止，真实模型授权需单独测试。</p>' : isX50() ? '<p class="muted">请在账号页刷新真实billing余额；缺失/失败/过期显示未知并保留历史。多Key共享账号余额/免费配额/限流，不累加为总可用量。免费层每日allowance未接入，不能以钱包0判耗尽。当前新注册无赠金保证。</p><p class="muted small">仅原生Chat/SSE与目录；目录不证明推理授权，其他协议本地拒绝。不自动充值/购买。</p>' : isDeploy() ? `<p class="muted">${esc(o.deploy?.quotaReason || '余额未知，未接入控制台会话。')}</p><p class="muted small">仅支持原生 Chat Completions（流式/非流式）；不转换 Responses / Messages。官方 405 可能表示组织暂停，429 默认停止轮换并遵守 Retry-After。请求费用是本池独立价格表估算，不是上游账单。</p>` : pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
+  $('#ov-windows').innerHTML = isMistral() ? mistralBudgetWindows(o, st) : isFactory() ? '<p class="muted">Factory模型目录来自配置参考，不证明账号授权。账号页可查看Standard/Core的5小时、周、月共享百分比；读取权限不足、失败、过期显示未知并保留历史。不会自动开启Extra usage或将多Key额度相加。</p><p class="muted small">开启有限协议转换后，Chat / Responses / Messages 可调用 Gemini 模型；跨协议 SSE 先缓冲后输出。content_policy_rejected 立即停止，真实模型授权需单独测试。</p>' : isX50() ? '<p class="muted">请在账号页刷新真实billing余额；缺失/失败/过期显示未知并保留历史。多Key共享账号余额/免费配额/限流，不累加为总可用量。免费层每日allowance未接入，不能以钱包0判耗尽。当前新注册无赠金保证。</p><p class="muted small">仅原生Chat/SSE与目录；目录不证明推理授权，其他协议本地拒绝。不自动充值/购买。</p>' : isDeploy() ? `<p class="muted">${esc(o.deploy?.quotaReason || '余额未知，未接入控制台会话。')}</p><p class="muted small">仅支持原生 Chat Completions（流式/非流式）；不转换 Responses / Messages。官方 405 可能表示组织暂停，429 默认停止轮换并遵守 Retry-After。请求费用是本池独立价格表估算，不是上游账单。</p>` : pool === 'opencode-go' ? goQuotaWindows(o.go) : o.windows.length ? o.windows.map((w) => {
     const used = w.limit ? w.used / w.limit * 100 : 0;
     return `<div class="win"><div class="row"><b>${esc(fmtDur(w.durationSeconds))}</b><span class="muted">剩余 ${num(w.remaining)} / ${num(w.limit)} credits</span></div><div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div></div>`;
-  }).join('') : `<p class="muted">${isMistral() ? '已接入 Studio / Vibe 套餐额度与组织订阅，请在账号页刷新查看；额度按用量百分比估算，不是钱包余额。读取失败或过期时标为未知并保留历史值。多个 Key 可能共享组织预算，不可直接相加；缓存命中由上游决定。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
+  }).join('') : `<p class="muted">${isMistral() ? '已接入 Studio / Vibe 套餐额度与组织订阅；额度按用量百分比估算，不是钱包余额。读取失败或过期时标为未知并保留历史值。' : pool === 'tokenharbor' ? 'Token Harbor 余额未知；只同步模型目录。默认按会话/缓存标识固定 Key，缓存是否命中仍由上游决定。429 遵守 Retry-After；免费账号/IP 限额可能共享，不能把每把 Key 当成独立账号额度。' : pool === 'river' ? 'River 没有额度接口，额度用完靠上游 402 / 429 错误推断冷却。' : pool === 'ollama' ? '暂无余额数据：Ollama 的 key 直接读 /api/balance，30 秒内不会重复读（该接口每个用户每分钟限 10 次）。' : pool === 'modal' ? 'Modal 没有额度接口：Shared Endpoint 按 token 从工作区余额计费，只能在 Modal 控制台看；本服务只在遇到 402 时冷却账号。' : '暂无额度数据（需要账号配置 vela_ctrl_ 控制密钥）。'}</p>`;
   applyWidths($('#ov-windows'));
   $('#ov-status').innerHTML = Object.entries(o.status).map(([k, v]) => `<span class="badge ${statusClass(k)}">${esc(statusLabel(k))} ${v}</span>`).join('') || '<span class="muted">无账号</span>';
   renderFactoryAccountUsage(o);
@@ -751,6 +752,31 @@ function openDesignFundingHTML(a) {
     html += `<div class="acc-sub">账单上次成功 ${esc(fmtTime(q.summaryAt))}${d?.billingFresh ? '' : ' · 当前未知'}</div>`;
   } else html += '<div class="acc-sub">套餐模型/充值余额未知</div>';
   return html;
+}
+
+// mistralBudgetWindows renders the pool's deduplicated budgets. Each row is one
+// organization; keys sharing an organization appear once, because one
+// api_budget/vibe_budget is all they share.
+function mistralBudgetWindows(o, st) {
+  const m = o.mistral;
+  if (!m) return '<p class="muted">额度数据不可用，请刷新后重试。</p>';
+  const totals = (m.groups || []).map((g) => {
+    const used = g.total > 0 ? (g.used / g.total) * 100 : 0;
+    return `<div class="win"><div class="row"><b>${esc(g.currency)} 合计</b><span class="muted">剩余约 ${esc(mistralAmount(g.remaining, g.currency))} / ${esc(mistralAmount(g.total, g.currency))}</span></div>`
+      + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
+      + `<div class="acc-sub">${num(g.workspaces)} 个工作区 · ${num(g.accounts)} 个账号共享 · 已用 ${used.toFixed(1)}%</div></div>`;
+  }).join('');
+  const rows = (m.workspaces || []).map((w) => {
+    const used = w.total > 0 ? Math.min(100, Math.max(0, (w.total - w.remaining) / w.total * 100)) : w.usedPercent;
+    const flags = [w.mixedTypes ? '<span class="badge warn">同工作区Key类型不一致</span>' : '', w.payg === true ? '<span class="badge">PAYG 已开</span>' : ''].filter(Boolean).join(' ');
+    return `<div class="win"><div class="row"><b>${esc(mistralPlanLabel(w.keyType))} · ${esc(w.plan || '订阅未知')}</b>`
+      + `<span class="muted">剩余约 <b>${esc(mistralAmount(w.remaining, w.currency))}</b> / ${esc(mistralAmount(w.total, w.currency))}</span></div>`
+      + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
+      + `<div class="acc-sub">已用 ${esc(num(w.usedPercent))}% · 重置 ${esc(fmtTime(w.resetsAt, true))} · ${num(w.accounts)} 个账号 · 检测 ${esc(fmtTime(w.readAt))} ${flags}</div>`
+      + `<div class="acc-sub">${esc(w.workspace)}</div></div>`;
+  }).join('');
+  return (totals || '') + (rows || '<p class="muted">还没有可汇总的预算：请到账号页对账号「刷新额度」。未知不计 0。</p>')
+    + `<p class="muted small">${esc(m.unknownRule)} 24h 请求 ${num(st.r)}，成功率 ${st.r && st.r > st.c ? pct(st.s / (st.r - st.c)) : '—'}。</p>`;
 }
 
 function mistralQuotaHTML(a) {
@@ -1915,6 +1941,23 @@ function cacheRateCell(r) {
   return `<span class="badge ${v >= 0.8 ? 'ok' : v >= 0.3 ? '' : 'warn'}">${(v * 100).toFixed(1)}%</span>`;
 }
 const CUR = { CNY: '¥', USD: '$' };
+// A Mistral budget is a percentage-derived estimate in the workspace's own
+// currency, so the amount is spelled out instead of guessed from a symbol.
+function mistralAmount(v, cur) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return `${cur || '?'} ${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function mistralPlanLabel(kind) { return kind === 'API' ? 'Studio' : kind === 'CHAT' ? 'Vibe' : 'Key 类型未知'; }
+function mistralOverviewCards(o) {
+  const m = o.mistral; if (!m) return [];
+  const totals = (m.groups || []).map((g) => mistralAmount(g.remaining, g.currency) + ' / ' + mistralAmount(g.total, g.currency)).join(' + ');
+  const used = (m.groups || []).map((g) => `${g.currency} ${g.total ? ((g.used / g.total) * 100).toFixed(1) : '0.0'}%`).join(' · ');
+  return [
+    ['Mistral 总额度剩余', totals || '未知', `${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
+    ['Mistral 额度数据', `${num(m.freshAccounts)} / ${num(m.accounts)}`, `新鲜 / 账号总数 · 未知 ${num(m.unknownAccounts)}；未知不计 0，也不按 Key 重复累加`],
+  ];
+}
 function money(v, cur) { return (CUR[cur] || '') + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(4) : v.toFixed(6)); }
 function usdCost(u) { return u && u.costUsd ? '$' + u.costUsd.toFixed(2) : '—'; }
 function factoryUsageSub(u) {

@@ -29,8 +29,29 @@ assert.match(form, /套餐额度与组织订阅，不是钱包余额/);
 assert.match(form, /不代表已完成各客户端验收/);
 assert.doesNotMatch(form, /无控制密钥，余额未知|仅兼容外来 reasoning_content/);
 assert.doesNotMatch(source, /Mistral 余额未知，只同步模型目录/);
-assert.match(source, /Mistral 套餐预算（请在账号页查看）/);
+assert.match(source, /Mistral 套餐总额度（按工作区去重）/);
+assert.match(source, /Mistral 总额度剩余/);
+assert.match(source, /function mistralBudgetWindows/);
 assert.match(source, /读取失败或过期时标为未知并保留历史值/);
+// The overview must sum budgets per workspace, never once per key, and must
+// never turn an unknown read into zero.
+vm.runInContext('globalThis.esc = (v) => String(v ?? ""); globalThis.num = (v) => String(v ?? 0); globalThis.pct = (v) => (v * 100).toFixed(1) + "%"; globalThis.fmtTime = (v) => String(v || "");'
+  + source.slice(source.indexOf('function mistralAmount('), source.indexOf('function money('))
+  + source.slice(source.indexOf('function mistralBudgetWindows('), source.indexOf('function mistralQuotaHTML(')), context);
+const budgetOverview = context.mistralBudgetWindows({
+  mistral: {
+    accounts: 3, freshAccounts: 2, unknownAccounts: 1,
+    groups: [{ currency: 'USD', total: 30, remaining: 22.5, used: 7.5, workspaces: 1, accounts: 2 }],
+    workspaces: [{ workspace: 'ws-1', keyType: 'API', plan: 'Student', accounts: 2, total: 30, remaining: 22.5, usedPercent: 25, currency: 'USD', resetsAt: new Date(Date.now() + 3600e3).toISOString(), readAt: new Date().toISOString() }],
+    unknownRule: '只汇总本服务读取成功且未过期的预算',
+  },
+}, { r: 0, s: 0, c: 0 });
+assert.match(budgetOverview, /USD 22\.50 \/ USD 30\.00/);
+assert.match(budgetOverview, /1 个工作区 · 2 个账号共享/);
+assert.match(budgetOverview, /只汇总本服务读取成功且未过期的预算/);
+const emptyBudget = context.mistralBudgetWindows({ mistral: { accounts: 2, freshAccounts: 0, unknownAccounts: 2, groups: [], workspaces: [], unknownRule: 'x' } }, { r: 0, s: 0, c: 0 });
+assert.match(emptyBudget, /未知不计 0/);
+assert.doesNotMatch(emptyBudget, /USD 0\.00/);
 assert.doesNotMatch(form, /id="f-ctrl"/);
 const account = { id: 'm1', name: '<img onerror=bad>', runtimeKey: 'mstrl_full_example_key', proxyUrl: 'http://user:p<a>ss@127.0.0.1:9', hasProxy: true };
 const edit = context.accountForm(account);

@@ -450,6 +450,12 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 				if q.Mistral != nil && q.Mistral.Source != quota.ResponseBindingSource(cfg, a) {
 					q.Mistral = nil
 				}
+				if q.Mistral != nil {
+					// A Mistral budget belongs to a workspace, so every key
+					// that saw one workspace shares it. The pool accounts
+					// identity through SharedWith instead of silently adding.
+					q.WorkspaceID = q.Mistral.Org
+				}
 				v.QuotaFresh = q.FreshMistral(now, time.Duration(cfg.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 			case config.ProviderALTAPI:
 				v.QuotaFresh = q.FreshALTAPIBalance(cfg, a, now)
@@ -2063,8 +2069,13 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	bindingLimit, bindingIndependent := s.pool.BindingCapacityFor(want)
+	var mistralView *mistralOverview
+	if want == config.ProviderMistral {
+		mistralView = mistralOverviewFor(views, now)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"go":                      goView,
+		"mistral":                 mistralView,
 		"factory":                 factoryOverviewFor(views),
 		"deploy":                  deployOverviewFor(views),
 		"accounts":                len(views),

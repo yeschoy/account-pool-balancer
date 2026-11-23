@@ -30,7 +30,12 @@ func FetchMistralCatalog(ctx context.Context, hc *http.Client, base, key, seed s
 // MistralState records only the budget this key spends, never both organization
 // budgets and never identity details returned by whoami.
 type MistralState struct {
-	Source       string               `json:"source"`
+	Source string `json:"source"`
+	// Org is whoami's customer_id: the billing workspace behind the key. Two
+	// keys of one workspace report the same value and spend the same
+	// api_budget/vibe_budget, so callers may deduplicate on it. It is an
+	// organization identifier, not a key secret.
+	Org          string               `json:"org,omitempty"`
 	KeyType      string               `json:"keyType,omitempty"`
 	Plan         string               `json:"plan,omitempty"`
 	Budget       *MistralBudget       `json:"budget,omitempty"`
@@ -103,8 +108,9 @@ func FetchMistralBudget(ctx context.Context, hc *http.Client, base, key, seed st
 	}
 	client := &Client{Base: whoBase, HTTP: opencode.NoRedirect(hc)}
 	var who struct {
-		Type string `json:"plan_type"`
-		Plan string `json:"plan_name"`
+		Type     string `json:"plan_type"`
+		Plan     string `json:"plan_name"`
+		Customer string `json:"customer_id"`
 	}
 	if err := client.get(ctx, key, "/api/vibe/whoami", "", seed, &who); err != nil {
 		return nil, fmt.Errorf("Mistral 账号类型读取失败: %w", err)
@@ -142,10 +148,26 @@ func FetchMistralBudget(ctx context.Context, hc *http.Client, base, key, seed st
 	if b.Reset.IsZero() || !b.Reset.After(time.Now()) {
 		return nil, errors.New("Mistral 套餐重置时间未知或已过期")
 	}
-	return &MistralState{KeyType: kind, Plan: mistralPlanName(who.Plan), Subscription: fetchMistralSubscription(ctx, client, key, seed), Budget: &MistralBudget{
+	return &MistralState{Org: mistralOrgID(who.Customer), KeyType: kind, Plan: mistralPlanName(who.Plan), Subscription: fetchMistralSubscription(ctx, client, key, seed), Budget: &MistralBudget{
 		Total: *b.Total, UsedPercent: *b.Used, Remaining: *b.Total * math.Max(0, 1-*b.Used/100),
 		Currency: b.Currency, ResetsAt: b.Reset, PAYG: b.PAYG,
 	}}, nil
+}
+
+// mistralOrgID keeps whoami's customer_id only in a shape that is safe to
+// store and compare. An unexpected value is dropped rather than approximated:
+// a wrong organization would merge two budgets or split one.
+func mistralOrgID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 8 || len(value) > 64 {
+		return ""
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return ""
+		}
+	}
+	return value
 }
 
 func mistralPlanName(value string) string {
