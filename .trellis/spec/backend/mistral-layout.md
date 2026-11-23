@@ -40,3 +40,12 @@
 - `mistral_layout_3051_test.go`：真实HTTP上游按3051验证至多一个leading ThinkChunk；600帧closed=true只保留一个逻辑块，旧168片段checkpoint不清空即可恢复/新capture等价，无思考文本丢失。
 - `mistral_layout_state_test.go`：Key凭据/ID/group/session/model/协议隔离，未识别identity无全局scope；正常Server重建经真实HTTP恢复、checkpoint不含原文/身份、签名/篡改拒绝、深拷贝；TTL/续期、LRU/字节/节点超限、真实 HTTP 中同文不同布局/过期/无效描述/超限/缺失均走既有兜底并单次正常上传，不冒充原始记录；后续真实返回可精确重建；native权威和旧历史unknown不变；流首帧及时flush、失败/未完成流无可用checkpoint、万帧续片有界、并发capture/get/export race。
 - 保留Mistral422空注解、legacy/native去重、图片/推理档位、SSE错误/usage/flush、原HMAC/绑定/隐私与metadata回归。不为此追加生产推理或重放用户私密历史。
+
+## 7. 还原实现的字节与配对约束（2026-11-24）
+
+- **位置配对不变**：`restore` 以原请求与 prepare 结果的 `messages` 按索引一一配对；prepare 不增删/重排消息，因此不再把原历史整体解码为 `[]json.RawMessage`，改为 `skipValue` 偏移并行遍历。任何未来在 prepare 中增删消息的改动必须同时改这里，否则配对语义失效。
+- **只就地拼 content**：命中后只把重建的 content 值拼回该消息，再与整份正文一次性写入；不得退回「逐消息 render + 根对象 render」的双重复制。命中记录前后字节保持原样，工具/大数/顺序/图片/identity/cache 不变。
+- **重复键**：根 `messages` 出现多次时不选其中一处改写，直接返回 prepare 结果（不可判定且极罕见）；单条消息的重复 `content` 仍按原有 `unique` 报错语义处理，不能静默取一个。
+- **字节等价**：`mistralLayoutRecord.render` 手写拼接必须与旧 `encoding/json` 数组编码逐字节一致（文本仍走 `json.Marshal` 转义），由 `mistral_wire_identity_test.go::TestMistralLayoutRenderWireBytesUnchanged` 固定；只有确实需要压缩空白时才可用编码器回退，不能顺带改变 key 顺序或转义。
+- **解析等价**：`mistralLayoutPlain`/`mistralHasNativeThinking` 改为 wire view 后必须与旧 map 解析等价：重复键取最后、未知键拒绝、`type/text/thinking/closed/signature` 与 null/空 signature 规则不变，非对象/非数组输入仍判不支持并走既有 unknown 兜底。
+- **分配边界**：还原缓冲按 `len(prepared)+len/8+1024` 预留；不允许出现「溢出一个字节就翻倍整份正文」的路径。新增解析不得引入每消息 map/数组 copy；`BenchmarkMistralPath` 与 `BenchmarkMistralGatewayStream` 保留同轮前后对比。

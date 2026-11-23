@@ -154,6 +154,17 @@ context.showMistralCacheAudit({requestId:'legacy'});
 assert.match(context.auditDialog.body,/旧日志不能补算/);
 context.showMistralCacheAudit({cacheAudit:{version:99,runId:'unsupported'}});
 assert.match(context.auditDialog.body,/格式不受支持/);
+context.modal = options => { context.timingDialog = options; };
+context.showMistralTiming({requestId:'timing-request',ttftMs:1700,mistralTiming:{uploadUs:8000,prepareUs:1500,admissionUs:200,inputBytes:1234},attempts:[{accountName:'m1',terminal:'success',mistralTiming:{httpStartUs:10000,connectionReadyUs:900,connectionWaitUs:400,connectionReused:true,requestWrittenUs:1200,responseHeadersUs:420000,firstEventReadUs:1690000,firstEventFlushUs:1695000,firstThinkingUs:1695000,firstToolUs:null,firstTextUs:1710000,lastEventFlushUs:3200000,terminalFlushUs:3210000,maxWriteFlushUs:3000,protocolTerminal:'done',outboundBytes:1234}}]});
+assert.match(context.timingDialog.title,/首字分段/);
+for (const label of ['请求入站读取','网关前段小计','到上游 HTTP 开始','连接就绪','复用 是','收到响应头','读到首个上游事件','首事件已写并 Flush 到下游','首事件等待','本地首帧适配+写','单次 Write+Flush 最大值','不是客户端首正文','不按 0 处理']) assert.ok(context.timingDialog.body.includes(label), label);
+assert.match(context.timingDialog.body,/连接等待 0\.40 ms/);
+assert.match(context.timingDialog.body,/1695\.0 ms/);
+assert.doesNotMatch(context.timingDialog.body,/NaN|undefined|null ms/); // unknown stays a dash, never a fake value
+context.showMistralTiming({requestId:'legacy',attempts:[{accountName:'m1'}]});
+assert.match(context.timingDialog.body,/未采集分段/);
+assert.match(context.timingDialog.body,/请求级阶段/);
+assert.doesNotMatch(context.timingDialog.body,/NaN|undefined/);
 vm.runInContext(source.slice(source.indexOf('function showDetail('), source.indexOf('function errorRow(')), context);
 context.modal = options => { context.wireDialog = options; };
 context.showDetail({provider:'mistral',wireVersion:1,method:'POST',path:'/v1/chat/completions',status:200,requestBody:'<img src=x onerror=bad>',responseBody:'adapted',upstreamAttempts:[{attemptIndex:0,method:'POST',path:'/v1/chat/completions',status:200,sent:true,request:{body:'prepared'},response:{body:'native',bodyTruncated:true,bodyBytes:99999}}]});

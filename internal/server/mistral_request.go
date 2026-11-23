@@ -53,6 +53,27 @@ func scanMistralObject(body []byte) *mistralWireObject {
 	return o
 }
 
+// field returns the last occurrence of key with its byte offsets, matching get().
+func (o *mistralWireObject) field(key string) (mistralWireField, bool) {
+	for i := len(o.fields) - 1; i >= 0; i-- {
+		if o.fields[i].key == key {
+			return o.fields[i], true
+		}
+	}
+	return mistralWireField{}, false
+}
+
+// countMistralField reports how many occurrences of key the object carries.
+func countMistralField(o *mistralWireObject, key string) int {
+	n := 0
+	for _, f := range o.fields {
+		if f.key == key {
+			n++
+		}
+	}
+	return n
+}
+
 func (o *mistralWireObject) get(key string) []byte {
 	for i := len(o.fields) - 1; i >= 0; i-- {
 		if o.fields[i].key == key {
@@ -100,6 +121,10 @@ func (o *mistralWireObject) render() []byte {
 		return o.body
 	}
 	var out bytes.Buffer
+	// Reserve the original size plus headroom once: a spliced body is close to
+	// the input, and a single byte of overflow would otherwise double the
+	// buffer and copy the whole history again.
+	out.Grow(len(o.body) + len(o.body)/8 + 256)
 	prefix, tail := o.end, o.end
 	if len(o.fields) > 0 {
 		prefix, tail = o.fields[0].start, o.fields[len(o.fields)-1].end
@@ -429,6 +454,10 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 		return raw, false, nil // native validation owns unrelated malformed messages
 	}
 	var out bytes.Buffer
+	// A rewritten history is about the original size plus a per-message
+	// wrapper, so reserve that plus headroom once instead of letting a small
+	// overflow double a multi-hundred-KiB buffer.
+	out.Grow(len(raw) + len(raw)/8 + 1024)
 	changed, last := false, 0
 	for i := skipSpace(raw, 1); raw[i] != ']'; {
 		end := skipValue(raw, i)
@@ -619,17 +648,36 @@ func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte, pre
 		return errors.New("Mistral assistant reasoning_content must be a string or null")
 	}
 	if text != nil && *text != "" {
-		thinking, _ := json.Marshal(map[string]any{
-			"type":     "thinking",
-			"thinking": []map[string]string{{"type": "text", "text": *text}},
-		})
-		chunks := []json.RawMessage{thinking}
+		// Assemble the native chunk with the same bytes encoding/json emits for
+		// the historical map literals: JSON object keys are sorted, so
+		// "thinking" precedes "type" and "text" precedes "type". This keeps the
+		// published wire bytes (and the cache prefix it shares) identical while
+		// avoiding two map marshals and an array re-compaction per history turn.
+		quoted, err := json.Marshal(*text)
+		if err != nil {
+			return err
+		}
+		thinking := make([]byte, 0, len(quoted)+48)
+		thinking = append(thinking, `{"thinking":[{"text":`...)
+		thinking = append(thinking, quoted...)
+		thinking = append(thinking, `,"type":"text"}],"type":"thinking"}`...)
+		var joined []byte
 		content := message.get("content")
 		switch {
 		case len(content) == 0 || bytes.Equal(content, []byte("null")):
+			joined = make([]byte, 0, len(thinking)+2)
+			joined = append(append(append(joined, '['), thinking...), ']')
 		case content[0] == '"':
-			chunk, _ := json.Marshal(map[string]string{"type": "text", "text": mistralString(content)})
-			chunks = append(chunks, chunk)
+			answer, err := json.Marshal(mistralString(content))
+			if err != nil {
+				return err
+			}
+			chunk := make([]byte, 0, len(answer)+40)
+			chunk = append(chunk, `{"text":`...)
+			chunk = append(chunk, answer...)
+			chunk = append(chunk, `,"type":"text"}`...)
+			joined = make([]byte, 0, len(thinking)+len(chunk)+3)
+			joined = append(append(append(append(append(joined, '['), thinking...), ','), chunk...), ']')
 		case content[0] == '[':
 			var existing []json.RawMessage
 			_ = json.Unmarshal(content, &existing)
@@ -637,12 +685,13 @@ func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte, pre
 				message.set("reasoning_content", nil)
 				return nil
 			}
-			chunks = append(chunks, existing...)
+			// Existing chunks may carry whitespace encoding/json would compact,
+			// so retain the established encoder for this branch.
+			joined, _ = json.Marshal(append([]json.RawMessage{thinking}, existing...))
 		default:
 			return errors.New("Mistral assistant content must be text, chunks or null to preserve reasoning")
 		}
-		content, _ = json.Marshal(chunks)
-		message.set("content", content)
+		message.set("content", joined)
 	}
 	message.set("reasoning_content", nil)
 	return nil

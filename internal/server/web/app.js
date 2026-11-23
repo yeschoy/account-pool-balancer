@@ -1996,6 +1996,51 @@ function showMistralCacheAudit(r) {
   const explanation = '临时诊断，仅记录脱敏HMAC、结构计数与HTTP读取/连接观测，不保存正文。指纹只在同一runId内可比较；不同账号、源配置或并发请求不能直接当作已预热缓存对照。读取完整不等于上游已收到全部字节，须结合写入状态、服务商追踪ID和真实用量。连接标识不是模型缓存节点，也不覆盖其他Key的连接使用。';
   modal({ title:'缓存链路诊断 · ' + r.requestId, wide:true, body:`<p class="acc-sub">${esc(explanation)}</p>${supported ? `<p>采样 ${esc(a.sample)} / ${esc(a.sampleLimit ?? '—')} · 本次进程 ${esc(a.runId)} · 新请求采集截止 ${esc(fmtTime(a.expiresAt))}</p><p class="acc-sub">client → prepared 检查适配；previousClient / previousPrepared / attempts[].previous 对比前序观测；sequenceComplete/toolsComplete=false 或缺失的比较字段表示未知。previousSequenceRetained 表示旧消息JSON字节前缀保留，不保证提供商缓存命中；sequenceReordered/toolsReordered 只识别字节相同元素的纯排列变化。</p><pre>${esc(JSON.stringify(a, null, 2))}</pre>` : '<p class="acc-sub">未采集或诊断格式不受支持；旧日志不能补算完整指纹。</p>'}` });
 }
+// showMistralTiming renders the segmented first-token observation for one
+// Mistral request. Missing milestones stay unknown; nothing is interpolated.
+function showMistralTiming(r) {
+  const µs = (v) => typeof v === 'number' && Number.isFinite(v) ? v : null;
+  const fmt = (v) => { const u = µs(v); return u === null ? '—' : (u / 1000).toFixed(u < 10000 ? 2 : 1) + ' ms'; };
+  const add = (a, b) => (µs(a) === null || µs(b) === null) ? null : a + b;
+  const sub = (a, b) => (µs(a) === null || µs(b) === null) ? null : a - b;
+  const req = r.mistralTiming || {};
+  const attempts = Array.isArray(r.attempts) ? r.attempts : [];
+  const pre = (µs(req.uploadUs) !== null && µs(req.prepareUs) !== null && µs(req.admissionUs) !== null) ? req.uploadUs + req.prepareUs + req.admissionUs : null;
+  const rows = [
+    ['请求入站读取', fmt(req.uploadUs), null],
+    ['JSON 校验/身份/缓存键/兼容适配/布局还原', fmt(req.prepareUs), null],
+    ['账号准入等待（含多尝试累计）', fmt(req.admissionUs), null],
+    ['网关前段小计（读取+准备+入池）', fmt(pre), '不含上游与出站网络'],
+  ];
+  const perAttempt = attempts.map((a, i) => {
+    const t = a.mistralTiming;
+    if (!t) return `<h4>尝试 #${i + 1}（${esc(a.accountName || a.account || '—')}）</h4><p class="acc-sub">未采集分段（旧日志或非 Mistral 尝试）。</p>`;
+    const httpStart = t.httpStartUs;
+    const connAbsolute = add(httpStart, t.connectionReadyUs);
+    const writtenAbsolute = add(httpStart, t.requestWrittenUs);
+    const headersAbsolute = add(httpStart, t.responseHeadersUs);
+    const waitFirst = sub(t.firstEventReadUs, headersAbsolute);
+    const localFirst = sub(t.firstEventFlushUs, t.firstEventReadUs);
+    const table = [
+      ['到上游 HTTP 开始（handler 相对）', fmt(httpStart), ''],
+      ['连接就绪（HTTP 开始相对）', fmt(t.connectionReadyUs), `连接等待 ${fmt(t.connectionWaitUs)} · 复用 ${t.connectionReused === true ? '是' : t.connectionReused === false ? '否（新建连接）' : '未知'}`],
+      ['请求体写完', fmt(t.requestWrittenUs), `出站正文 ${t.outboundBytes === undefined ? '—' : num(t.outboundBytes) + ' B'}`],
+      ['收到响应头', fmt(t.responseHeadersUs), '上游 TTFB 起点'],
+      ['读到首个上游事件（handler 相对）', fmt(t.firstEventReadUs), '首事件等待 ' + fmt(waitFirst)],
+      ['首事件已写并 Flush 到下游', fmt(t.firstEventFlushUs), '本地首帧适配+写 ' + fmt(localFirst)],
+      ['首个思考 / 工具 / 正文 Flush', `${fmt(t.firstThinkingUs)} / ${fmt(t.firstToolUs)} / ${fmt(t.firstTextUs)}`, '各类首个可转发内容'],
+      ['末事件 / 协议终态 Flush', `${fmt(t.lastEventFlushUs)} / ${fmt(t.terminalFlushUs)}`, t.protocolTerminal ? '终态 ' + esc(t.protocolTerminal) : '未见终态帧'],
+      ['单次 Write+Flush 最大值', fmt(t.maxWriteFlushUs), '含下游背压阻塞；不是首字'],
+    ];
+    return `<h4>尝试 #${i + 1} · ${esc(a.accountName || a.account || '—')} · ${esc(a.terminal || '')}</h4>` +
+      `<table class="tbl"><thead><tr><th>阶段</th><th class="num">耗时</th><th>说明</th></tr></thead><tbody>` +
+      table.map(([k, v, note]) => `<tr><td>${esc(k)}</td><td class="num">${v}</td><td class="acc-sub">${note}</td></tr>`).join('') +
+      `</tbody></table>` +
+      `<p class="acc-sub">绝对位置（handler 相对）：连接就绪 ${fmt(connAbsolute)} · 请求写完 ${fmt(writtenAbsolute)} · 响应头 ${fmt(headersAbsolute)}。${t.outputProbeSkipped ? '首内容探测因帧过大被跳过，思考/正文分类未知。' : ''}</p>`;
+  }).join('');
+  const head = `<p class="acc-sub">微秒级分段观测，仅覆盖本网关。首字口径：日志 ttftMs=${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + ' ms'} 是首个可转发事件前的时间，可能是角色/思考/生命周期帧，不是客户端首正文。入站读取包含客户端上传；准备含 JSON 校验、身份、缓存键与原生兼容适配；准入含等待与租约。缺字段表示未观测（旧日志、未到达该阶段或失败），不按 0 处理。Write+Flush 阻塞与上游模型耗时分开，不能把本地分段当作供应商解码速度。</p>`;
+  modal({ title: '首字分段 · ' + r.requestId, wide: true, body: head + `<table class="tbl"><thead><tr><th>请求级阶段</th><th class="num">耗时</th><th>说明</th></tr></thead><tbody>` + rows.map(([k, v, note]) => `<tr><td>${esc(k)}</td><td class="num">${v}</td><td class="acc-sub">${esc(note || '')}</td></tr>`).join('') + `</tbody></table>` + (perAttempt || '<p class="acc-sub">本次没有上游尝试。</p>') });
+}
 function showClientRequestHeaders(r) {
   const states = { valid:'有效候选（不代表最终选中）', empty:'空值', invalid:'无效值（控制字符或超过512字节）' };
   const candidates = Object.entries(r.clientSessionHeaderStatus || {}).map(([name, state]) => `${name}: ${states[state] || state}`).join('\n');
@@ -2013,7 +2058,7 @@ function requestRow(r) {
     <td><span class="acc-sub">${esc(BIND[r.bindingResult] || r.bindingResult)}</span><div class="acc-sub">${esc(r.affinityKeyType)}</div>${r.provider === 'mistral' ? `<div class="acc-sub">来源 ${esc(r.sessionSource || '—')}</div>` : ''}${r.cacheAffinityResult ? `<div class="acc-sub">缓存亲和 ${esc(GO_CACHE_LABEL[r.cacheAffinityResult] || r.cacheAffinityResult)} · ${esc(r.cacheHintSource)}</div>` : ''}</td>
     <td class="num">${r.ttftMs === null || r.ttftMs === undefined ? '—' : num(r.ttftMs) + 'ms'}</td><td class="num">${num(r.durationMs)}ms<div>${upstreamTPSCell(r)}</div><div class="acc-sub">${costCell(r)}</div></td>
     <td class="num">${tok}<div>${cacheRateCell(r)}</div>${r.cacheCreationTokens != null ? `<div class="acc-sub">缓存写入 ${num(r.cacheCreationTokens)}</div>` : ''}${r.egressStatus ? `<div class="acc-sub">${esc(r.proxy)}${r.egressIp ? ' / ' + esc(r.egressIp) : ''} · ${esc(GO_EGRESS_LABEL[r.egressStatus] || r.egressStatus)}</div>` : ''}</td><td class="num">${r.attempts ? r.attempts.length : 0}</td>
-    <td class="act">${r.provider === 'mistral' && r.cacheAudit ? `<button type="button" class="btn small ghost rq-audit" data-rid="${esc(r.requestId)}">缓存诊断</button>` : ''}${r.provider === 'mistral' ? `<button type="button" class="btn small ghost rq-headers" data-rid="${esc(r.requestId)}">客户端头</button>` : ''}<button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
+    <td class="act">${r.provider === 'mistral' && (r.mistralTiming || (r.attempts || []).some(a => a.mistralTiming)) ? `<button type="button" class="btn small ghost rq-timing" data-rid="${esc(r.requestId)}">首字分段</button>` : ''}${r.provider === 'mistral' && r.cacheAudit ? `<button type="button" class="btn small ghost rq-audit" data-rid="${esc(r.requestId)}">缓存诊断</button>` : ''}${r.provider === 'mistral' ? `<button type="button" class="btn small ghost rq-headers" data-rid="${esc(r.requestId)}">客户端头</button>` : ''}<button type="button" class="btn small ghost rq-del" data-rid="${esc(r.requestId)}" title="删除这条日志">删除</button></td></tr>`;
 }
 function detailRow(d) {
   const sz = (n, cut) => num(n) + ' B' + (cut ? ' <span class="badge warn">截断</span>' : '');
@@ -2092,6 +2137,8 @@ for (const [kind, p] of Object.entries(LOG_PREFIX)) {
     try { await api('DELETE', `/api/logs/${kind}`); loadLogs(kind, true); } catch (e) { toast(e.message); }
   });
   $(`#${p}-table tbody`).addEventListener('click', (ev) => {
+    const timing = ev.target.closest('.rq-timing');
+    if (timing) { const item = logState.requests.items.find(r => r.requestId === timing.dataset.rid); if (item) showMistralTiming(item); return; }
     const audit = ev.target.closest('.rq-audit');
     if (audit) { const item = logState.requests.items.find(r => r.requestId === audit.dataset.rid); if (item) showMistralCacheAudit(item); return; }
     const headers = ev.target.closest('.rq-headers');

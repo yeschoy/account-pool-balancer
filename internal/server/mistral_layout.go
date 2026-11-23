@@ -293,25 +293,55 @@ func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *m
 		return prepared, nil
 	}
 	oldRoot, root := scanMistralObject(original), scanMistralObject(prepared)
-	var oldMessages []json.RawMessage
-	if oldRoot == nil || root == nil || json.Unmarshal(oldRoot.get("messages"), &oldMessages) != nil {
+	if oldRoot == nil || root == nil {
 		return prepared, nil
 	}
-	raw := root.get("messages")
-	if len(raw) == 0 || raw[0] != '[' {
+	field, ok := root.field("messages")
+	if !ok || len(field.value) == 0 || field.value[0] != '[' {
+		return prepared, nil
+	}
+	raw := field.value
+	// Walk the original history by offset instead of decoding it into a
+	// []json.RawMessage: the previous form copied the whole message array just
+	// to pair item indexes. Preparation never adds, removes or reorders
+	// messages, so positional pairing is unchanged.
+	oldRaw := oldRoot.get("messages")
+	if len(oldRaw) == 0 || oldRaw[0] != '[' {
+		return prepared, nil
+	}
+	// A duplicate root messages key is ambiguous; leave such a request entirely
+	// as preparation left it rather than picking one occurrence to rewrite.
+	if countMistralField(root, "messages") != 1 {
 		return prepared, nil
 	}
 	var out bytes.Buffer
-	last, changed, mi := 0, false, 0
+	started, changed, mi := false, false, 0
+	last := 0
+	oi := skipSpace(oldRaw, 1)
 	for i := skipSpace(raw, 1); raw[i] != ']'; mi++ {
 		end := skipValue(raw, i)
+		if end < 0 {
+			return prepared, nil
+		}
+		var old *mistralWireObject
+		if oi < len(oldRaw) && oldRaw[oi] != ']' {
+			oend := skipValue(oldRaw, oi)
+			if oend < 0 {
+				return prepared, nil
+			}
+			old = scanMistralObject(oldRaw[oi:oend])
+			oi = skipSpace(oldRaw, oend)
+			if oi < len(oldRaw) && oldRaw[oi] == ',' {
+				oi = skipSpace(oldRaw, oi+1)
+			}
+		}
 		m := scanMistralObject(raw[i:end])
-		if m != nil && mistralString(m.get("role")) == "assistant" && mi < len(oldMessages) {
+		if m != nil && old != nil && mistralString(m.get("role")) == "assistant" {
 			if err := m.unique("content"); err != nil {
 				return nil, err
 			}
-			old := scanMistralObject(oldMessages[mi])
-			if old != nil && mistralHasNativeThinking(old.get("content")) {
+			contentField, _ := m.field("content")
+			if mistralHasNativeThinking(old.get("content")) {
 				log.Native++
 			} else if answer, thought, ok := mistralLayoutPlain(m.get("content")); ok {
 				r, found, err := s.get(s.textKey(scope, answer, thought))
@@ -334,9 +364,20 @@ func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *m
 					}
 				default:
 					s.refresh(r)
-					m.set("content", content)
-					out.Write(raw[last:i])
-					out.Write(m.render())
+					// Splice only the content value into the prepared message and
+					// write the whole body once; rendering the message and then the
+					// root object again would copy the history twice.
+					if !started {
+						out.Grow(len(prepared) + len(prepared)/8 + 1024)
+						out.Write(prepared[:field.vs])
+						out.Write(raw[:i])
+						started = true
+					} else {
+						out.Write(raw[last:i])
+					}
+					out.Write(raw[i : i+contentField.vs])
+					out.Write(content)
+					out.Write(raw[i+contentField.end : end])
 					last, changed = end, true
 					log.Restored++
 				}
@@ -349,22 +390,29 @@ func (s *mistralLayouts) restore(original, prepared []byte, scope string, log *m
 			i = skipSpace(raw, i+1)
 		}
 	}
-	if changed {
-		out.Write(raw[last:])
-		root.set("messages", out.Bytes())
-		return root.render(), nil
+	if !changed {
+		return prepared, nil
 	}
-	return prepared, nil
+	out.Write(raw[last:])
+	out.Write(prepared[field.end:])
+	return out.Bytes(), nil
 }
 
 func mistralHasNativeThinking(raw []byte) bool {
-	var chunks []json.RawMessage
-	if json.Unmarshal(raw, &chunks) != nil {
+	if len(raw) == 0 || raw[0] != '[' {
 		return false
 	}
-	for _, raw := range chunks {
-		if o := scanMistralObject(raw); o != nil && mistralString(o.get("type")) == "thinking" {
+	for i := skipSpace(raw, 1); i < len(raw) && raw[i] != ']'; {
+		end := skipValue(raw, i)
+		if end < 0 {
+			return false
+		}
+		if o := scanMistralObject(raw[i:end]); o != nil && mistralString(o.get("type")) == "thinking" {
 			return true
+		}
+		i = skipSpace(raw, end)
+		if i < len(raw) && raw[i] == ',' {
+			i = skipSpace(raw, i+1)
 		}
 	}
 	return false
@@ -379,41 +427,30 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 		err := json.Unmarshal(raw, &s)
 		return s, "", err == nil
 	}
-	var chunks []json.RawMessage
-	if json.Unmarshal(raw, &chunks) != nil {
+	if raw[0] != '[' {
 		return "", "", false
 	}
 	var a, r bytes.Buffer
-	for _, rawChunk := range chunks {
-		view := scanMistralObject(rawChunk)
-		if view == nil || view.unique("type", "text", "thinking", "closed", "signature") != nil {
+	// Walk the content array by offsets: decoding it into maps would allocate
+	// a second copy of every chunk plus a map per chunk for the same answer.
+	for i := skipSpace(raw, 1); i < len(raw) && raw[i] != ']'; {
+		end := skipValue(raw, i)
+		if end < 0 {
 			return "", "", false
 		}
-		var c map[string]json.RawMessage
-		if json.Unmarshal(rawChunk, &c) != nil {
+		chunk := scanMistralObject(raw[i:end])
+		if chunk == nil || chunk.unique("type", "text", "thinking", "closed", "signature") != nil {
 			return "", "", false
 		}
-		if mistralString(c["type"]) == "thinking" {
-			var parts []json.RawMessage
-			if json.Unmarshal(c["thinking"], &parts) != nil {
-				return "", "", false
-			}
-			for _, rawPart := range parts {
-				p := scanMistralObject(rawPart)
-				if p == nil || p.unique("type", "text") != nil {
-					return "", "", false
-				}
-			}
-		}
-		switch mistralString(c["type"]) {
+		switch mistralString(chunk.get("type")) {
 		case "text":
-			text, err := mistralTextChunk(c)
+			text, err := mistralTextChunkView(chunk)
 			if err != nil {
 				return "", "", false
 			}
 			a.WriteString(text)
 		case "thinking":
-			parts, err := mistralThinkingTextParts(c)
+			parts, err := mistralThinkingPartsView(chunk)
 			if err != nil {
 				return "", "", false
 			}
@@ -423,8 +460,73 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 		default:
 			return "", "", false
 		}
+		i = skipSpace(raw, end)
+		if i < len(raw) && raw[i] == ',' {
+			i = skipSpace(raw, i+1)
+		}
 	}
 	return a.String(), r.String(), true
+}
+
+// mistralTextChunkView mirrors mistralTextChunk (the response adapter's parser)
+// on a wire view: only type/text, no null text, and the last duplicate wins as
+// a map decode would.
+func mistralTextChunkView(o *mistralWireObject) (string, error) {
+	for _, f := range o.fields {
+		if f.key != "type" && f.key != "text" {
+			return "", errMistralContent
+		}
+	}
+	return mistralTextFieldsView(o)
+}
+
+func mistralTextFieldsView(o *mistralWireObject) (string, error) {
+	var typ, text string
+	rawText := o.get("text")
+	if json.Unmarshal(o.get("type"), &typ) != nil || typ != "text" || json.Unmarshal(rawText, &text) != nil || bytes.Equal(bytes.TrimSpace(rawText), []byte("null")) {
+		return "", errMistralContent
+	}
+	return text, nil
+}
+
+// mistralThinkingPartsView mirrors mistralThinkingTextParts on a wire view.
+func mistralThinkingPartsView(o *mistralWireObject) ([]string, error) {
+	for _, f := range o.fields {
+		switch f.key {
+		case "type", "thinking", "closed":
+		case "signature":
+			if !bytes.Equal(bytes.TrimSpace(f.value), []byte("null")) && !bytes.Equal(bytes.TrimSpace(f.value), []byte(`""`)) {
+				return nil, errMistralContent
+			}
+		default:
+			return nil, errMistralContent
+		}
+	}
+	arr := o.get("thinking")
+	if len(arr) == 0 || arr[0] != '[' {
+		return nil, errMistralContent
+	}
+	parts := make([]string, 0, 4)
+	for i := skipSpace(arr, 1); i < len(arr) && arr[i] != ']'; {
+		end := skipValue(arr, i)
+		if end < 0 {
+			return nil, errMistralContent
+		}
+		part := scanMistralObject(arr[i:end])
+		if part == nil || part.unique("type", "text") != nil {
+			return nil, errMistralContent
+		}
+		text, err := mistralTextChunkView(part)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, text)
+		i = skipSpace(arr, end)
+		if i < len(arr) && arr[i] == ',' {
+			i = skipSpace(arr, i+1)
+		}
+	}
+	return parts, nil
 }
 
 // Response transport fragments (even closed=true) are not distinct request
@@ -466,40 +568,72 @@ func (r mistralLayoutRecord) render(answer, thought string) ([]byte, error) {
 		return part, nil
 	}
 	blocks := mistralReplayBlocks(r.Blocks)
-	chunks := make([]json.RawMessage, 0, len(blocks))
-	for _, b := range blocks {
-		var raw []byte
+	// Assemble the content array directly. Every chunk below is already compact
+	// JSON built here, so encoding through []json.RawMessage would only
+	// re-validate and re-compact the text a second time.
+	var out bytes.Buffer
+	out.Grow(totalMistralLayoutBytes(blocks) + 2)
+	out.WriteByte('[')
+	for bi, b := range blocks {
+		if bi > 0 {
+			out.WriteByte(',')
+		}
 		if b.Kind == "text" {
 			text, err := take(&answer, b.Bytes)
 			if err != nil {
 				return nil, err
 			}
 			s, _ := json.Marshal(text)
-			raw = append(append([]byte(`{"type":"text","text":`), s...), '}')
-		} else {
-			parts := make([]json.RawMessage, 0, len(b.Parts))
-			for _, n := range b.Parts {
-				text, err := take(&thought, n)
-				if err != nil {
-					return nil, err
-				}
-				s, _ := json.Marshal(text)
-				parts = append(parts, append(append([]byte(`{"type":"text","text":`), s...), '}'))
-			}
-			p, _ := json.Marshal(parts)
-			raw = append([]byte(`{"type":"thinking","thinking":`), p...)
-			if b.Closed != 0 {
-				raw = append(raw, []byte(`,"closed":`+[]string{"", "false", "true", "null"}[b.Closed])...)
-			}
-			if b.Signature != 0 {
-				raw = append(raw, []byte(`,"signature":`+[]string{"", "null", `""`}[b.Signature])...)
-			}
-			raw = append(raw, '}')
+			out.WriteString(`{"type":"text","text":`)
+			out.Write(s)
+			out.WriteByte('}')
+			continue
 		}
-		chunks = append(chunks, raw)
+		out.WriteString(`{"type":"thinking","thinking":[`)
+		for i, n := range b.Parts {
+			if i > 0 {
+				out.WriteByte(',')
+			}
+			text, err := take(&thought, n)
+			if err != nil {
+				return nil, err
+			}
+			s, _ := json.Marshal(text)
+			out.WriteString(`{"type":"text","text":`)
+			out.Write(s)
+			out.WriteByte('}')
+		}
+		out.WriteByte(']')
+		if b.Closed != 0 {
+			out.WriteString(`,"closed":`)
+			out.WriteString([]string{"", "false", "true", "null"}[b.Closed])
+		}
+		if b.Signature != 0 {
+			out.WriteString(`,"signature":`)
+			out.WriteString([]string{"", "null", `""`}[b.Signature])
+		}
+		out.WriteByte('}')
 	}
+	out.WriteByte(']')
 	if answer != "" || thought != "" {
 		return nil, errMistralLayout
 	}
-	return json.Marshal(chunks)
+	return out.Bytes(), nil
+}
+
+// totalMistralLayoutBytes estimates the rendered content size so the buffer is
+// allocated once; JSON escaping can grow text, so the estimate is generous.
+func totalMistralLayoutBytes(blocks []mistralLayoutBlock) int {
+	n := 0
+	for _, b := range blocks {
+		if b.Kind == "text" {
+			n += b.Bytes + 32
+			continue
+		}
+		n += 48
+		for _, part := range b.Parts {
+			n += part + 32
+		}
+	}
+	return n
 }

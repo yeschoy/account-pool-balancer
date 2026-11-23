@@ -181,3 +181,13 @@ Good: set client temperature≤1.5 or omit; compatible reasoning/history/tools/c
 Wrong: infer generic Chat temperature limits from recommendations or change live NewAPI rules without approval. Correct: use observed exact-model validation evidence, retain sampling intent, disclose caller correction and deployment boundaries separately.
 
 Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching ; https://docs.mistral.ai/api/endpoint/chat ; https://docs.mistral.ai/api/endpoint/responses ; https://docs.mistral.ai/inference/conversations/reasoning .
+
+## 7. 首字分段观测契约（2026-11-24）
+
+- `requestLog.mistralTiming` 与 `attemptLog.mistralTiming` 只对 Mistral 产生；其他池、旧日志、未到达的阶段不写字段，也不补算。`prepareMistralRequest` 的签名、缓存键优先级、身份 HMAC、绑定/选号/TTL、错误与重放策略不因此改变。
+- **缺失≠0**：只有真正观测到亚微秒才写 0；未开始/未到达/旧记录保持 `null`（Go 指针 nil，JSON 省略）。不允许用 `durationMs`、`ttftMs` 或其它阶段倒算缺失字段。
+- 相对起点固定：`uploadUs/prepareUs/admissionUs/firstEventReadUs/firstEventFlushUs/first*Us/lastEventFlushUs/terminalFlushUs/httpStartUs` 相对 handler 入口；`connectionReadyUs/connectionWaitUs/requestWrittenUs/responseHeadersUs` 相对 `client.Do` 开始。前端「首字分段」按此标注，不能混用。
+- 请求级 `admissionUs` 为每次 `Pool.Acquire` 的累计；每次尝试独立记录自己的连接/首事件事实。已发出后失败保留已观测里程碑，不编造响应头。
+- `ttftMs` 语义不变（首个可转发事件前时间，可能是角色/思考/生命周期帧）；`firstEventFlushUs` 与其同为 handler 相对可直接对照，但都不是客户端首正文。`maxWriteFlushUs`（含下游背压）与 `streamMaxLagUs`（写前队列滞后）必须单列，不得当成首字或模型解码速度。
+- 观测本身不得增加额外写、额外 Flush、延迟首帧、缓冲整流或改变响应字节；`mistralChatEvent`/layout capture 的既有逐事件行为不变。缺失/超限（`outputProbeSkipped`）要如实标记。
+- 验证：`mistral_timing_test.go`（nil/0 语义、非流无首事件、里程碑顺序、连接复用观测、日志往返）；`mistral_web_test.js`（浏览器展示缺字段为 —、不出现 NaN/0 冒充、不可信文本转义）。本地 Mock 数据不是生产验收，不得据此宣称上游首字改善。

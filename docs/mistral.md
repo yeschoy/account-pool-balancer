@@ -211,6 +211,60 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 
 参考：[官方文档](https://docs.mistral.ai/)、[Responses](https://docs.mistral.ai/inference/conversations/responses)、[用量和限制](https://docs.mistral.ai/admin/billing-usage/usage-limits)。
 
+## 首字分段时间观测（2026-11-24，本地实现）
+
+请求日志新增**仅 Mistral** 的 `mistralTiming`：请求级记录入站读取、准备、入池等待与入站字节；每个上游尝试记录连接等待/复用、请求写完、响应头、首事件读到、首事件 Flush、首思考/工具/正文 Flush、末事件/终态 Flush 和单次 Write+Flush 最大值。管理员请求日志行出现「首字分段」按钮，打开后按阶段展示并标注相对起点与缺失值。旧日志、其他池和未到达的阶段不产生字段，也不补算。
+
+字段口径（`internal/server/mistral_timing.go`）：
+
+| 字段 | 起点 | 语义 |
+| --- | --- | --- |
+| `uploadUs` / `prepareUs` / `admissionUs` | 请求读取开始 / 读取结束 / 每次准入前 | 客户端上传读取（含读 deadline）；JSON 校验、身份、缓存键与兼容适配、布局还原；`Acquire` 租约等待（多尝试累计） |
+| `httpStartUs` | handler 入口 | 真正开始 `client.Do` 的时间 |
+| `connectionReadyUs` / `connectionWaitUs` | HTTP 开始 / `GetConn` | 连接就绪（含代理握手）；最后一次 `GetConn → GotConn` 的等待；`connectionReused` 表明是否复用 |
+| `requestWrittenUs` / `responseHeadersUs` | HTTP 开始 | 请求体写完 / 收到响应头（上游 TTFB 起点） |
+| `firstEventReadUs` / `firstEventFlushUs` | handler 入口 | 读到首个可转发上游事件 / 该事件 Write+Flush 成功 |
+| `firstThinkingUs` / `firstToolUs` / `firstTextUs` | handler 入口 | 首个思考/工具/正文成功 Flush；只做有界探测，超限时 `outputProbeSkipped` |
+| `lastEventFlushUs` / `terminalFlushUs` / `protocolTerminal` | handler 入口 | 末个事件、协议终态（`done`/`responses_terminal`）Flush |
+| `maxWriteFlushUs` | — | 单次 Write+Flush 的最大值，含下游背压阻塞，单列而不并入首字 |
+
+语义边界：
+
+- **缺失 ≠ 0**：未观测到（旧日志、未到达、失败在更早处）为 `null`，只是亚微秒观测才写 0。
+- `ttftMs` 仍是「首个可转发事件前的时间」，可能是角色/思考/生命周期帧，**不是客户端首正文**；`firstEventFlushUs` 与本网关 `ttftMs` 同为 handler 相对，可直接对照。上游真实生成耗时属于 `responseHeadersUs → firstEventReadUs` 区间。
+- 非流式尝试没有首事件字段，只记录到响应头；已发出请求后失败仍保留连接与请求写入事实，不伪造响应头。
+- 写阻塞（`maxWriteFlushUs`）、事件队列滞后（`streamMaxLagUs`）与上游模型耗时分开；日志分段不含 NewAPI/Nginx/公网，不能据此判定供应商解码速度或客户端首正文时间。
+
+### 本地同轮基准（HEAD `64c7b0c` vs 本轮工作树）
+
+Apple M4 / Go 1.26.8，`-cpu 2 -count 5` 取中位；128 KiB / 512 KiB / 2 MiB 合成 Chat 历史（system + 64 轮 user/assistant，带 `reasoning_content`），对象在 HEAD 独立工作树与本树同轮运行：
+
+| 阶段 | 128 KiB 之前 → 现在 | 512 KiB | 2 MiB |
+| --- | --- | --- | --- |
+| 路由解析 `parseRoutingBodyWithHistory` | 0.71 → 0.71 ms | 2.71 → 2.71 | 10.69 → 10.69 |
+| 请求准备 `prepareMistralRequest` | 2.14 → 1.38 ms | 7.22 → 4.60 | 27.29 → 17.27 |
+| 布局还原 `restore` | 7.50 → 1.91 ms | 25.77 → 5.40 | 97.70 → 19.31 |
+| 准备+还原 | 9.69 → 3.32 ms（B/op 4.85 → 3.09 MB） | 33.37 → 10.07（16.61 → 10.09 MB） | 126.2 → 37.1（63.45 → 38.27 MB） |
+| 端到端首字节（真实 Handler + 本地 Mock 上游，1 账号，128 KiB / 512 KiB） | 9.46 → 4.23 ms / 32.11 → 13.30 ms | — | — |
+| 端到端分配 | 3.85 → 2.96 MB/请求 | 11.94 → 8.99 MB | — |
+
+端到端基准在 Mock 上游立即返回时测量，反映**网关自身**加上环回 HTTP 的开销，不含真实模型 prefill、NewAPI、Nginx、公网与代理 RTT。
+
+### 本轮改动（不改线上协议语义）
+
+- 正文拼接与布局重建的一次性缓冲改为按原大小+余量 `Grow`：此前溢出一个字节就会翻倍并整份复制历史（`mistralWireObject.render`、`mistralChatMessages`、`restore`）。
+- 原生思考块与 content 数组改为手写拼接，**字节与旧 `encoding/json` 输出逐字节相同**（对象键排序一致），由 `mistral_wire_identity_test.go` 固定；仅当已有 content 数组可能含可压缩空白时保留原编码器。
+- `restore` 不再把原历史整体解码成 `[]json.RawMessage`（按消息偏移并行遍历配对），只把命中的 content 值就地拼接进一次性全文缓冲，不再「逐消息 render + 根对象再 render」；根 `messages` 重复键的请求直接保持 prepare 结果，不猜哪一处生效。
+- 布局纯文本解析改用 wire view（`mistralLayoutPlain`/`mistralHasNativeThinking`），语义与旧的 map 解析等价（重复键取最后、未知键拒绝、null/类型校验不变），省掉每消息的 map 与数组 copy。
+
+未改变：缓存键优先级与 `X-Affinity`、身份 HMAC、绑定/选号/TTL、布局记录内容与歧义兜底、响应适配字节、错误策略与重放边界；所有既有 Mistral 回归（含布局 3051/状态、报文顺序、参数/推理/图片/温度）保持通过。
+
+### 生产现状与下一步
+
+本轮**未部署、未发真实推理**，线上仍无 `mistralTiming`。上一次生产只读基线（14,582 条，2026-11-23）显示：流式成功首事件 P50/P95 1.69/4.21 s，`durationMs − 最后 attempt.ms` P50/P95 8/48 ms；≥200k 输入零缓存请求首事件 P50 10.36 s，而缓存读取占比 ≥90% 的为 2.55 s。即首字主要仍由**上游 prefill 与缓存命中**决定，本网关这几毫秒不是主因；本轮把网关前段压到 128 KiB 3.3 ms、512 KiB 10 ms 量级，主要收益是 CPU/分配与长上下文尾延迟，而不是把 1.7 s 变成几百毫秒。
+
+按此证据，下一步优先级：部署含 `mistralTiming` 的版本后用生产自然流量核对「尝试外/连接/响应头/首事件」占比；再针对 ≥200k 零缓存桶核对绑定命中、身份来源与前缀稳定性（不擅自改缓存键或亲和策略）；之后再考虑单趟 JSON 校验索引复用与 prepare+restore 合并。旧的 3 亿 TPM 容量口径与验收边界不变。
+
 ## TPS与局部性能
 
 请求日志有两种TPS：

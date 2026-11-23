@@ -34,16 +34,17 @@ import (
 // ---- log records: strict projections, never a request, account or error object ----
 
 type attemptLog struct {
-	Account        string `json:"account"`
-	AccountName    string `json:"accountName"`
-	Status         int    `json:"status"`
-	UpstreamStatus *int   `json:"upstreamStatus"`
-	Ms             int64  `json:"ms"`
-	Action         string `json:"action,omitempty"`
-	RuleID         string `json:"ruleId,omitempty"`
-	Egress         string `json:"egress"`
-	EgressIP       string `json:"egressIp,omitempty"`
-	Terminal       string `json:"terminal"`
+	Account        string                   `json:"account"`
+	AccountName    string                   `json:"accountName"`
+	Status         int                      `json:"status"`
+	UpstreamStatus *int                     `json:"upstreamStatus"`
+	Ms             int64                    `json:"ms"`
+	Action         string                   `json:"action,omitempty"`
+	RuleID         string                   `json:"ruleId,omitempty"`
+	Egress         string                   `json:"egress"`
+	EgressIP       string                   `json:"egressIp,omitempty"`
+	Terminal       string                   `json:"terminal"`
+	MistralTiming  *mistralAttemptTimingLog `json:"mistralTiming,omitempty"`
 }
 
 type workflowDecision struct {
@@ -130,6 +131,7 @@ type requestLog struct {
 	ClientSessionHeaderStatus     map[string]string   `json:"clientSessionHeaderStatus,omitempty"`
 	ClientRequestHeadersTruncated bool                `json:"clientRequestHeadersTruncated,omitempty"`
 
+	MistralTiming      *mistralRequestTiming `json:"mistralTiming,omitempty"`
 	MistralLayout      *mistralLayoutLog     `json:"mistralLayout,omitempty"`
 	mistralLayoutScope string                // private, never serialized or sent upstream
 	CacheAudit         *mistralCacheAuditLog `json:"cacheAudit,omitempty"`
@@ -245,6 +247,7 @@ type attemptResult struct {
 	wrapped           bool
 	mistralCapacity   bool // matched Mistral service-capacity policy, not just a user-chosen rule ID
 	mistralLayout     *mistralLayoutCapture
+	mistralTiming     *mistralAttemptTiming
 	accountScoped     bool
 	evaluated         bool
 	retryAfter        time.Duration
@@ -252,9 +255,8 @@ type attemptResult struct {
 	downstreamStatus int
 	ruleID           string
 	ttft             *int64
-	// streamEvents counts delivered upstream events and streamMaxLagUs is the
-	// worst delay between reading an event and flushing it downstream. Together
-	// they show the relay forwards each event instead of batching replies.
+	// streamEvents counts upstream event writes (including the last failed
+	// write, if any). streamMaxLagUs ends immediately before Write/Flush.
 	streamEvents    int
 	streamMaxLagUs  int64
 	upstreamStarted time.Time
@@ -522,6 +524,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var reqHeader http.Header
 	var reqBody []byte
 	var reqBodyIncomplete bool
+	var mistralPrepareStart time.Time
 	var detailIdentities []string
 	detailEnabled := cfg.Logs.Detail
 	if detailEnabled {
@@ -556,6 +559,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				us := res.upstreamStatus
 				rec.UpstreamStatus = &us
 			}
+		}
+		if !mistralPrepareStart.IsZero() && rec.MistralTiming.PrepareUs == nil && !reqBodyIncomplete {
+			// An early local validation rejection did not reach admission.
+			rec.MistralTiming.PrepareUs = mistralElapsed(mistralPrepareStart, ended)
 		}
 		applyAverageTiming(rec, ended)
 		// The Perch pool reports its turn to the same places the CLI does.
@@ -699,7 +706,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	releaseBody := func() {}
 	var inputBuffer *mistralBuffer
 	if rec.Provider == config.ProviderMistral {
+		at := time.Now()
 		body, inputBuffer, err = s.readMistralBody(w, r, cfg)
+		mistralPrepareStart = time.Now()
+		rec.MistralTiming = &mistralRequestTiming{UploadUs: mistralElapsed(at, mistralPrepareStart)}
+		if err == nil {
+			size := len(body)
+			rec.MistralTiming.InputBytes = &size
+		}
 		defer inputBuffer.release()
 	} else if rec.Provider == config.ProviderTokenHarbor {
 		body, releaseBody, err = s.readTHBody(w, r, int64(cfg.Routing.MaxBodyMB)<<20)
@@ -937,6 +951,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		rec.MistralTiming.PrepareUs = mistralElapsed(mistralPrepareStart, time.Now())
 	}
 
 	owner, ownerErr := s.readRequestOwner(cfg, ck, rec.Model, r.URL.Path, r.Header, time.Now())
@@ -996,6 +1011,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if i > 0 {
 			wait = 0
 		} // switches never queue behind the first attempt
+		var admissionStart time.Time
+		if rec.MistralTiming != nil {
+			admissionStart = time.Now()
+		}
 		lease, err := s.pool.Acquire(r.Context(), cfg, pool.Request{
 			PinnedAccountID: pinnedAccount,
 			Group:           routeGroup, Model: rec.Model, RequestID: rid,
@@ -1003,6 +1022,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			Excluded: excluded, Wait: wait, MaxWaiters: maxWaiters,
 			RequireBinding: stateful, PreserveBinding: config.StrictResponses(rec.Provider) && (rec.Provider != config.ProviderFactory || stateful),
 		})
+		if !admissionStart.IsZero() {
+			us := time.Since(admissionStart).Microseconds()
+			if rec.MistralTiming.AdmissionUs == nil {
+				rec.MistralTiming.AdmissionUs = &us
+			} else {
+				*rec.MistralTiming.AdmissionUs += us
+			}
+		}
 		if err != nil {
 			if r.Context().Err() != nil {
 				finish(499, "client_cancelled")
@@ -1136,7 +1163,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			s.thFailureDetail(cfg, rec, r, body, res, i)
 		}
 		lease.Release()
-		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", EgressIP: res.egressIP, Terminal: res.terminal}
+		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", EgressIP: res.egressIP, Terminal: res.terminal,
+			MistralTiming: res.mistralTiming.snapshot()}
 		if acct.ProxyURL != "" {
 			att.Egress = "proxy"
 		}
@@ -1729,6 +1757,10 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			markSent()
 		}
 	}}
+	if acct.Provider == config.ProviderMistral {
+		res.mistralTiming = newMistralAttemptTiming(start, r.URL.Path)
+		res.mistralTiming.attach(trace)
+	}
 	generate := rec.factoryPlan != nil && rec.factoryPlan.generate
 	countTokens := rec.factoryPlan != nil && rec.factoryPlan.countTokens
 	targetPath := strings.TrimPrefix(r.URL.Path, "/v1")
@@ -1914,7 +1946,11 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		client = opencode.NoRedirect(client)
 	}
 	res.upstreamStarted = time.Now()
+	res.mistralTiming.begin(res.upstreamStarted, len(body))
 	resp, err := client.Do(req)
+	if res.mistralTiming != nil && resp != nil {
+		res.mistralTiming.headers(time.Now())
+	}
 	if config.IsOpenCode(acct.Provider) && r.Context().Err() == nil {
 		if err == nil {
 			s.observeOpenCodeProxy(acct.ProxyURL, resp.StatusCode == http.StatusProxyAuthRequired)
@@ -2515,6 +2551,10 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			return readFailure(m.err)
 		}
 	}
+	timing := res.mistralTiming
+	if timing != nil {
+		timing.log.FirstEventReadUs = mistralElapsed(start, res.upstreamFirst)
+	}
 	timer.Stop()
 	if isErr, st, payload := sseError(firstEvent, firstData); isErr {
 		res.kind, res.status, res.body, res.terminal, res.category = outFailed, st, payload, "upstream_envelope", "upstream"
@@ -2522,6 +2562,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		return res
 	}
 	mistralChat := lease.Account.Provider == config.ProviderMistral && r.URL.Path == "/v1/chat/completions"
+	firstNative := first
 	if mistralChat {
 		var err error
 		first, err = mistralChatEvent(first)
@@ -2585,6 +2626,20 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 		}
 		return rc.Flush() == nil
 	}
+	// Only observe the original write; no extra write, flush, or read.
+	writeUpstreamEvent := func(original, outgoing []byte, event string, data []byte, real, terminal, isErr bool) bool {
+		if timing == nil {
+			return write(outgoing)
+		}
+		at := time.Now()
+		ok := write(outgoing)
+		end := time.Now()
+		timing.recordWrite(at, end)
+		if ok && real {
+			timing.flushed(end, event, data, original, outgoing, r.URL.Path, terminal, isErr)
+		}
+		return ok
+	}
 	// Keep HTTP200 after commitment, but never turn a missing Responses
 	// terminal into success or synthesize completed/DONE. No account replay.
 	truncatedResponses := func() *attemptResult {
@@ -2622,7 +2677,7 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			res.streamMaxLagUs = lag
 		}
 	}
-	if !write(first) {
+	if !writeUpstreamEvent(firstNative, first, firstEvent, firstData, true, mistralResponses && firstDone, false) {
 		if firstDone {
 			return res
 		}
@@ -2660,11 +2715,12 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 			held = m.release
 			if len(m.ev) > 0 {
 				res.upstreamLast = m.at
-				event, data, _ := sseFields(m.ev)
+				event, data, real := sseFields(m.ev)
 				done := isTerminalEvent(event, data) || geminiStream && geminiTerminal(data)
 				if mistralResponses {
 					done = mistralResponsesTerminal(event, data)
 				}
+				isErr, st, payload := sseError(event, data)
 				outEvent := m.ev
 				if mistralChat {
 					var err error
@@ -2678,11 +2734,11 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 						res.evaluated = true // incompatible output is not a bad account
 						return res           // already committed: never replay or fabricate [DONE]
 					}
-					if isErr, _, _ := sseError(event, data); !isErr && res.result != "failed" {
+					if !isErr && res.result != "failed" {
 						res.mistralLayout.observe(data, true)
 					}
 				}
-				if isErr, _, _ := sseError(event, data); isErr {
+				if isErr {
 					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
 				}
 				if lag := time.Since(m.at).Microseconds(); lag >= 0 {
@@ -2691,14 +2747,14 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 						res.streamMaxLagUs = lag
 					}
 				}
-				if !write(outEvent) {
+				if !writeUpstreamEvent(m.ev, outEvent, event, data, real, mistralResponses && done, isErr) {
 					if done {
 						return res // the client had what it needs and hung up first
 					}
 					return clientGone()
 				}
 				scan(event, data)
-				if isErr, st, payload := sseError(event, data); isErr {
+				if isErr {
 					res.result, res.category = "failed", "upstream"
 					if mistralResponses {
 						res.terminal, res.evaluated = "upstream_envelope", true
