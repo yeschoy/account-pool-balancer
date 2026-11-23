@@ -38,6 +38,14 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 额度请求按工作区合并（2026-11-23 21:12 UTC，3940cc9）
+
+- `3eebe98`（同工作区额度复用 + `mistral.workspaceQuotaTtlSec` 设置项）与 `3940cc9`（手动刷新也复用、采纳者使用自己的 source）已推送 `origin/master`。额度读取从「每账号 3 请求」改为「每工作区每窗口 3 请求」，仍受每账号轮询间隔、失败不共享、同工作区串行等约束。
+- 本地实测（20 Key 同工作区，Mock 上游）：第一轮预算请求 60 → 3，第二轮 60 → 0。含新增 6 个 Go 用例（共享/过期/失败不共享/不回退/并发合并/强制刷新复用）、`internal/quota`/`internal/config`/`internal/server` 全包与 `-race`、Mistral Node 前端测试全部通过。
+- UTC 构建 `21:12:09`，一致备份含 `.env`/compose/`data.tgz`（`gzip -t` 通过），`21:12:20.361` 切换、`21:12:20.944` 新容器启动，`21:12:52` Docker healthy、0 重启、无 OOM。双内网别名 `/healthz` 均 `{"ok":true}`；315 账号/revision 6912 保留。
+- 镜像 `account-pool-balancer:release-3940cc9-20261123T211209Z`；回退 `account-pool-balancer:rollback-20261123T211209Z`；release `/home/ubuntu/project/account-pool-balancer-releases/20261123T211209Z-3940cc9/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261123T211209Z-mistral-quota-reuse/`。
+- 未做：生产端长期请求量对比（需跨多个 300 秒窗口观测）；设置项「同工作区额度复用窗口」暂无真实浏览器人工保存往返验收。
+
 ## 当前部署：Mistral 概览总额度（2026-11-23 20:47 UTC，1bb7b6a）
 
 - `1bb7b6a8b8c720407733bd4a9a9fe1d7d038f4c9` 已推送 `origin/master`。Mistral 概览新增「总额度剩余」卡片与按工作区去重的预算面板；额度快照新增 `mistral.org`（取自 whoami `customer_id`），账号视图镜像为 `workspaceId`。未知/过期读数计未知，不计 0，不按 Key 累加，不同币种不相加。
