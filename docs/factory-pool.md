@@ -1,12 +1,12 @@
 # Factory AI 号池与全局号池启停
 
-## DSH 的 Chat Completions 大请求适配（本地验证，未部署）
+## DSH 的 Chat Completions 大请求适配（已部署 8a68015，真实 DSH 待验收）
 
 - 原生 `/v1/chat/completions` 将 Magpie 提示词处理、工具别名和系统开场合并到同一棵已解码的 JSON 树。没有改动，仍返回原始请求字节；需要改动时只重建一次，这之后依然照旧处理全局短语。`keep` / `fold` 行为不变，Chat → Gemini 仍走 Gemini 适配。
 - 回归测试逐字节对比新旧出站请求，覆盖系统指令、别名与相关日志标记；本地 Mock 验证工具声明、历史调用与 `tool_choice` 使用一致的名称，SSE 还原原名并保留调用 ID、参数和 `[DONE]`。
 - 本地基准（Apple M4，单 CPU，约 352 KB 合成 Chat 请求、265 个工具、97 条消息，修改前后各 5 轮中位数）：网关请求适配 **8.78 → 4.97 ms/次（约 -43%）**，每次内存分配 **9.90 → 4.37 MB（约 -56%）**。复测：`go test ./internal/server -run '^$' -bench '^BenchmarkFactoryPrepareChatDSH$' -benchmem -cpu 1 -count 5`。不代表上游或线上首字延迟有同等降幅。
 
-## DSH 的 Gemini 大请求适配（本地验证，未部署）
+## DSH 的 Gemini 大请求适配（已部署 8a68015，真实 DSH 待验收）
 
 - DSH 一次可带 265 个工具。Factory 的 Gemini 生成路径现在在工具别名改写时复用已解码的声明做 schema 规范化，省掉一次 JSON 往返；没有改名时仍独立规范化。没有删工具，也没有改动现有提示词模式、思考设置、会话粘性或选号逻辑。`countTokens` 路径不变。
 - 别名照常应用于声明、历史调用/结果及允许调用列表，回包恢复客户端原名。回归测试也覆盖原生 Gemini SSE 工具参数中的大整数，恢复别名时不再将其解码为浮点数。

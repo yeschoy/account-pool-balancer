@@ -38,6 +38,13 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory DSH Gemini / Chat 请求适配（2026-11-23 19:13 UTC，8a68015）
+
+- `8a68015f5636c571ddce179ae9434cfac0e5412a` 已推送 `origin/master`。部署前线上为 `3c5e8e8`，候选差异仅 Factory DSH 优化、回归测试和说明；全仓普通/竞态测试、vet、build 已在本地通过。旧工作树 `05e0044` 有 48 项改动，未在其中构建或切分支；从服务器 fetch 后用 `git archive` 创建干净 release。
+- **UTC** 构建 `19:11:32.719–19:11:40.385`（7.67 秒）；`19:12:43.590` 请求停止，旧容器 `19:12:43.728` 退出；一致备份 `19:12:46.954` 完成（100281522 字节，`gzip -t` 通过）；仅用线上 Compose 的 image overlay 切换，新容器 `19:12:47.228` 启动，距旧退出约 3.50 秒。`19:13:17.510` 确认 Docker healthy（健康等待不计作停机）；`19:13:17.622` 完成核心验收并立即反馈。
+- 运行 revision、Healthcheck、0 重启/无 OOM 核验通过。环境变量、资源限制、挂载、端口及网络配置保持原样，`config.json` 字节未变。`new-api` 容器访问 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均成功；宿主机健康和 7 个 HTML 引用的 JS 校验通过。约 `19:14 UTC` 公网未登录浏览器验证登录页、`/healthz` 与 7 个 JS 资源均成功，JS SHA-256 与发布源码匹配。未变更 NewAPI 渠道，未主动发送生产推理；入口验收不代表真实 DSH 业务或首字延迟已验收。
+- 镜像 `account-pool-balancer:release-8a68015-20261123T191132Z`。正式源码、image override 与部署回执：`/home/ubuntu/project/account-pool-balancer-releases/20261123T191132Z-8a68015/`。一致备份：`/home/ubuntu/backups/account-pool-balancer/20261123T191132Z-factory-dsh-8a68015/`。保留 `account-pool-balancer:rollback-20261123T191132Z`，如需回退沿同一 Compose 只切 image，不自动覆盖线上新写入。公网临时验收回执已登记 `_tmp_artifacts.md`，待用户同意再清理。
+
 ## 当前部署：Factory Amp 快速通道 / 详情日志性能（2026-11-22 18:05 UTC，c77d549）
 
 - 用户授权“清理，提交推送，部署”。只在独立worktree `/Users/lyh_god/workspaces/factory-amp-log` 的 `perf/factory-amp-log` 提交并推送四项代码改动（`f452720`、`64244ff`、`1c451ef`、`c77d549`）；未改动/合入/推送master。目标完整revision `c77d5490a177efe08844501b995bd62fb1bf72ac`，全仓normal/race/vet/build、17个Node测试、60秒fuzz和本地零账号浏览器已通过，不重复跑同提交完整测试。
