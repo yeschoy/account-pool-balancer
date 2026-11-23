@@ -38,6 +38,16 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 概览总额度（2026-11-23 20:47 UTC，1bb7b6a）
+
+- `1bb7b6a8b8c720407733bd4a9a9fe1d7d038f4c9` 已推送 `origin/master`。Mistral 概览新增「总额度剩余」卡片与按工作区去重的预算面板；额度快照新增 `mistral.org`（取自 whoami `customer_id`），账号视图镜像为 `workspaceId`。未知/过期读数计未知，不计 0，不按 Key 累加，不同币种不相加。
+- 本地：语义/边界 Go 用例 4 个 + 快照落 `org` 与 `org` 校验 2 个、`internal/server`/`internal/quota`/`internal/config` 全包、受影响区域 `-race`、17 个 Node 前端测试均通过。本地零账号实例 + mock 上游真实 HTTP 核对：同组织两账号汇总为 1 个工作区（USD 30 / 剩余 22.5），无读数时返回未知而非 0。
+- UTC 构建 `20:47:14.665–20:47:22.382`（7.72 秒）；一致备份 `20:47:29.117–20:47:32.144` 完成（data.tgz 100117195 字节，`gzip -t` 通过，含 compose/.env）。`20:48:12.060` 请求切换，`20:48:12.703` 新容器启动；`20:48:43` 确认 Docker healthy、0 重启、无 OOM。**健康等待未计为停机**。
+- 验收：「ai-internal」保留 `account-pool-balancer` 与 `opendesign-balancer` 双别名，`new-api` 容器分别请求两个 `/healthz` 均 `{"ok":true}`；宿主机 healthz=200。`config.json` SHA256 前 16 位切换前后一致（`e8b3cbf75d4c420f`），315 账号 / Mistral 133 / `tang-11.24` 38 / `zxg-11.24` 49 / 131 个带代理全部保留，revision 6912 未变。公网静态资源 `/assets/app.js?v=9d5dad6e53` 的 SHA256 与发布源码 `76855619…0394` 逐字节一致，且包含新面板文案。
+- 线上只读调用 `/api/overview?provider=mistral`：133 账号中 119 新鲜、14 未知；去重为 119 个工作区，EUR 合计 8126（剩余约 8012.26）、USD 合计 10130（剩余约 8984.67），两币种分列。管理会话用只读 GET 核对后立即登出，未改配置、未发推理。
+- 回退镜像 `account-pool-balancer:rollback-20261123T204707Z`；release `/home/ubuntu/project/account-pool-balancer-releases/20261123T204707Z-1bb7b6a/`（含 `deploy-image.override.yml`）；备份 `/home/ubuntu/backups/account-pool-balancer/20261123T204707Z-mistral-overview-total/`（0700，含 `.env`/compose/data.tgz）。回退沿同一 Compose 只切 image，`up -d --no-build --no-deps account-pool-balancer`，不自动用旧数据覆盖上线后写入。
+- 未做：真实浏览器管理台人工点击核对（仅逐字节比对资源与只读 API 核对）、主动推理。工作区中他人未提交的 `proxy.go`/`mistral_timing.go` 等改动未纳入本次提交。
+
 ## 当前部署：Factory DSH Gemini / Chat 请求适配（2026-11-23 19:13 UTC，8a68015）
 
 - `8a68015f5636c571ddce179ae9434cfac0e5412a` 已推送 `origin/master`。部署前线上为 `3c5e8e8`，候选差异仅 Factory DSH 优化、回归测试和说明；全仓普通/竞态测试、vet、build 已在本地通过。旧工作树 `05e0044` 有 48 项改动，未在其中构建或切分支；从服务器 fetch 后用 `git archive` 创建干净 release。
