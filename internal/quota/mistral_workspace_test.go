@@ -186,3 +186,27 @@ func TestMistralWorkspaceBudgetCoalescesConcurrentReads(t *testing.T) {
 		}
 	}
 }
+
+// A forced refresh of a key whose workspace already has a recent read must
+// not spend the three budget requests again.
+func TestMistralWorkspaceForcedRefreshReuses(t *testing.T) {
+	u := &wsUpstream{}
+	srv := u.start(t)
+	defer srv.Close()
+	cfg := wsConfig(t, srv.URL, "k1", "k2")
+	p := NewPoller(func() *config.Config { return cfg }, func(string) *http.Client { return srv.Client() })
+	for _, a := range cfg.Accounts {
+		if err := p.RefreshNow(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := u.budget.Load()
+	for _, a := range cfg.Accounts {
+		if err := p.RefreshNow(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d := u.budget.Load() - before; d != 0 {
+		t.Fatalf("second forced pass read the budget %d times, want 0", d)
+	}
+}

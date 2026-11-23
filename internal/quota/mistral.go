@@ -241,6 +241,17 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 		p.store(a.ID, s)
 		return catalogErr
 	}
+	// A manual refresh asks the same question of the same workspace, so a key
+	// that already holds a read as new as the workspace record is answered
+	// from it rather than by spending the three requests again. The value is
+	// never older than what this key already had.
+	if s.Mistral != nil && s.Mistral.Source == source {
+		if p.workspaceFreshFor(a.ID, cfg, source, s.Mistral.CheckedAt, now) {
+			s.NextAt = schedule(now.Add(interval))
+			p.store(a.ID, s)
+			return catalogErr
+		}
+	}
 	m, err := p.mistralBudgetFor(ctx, cfg, a, source)
 	if err != nil {
 		if s.Mistral == nil {

@@ -23,8 +23,9 @@ import (
 //     older value and an account's own interval is never shortened;
 //   - a failed read is never shared: the error belongs to the key that got it,
 //     and nothing marks the workspace as read;
-//   - a manual refresh of a sibling asks for a genuine read of that key, which
-//     then refreshes the workspace record for the others.
+//   - a manual refresh asks the same question of the same workspace, so it may
+//     reuse a recent sibling read too, but never one older than this key's own
+//     last attempt; the key that actually reads refreshes it for the others.
 func (p *Poller) mistralBudgetFor(ctx context.Context, cfg *config.Config, a config.Account, source string) (*MistralState, error) {
 	ttl := cfg.Mistral.WorkspaceQuotaTTL()
 	ws := p.mistralWorkspace(a.ID, cfg, source)
@@ -32,7 +33,6 @@ func (p *Poller) mistralBudgetFor(ctx context.Context, cfg *config.Config, a con
 	// Serialise per workspace. A key that does not know its workspace yet
 	// serialises on its egress instead, so keys of one proxy+base never read
 	// the same budget concurrently; after waiting it may learn the workspace.
-	landed := false
 	for waiting := true; waiting; {
 		key := ws
 		if key == "" {
@@ -48,13 +48,17 @@ func (p *Poller) mistralBudgetFor(ctx context.Context, cfg *config.Config, a con
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		landed = true
 		if ws = p.mistralWorkspace(a.ID, cfg, source); ws == "" {
 			waiting = false // nobody reported a workspace yet: read for myself
 		}
 	}
 
-	if shared, ok := p.workspaceBudget(a.ID, ws, ttl, landed); ok {
+	// A force (manual refresh) may reuse the workspace's recent read too: the
+	// numbers are the workspace's, and the sibling that wrote them asked the
+	// same question moments ago. What it does not do is reuse a value older
+	// than this key's own last attempt, which workspaceBudget already refuses.
+	if shared, ok := p.workspaceBudget(a.ID, ws, ttl, true); ok {
+		shared.Source = source // the adopting key's own binding, not the reader's
 		return shared, nil
 	}
 	m, err := FetchMistralBudget(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
@@ -187,4 +191,33 @@ func MistralWorkspace(s *Snapshot) string {
 		return ""
 	}
 	return s.Mistral.Org
+}
+
+// workspaceFreshFor reports whether this account already holds a budget for
+// its workspace that a queued second pass in the same round can reuse
+// without another request: either the workspace record is newer than the
+// value the key held before this pass, or the key already carries that very
+// record because it adopted it moments ago.
+func (p *Poller) workspaceFreshFor(id string, cfg *config.Config, source string, heldCheckedAt, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ws := p.mistralWorkspaceLocked(id)
+	if ws == "" {
+		return false
+	}
+	r, ok := p.wsQuota[ws]
+	if !ok || r.state == nil || now.Sub(r.at) >= cfg.Mistral.WorkspaceQuotaTTL() {
+		return false
+	}
+	// The record's source belongs to whichever key performed the read, so it
+	// is not compared with this caller's; the workspace and the TTL already
+	// bound what may be reused.
+	if r.at.After(heldCheckedAt) {
+		return true // the record is newer than what this key had before
+	}
+	// The key already carries this record: same workspace, same budget, and a
+	// read at or after the record — re-reading would return the same numbers.
+	s := p.snaps[id]
+	return s != nil && s.Mistral != nil && s.Mistral.Budget != nil && r.state.Budget != nil &&
+		s.Mistral.Org == r.state.Org && !s.Mistral.CheckedAt.Before(r.at)
 }
