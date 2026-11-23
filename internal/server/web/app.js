@@ -1816,6 +1816,7 @@ async function loadSettings() {
   $('#ms-console-state').textContent = (ms.console?.state === 'not-connected' ? '状态：未接入控制台。' : '状态：' + (ms.console?.state || '未知') + '。') + (ms.console?.reason || '') + (ms.console?.subscriptionPath ? ' 预留接口：' + ms.console.subscriptionPath : '');
   $('#mistral-base').value = s.mistral?.baseUrl || 'https://api.mistral.ai/v1';
   $('#mistral-sync').value = s.mistral?.modelSyncSec ?? 600;
+  $('#mistral-workspace-ttl').value = s.mistral?.workspaceQuotaTtlSec ?? 0;
   $('#mistral-detail-log').checked = s.mistral?.detailLog ?? s.logs.detail;
   $('#mistral-binding-capacity').value = s.mistral?.bindingCapacity ?? 0;
   renderForm($('#form-mistral-performance'), MISTRAL_PERFORMANCE_FIELDS, s.mistral?.performance ?? settingsCache.defaults.mistralPerformance, 'mp');
@@ -1886,7 +1887,7 @@ $('#btn-save-settings').addEventListener('click', async () => {
   if (isX50()) body.x50 = { baseUrl: $('#x50-pool-base').value.trim(), modelSyncSec: Number($('#x50-pool-sync').value), detailLog: $('#x50-pool-detail').checked, requestLog: $('#x50-pool-requests').checked, errorLog: $('#x50-pool-errors').checked };
   if (isDeploy()) body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked };
   if (isModelStudio()) body.modelStudio = { region: $('#ms-region').value, modelSyncSec: Number($('#ms-sync').value), detailLog: $('#ms-detail-log').checked, planOverrides: (s.modelStudio && s.modelStudio.planOverrides) || {} };
-  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), detailLog: $('#mistral-detail-log').checked,
+  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), workspaceQuotaTtlSec: Number($('#mistral-workspace-ttl').value || 0), detailLog: $('#mistral-detail-log').checked,
     bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance) };
   if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {

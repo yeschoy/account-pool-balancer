@@ -647,12 +647,28 @@ type Poller struct {
 	pending     map[string]bool
 	urgent      map[string]bool
 	models      map[string]time.Time // models requested lately → last seen
-	wake        chan struct{}
+	// wsQuota is the last successful workspace budget read, by workspace, so
+	// sibling keys reuse it instead of spending the same three requests on
+	// numbers one of them already fetched.
+	wsQuota map[string]wsQuotaRead
+	// wsBusy serialises budget reads per workspace on its own mutex: a read
+	// must never wait for mu, which every snapshot reader takes.
+	wsMu   sync.Mutex
+	wsBusy map[string]chan struct{}
+	wake   chan struct{}
+}
+
+// wsQuotaRead is one workspace's shared budget result.
+type wsQuotaRead struct {
+	state  *MistralState // cloned per account; never shared by pointer
+	owner  string        // account that performed the read
+	source string        // binding source of that read, so a change invalidates it
+	at     time.Time
 }
 
 func NewPoller(cfg func() *config.Config, httpFor func(string) *http.Client) *Poller {
 	return &Poller{Cfg: cfg, HTTPFor: httpFor, snaps: map[string]*Snapshot{}, running: map[string]chan struct{}{}, pending: map[string]bool{}, urgent: map[string]bool{},
-		models: map[string]time.Time{}, wake: make(chan struct{}, 1), ollamaReads: map[string]*ollamaRead{}, cancels: map[string]context.CancelFunc{}, discarded: map[string]bool{}}
+		models: map[string]time.Time{}, wsQuota: map[string]wsQuotaRead{}, wake: make(chan struct{}, 1), ollamaReads: map[string]*ollamaRead{}, cancels: map[string]context.CancelFunc{}, discarded: map[string]bool{}, wsBusy: map[string]chan struct{}{}}
 }
 
 // NoteModel records a requested model so each account's coverage of it is
@@ -775,6 +791,11 @@ func (p *Poller) Forget(id string) {
 	delete(p.snaps, id)
 	delete(p.pending, id)
 	delete(p.urgent, id)
+	for ws, r := range p.wsQuota {
+		if r.owner == id {
+			delete(p.wsQuota, ws)
+		}
+	}
 	p.mu.Unlock()
 	// Consumers may read snapshots; never invoke them while holding mu.
 	if existed && p.OnUpdate != nil {

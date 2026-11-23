@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"account-pool-balancer/internal/rules"
 )
@@ -19,13 +20,19 @@ const (
 // Mistral uses the existing scheduler. An absent override inherits the same
 // routing and busy-binding policy as OpenDesign, without sharing its rules.
 type Mistral struct {
-	BaseURL         string              `json:"baseUrl"`
-	Routing         *Routing            `json:"routing,omitempty"`
-	Quota           *Quota              `json:"quota,omitempty"` // nil inherits the shared polling settings
-	ModelSyncSec    *int                `json:"modelSyncSec,omitempty"`
-	DetailLog       *bool               `json:"detailLog,omitempty"`       // nil retains the shared legacy switch
-	BindingCapacity *int                `json:"bindingCapacity,omitempty"` // nil/0: legacy shared4096; positive: independent ordinary sessions
-	Performance     *MistralPerformance `json:"performance,omitempty"`
+	BaseURL         string   `json:"baseUrl"`
+	Routing         *Routing `json:"routing,omitempty"`
+	Quota           *Quota   `json:"quota,omitempty"` // nil inherits the shared polling settings
+	ModelSyncSec    *int     `json:"modelSyncSec,omitempty"`
+	DetailLog       *bool    `json:"detailLog,omitempty"`       // nil retains the shared legacy switch
+	BindingCapacity *int     `json:"bindingCapacity,omitempty"` // nil/0: legacy shared4096; positive: independent ordinary sessions
+	// WorkspaceQuotaTTLSec is how long one successful budget read serves every
+	// key of the same workspace. Mistral bills per workspace, not per key, so a
+	// second key's read would return the same numbers while still costing
+	// requests: keys sharing a workspace coalesce onto one read for this long.
+	// 0 uses the default; it is never unbounded, so usage still tracks.
+	WorkspaceQuotaTTLSec *int                `json:"workspaceQuotaTtlSec,omitempty"`
+	Performance          *MistralPerformance `json:"performance,omitempty"`
 }
 
 // MistralPerformance bounds local resources, not upstream token throughput.
@@ -47,6 +54,18 @@ func (m Mistral) EffectivePerformance() MistralPerformance {
 
 func DefaultMistral() Mistral { return Mistral{BaseURL: "https://api.mistral.ai/v1"} }
 
+// DefaultWorkspaceQuotaTTLSec is how long one workspace's successful budget
+// read is reused by its other keys when nothing is configured.
+const DefaultWorkspaceQuotaTTLSec = 600
+
+// WorkspaceQuotaTTL is the effective coalescing window for workspace budgets.
+func (m Mistral) WorkspaceQuotaTTL() time.Duration {
+	if v := m.WorkspaceQuotaTTLSec; v != nil && *v > 0 {
+		return time.Duration(*v) * time.Second
+	}
+	return time.Duration(DefaultWorkspaceQuotaTTLSec) * time.Second
+}
+
 func (c *Config) normalizeMistral() error {
 	m := &c.Mistral
 	if m.BaseURL == "" {
@@ -67,6 +86,11 @@ func (c *Config) normalizeMistral() error {
 	}
 	if m.BindingCapacity != nil && (*m.BindingCapacity < 0 || *m.BindingCapacity > 1000000) {
 		return fmt.Errorf("mistral.bindingCapacity must be 0 (legacy shared) or 1–1000000")
+	}
+	switch v := m.WorkspaceQuotaTTLSec; {
+	case v == nil || *v == 0:
+	case *v < 0 || *v > 86400:
+		return fmt.Errorf("mistral.workspaceQuotaTtlSec must be 0 (default) or 1–86400")
 	}
 	if p := m.Performance; p != nil {
 		for _, v := range []struct {

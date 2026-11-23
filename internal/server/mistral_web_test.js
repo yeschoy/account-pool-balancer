@@ -32,6 +32,10 @@ assert.doesNotMatch(source, /Mistral 余额未知，只同步模型目录/);
 assert.match(source, /Mistral 套餐总额度（按工作区去重）/);
 assert.match(source, /Mistral 总额度剩余/);
 assert.match(source, /function mistralBudgetWindows/);
+// The workspace reuse window is a visible, saved setting, not a hidden default.
+assert.match(html, /id="mistral-workspace-ttl"/);
+assert.match(source, /workspaceQuotaTtlSec: Number\(\$\('#mistral-workspace-ttl'\)/);
+assert.match(source, /\$\('#mistral-workspace-ttl'\)\.value = s\.mistral\?\.workspaceQuotaTtlSec/);
 assert.match(source, /读取失败或过期时标为未知并保留历史值/);
 // The overview must sum budgets per workspace, never once per key, and must
 // never turn an unknown read into zero.

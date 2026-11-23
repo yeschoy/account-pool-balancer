@@ -205,9 +205,17 @@ func fetchMistralSubscription(ctx context.Context, client *Client, key, seed str
 func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.Account, force bool) error {
 	cfg = cfg.ForProvider(config.ProviderMistral)
 	catalogErr := p.fetchCatalogOnlyForce(ctx, cfg, a, force)
-	s := p.Get(a.ID)
 	source := ResponseBindingSource(cfg, a)
-	if s == nil || s.CatalogSource != source {
+	// Take the snapshot under the lock, as the catalogue read does: p.Get on
+	// an account that has never been stored returns nil and used to be read as
+	// "source changed", so a brand-new account could never record a budget.
+	p.mu.Lock()
+	s := p.snaps[a.ID].clone()
+	p.mu.Unlock()
+	if s == nil {
+		s = &Snapshot{CatalogSource: source}
+	}
+	if s.CatalogSource != source {
 		return errors.New("Mistral 账号来源已变化，请重新刷新")
 	}
 	now := time.Now()
@@ -233,7 +241,7 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 		p.store(a.ID, s)
 		return catalogErr
 	}
-	m, err := FetchMistralBudget(ctx, p.HTTPFor(a.ProxyURL), cfg.RuntimeBase(a), a.RuntimeKey, a.ID)
+	m, err := p.mistralBudgetFor(ctx, cfg, a, source)
 	if err != nil {
 		if s.Mistral == nil {
 			s.Mistral = &MistralState{Source: source}
@@ -251,6 +259,9 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 		}
 		m.Source, m.At, m.CheckedAt = source, now, now
 		s.Mistral = m
+		// The next round for this account is one full interval away. It may
+		// still be decided by the shared workspace read before then, which is
+		// cheaper and can only refresh a stale value, never reuse an older one.
 		s.NextAt = schedule(now.Add(interval))
 		if catalogErr == nil {
 			s.LastError, s.Failures, s.LastOKAt = "", 0, now
