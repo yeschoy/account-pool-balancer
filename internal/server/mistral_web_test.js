@@ -50,7 +50,14 @@ const budgetOverview = context.mistralBudgetWindows({
     unknownRule: '只汇总本服务读取成功且未过期的预算',
   },
 }, { r: 0, s: 0, c: 0 });
-assert.match(budgetOverview, /USD 22\.50 \/ USD 30\.00/);
+// The card and the total row lead with what is left; the budget is context.
+assert.match(budgetOverview, /USD 合计剩余/);
+assert.match(budgetOverview, /<b>USD 22\.50<\/b>/);
+assert.match(budgetOverview, /总额 USD 30\.00/);
+const overviewCards = context.mistralOverviewCards({ mistral: { accounts: 2, freshAccounts: 2, unknownAccounts: 0,
+  groups: [{ currency: 'USD', total: 30, remaining: 22.5, used: 7.5, workspaces: 1, accounts: 2 }], workspaces: [] } });
+assert.equal(overviewCards[0][1], 'USD 22.50', 'the headline is remaining only');
+assert.match(overviewCards[0][2], /总额 USD 30\.00/);
 assert.match(budgetOverview, /1 个工作区 · 2 个账号共享/);
 assert.match(budgetOverview, /只汇总本服务读取成功且未过期的预算/);
 const emptyBudget = context.mistralBudgetWindows({ mistral: { accounts: 2, freshAccounts: 0, unknownAccounts: 2, groups: [], workspaces: [], unknownRule: 'x' } }, { r: 0, s: 0, c: 0 });

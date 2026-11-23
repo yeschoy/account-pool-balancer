@@ -762,9 +762,9 @@ function mistralBudgetWindows(o, st) {
   if (!m) return '<p class="muted">额度数据不可用，请刷新后重试。</p>';
   const totals = (m.groups || []).map((g) => {
     const used = g.total > 0 ? (g.used / g.total) * 100 : 0;
-    return `<div class="win"><div class="row"><b>${esc(g.currency)} 合计</b><span class="muted">剩余约 ${esc(mistralAmount(g.remaining, g.currency))} / ${esc(mistralAmount(g.total, g.currency))}</span></div>`
+    return `<div class="win"><div class="row"><b>${esc(g.currency)} 合计剩余</b><span class="muted"><b>${esc(mistralAmount(g.remaining, g.currency))}</b></span></div>`
       + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
-      + `<div class="acc-sub">${num(g.workspaces)} 个工作区 · ${num(g.accounts)} 个账号共享 · 已用 ${used.toFixed(1)}%</div></div>`;
+      + `<div class="acc-sub">总额 ${esc(mistralAmount(g.total, g.currency))} · ${num(g.workspaces)} 个工作区 · ${num(g.accounts)} 个账号共享 · 已用 ${used.toFixed(1)}%</div></div>`;
   }).join('');
   const rows = (m.workspaces || []).map((w) => {
     const used = w.total > 0 ? Math.min(100, Math.max(0, (w.total - w.remaining) / w.total * 100)) : w.usedPercent;
@@ -1952,10 +1952,13 @@ function mistralAmount(v, cur) {
 function mistralPlanLabel(kind) { return kind === 'API' ? 'Studio' : kind === 'CHAT' ? 'Vibe' : 'Key 类型未知'; }
 function mistralOverviewCards(o) {
   const m = o.mistral; if (!m) return [];
-  const totals = (m.groups || []).map((g) => mistralAmount(g.remaining, g.currency) + ' / ' + mistralAmount(g.total, g.currency)).join(' + ');
+  // The card leads with what is left; totals and usage are context, not a
+  // second headline competing with it.
+  const remaining = (m.groups || []).map((g) => mistralAmount(g.remaining, g.currency)).join(' + ');
+  const totals = (m.groups || []).map((g) => mistralAmount(g.total, g.currency)).join(' + ');
   const used = (m.groups || []).map((g) => `${g.currency} ${g.total ? ((g.used / g.total) * 100).toFixed(1) : '0.0'}%`).join(' · ');
   return [
-    ['Mistral 总额度剩余', totals || '未知', `${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
+    ['Mistral 总额度剩余', remaining || '未知', `总额 ${totals || '—'} · ${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
     ['Mistral 额度数据', `${num(m.freshAccounts)} / ${num(m.accounts)}`, `新鲜 / 账号总数 · 未知 ${num(m.unknownAccounts)}；未知不计 0，也不按 Key 重复累加`],
   ];
 }
