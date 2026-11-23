@@ -190,13 +190,17 @@ func prepareFactoryPlan(cfg *config.Config, path string, body []byte, trusted bo
 			plan.body = stripped
 		}
 	}
-	switch cfg.Factory.EffectiveSystemMode() {
-	case config.SystemFold:
+	mode := cfg.Factory.EffectiveSystemMode()
+	adaptPrompt := mode == config.SystemMagpie && !trusted
+	switch {
+	case mode == config.SystemFold:
 		plan.body = factory.FoldSystemIntoUser(string(to), plan.body)
-	case config.SystemKeep:
+	case mode == config.SystemKeep:
 		// unchanged
+	case to == opencode.Chat:
+		plan.body, plan.toolAliases, plan.adapted = factory.PrepareChatBody(plan.body, adaptPrompt, cfg.Factory.EffectiveRenameAllTools())
 	default:
-		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie && !trusted {
+		if adaptPrompt {
 			// magpie's adapters rewrite only the fixed client sentences and
 			// keep every task instruction.
 			if adapted, changed := factory.MagpieAdapt(string(to), plan.body); changed {
@@ -262,68 +266,30 @@ func prepareFactoryGenerate(cfg *config.Config, model string, stream bool, body 
 	if route.Protocol != "generate" || route.Upstream != "google" {
 		return nil, errors.New("Factory model is not a Google generate route")
 	}
+	mode := cfg.Factory.EffectiveSystemMode()
 	var aliases map[string]string
-	if cfg.Factory.EffectiveSystemMode() != config.SystemKeep {
-		// Factory refuses a function declaration whose name it blocks, so the
-		// tool is renamed here and renamed back in the reply.
-		var aliased []byte
-		var found map[string]string
-		if cfg.Factory.EffectiveRenameAllTools() {
-			aliased, found = factory.AliasToolNamesRenamingAll(body)
-		} else {
-			aliased, found = factory.AliasToolNames(body)
-		}
-		if len(found) > 0 {
-			body, aliases = aliased, found
-		}
+	if mode != config.SystemKeep {
+		// When aliasing needs to rewrite the body, normalize the same decoded
+		// tool declarations in that pass. The reply still restores each name.
+		body, aliases = factory.AliasGeminiToolNames(body, cfg.Factory.EffectiveRenameAllTools())
 	}
-	body = factory.DropGeminiStreamField(body)
-	var b []byte
-	var err error
-	switch cfg.Factory.EffectiveSystemMode() {
-	case config.SystemFold:
-		b, err = factory.FoldGeminiSystem(model, body)
-	case config.SystemKeep:
-		// Only the model placement the captured route needs.
-		b, err = factory.OpenGeminiBodyWith(model, body, false)
-	default:
-		// Factory requires the opening on this route too, so open mode and
-		// magpie mode both keep the systemInstruction.
-		if cfg.Factory.EffectiveSystemMode() == config.SystemMagpie && !trusted {
-			body = factory.MagpieAdaptGemini(body)
-		}
-		b, err = factory.OpenGeminiBodyWith(model, body, true)
+	level, ok := cfg.Factory.NormalizeThinkingLevel()
+	if !ok {
+		level = ""
 	}
+	b, err := factory.PrepareGeminiGenerateBody(model, body, factory.GeminiGenerateOptions{
+		FoldSystem:      mode == config.SystemFold,
+		AdaptSystem:     mode == config.SystemMagpie && !trusted,
+		OpenSystem:      mode != config.SystemFold && mode != config.SystemKeep,
+		IncludeThoughts: from == "" && cfg.Factory.EffectiveIncludeThoughts(),
+		ThinkingLevel:   level,
+		SanitizeTools:   len(aliases) == 0,
+	})
 	if err != nil {
 		return nil, err
 	}
-	// A configured thinking level keeps interactive first-token latency low; a
-	// caller that set its own thinkingConfig keeps its choice.
-	// Native Gemini callers that do not ask for thinking content can still show
-	// progress early when the pool forwards it.
-	if from == "" && cfg.Factory.EffectiveIncludeThoughts() {
-		if applied, changed := factory.ApplyGeminiIncludeThoughts(b); changed {
-			b = applied
-		}
-	}
-	if level, ok := cfg.Factory.NormalizeThinkingLevel(); ok && level != "" {
-		if applied, changed := factory.ApplyGeminiThinkingLevel(b, level); changed {
-			b = applied
-		}
-	}
-	// Google's Schema message has no room for the draft keywords agent tool
-	// schemas carry ($schema, additionalProperties, …) and refuses the request
-	// with 400, so the declarations are trimmed first.
-	// Trim to the keys Google's Schema accepts. A converted client (Codex and
-	// other Responses callers) carries the same draft keywords a native Gemini
-	// client does, so trimming applies to both; refusing the request instead
-	// made every Responses client unable to use a Gemini model.
-	if trimmed, changed := factory.SanitizeGeminiTools(b); changed {
-		b = trimmed
-	}
-	// Factory's policy reads the whole body, so a refused sentence is escaped
-	// here too; JSON decoding gives the model the original characters.
-	if cfg.Factory.EffectiveEscapeClientPhrases() && cfg.Factory.EffectiveSystemMode() != config.SystemKeep && !trusted {
+	// Keep the original whole-body phrase handling after all wire adapters.
+	if cfg.Factory.EffectiveEscapeClientPhrases() && mode != config.SystemKeep && !trusted {
 		if escaped, changed := factory.EscapeClientPhrases(b); changed {
 			b = escaped
 		}

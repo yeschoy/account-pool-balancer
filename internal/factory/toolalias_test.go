@@ -62,6 +62,14 @@ func TestRestoreToolNames(t *testing.T) {
 	}
 }
 
+func TestRestoreToolNamesPreservesGeminiNumbers(t *testing.T) {
+	reply := []byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"Read","args":{"n":9007199254740993}}}]}}]}`)
+	out, changed := RestoreToolNames(reply, map[string]string{"Read": "read"})
+	if !changed || !strings.Contains(string(out), `"name":"read"`) || !strings.Contains(string(out), `"n":9007199254740993`) {
+		t.Fatalf("restoring the tool name changed the arguments: %s", out)
+	}
+}
+
 // Responses declares tools flat ({"type":"function","name":...}), not nested
 // under "function"; both shapes must be renamed.
 func TestAliasToolNamesResponsesShape(t *testing.T) {

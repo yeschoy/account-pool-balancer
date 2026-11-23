@@ -226,20 +226,43 @@ func openOpenAI(path string, m object) bool {
 		m["instructions"] = DroidLine
 		return true
 	case strings.HasSuffix(path, "/chat/completions"):
-		if m["messages"] == nil {
-			return false
-		}
-		msgs, ok := m["messages"].([]any)
-		if !ok {
-			return false
-		}
-		opened, changed := openChat(msgs)
-		if changed {
-			m["messages"] = opened
-		}
-		return changed
+		return openChatRequest(m)
 	}
 	return false
+}
+
+func openChatRequest(m object) bool {
+	msgs, ok := m["messages"].([]any)
+	if !ok {
+		return false
+	}
+	opened, changed := openChat(msgs)
+	if changed {
+		m["messages"] = opened
+	}
+	return changed
+}
+
+// PrepareChatBody runs the existing Chat prompt, tool-alias and opening
+// adapters on one decoded object, in their original order. No-op bodies keep
+// their original bytes. The caller still owns final phrase handling and the
+// choice to use keep or fold mode instead.
+func PrepareChatBody(body []byte, adaptPrompt, renameAll bool) (out []byte, aliases map[string]string, adapted bool) {
+	var m object
+	if decode(body, &m) != nil || m == nil {
+		return body, nil, false
+	}
+	adapted = adaptPrompt && adaptChat(m)
+	aliases = renameToolNames(m, renameAll)
+	opened := openChatRequest(m)
+	if !opened && !adapted && len(aliases) == 0 {
+		return body, nil, false
+	}
+	out, err := marshal(m)
+	if err != nil {
+		return body, nil, false
+	}
+	return out, aliases, adapted
 }
 
 func openWith(s string) string {

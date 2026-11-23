@@ -26,18 +26,25 @@ var GeminiToolSchemaKeys = map[string]bool{
 // of the declaration (name, description) are untouched.
 func SanitizeGeminiTools(body []byte) ([]byte, bool) {
 	m, err := decodeTop(body)
+	if err != nil || !sanitizeGeminiToolsTop(m) {
+		return body, false
+	}
+	out, err := m.marshal()
 	if err != nil {
 		return body, false
 	}
+	return out, true
+}
+
+func sanitizeGeminiToolsTop(m topObject) bool {
 	// Only the declarations are decoded; contents keep their original bytes.
 	raw, _, err := m.field("tools")
-	if err != nil {
-		return body, false
-	}
-	tools, ok := raw.([]any)
-	if !ok {
-		return body, false
-	}
+	return err == nil && sanitizeGeminiToolDeclarations(list(raw)) && m.set("tools", raw) == nil
+}
+
+// sanitizeGeminiToolDeclarations updates the already-decoded declarations in
+// place, so the aliasing path can reuse its tool tree.
+func sanitizeGeminiToolDeclarations(tools []any) bool {
 	changed := false
 	for _, raw := range tools {
 		tool := obj(raw)
@@ -70,17 +77,7 @@ func SanitizeGeminiTools(body []byte) ([]byte, bool) {
 			}
 		}
 	}
-	if !changed {
-		return body, false
-	}
-	if m.set("tools", tools) != nil {
-		return body, false
-	}
-	out, err := m.marshal()
-	if err != nil {
-		return body, false
-	}
-	return out, true
+	return changed
 }
 
 // sanitizeGeminiSchema drops unknown keys in place and recurses.

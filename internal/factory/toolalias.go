@@ -2,7 +2,6 @@ package factory
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -72,7 +71,7 @@ func RefusedToolName(name string) bool {
 // caller's own name is restored in the reply.
 func mcpAlias(name string) string {
 	trimmed := strings.TrimPrefix(strings.TrimLeft(name, "_"), "mcp__")
-	flat := strings.NewReplacer("__", "_").Replace(trimmed)
+	flat := strings.ReplaceAll(trimmed, "__", "_")
 	safe := make([]rune, 0, len(flat))
 	for _, r := range flat {
 		switch {
@@ -116,22 +115,42 @@ func suffixName(name string) string {
 // request while a renamed name costs nothing (the reply is renamed back).
 // droid's own names and mcp__ tools are kept.
 func AliasToolNamesRenamingAll(body []byte) ([]byte, map[string]string) {
-	return aliasToolNames(body, true)
+	return aliasToolNames(body, true, false)
 }
 
 func AliasToolNames(body []byte) ([]byte, map[string]string) {
-	return aliasToolNames(body, false)
+	return aliasToolNames(body, false, false)
 }
 
-func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
+// AliasGeminiToolNames also normalizes Gemini's declarations when renaming
+// already requires re-encoding the request. With no aliases it returns the
+// original bytes; the caller still needs SanitizeGeminiTools in that case.
+func AliasGeminiToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
+	return aliasToolNames(body, renameAll, true)
+}
+
+func aliasToolNames(body []byte, renameAll, sanitizeGemini bool) ([]byte, map[string]string) {
 	var request object
 	if decode(body, &request) != nil || request == nil {
 		return body, nil
 	}
-	type slot struct {
-		holder map[string]any
-		key    string
+	aliases := renameToolNames(request, renameAll)
+	if len(aliases) == 0 {
+		return body, nil
 	}
+	if sanitizeGemini {
+		sanitizeGeminiToolDeclarations(list(request["tools"]))
+	}
+	out, err := marshal(request)
+	if err != nil {
+		return body, nil
+	}
+	return out, aliases
+}
+
+// renameToolNames updates declarations and references in an already-decoded
+// request and returns the map used to restore the names in replies.
+func renameToolNames(request object, renameAll bool) map[string]string {
 	declared := declaredTools(request)
 	rename := func(name string) bool {
 		if RefusedToolName(name) {
@@ -150,7 +169,7 @@ func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
 		}
 	}
 	if !needed {
-		return body, nil
+		return nil
 	}
 	taken := map[string]bool{}
 	for _, s := range declared {
@@ -204,11 +223,7 @@ func aliasToolNames(body []byte, renameAll bool) ([]byte, map[string]string) {
 			}
 		}
 	}
-	out, err := marshal(request)
-	if err != nil {
-		return body, nil
-	}
-	return out, aliases
+	return aliases
 }
 
 // declaredTools lists every place a request declares a tool by name.
@@ -332,7 +347,8 @@ func RestoreToolNames(body []byte, aliases map[string]string) ([]byte, bool) {
 		return body, false
 	}
 	var value any
-	if err := json.Unmarshal(body, &value); err != nil || value == nil {
+	// Keep the exact numeric arguments when the reply is re-encoded.
+	if err := decode(body, &value); err != nil || value == nil {
 		return body, false
 	}
 	if !restoreNames(value, aliases) {
@@ -442,7 +458,7 @@ func (r *aliasReader) frame(raw []byte) []byte {
 		return original()
 	}
 	var event any
-	if json.Unmarshal([]byte(payload), &event) != nil || !restoreNames(event, r.aliases) {
+	if decode([]byte(payload), &event) != nil || !restoreNames(event, r.aliases) {
 		return original()
 	}
 	out, err := marshal(event)

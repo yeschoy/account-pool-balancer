@@ -377,16 +377,22 @@ func MagpieAdaptGemini(body []byte) []byte {
 	if len(body) == 0 {
 		return body
 	}
-	// Only the instruction is decoded; contents keep their original bytes.
 	top, err := decodeTop(body)
 	if err != nil {
 		return body
 	}
-	raw, present, err := top.field("systemInstruction")
-	if err != nil || !present {
+	changed, err := updateGeminiSystem(top, true, false)
+	if err != nil || !changed {
 		return body
 	}
-	m := object{"systemInstruction": raw}
+	out, err := top.marshal()
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func adaptGeminiSystem(m object) bool {
 	changed := false
 	switch si := m["systemInstruction"].(type) {
 	case string:
@@ -412,12 +418,5 @@ func MagpieAdaptGemini(body []byte) []byte {
 			}
 		}
 	}
-	if !changed || top.set("systemInstruction", m["systemInstruction"]) != nil {
-		return body
-	}
-	out, err := top.marshal()
-	if err != nil {
-		return body
-	}
-	return out
+	return changed
 }

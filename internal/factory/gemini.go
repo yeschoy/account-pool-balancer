@@ -58,25 +58,87 @@ func OpenGeminiBody(model string, body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only the instruction is decoded; contents stay as their original bytes.
-	si, present, err := m.field("systemInstruction")
+	opened, err := updateGeminiSystem(m, false, true)
 	if err != nil {
-		return nil, errNotObject
+		return nil, err
 	}
-	holder := object{}
-	if present {
-		holder["systemInstruction"] = si
+	if !changed && !opened {
+		return body, nil
 	}
-	if openGeminiSystem(holder) {
-		if err := m.set("systemInstruction", holder["systemInstruction"]); err != nil {
+	return m.marshal()
+}
+
+// GeminiGenerateOptions selects the existing wire adapters for a generate
+// request. Keep mode leaves all three system switches off.
+type GeminiGenerateOptions struct {
+	FoldSystem, AdaptSystem, OpenSystem bool
+	IncludeThoughts, SanitizeTools      bool
+	ThinkingLevel                       string
+}
+
+// PrepareGeminiGenerateBody applies the top-level adapters to one validated
+// object and renders it at most once on the common (non-fold) path. The
+// adapters decode only the fields they inspect; untouched values keep their bytes.
+// Aliasing (when enabled) runs before this step and may already trim tools.
+func PrepareGeminiGenerateBody(model string, body []byte, opts GeminiGenerateOptions) ([]byte, error) {
+	if opts.FoldSystem {
+		// Folding moves text into the history and retains its existing full-body
+		// renderer. The remaining top-level operations can still share a pass.
+		var err error
+		body, err = FoldGeminiSystem(model, DropGeminiStreamField(body))
+		if err != nil || (!opts.IncludeThoughts && opts.ThinkingLevel == "" && !opts.SanitizeTools) {
+			return body, err
+		}
+	}
+	m, err := openGeminiTop(body)
+	if err != nil {
+		return nil, err
+	}
+	_, changed := m["stream"]
+	delete(m, "stream")
+	if !opts.FoldSystem {
+		placed, err := placeGeminiModel(m, model)
+		if err != nil {
 			return nil, err
 		}
-		changed = true
+		updated, err := updateGeminiSystem(m, opts.AdaptSystem, opts.OpenSystem)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || placed || updated
+	}
+	changed = updateGeminiGenerationConfig(m, opts.IncludeThoughts, opts.ThinkingLevel) || changed
+	if opts.SanitizeTools {
+		changed = sanitizeGeminiToolsTop(m) || changed
 	}
 	if !changed {
 		return body, nil
 	}
 	return m.marshal()
+}
+
+// updateGeminiSystem shares the decoded system instruction between prompt
+// adaptation and the opening. There is no work in keep mode.
+func updateGeminiSystem(m topObject, adapt, open bool) (bool, error) {
+	if !adapt && !open {
+		return false, nil
+	}
+	si, present, err := m.field("systemInstruction")
+	if err != nil {
+		return false, errNotObject
+	}
+	holder := object{}
+	if present {
+		holder["systemInstruction"] = si
+	}
+	changed := adapt && adaptGeminiSystem(holder)
+	if open {
+		changed = openGeminiSystem(holder) || changed
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, m.set("systemInstruction", holder["systemInstruction"])
 }
 
 // openGeminiTop decodes a generateContent body's top level and requires the

@@ -79,6 +79,34 @@ func TestOpenGeminiBodySystemPartsAndIdempotence(t *testing.T) {
 	}
 }
 
+func TestPrepareGeminiGenerateBodyPreservesRawFields(t *testing.T) {
+	const history = `[ {"parts": [ {"functionCall":{"args":{"id":9007199254740993}},"thoughtSignature":"\\u003copaque"} ]} ]`
+	const opaque = ` { "tag": "<literal>", "opaque": [ 1, 2 ] }`
+	input := []byte(`{"contents":` + history + `,"extra":` + opaque + `,"stream":true,"model":"old","m\u006fdel":"also-old"}`)
+	out, err := PrepareGeminiGenerateBody("gemini-4-carbon", input, GeminiGenerateOptions{OpenSystem: true, SanitizeTools: true})
+	if err != nil || !json.Valid(out) {
+		t.Fatalf("unexpected result %s: %v", out, err)
+	}
+	for _, raw := range []string{history, strings.TrimSpace(opaque), `"model":"gemini-4-carbon"`} {
+		if !strings.Contains(string(out), raw) {
+			t.Fatalf("raw value %q lost or changed: %s", raw, out)
+		}
+	}
+	if strings.Contains(string(out), `"stream"`) || strings.Contains(string(out), `"also-old"`) {
+		t.Fatalf("stream or old model still present: %s", out)
+	}
+
+	unchanged := ` { "model": "gemini-4-carbon", "contents": [] } `
+	if got, err := PrepareGeminiGenerateBody("gemini-4-carbon", []byte(unchanged), GeminiGenerateOptions{}); err != nil || string(got) != unchanged {
+		t.Fatalf("unmodified body changed to %s: %v", got, err)
+	}
+	for _, malformed := range []string{`{"contents":null}`, `{"contents":[{"parts":[1,]}]}`, `{"contents":[]} {}`, `{"contents":[],"extra":{"x":tru}}`} {
+		if _, err := PrepareGeminiGenerateBody("gemini-4-carbon", []byte(malformed), GeminiGenerateOptions{}); err == nil {
+			t.Fatalf("accepted malformed request %s", malformed)
+		}
+	}
+}
+
 func TestOpenGeminiBodyRejectsNonContents(t *testing.T) {
 	if _, err := OpenGeminiBody("gemini-4-carbon", []byte(`{"messages":[]}`)); err == nil {
 		t.Fatal("body without contents accepted")
