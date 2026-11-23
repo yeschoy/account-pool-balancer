@@ -215,9 +215,22 @@ func (p *Poller) workspaceFreshFor(id string, cfg *config.Config, source string,
 	if r.at.After(heldCheckedAt) {
 		return true // the record is newer than what this key had before
 	}
-	// The key already carries this record: same workspace, same budget, and a
-	// read at or after the record — re-reading would return the same numbers.
+	// The key already carries this very record: same workspace, same amounts and
+	// a read at or after the record, so re-reading would return the same numbers.
+	// The amounts must match: a newer timestamp on a *different* reading (another
+	// key of the workspace, or a value adopted before a real read) is not this
+	// record, and must not suppress a read of this key's own.
 	s := p.snaps[id]
 	return s != nil && s.Mistral != nil && s.Mistral.Budget != nil && r.state.Budget != nil &&
-		s.Mistral.Org == r.state.Org && !s.Mistral.CheckedAt.Before(r.at)
+		s.Mistral.Org == r.state.Org && !s.Mistral.CheckedAt.Before(r.at) &&
+		sameMistralBudget(s.Mistral.Budget, r.state.Budget)
+}
+
+// sameMistralBudget reports whether two readings are the same budget state.
+func sameMistralBudget(a, b *MistralBudget) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Total == b.Total && a.Remaining == b.Remaining && a.UsedPercent == b.UsedPercent &&
+		a.Currency == b.Currency && a.ResetsAt.Equal(b.ResetsAt)
 }

@@ -210,3 +210,23 @@ func TestMistralWorkspaceForcedRefreshReuses(t *testing.T) {
 		t.Fatalf("second forced pass read the budget %d times, want 0", d)
 	}
 }
+
+// A key holding a different reading of the same workspace must not be told its
+// budget is current: that suppressed a real read and preserved a stale value.
+func TestMistralWorkspaceFreshRequiresSameAmounts(t *testing.T) {
+	p := NewPoller(func() *config.Config { return config.Default() }, func(string) *http.Client { return http.DefaultClient })
+	now := time.Now()
+	record := &MistralState{Org: "ws", KeyType: "API", Budget: &MistralBudget{Total: 25.5, UsedPercent: 90.94, Remaining: 2.31, Currency: "EUR"}}
+	p.wsQuota["ws"] = wsQuotaRead{state: record, owner: "other", source: "s", at: now}
+	// same workspace, different amounts, and a newer timestamp
+	p.snaps["k"] = &Snapshot{Mistral: &MistralState{Org: "ws", CheckedAt: now.Add(time.Second),
+		Budget: &MistralBudget{Total: 25.5, UsedPercent: 0, Remaining: 25.5, Currency: "EUR"}}}
+	if p.workspaceFreshFor("k", config.Default(), "s", p.snaps["k"].Mistral.CheckedAt, now) {
+		t.Fatal("a different reading was reported as the shared record")
+	}
+	// the identical reading is the record, and may be reused
+	p.snaps["k"].Mistral.Budget = record.clone().Budget
+	if !p.workspaceFreshFor("k", config.Default(), "s", p.snaps["k"].Mistral.CheckedAt, now) {
+		t.Fatal("the identical reading should count as the shared record")
+	}
+}
