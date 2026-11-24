@@ -897,14 +897,23 @@ func (p *Pool) tryLocked(cfg *config.Config, req Request, forceOverflow bool) (*
 			return nil, &BindingError{Reason: "account unavailable"}
 		}
 		ue := &UnavailableError{Reason: "all-unavailable", Details: details}
-		// some are only cooling down: say when the soonest is back
-		if details["cooldown"]+details["model-cooldown"]+details["funding-cooldown"]+details["policy-paused"] > 0 {
+		// Some are only cooling down or out of a spend window: say when the
+		// soonest is back. A spent usage window (quota-exhausted) is counted
+		// too: it is the case where the wait is long and measurable, and
+		// reporting only cooldowns would either invent a short wait or none.
+		if details["cooldown"]+details["model-cooldown"]+details["funding-cooldown"]+details["policy-paused"]+details["quota-exhausted"] > 0 {
 			var soonest time.Time
 			for _, a := range cfg.Accounts {
 				if a.Group != req.Group || req.Excluded[a.ID] {
 					continue
 				}
-				if t := p.cooldownEndLocked(a.ID, req.Model, p.classLocked(cfg, req.Model, now)); !t.IsZero() && (soonest.IsZero() || t.Before(soonest)) {
+				t := p.cooldownEndLocked(a.ID, req.Model, p.classLocked(cfg, req.Model, now))
+				if t.IsZero() && a.Provider == config.ProviderFactory {
+					if s := p.quota(a.ID); s != nil && s.Factory != nil {
+						t = s.Factory.ResetAt(cfg, req.Model, now)
+					}
+				}
+				if !t.IsZero() && (soonest.IsZero() || t.Before(soonest)) {
 					soonest = t
 				}
 			}

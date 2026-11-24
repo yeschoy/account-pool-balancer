@@ -1060,13 +1060,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", "pool_capacity", "all upstream accounts are busy, retry later", ra)
 				finish(http.StatusTooManyRequests, "failed")
 			case errors.As(err, &ue) && ue.RetryAfter > 0:
-				// every account is only cooling down: a retryable 429, not a 503
+				// every account is only cooling down or out of a spend window: a retryable 429, not a 503
 				ra := ceilSeconds(ue.RetryAfter)
 				rec.ErrorCategory, rec.BlockedBy, rec.RetryAfter = "unavailable", "cooldown", &ra
 				if rec.Provider == config.ProviderOpenCodeGo && (ue.Reason == "policy-paused" || ue.Details["policy-paused"] == sumCounts(ue.Details)) {
 					rec.ErrorCategory, rec.BlockedBy = "policy", "policy"
 				}
-				writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", "pool_cooling_down", "all upstream accounts are cooling down for this model, retry later", ra)
+				writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", "pool_cooling_down", "all upstream accounts are cooling down or out of quota for this model, retry later", ra)
 				finish(http.StatusTooManyRequests, "failed")
 			case errors.As(err, &ue) && ue.Details["not-entitled"] > 0 && ue.Details["not-entitled"] == sumCounts(ue.Details):
 				rec.ErrorCategory, rec.BlockedBy = "unavailable", "not-entitled"
@@ -1453,6 +1453,17 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 					strikes = s.pool.Strike(acct.ID, key)
 				}
 				d := rules.CooldownAfter(rule, res.header, redacted, now, strikes)
+				if acct.Provider == config.ProviderFactory && rule.ID == "factory-funding" {
+					// A 402 is a window that is spent, not a transient limit: read
+					// the reset Factory named and refresh the snapshot so the
+					// console shows the full window instead of our guess.
+					s.quota.Refresh(acct.ID)
+					if until, ok := factoryQuotaReset(matchText, now); ok {
+						if d = until.Sub(now); d < time.Second {
+							d = time.Second
+						}
+					}
+				}
 				ms := d.Milliseconds()
 				el.RetryAfterMs = &ms
 				el.RuleScope = rule.Scope + ":" + target
@@ -3100,7 +3111,34 @@ func (s *Server) fetchModels(ctx context.Context, cfg *config.Config, group stri
 var (
 	concLimitRe = regexp.MustCompile(`concurrency limit exceeded\s*(\d+)\s*/\s*(\d+)`)
 	rpmLimitRe  = regexp.MustCompile(`\brpm(?: limit exceeded)?\s*:?\s*(\d+)\s*/\s*(\d+)`)
+	// factoryResetRe reads the window Factory names in its 402 body:
+	// "You've reached your 5-hour standard usage limit (resets in 0h 52min)."
+	factoryResetRe = regexp.MustCompile(`resets in\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)`)
 )
+
+// factoryQuotaReset is when the usage window Factory refused in a 402 comes
+// back. Factory states the remaining time in the refusal itself, and the window
+// is a fixed upstream measurement: retrying before it resets can only be
+// refused again. A fixed short cooldown would therefore spend one rejected
+// attempt per retry and keep telling the client "retry later" with a wait that
+// is not the real one. Rewriting this as a per-request deadline needs a
+// cooldown, so the answer is here rather than in the rule's fallback.
+func factoryQuotaReset(lower string, now time.Time) (time.Time, bool) {
+	m := factoryResetRe.FindStringSubmatch(lower)
+	if m == nil {
+		return time.Time{}, false
+	}
+	hours, _ := strconv.Atoi(m[1])
+	minutes, _ := strconv.Atoi(m[2])
+	if hours == 0 && minutes == 0 {
+		return time.Time{}, false
+	}
+	d := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	if d > 7*24*time.Hour {
+		d = 7 * 24 * time.Hour
+	}
+	return now.Add(d), true
+}
 
 // membershipLimits reads the limits a tier_limit_exceeded refusal names:
 // "membership concurrency limit exceeded 6/5" → concurrency 5, "rpm 61/60"

@@ -70,15 +70,26 @@ func (f *FactoryState) Fresh(now time.Time, stale time.Duration) bool {
 	return f != nil && f.QuotaState == "ok" && !f.QuotaAt.IsZero() && now.Sub(f.QuotaAt) < stale
 }
 
+// spendPool is the billing window model is paid from.
+func (f *FactoryState) spendPool(cfg *config.Config, model string) string {
+	if !cfg.Factory.StandardOnly && cfg.Factory.CoreModel(model) {
+		return "core"
+	}
+	return "standard"
+}
+
+// extraCanPay reports that a positive Extra balance may carry this request past
+// a spent window. It says nothing about whether spending it was approved.
+func (f *FactoryState) extraCanPay(cfg *config.Config) bool {
+	return !cfg.Factory.StandardOnly && f.ExtraAllowed != nil && *f.ExtraAllowed && f.ExtraBalanceCents != nil && *f.ExtraBalanceCents > 0
+}
+
 func (f *FactoryState) Exhausted(cfg *config.Config, model string, now time.Time) bool {
 	if !f.Fresh(now, time.Duration(cfg.Factory.EffectiveQuota().StaleSec)*time.Second) {
 		return false
 	}
-	pool := "standard"
-	if !cfg.Factory.StandardOnly && cfg.Factory.CoreModel(model) {
-		pool = "core"
-	}
-	if !cfg.Factory.StandardOnly && f.ExtraAllowed != nil && *f.ExtraAllowed && f.ExtraBalanceCents != nil && *f.ExtraBalanceCents > 0 {
+	pool := f.spendPool(cfg, model)
+	if f.extraCanPay(cfg) {
 		return false
 	}
 	for _, w := range f.Windows {
@@ -87,6 +98,27 @@ func (f *FactoryState) Exhausted(cfg *config.Config, model string, now time.Time
 		}
 	}
 	return false
+}
+
+// ResetAt is when the spent window that excludes model comes back, i.e. the
+// earliest moment this account could serve it again. Zero means unknown: a
+// stale snapshot, nothing spent, or a balance that can already carry the call.
+// The pool needs it to answer "when" instead of waiting out an unrelated
+// cooldown, because "retry in 10 minutes" is a promise this window will not keep.
+func (f *FactoryState) ResetAt(cfg *config.Config, model string, now time.Time) time.Time {
+	if !f.Fresh(now, time.Duration(cfg.Factory.EffectiveQuota().StaleSec)*time.Second) || f.extraCanPay(cfg) {
+		return time.Time{}
+	}
+	pool := f.spendPool(cfg, model)
+	var earliest time.Time
+	for _, w := range f.Windows {
+		if w.Pool == pool && w.Active && now.Before(w.ResetsAt) && w.UsedPercent >= 100 {
+			if earliest.IsZero() || w.ResetsAt.Before(earliest) {
+				earliest = w.ResetsAt
+			}
+		}
+	}
+	return earliest
 }
 
 // The credential is sent only to the configured management origin;
