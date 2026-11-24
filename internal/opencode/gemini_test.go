@@ -167,3 +167,34 @@ func TestGeminiCompatibleTruncatedStreamKeepsContent(t *testing.T) {
 		t.Fatal("empty stream accepted")
 	}
 }
+
+// A chat history that starts at the assistant is representable: measured
+// 2026-11-24, Factory's generate route accepts contents whose first turn is
+// model and continues from them. Rejecting it broke chat callers whose window
+// begins mid-conversation (and Gemini clients whose first user turn was
+// dropped by new-api's Gemini→OpenAI conversion).
+func TestGeminiCompatibleLeadingAssistantTurn(t *testing.T) {
+	raw, _, _, err := ConvertGeminiRequest(Chat, []byte(`{"model":"g","messages":[{"role":"assistant","content":"here is the summary"},{"role":"user","content":"continue"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"contents":[{"parts":[{"text":"here is the summary"}],"role":"model"},{"parts":[{"text":"continue"}],"role":"user"}]`
+	if !strings.Contains(string(raw), want) {
+		t.Fatalf("leading assistant turn rewritten: %s", raw)
+	}
+	// The same holds for a leading assistant turn that carries tool calls: the
+	// call stays model-side and its result lands in the user turn after it.
+	raw, _, _, err = ConvertGeminiRequest(Chat, []byte(`{"model":"g","messages":[{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":"done"}]}`))
+	if err != nil || !strings.Contains(string(raw), `"contents":[{"parts":[{"functionCall":{"args":{},"id":"c1","name":"read"}}],"role":"model"},{"parts":[{"functionResponse":{"id":"c1","name":"read","response":{"output":"done"}}}],"role":"user"}]`) {
+		t.Fatalf("leading tool-call turn: %s %v", raw, err)
+	}
+	// A history that opens with a tool result still cannot be represented: the
+	// call it answers is gone.
+	if _, _, _, err := ConvertGeminiRequest(Chat, []byte(`{"model":"g","messages":[{"role":"tool","tool_call_id":"c1","content":"done"},{"role":"user","content":"go on"}]}`)); err == nil {
+		t.Fatal("leading tool result accepted")
+	}
+	// Ending with the assistant stays rejected: the upstream refuses it.
+	if _, _, _, err := ConvertGeminiRequest(Chat, []byte(`{"model":"g","messages":[{"role":"user","content":"write"},{"role":"assistant","content":"Sure, "}]}`)); err == nil {
+		t.Fatal("trailing assistant accepted")
+	}
+}

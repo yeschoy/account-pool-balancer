@@ -118,7 +118,18 @@ func encodeGeminiRequest(r request) (object, error) {
 			}
 			continue
 		}
-		if len(contents) == 0 && msg.role != "user" {
+		if len(contents) == 0 && msg.role != "user" && msg.role != "assistant" && msg.role != "tool" {
+			// A role outside the Gemini vocabulary cannot open a conversation.
+			// A leading assistant turn CAN, and does: measured 2026-11-24 against
+			// Factory's generate route, contents that start with a model turn
+			// answer 200 and continue from it, while contents that END with a
+			// model turn answer 400 "Requests ending with a model turn are not
+			// supported". Chat callers reach the leading-assistant shape
+			// whenever their history begins at the assistant (prefill, a trimmed
+			// window, or a Gemini request whose first user turn was dropped by
+			// the Gemini→OpenAI conversion), so this used to reject requests the
+			// upstream serves. A leading tool result stays an error further
+			// down: it names a call that is no longer in the history.
 			return nil, unsupported("Gemini history must start with user content")
 		}
 		role := "user"
