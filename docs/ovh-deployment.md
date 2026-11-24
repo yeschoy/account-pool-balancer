@@ -38,6 +38,19 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Factory 组织套餐不包含的模型 ID（2026-11-24 06:49 UTC，79ec43c）
+
+- 现场：new-api 渠道 245 对 `gemini-4-neon` 连续 400，正文是 Factory 结构化信封 `{"detail":"Invalid model ID in request body","requestId":"yul1::…"}`。本池日志显示 44 次 `gemini-4-neon` 400 全部落在 `kevin-11.18`，143 次 200 全部落在 `zxg-11.16-01`；同一模型、同一池，只差账号。
+- 结论：Factory 按**组织套餐**校验 body 里的模型 ID，并把"这个套餐没有这个模型"和"模型 ID 写错"用同一句话回。`GET api.factory.ai/api/organization/managed-settings` 实测 `kevin-11.18` 为 `factoryTier:"pro_plus"`（`gemini-4-argon/carbon/hydrogen/neon` 全部 400），`zxg-11.16-01` 为 `factoryTier:"team"`（同批 200）。该账号本身健康：同 Key 的 `claude-sonnet-5`、`glm-5.3`、`gemini-3.8-flash`、`gemini-3.1-pro-preview` 均 200。原规则把这句 400 当"请求有问题"，命中 `factory-stop`，于是既不换号也把 400 透给 new-api。
+- 代码 `79ec43c`：新增 `factory-model-id-rejected`（作用域 `model`、冷却 24h/最长 7d、不回健康分）；本池唯一允许"模型级冷却覆盖显式 stop"的例外（账号级 stop 不变）；该号×该模型在调度里按 `not-entitled` 处理，全部账号都没有时报 `not included in any upstream account's plan` 且不带 Retry-After。测试见 `internal/server/factory_tier_model_test.go`，全仓 normal/race/vet 同提交通过。
+- UTC 构建 `06:50:09.388–06:51:38.496`（89 秒，Go 层缓存未全命中）；一致备份 `06:51:50` 完成（`data.tgz` 82,285,134 字节、`gzip -t` 通过、含 compose/`.env`/`config.json`/`metadata.json`，目录 0700）。`06:52:30.683` 请求切换、`06:52:31.297` 新容器启动；随后 Docker healthy、0 重启、无 OOM，`User=1000:1000`、8GiB、挂载/端口/网络未变。
+- 线上规则按"只保存该池"的方式追加：`config.json` revision `6915 → 6916`，前后逐键对比**只有 `factoryErrorRules` 变化**（新增该规则，其余 6 条保序、重试规则未动），落盘可读回。
+- 验收：`new-api` 容器分别请求 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`；宿主机 healthz 200；公网未登录 `https://ods.yeschoy.io/healthz`=200、首页 200、`/assets/app.js?v=1844b5ccc9` 200 且 SHA256 前 16 位 `c1fbef94886c102e` 与发布源码逐字节一致。317 账号 / 19 下游 Key 保留，Factory 仍是 `kevin-11.18` + `zxg-11.16-01`。
+- 功能验收（真实上游，经线上池）：`gemini-4-neon/carbon/hydrogen/argon` 各有一次打到 `kevin-11.18` 后按规则换号并**对客户端 200**；错误行 `ruleId=factory-model-id-rejected`、`ruleScope=model:model`、`switched=true`、`retryDecision=overridden-by-error-rule`、`retryAfterMs=86400000`、`healthAction=none`；该账号健康仍为 1（samples 231 未因这 4 次扣分），仅四个模型对冷却到次日 14:55+08。随后同模型请求 `X-Attempts: 1`（直接走可用号）。公网 `m.yeschoy.pro` 四个模型各两次 `:generateContent` 全部 200。
+- 镜像 `account-pool-balancer:release-79ec43c-20261124T064959Z`（运行镜像 ID `baa0b63ce605` 与构建产物一致）；回退镜像 `account-pool-balancer:rollback-20261124T064959Z`；release `/home/ubuntu/project/account-pool-balancer-releases/20261124T064959Z-79ec43c/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261124T064959Z-factory-tier-model/`。
+- 回退沿线上 Compose 只切 image：`docker compose -f docker-compose.yml -f docker-compose.override.yml -f <release>/deploy-image.override.yml up -d --no-build --no-deps account-pool-balancer`，不自动用旧数据覆盖上线后的写入；回退后需同时把 `factoryErrorRules` 里的该规则删除或停用（旧二进制不认识此规则，只会按通用 400 停止）。
+- 未做：套餐/模型权限的**主动**采集（现在是首次遇到时学习，最多每个号×模型浪费一次上游往返）；`factoryTier` 未进控制台展示（诊断时用 managed-settings 只读接口）。两者都不影响本次故障的客户可见结果。
+
 ## 当前部署：Mistral 额度请求按工作区合并（2026-11-23 21:12 UTC，3940cc9）
 
 - `3eebe98`（同工作区额度复用 + `mistral.workspaceQuotaTtlSec` 设置项）与 `3940cc9`（手动刷新也复用、采纳者使用自己的 source）已推送 `origin/master`。额度读取从「每账号 3 请求」改为「每工作区每窗口 3 请求」，仍受每账号轮询间隔、失败不共享、同工作区串行等约束。
