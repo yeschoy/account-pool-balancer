@@ -35,6 +35,7 @@ type mistralAttemptTimingLog struct {
 	FirstThinkingUs    *int64 `json:"firstThinkingUs,omitempty"`
 	FirstToolUs        *int64 `json:"firstToolUs,omitempty"`
 	FirstTextUs        *int64 `json:"firstTextUs,omitempty"`
+	LastEventReadUs    *int64 `json:"lastEventReadUs,omitempty"`
 	LastEventFlushUs   *int64 `json:"lastEventFlushUs,omitempty"`
 	TerminalFlushUs    *int64 `json:"terminalFlushUs,omitempty"`
 	MaxWriteFlushUs    *int64 `json:"maxWriteFlushUs,omitempty"`
@@ -175,6 +176,7 @@ func (t *mistralAttemptTiming) flushed(at time.Time, event string, data, origina
 	adapted := len(original) != len(outgoing) || len(original) > 0 && &original[0] != &outgoing[0]
 	if len(data) > mistralProbeLimit || adapted && len(outgoing) > mistralProbeLimit {
 		t.log.OutputProbeSkipped = true
+		t.pending = 0 // a later match can no longer establish a first
 		return
 	}
 	if adapted {

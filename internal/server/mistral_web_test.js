@@ -143,6 +143,15 @@ assert.match(bothTPS,/全程平均 25 tok\/s/);
 assert.match(bothTPS,/首事件后 50 tok\/s/);
 assert.match(context.upstreamTPSCell({averageTps:25.6}),/全程平均 26 tok\/s/);
 assert.match(context.upstreamTPSCell({outputTokens:100,durationMs:4000}),/全程平均 TPS —/); // never backfill old logs
+vm.runInContext(source.slice(source.indexOf('function requestFirstCell('), source.indexOf('function requestRow(')), context);
+assert.match(context.requestFirstCell({provider:'mistral',stream:true,ttftMs:200,attempts:[{mistralTiming:{firstTextUs:400001}},{mistralTiming:{firstTextUs:589900}}]}), /200ms.*正文 590ms/);
+assert.match(context.requestFirstCell({provider:'mistral',stream:true,ttftMs:200,attempts:[{mistralTiming:{firstToolUs:382001,firstTextUs:589900}}]}), /200ms.*工具 382ms/);
+assert.match(context.requestFirstCell({provider:'mistral',stream:true,ttftMs:200}), /200ms.*输出 —/);
+assert.match(context.requestFirstCell({provider:'mistral',stream:true,attempts:[{mistralTiming:{firstTextUs:0}}]}), /正文 0ms/);
+assert.doesNotMatch(context.requestFirstCell({provider:'mistral',stream:true,attempts:[{mistralTiming:{firstTextUs:'<img>'}}]}), /<img>/);
+assert.equal(context.requestFirstCell({provider:'factory',stream:true,ttftMs:10}), '10ms');
+assert.equal(context.requestFirstCell({provider:'mistral',stream:false}), '—');
+assert.match(source, /pool === 'mistral' \? '首事件 \/ 首输出'/);
 vm.runInContext(source.slice(source.indexOf('function showMistralCacheAudit('), source.indexOf('function showClientRequestHeaders(')), context);
 context.modal = options => { context.auditDialog = options; };
 context.showMistralCacheAudit({requestId:'audit-request',cacheAudit:{version:1,runId:'<img src=x onerror=bad>',sample:2,sampleLimit:128,expiresAt:'future',prepared:{sequenceComplete:false},attempts:[{bodyReads:[{complete:false,matchesExpected:false}]}]}});

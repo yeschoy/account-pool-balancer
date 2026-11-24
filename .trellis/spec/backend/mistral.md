@@ -186,8 +186,7 @@ Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
 
 - `requestLog.mistralTiming` 与 `attemptLog.mistralTiming` 只对 Mistral 产生；其他池、旧日志、未到达的阶段不写字段，也不补算。`prepareMistralRequest` 的签名、缓存键优先级、身份 HMAC、绑定/选号/TTL、错误与重放策略不因此改变。
 - **缺失≠0**：只有真正观测到亚微秒才写 0；未开始/未到达/旧记录保持 `null`（Go 指针 nil，JSON 省略）。不允许用 `durationMs`、`ttftMs` 或其它阶段倒算缺失字段。
-- 相对起点固定：`uploadUs/prepareUs/admissionUs/firstEventReadUs/firstEventFlushUs/first*Us/lastEventFlushUs/terminalFlushUs/httpStartUs` 相对 handler 入口；`connectionReadyUs/connectionWaitUs/requestWrittenUs/responseHeadersUs` 相对 `client.Do` 开始。前端「首字分段」按此标注，不能混用。
-- 请求级 `admissionUs` 为每次 `Pool.Acquire` 的累计；每次尝试独立记录自己的连接/首事件事实。已发出后失败保留已观测里程碑，不编造响应头。
-- `ttftMs` 语义不变（首个可转发事件前时间，可能是角色/思考/生命周期帧）；`firstEventFlushUs` 与其同为 handler 相对可直接对照，但都不是客户端首正文。`maxWriteFlushUs`（含下游背压）与 `streamMaxLagUs`（写前队列滞后）必须单列，不得当成首字或模型解码速度。
-- 观测本身不得增加额外写、额外 Flush、延迟首帧、缓冲整流或改变响应字节；`mistralChatEvent`/layout capture 的既有逐事件行为不变。缺失/超限（`outputProbeSkipped`）要如实标记。
-- 验证：`mistral_timing_test.go`（nil/0 语义、非流无首事件、里程碑顺序、连接复用观测、日志往返）；`mistral_web_test.js`（浏览器展示缺字段为 —、不出现 NaN/0 冒充、不可信文本转义）。本地 Mock 数据不是生产验收，不得据此宣称上游首字改善。
+- 计时单位是微秒。`uploadUs` 是入站读取用时，`prepareUs` 是读取完成后的检查与准备时间，`admissionUs` 是每次 `Pool.Acquire` 耗时累计，不是三个从 handler 起点的里程碑。每次尝试的 `httpStartUs`、`firstEventReadUs`、`firstEventFlushUs`、`firstThinkingUs`/`firstToolUs`/`firstTextUs`、`lastEventReadUs`/`lastEventFlushUs`、`terminalFlushUs` 相对 handler 开始；`connectionReadyUs`/`requestWrittenUs`/`responseHeadersUs` 相对 `client.Do` 开始；`connectionWaitUs` 是最后一次 GetConn → GotConn 的耗时。各尝试独立；失败保留已发生阶段，不编造响应头。GotConn 复用不等于上游缓存命中。
+- `ttftMs` 语义不变（首个可转发事件前时间，可能是角色/思考/生命周期帧）；`firstEventFlushUs` 与其同为 handler 相对可直接对照，但都不是客户端首正文。管理台 Mistral「首事件 / 首输出」第二行显示第一帧非空白可见正文或实质工具调用（名称/参数）中最早者、标明类别，思考不当正文。旧日志/无命中显示「输出 —」；亚微秒观测可显示 0。点「首字分段」查看各类首帧。`maxWriteFlushUs`（含下游背压）和 `streamMaxLagUs`（写前队列/解析滞后）必须单列，不得当成模型解码速度。
+- 观测本身不得增加额外读写/Flush、让首帧等待观测解析、缓冲整流或改变响应字节。输出分类只发生在原始 Write+Flush 成功后；首内容探测遇超限帧（原始 data 或重新适配的输出帧大于 64KiB）停止分类剩余未知类别并标 `outputProbeSkipped`，不能把后续可解析帧假报为实际首次。已有首内容记录保留。失败的 Flush 不生成首/末输出或终态 Flush；`lastEventReadUs` 可存在，即使未成功写入。无终态观测不改 Chat 既有 EOF 兼容，Responses 终态门禁不变。
+- 验证：`mistral_timing_test.go`、`mistral_timing_integration_test.go`（nil/0、非流、迟到回调快照、Chat/Responses 思考/工具/正文、失败 Flush、超限、无响应头、换号、跨池隔离、末事件读取和写入分离）；`mistral_web_test.js`（旧日志、首正文和首工具选择、缺字段/零值及转义）。本地 Mock 或新增计时都不是上游首字改善。

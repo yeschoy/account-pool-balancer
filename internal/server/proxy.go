@@ -1163,6 +1163,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			s.thFailureDetail(cfg, rec, r, body, res, i)
 		}
 		lease.Release()
+		if res.mistralTiming != nil && res.upstreamStream {
+			res.mistralTiming.log.LastEventReadUs = mistralElapsed(start, res.upstreamLast)
+		}
 		att := attemptLog{Account: acct.ID, AccountName: acct.Name, Status: res.status, Ms: res.ms, Egress: "direct", EgressIP: res.egressIP, Terminal: res.terminal,
 			MistralTiming: res.mistralTiming.snapshot()}
 		if acct.ProxyURL != "" {
