@@ -485,6 +485,11 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 				}
 			}
 			if role == "assistant" {
+				if deepSeek {
+					if err := mistralDeepSeekToolCalls(message); err != nil {
+						return nil, false, err
+					}
+				}
 				reasoning := message.get("reasoning_content")
 				// All three reasoning models use Mistral's native typed chunks.
 				// Preserve legacy assistant reasoning via the same representation.
