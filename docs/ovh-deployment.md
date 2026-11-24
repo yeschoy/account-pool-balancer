@@ -38,7 +38,16 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：额度窗口用尽时的等待时间（2026-11-24 09:53 UTC，f1ca971）
+## 当前部署：Mistral DeepSeek 用户文本 1h 缓存提示兼容（2026-11-24 11:30 UTC，f66b67c）
+
+- 业务提交 `f66b67ce6bfef10ac92ec5e0fef3d0ee591130ed` 已推送 `origin/master`。仅适配精确 `deepseek-v4-1-flash-1017` Chat 用户文本块中的 `cache_control:{"type":"ephemeral","ttl":"1h"}`；不改正文、工具、图片或缓存键，不调整生产规则。提交前本地 HTTP mock 旧版422/新版单次200，以及全仓测试、race、vet、构建通过。
+- 从远端 `git fetch` 后的固定提交 `git archive` 提取 983 个文件；未改旧分叉工作树。构建 **11:28:06.440–11:29:12.954 UTC**（约 67 秒，重建了部分 Chrome/Playwright 层）。镜像 `account-pool-balancer:release-f66b67c-20261124T112805Z`，OCI revision `f66b67c`，ID `sha256:1a5b5290553caf2338362e76fcd6e2c2f6839354fe0414361aa6e2077da84593`。源码与 image override 在 `/home/ubuntu/project/account-pool-balancer-releases/20261124T112805Z-f66b67c/`。
+- 旧容器 **11:29:57.909** 正常退出；完整一致 `data.tgz`（87,160,322 字节，gzip/SHA256 校验通过）、原 Compose/.env/config 保存于 `/home/ubuntu/backups/account-pool-balancer/20261124T112805Z-mistral-cache-hint-f66b67c/`。回退镜像为 `account-pool-balancer:rollback-20261124T112805Z`，可沿上一版 release 的 Compose image override 回退；不覆盖新版运行后写入的数据。
+- **11:30:00.376** 请求切换、**11:30:00.609** 新容器启动、**11:30:01.706** 首次本机健康响应、**11:30:30.983** Docker healthy（0 重启、无 OOM，Healthcheck 存在）。上述健康等待不是停机时长。Compose 仅覆盖 image，8GiB 内存、UID、挂载、入口和网络别名保留；**11:30:31.265** `new-api` 到 `account-pool-balancer`、`opendesign-balancer` 的 `/healthz` 均通过。`config.json` 字节相同，323 账号、20 下游 Key、revision 6926 保留。
+- 远端公网 HTTP 验收 **11:33:53**：登录页、`/healthz`、`app.js`、`app.css` 均为 200，资源保留 `?v=a1ed77f688` 且 SHA256 与本次源码匹配。本地浏览器访问超时，未把 HTTP 验收表述成真实浏览器通过。
+- 截至 **11:32:11 UTC**，新容器启动后的初步自然样本中目标模型 **34 次成功，0 次上游422**；无主动推理、无用户请求重放，未证明这 34 次里有携带旧 1h 提示的请求，也不代表其他 422 被一并修复。
+
+## 前次部署：额度窗口用尽时的等待时间（2026-11-24 09:53 UTC，f1ca971）
 
 - 现场：`gemini-4-neon` 在 17:18–17:45 +08 对客户端返回 429 `all upstream accounts are cooling down`（Retry-After 从 600 秒倒数），之后变成裸 503。真正原因不是限流：唯一能跑 gemini-4 的 `zxg-11.16-01` 打满了 Factory 5 小时 standard 窗口（`usedPercent=100`，resets `10:11:11Z`），上游 402 明说 `resets in 0h 52min`；另一个号 `kevin-11.18` 的组织套餐没有 gemini-4（06:49 那轮已按账号×模型学习）。
 - 两处报错质量问题（本轮修复）：① 402 规则忽略上游给的重置时间，用固定 10 分钟冷却 → 窗口内每次重试都白撞一次 402，还对客户说"~10 分钟后重试"（假的）；② 配额轮询看到 100% 后账号变成 `quota-exhausted`，而"全部不可用"分支不把它算进 Retry-After → 同一个请求从 429 变成没有等待时间的 503。
