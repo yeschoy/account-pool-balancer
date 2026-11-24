@@ -38,6 +38,16 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：额度窗口用尽时的等待时间（2026-11-24 09:53 UTC，f1ca971）
+
+- 现场：`gemini-4-neon` 在 17:18–17:45 +08 对客户端返回 429 `all upstream accounts are cooling down`（Retry-After 从 600 秒倒数），之后变成裸 503。真正原因不是限流：唯一能跑 gemini-4 的 `zxg-11.16-01` 打满了 Factory 5 小时 standard 窗口（`usedPercent=100`，resets `10:11:11Z`），上游 402 明说 `resets in 0h 52min`；另一个号 `kevin-11.18` 的组织套餐没有 gemini-4（06:49 那轮已按账号×模型学习）。
+- 两处报错质量问题（本轮修复）：① 402 规则忽略上游给的重置时间，用固定 10 分钟冷却 → 窗口内每次重试都白撞一次 402，还对客户说"~10 分钟后重试"（假的）；② 配额轮询看到 100% 后账号变成 `quota-exhausted`，而"全部不可用"分支不把它算进 Retry-After → 同一个请求从 429 变成没有等待时间的 503。
+- 代码 `f1ca971`：`proxy.go` 解析 402 正文的 `resets in Xh Ymin` 并按真实重置冷却（上限 7d）、同时刷新额度快照；`pool.go` 的"全部不可用"把 Factory 额度窗口重置也计入候选恢复时间；`quota.FactoryState.ResetAt` 与该窗口选择共用 `Exhausted` 的逻辑（含 Extra 余额豁免），两者不会给出相反结论。测试 `TestFactoryFundingUsesStatedReset`、`TestFactoryQuotaExhaustedLooksUpWindowReset`；全仓 vet/normal 同提交通过。
+- UTC 构建 `09:53:40.877–09:53:48.457`；备份 `09:54` 前完成（`data.tgz` `gzip -t` 通过，含 compose/`.env`/`config.json`）；`09:54:00` 切换，随后 healthy、0 重启、无 OOM；`new-api` 容器到两个内网别名 `/healthz` 均 `{"ok":true}`。
+- 线上验证（`09:55:00Z`，窗口尚未重置）：`gemini-4-neon` → 429 + `Retry-After: 971`（16 分 11 秒，正好到 `10:11:11Z` 窗口重置），消息 `all upstream accounts are cooling down or out of quota for this model`。此前同一请求是 `Retry-After: 600`（假）或裸 503。
+- 镜像 `account-pool-balancer:release-f1ca971-20261124T095340Z`；回退 `rollback-20260953` 未创建（上一版 `59be4bb` 镜像仍在本地 `account-pool-balancer:release-59be4bb-20261124T073445Z`）；release `/home/ubuntu/project/account-pool-balancer-releases/20261124T095340Z-f1ca971/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261124T095340Z-quota-reset-report/`。
+- 未做：没有替用户开启 Extra Usage / 切 Core（付费决定），也没有把 gemini-4 流量改道到别的 provider；窗口重置后（`10:11Z`）未再复测 200。另：`zai-glm-5-3` 同期 429 是 Mistral 上游 `backend_out_of_capacity (3505)`，非本池限流，规则按模型忽略、不换号、不扣健康分。
+
 ## 当前部署：chat 历史以 assistant 开头（2026-11-24 07:34 UTC，59be4bb）
 
 - 现场：new-api 渠道 272（Gemini→chat 协议转换）把请求送进本池 `/v1/chat/completions`，13 次返回 `400 Factory Gemini conversion: unsupported compatibility field or content: Gemini history must start with user content`（模型 `gemini-4-hydrogen`，11-24 13:06–13:32 +08）。本池自身 `opencode.ConvertGeminiRequest` 在 `contents` 首条不是 user 时直接拒绝。
