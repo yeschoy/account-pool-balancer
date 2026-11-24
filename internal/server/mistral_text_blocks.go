@@ -2,11 +2,10 @@ package server
 
 import "bytes"
 
-// Only exact DeepSeek Chat calls this compatibility boundary. A standard
-// Anthropic performance hint is not a Mistral TTL promise; unknown hints stay
-// native. Empty assistant text annotations carry no citations and may be
-// omitted; meaningful/unknown annotations stay native. Complete a known empty
-// assistant slot without deleting any block.
+// Only exact DeepSeek Chat calls this compatibility boundary. Strip the
+// standard Anthropic performance hint and the observed user-text 1h variant;
+// neither sets a Mistral cache TTL. Unknown hints and meaningful assistant
+// annotations stay native. Complete a known empty slot without deleting it.
 func mistralDeepSeekTextChunks(message *mistralWireObject, assistant bool) error {
 	content := message.get("content")
 	if len(content) == 0 || content[0] != '[' {
@@ -32,7 +31,14 @@ func mistralDeepSeekTextChunks(message *mistralWireObject, assistant bool) error
 				if err := hint.unique("type"); err != nil {
 					return err
 				}
-				if len(hint.fields) == 1 {
+				consume := len(hint.fields) == 1
+				if !consume && !assistant {
+					if err := hint.unique("ttl"); err != nil {
+						return err
+					}
+					consume = len(hint.fields) == 2 && mistralString(hint.get("ttl")) == "1h"
+				}
+				if consume {
 					chunk.set("cache_control", nil)
 					removedHint = true
 				}
