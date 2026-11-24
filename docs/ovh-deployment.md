@@ -38,7 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek 用户文本 1h 缓存提示兼容（2026-11-24 11:30 UTC，f66b67c）
+## 当前部署：Mistral DeepSeek 工具签名兼容与长历史分配优化（2026-11-24 16:42 UTC，c0d205c）
+
+- `44d5dcd` 与 `c0d205c011d3e63d185a8399c21825c09e0bd604` 均推送 `origin/master`。目标镜像保留精确 DeepSeek Chat 的跨供应商工具签名适配和长历史复制优化；同提交通过本地全仓/竞态/vet/构建，不修改线上规则、端点或额度配置。
+- 固定提交 `git archive` 共 985 个文件，从 `/home/ubuntu/project/account-pool-balancer-releases/20261124T163954Z-c0d205c/` 构建，未改旧工作树。构建 **16:39:54.474–16:40:59.839 UTC**；镜像 `account-pool-balancer:release-c0d205c-20261124T163954Z`，OCI revision `c0d205c`，ID `sha256:926c43c5aa89b9b226afa764a6e1f3ec711c29bccab64a2c87624aa7eb6dda23`。
+- 旧实例 **16:42:03.888** 正常退出；一致备份于 **16:42:06.464** 完成，`data.tgz` 89,514,270 字节，gzip/SHA256 核对通过，连同旧 Compose/.env/config 保存至 `/home/ubuntu/backups/account-pool-balancer/20261124T163954Z-mistral-tools-and-perf/`。回滚镜像 `account-pool-balancer:rollback-20261124T163954Z`，沿旧 release 的 `deploy-image.override.yml` 仅换回旧镜像，不覆盖新版业务数据。
+- Compose 有效配置比较仅 image 不同。**16:42:06.467** 请求切换、**16:42:06.701** 新容器启动、**16:42:07.817** 首次宿主机健康 200；**16:42:37.137** Docker healthy（Healthcheck 存在，0 次重启、非 OOM、UID 1000:1000、8 GiB 与挂载保留）。旧退出到首次本机健康观测约 3.9 秒，不是精确停机；健康等待不算停机。`config.json` 字节相同，保留 323 个账号、20 个下游 Key、revision 6926。**16:42:37.191** NewAPI 容器访问 `account-pool-balancer` 和 `opendesign-balancer` 两个内网 `/healthz` 均成功；**16:43:00.747** 公网未登录 HTTP 首页、healthz、`app.js`、`app.css` 均 200，资源保留 `?v=a1ed77f688`，哈希与发布源码一致。
+- 至 **16:43:37 UTC**，新实例自然流量观测目标 DeepSeek Chat **55/55 成功、0 次上游 422**。未主动推理、未重放历史，不能确定样本中包含原签名结构；内存分配收益仍为本地基准，未做生产压测。
+
+## 前次部署：Mistral DeepSeek 用户文本 1h 缓存提示兼容（2026-11-24 11:30 UTC，f66b67c）
 
 - 业务提交 `f66b67ce6bfef10ac92ec5e0fef3d0ee591130ed` 已推送 `origin/master`。仅适配精确 `deepseek-v4-1-flash-1017` Chat 用户文本块中的 `cache_control:{"type":"ephemeral","ttl":"1h"}`；不改正文、工具、图片或缓存键，不调整生产规则。提交前本地 HTTP mock 旧版422/新版单次200，以及全仓测试、race、vet、构建通过。
 - 从远端 `git fetch` 后的固定提交 `git archive` 提取 983 个文件；未改旧分叉工作树。构建 **11:28:06.440–11:29:12.954 UTC**（约 67 秒，重建了部分 Chrome/Playwright 层）。镜像 `account-pool-balancer:release-f66b67c-20261124T112805Z`，OCI revision `f66b67c`，ID `sha256:1a5b5290553caf2338362e76fcd6e2c2f6839354fe0414361aa6e2077da84593`。源码与 image override 在 `/home/ubuntu/project/account-pool-balancer-releases/20261124T112805Z-f66b67c/`。
