@@ -38,6 +38,16 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：chat 历史以 assistant 开头（2026-11-24 07:34 UTC，59be4bb）
+
+- 现场：new-api 渠道 272（Gemini→chat 协议转换）把请求送进本池 `/v1/chat/completions`，13 次返回 `400 Factory Gemini conversion: unsupported compatibility field or content: Gemini history must start with user content`（模型 `gemini-4-hydrogen`，11-24 13:06–13:32 +08）。本池自身 `opencode.ConvertGeminiRequest` 在 `contents` 首条不是 user 时直接拒绝。
+- 实测 Factory `/g/v1/generate`（真实上游，两发）：**首条为 model 的 contents → 200 并从该处继续**；**末条为 model 的 contents → 400 `Requests ending with a model turn are not supported`**。也就是本池的首条检查比上游更严，挡掉了上游本来能服务的请求。
+- 代码 `59be4bb`：`internal/opencode/gemini_request.go` 只保留"末条必须是 user 或完整工具结果"的检查；首条 assistant 原样转成 `role:"model"`（不丢内容、不改角色、不插合成消息）。首条为工具结果仍拒绝（对应的 `tool_call` 已不在历史里），错误文本按新路径变为 `tool result requires its original tool call and matching ID in full history`。单测 `TestGeminiCompatibleLeadingAssistantTurn`、端到端 `TestFactoryGeminiChatLeadingAssistantHistory`；全仓 normal/race/vet 同提交通过（`go vet ./...` + `go test ./...` 无失败）。
+- UTC 构建 `07:34:54.618–07:35:02.342`（7.7 秒，缓存命中）；一致备份 `07:35:14` 完成（`data.tgz` 83,495,489 字节、`gzip -t` 通过，含 compose/`.env`/`config.json`/`metadata.json`）。`07:35:21.783` 请求切换、`07:35:22.322` 新容器启动，随后 healthy、0 重启、无 OOM、`1000:1000`。
+- 验收：`new-api` 容器到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`；317 账号 / 19 下游 Key / revision 6916 / 7 条 Factory 错误规则（含 06:49 那轮新增的 `factory-model-id-rejected`）全部保留。功能实测（线上池，factory 渠道 Key）：assistant 开头的 chat 请求 → 200（含带 system 的变体、`stream:true` → SSE 3 帧 / `X-Compatibility-Mode: buffered`）；assistant-only → 400 `must end with user content`（与上游一致）；工具结果开头 → 400 `tool result requires its original tool call and matching ID in full history`。
+- 镜像 `account-pool-balancer:release-59be4bb-20261124T073445Z`；回退 `account-pool-balancer:rollback-20261124T073445Z`（=上一版 `79ec43c`，ID `baa0b63ce605`）；release `/home/ubuntu/project/account-pool-balancer-releases/20261124T073445Z-59be4bb/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261124T073445Z-gemini-leading-assistant/`。
+- 未做：未接触 new-api 渠道 272 的配置（本轮只改本池转换行为）；该渠道真实客户端的复测依赖其自行重试，本池侧已用同形状请求验证。
+
 ## 当前部署：Factory 组织套餐不包含的模型 ID（2026-11-24 06:49 UTC，79ec43c）
 
 - 现场：new-api 渠道 245 对 `gemini-4-neon` 连续 400，正文是 Factory 结构化信封 `{"detail":"Invalid model ID in request body","requestId":"yul1::…"}`。本池日志显示 44 次 `gemini-4-neon` 400 全部落在 `kevin-11.18`，143 次 200 全部落在 `zxg-11.16-01`；同一模型、同一池，只差账号。
