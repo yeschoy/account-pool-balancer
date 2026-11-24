@@ -112,19 +112,30 @@ func (o *mistralWireObject) set(key string, value []byte) {
 	}
 }
 
-func (o *mistralWireObject) render() []byte {
-	changed := len(o.additions) != 0
-	for _, f := range o.fields {
-		changed = changed || f.changed
+func (o *mistralWireObject) changed() bool {
+	if len(o.additions) != 0 {
+		return true
 	}
-	if !changed {
+	for _, f := range o.fields {
+		if f.changed {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *mistralWireObject) render() []byte {
+	if !o.changed() {
 		return o.body
 	}
 	var out bytes.Buffer
-	// Reserve the original size plus headroom once: a spliced body is close to
-	// the input, and a single byte of overflow would otherwise double the
-	// buffer and copy the whole history again.
+	// Reserve headroom so growing a spliced body does not copy it twice.
 	out.Grow(len(o.body) + len(o.body)/8 + 256)
+	o.writeSplice(&out)
+	return out.Bytes()
+}
+
+func (o *mistralWireObject) writeSplice(out *bytes.Buffer) {
 	prefix, tail := o.end, o.end
 	if len(o.fields) > 0 {
 		prefix, tail = o.fields[0].start, o.fields[len(o.fields)-1].end
@@ -151,7 +162,6 @@ func (o *mistralWireObject) render() []byte {
 		kept = true
 	}
 	out.Write(o.body[tail:])
-	return out.Bytes()
 }
 
 // Preserve the deployed cache-shard affinity behavior when updating master.
@@ -454,10 +464,6 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 		return raw, false, nil // native validation owns unrelated malformed messages
 	}
 	var out bytes.Buffer
-	// A rewritten history is about the original size plus a per-message
-	// wrapper, so reserve that plus headroom once instead of letting a small
-	// overflow double a multi-hundred-KiB buffer.
-	out.Grow(len(raw) + len(raw)/8 + 1024)
 	changed, last := false, 0
 	for i := skipSpace(raw, 1); raw[i] != ']'; {
 		end := skipValue(raw, i)
@@ -526,10 +532,14 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 					}
 				}
 			}
-			prepared := message.render()
-			if !bytes.Equal(prepared, raw[i:end]) {
+			if message.changed() {
+				if !changed {
+					// Unchanged histories keep the original slice. Once changed,
+					// splice directly into the array, not a per-message copy.
+					out.Grow(len(raw) + len(raw)/8 + 1024)
+				}
 				out.Write(raw[last:i])
-				out.Write(prepared)
+				message.writeSplice(&out)
 				last, changed = end, true
 			}
 		}
@@ -648,53 +658,53 @@ func mistralNativeThoughtMatches(chunks []json.RawMessage, text string) bool {
 }
 
 func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte, preserveNative bool) error {
-	var text *string
+	var text string
 	if json.Unmarshal(reasoning, &text) != nil {
 		return errors.New("Mistral assistant reasoning_content must be a string or null")
 	}
-	if text != nil && *text != "" {
-		// Assemble the native chunk with the same bytes encoding/json emits for
-		// the historical map literals: JSON object keys are sorted, so
-		// "thinking" precedes "type" and "text" precedes "type". This keeps the
-		// published wire bytes (and the cache prefix it shares) identical while
-		// avoiding two map marshals and an array re-compaction per history turn.
-		quoted, err := json.Marshal(*text)
-		if err != nil {
-			return err
-		}
-		thinking := make([]byte, 0, len(quoted)+48)
-		thinking = append(thinking, `{"thinking":[{"text":`...)
-		thinking = append(thinking, quoted...)
-		thinking = append(thinking, `,"type":"text"}],"type":"thinking"}`...)
-		var joined []byte
+	if text != "" {
+		var answer []byte
+		var existing []json.RawMessage
 		content := message.get("content")
+		isArray := len(content) != 0 && content[0] == '['
 		switch {
 		case len(content) == 0 || bytes.Equal(content, []byte("null")):
-			joined = make([]byte, 0, len(thinking)+2)
-			joined = append(append(append(joined, '['), thinking...), ']')
 		case content[0] == '"':
-			answer, err := json.Marshal(mistralString(content))
-			if err != nil {
-				return err
-			}
-			chunk := make([]byte, 0, len(answer)+40)
-			chunk = append(chunk, `{"text":`...)
-			chunk = append(chunk, answer...)
-			chunk = append(chunk, `,"type":"text"}`...)
-			joined = make([]byte, 0, len(thinking)+len(chunk)+3)
-			joined = append(append(append(append(append(joined, '['), thinking...), ','), chunk...), ']')
-		case content[0] == '[':
-			var existing []json.RawMessage
+			answer, _ = json.Marshal(mistralString(content))
+		case isArray:
 			_ = json.Unmarshal(content, &existing)
-			if preserveNative && mistralNativeThoughtMatches(existing, *text) {
+			if preserveNative && mistralNativeThoughtMatches(existing, text) {
 				message.set("reasoning_content", nil)
 				return nil
 			}
-			// Existing chunks may carry whitespace encoding/json would compact,
-			// so retain the established encoder for this branch.
-			joined, _ = json.Marshal(append([]json.RawMessage{thinking}, existing...))
 		default:
 			return errors.New("Mistral assistant content must be text, chunks or null to preserve reasoning")
+		}
+
+		// Match encoding/json's historical sorted keys and escaping. Write the
+		// scalar case into one array instead of allocating the two chunks first.
+		const thinkingStart, thinkingEnd = `{"thinking":[{"text":`, `,"type":"text"}],"type":"thinking"}`
+		const answerStart, answerEnd = `,{"text":`, `,"type":"text"}`
+		quoted, _ := json.Marshal(text)
+		size := 2 + len(thinkingStart) + len(quoted) + len(thinkingEnd)
+		if answer != nil {
+			size += len(answerStart) + len(answer) + len(answerEnd)
+		}
+		joined := make([]byte, 0, size)
+		joined = append(joined, '[')
+		joined = append(joined, thinkingStart...)
+		joined = append(joined, quoted...)
+		joined = append(joined, thinkingEnd...)
+		if isArray {
+			// The established array encoder compacts the existing chunks too.
+			joined, _ = json.Marshal(append([]json.RawMessage{joined[1:]}, existing...))
+		} else {
+			if answer != nil {
+				joined = append(joined, answerStart...)
+				joined = append(joined, answer...)
+				joined = append(joined, answerEnd...)
+			}
+			joined = append(joined, ']')
 		}
 		message.set("content", joined)
 	}

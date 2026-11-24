@@ -77,6 +77,36 @@ func TestMistralAssistantReasoningWireBytesUnchanged(t *testing.T) {
 	}
 }
 
+func TestMistralAssistantReasoningSpliceContentShapes(t *testing.T) {
+	const before = ` {"model":"deepseek-v4-1-flash-1017", "reasoning_effort":"high","prompt_cache_key":"keep", "messages":[ {"role":"user","content":"hello"}, {"role":"assistant", "reasoning_content":"\u003cwhy\u003e\n\u2028",`
+	const after = `"tool_calls":[{"id":"call","type":"function","function":{"name":"mock","arguments":"{\"n\":9007199254740993}"}}]}, {"role":"tool","content":"<keep>","tool_call_id":"call"} ]} `
+	const wantBefore = ` {"model":"deepseek-v4-1-flash-1017", "reasoning_effort":"high","prompt_cache_key":"keep", "messages":[ {"role":"user","content":"hello"}, {"role":"assistant", `
+	const thought = `{"thinking":[{"text":"\u003cwhy\u003e\n\u2028","type":"text"}],"type":"thinking"}`
+	for _, tc := range []struct{ name, content, expected string }{
+		{"null", ` "content":null,`, thought},
+		{"empty string", ` "content":"",`, thought + `,{"text":"","type":"text"}`},
+		{"scalar", ` "content":"<answer> 😀",`, thought + `,{"text":"\u003canswer\u003e 😀","type":"text"}`},
+		{"existing array", ` "content":[ { "type":"text", "text":"<answer>" } ],`, thought + `,{"type":"text","text":"\u003canswer\u003e"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(before + tc.content + after)
+			want := wantBefore + `"content":[` + tc.expected + `],` + after
+			got, _, err := prepareMistralRequest(raw, "/v1/chat/completions", "unused")
+			if err != nil || string(got) != want || string(raw) != before+tc.content+after {
+				t.Fatalf("splice changed request bytes outside the established transform:\n got %s\nwant %s\nerr %v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestMistralUnchangedHistoryKeepsInputSlice(t *testing.T) {
+	raw := []byte(` {"model":"deepseek-v4-1-flash-1017","reasoning_effort":"high","prompt_cache_key":"keep","messages":[ {"role":"user","content":[{"type":"text","text":"hello"}]}, {"role":"assistant","content":"done"} ]} `)
+	got, _, err := prepareMistralRequest(raw, "/v1/chat/completions", "unused")
+	if err != nil || !bytes.Equal(got, raw) || &got[0] != &raw[0] {
+		t.Fatal("native history must be returned without a body copy")
+	}
+}
+
 // TestMistralLayoutRenderWireBytesUnchanged pins the layout replay splice to
 // the established encoding: raw text chunks wrapped as before, joined by the
 // same array encoder.
@@ -176,6 +206,7 @@ func TestMistralLayoutPlainMatchesResponseParser(t *testing.T) {
 		`[]`,
 		`[{"type":"text","text":"answer"}]`,
 		`[{"type":"thinking","thinking":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"closed":true},{"type":"text","text":"c"}]`,
+		`[{"type":"text","text":""},{"type":"thinking","thinking":[{"type":"text","text":""},{"type":"text","text":"\u4e2d\n"}]},{"type":"text","text":" first "},{"type":"thinking","thinking":[{"type":"text","text":" second "},{"type":"text","text":" third "}]},{"type":"text","text":"last"}]`,
 		`[{"type":"thinking","thinking":[{"type":"text","text":"t"}],"closed":null,"signature":null}]`,
 		`[{"type":"thinking","thinking":[{"type":"text","text":"t"}],"signature":""}]`,
 		`[{"type":"thinking","thinking":[{"type":"text","text":"t"}],"signature":"abc"}]`,

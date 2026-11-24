@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -418,6 +419,35 @@ func mistralHasNativeThinking(raw []byte) bool {
 	return false
 }
 
+// Single-part text already owns its decoded string; only allocate a join
+// buffer when a second nonempty part actually needs concatenation.
+type mistralLayoutText struct {
+	first  string
+	joined strings.Builder
+}
+
+func (t *mistralLayoutText) add(part string) {
+	if part == "" {
+		return
+	}
+	if t.first == "" {
+		t.first = part
+		return
+	}
+	if t.joined.Len() == 0 {
+		t.joined.Grow(len(t.first) + len(part))
+		t.joined.WriteString(t.first)
+	}
+	t.joined.WriteString(part)
+}
+
+func (t *mistralLayoutText) text() string {
+	if t.joined.Len() != 0 {
+		return t.joined.String()
+	}
+	return t.first
+}
+
 func mistralLayoutPlain(raw []byte) (string, string, bool) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return "", "", true
@@ -430,7 +460,7 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 	if raw[0] != '[' {
 		return "", "", false
 	}
-	var a, r bytes.Buffer
+	var a, r mistralLayoutText
 	// Walk the content array by offsets: decoding it into maps would allocate
 	// a second copy of every chunk plus a map per chunk for the same answer.
 	for i := skipSpace(raw, 1); i < len(raw) && raw[i] != ']'; {
@@ -448,14 +478,14 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 			if err != nil {
 				return "", "", false
 			}
-			a.WriteString(text)
+			a.add(text)
 		case "thinking":
 			parts, err := mistralThinkingPartsView(chunk)
 			if err != nil {
 				return "", "", false
 			}
 			for _, text := range parts {
-				r.WriteString(text)
+				r.add(text)
 			}
 		default:
 			return "", "", false
@@ -465,7 +495,7 @@ func mistralLayoutPlain(raw []byte) (string, string, bool) {
 			i = skipSpace(raw, i+1)
 		}
 	}
-	return a.String(), r.String(), true
+	return a.text(), r.text(), true
 }
 
 // mistralTextChunkView mirrors mistralTextChunk (the response adapter's parser)
