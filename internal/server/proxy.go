@@ -1412,6 +1412,12 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 					// this key's health or eligibility for other models.
 					sample, el.HealthAction = false, "none"
 				}
+				if acct.Provider == config.ProviderFactory && rule.ID == "factory-model-id-rejected" && rule.Scope == rules.ScopeModel {
+					// Factory refuses a model its org tier does not carry with the
+					// wording it uses for a typo. The account answers every other
+					// model the tier has, so this is not a health signal.
+					sample, el.HealthAction = false, "none"
+				}
 				// what the cooldown covers: the account, one model, or a funding class
 				target, class := "account", ""
 				switch {
@@ -1483,7 +1489,15 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 		// Legacy pools let account cooldown/quarantine override a stop rule.
 		// Native-chat pools and ALTAPI apply health actions but honor an
 		// explicit stop: a rate limit/challenge must not trigger key rotation.
-		if retry != nil && (config.NativeGateway(acct.Provider) || acct.Provider == config.ProviderALTAPI || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
+		//
+		// Factory keeps that honor for account-scope refusals, but a MODEL-scope
+		// cooldown there says "this account's org tier has no such model"
+		// (measured 2026-11-24: a pro_plus org answers 400 "Invalid model ID in
+		// request body" for gemini-4-*, a team org serves it). Another account
+		// can serve the request, so that one refusal must not stop the switch.
+		modelEntitlement := acct.Provider == config.ProviderFactory && rule != nil &&
+			rule.Scope == rules.ScopeModel && rule.Action == rules.ActionCooldown
+		if retry != nil && ((config.NativeGateway(acct.Provider) && !modelEntitlement) || acct.Provider == config.ProviderALTAPI || !(rule != nil && (rule.Action == rules.ActionCooldown || rule.Action == rules.ActionHardQuarantine))) {
 			ev.switchAccount = false
 		} else if retry != nil {
 			el.RetryDecision = "overridden-by-error-rule"

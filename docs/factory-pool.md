@@ -275,6 +275,44 @@ droid 模型选择器里的 12 个模型逐个实测（`m.yeschoy.pro`，tiny �
 - `/v1/chat/completions` 调用 gpt 模型仍会被本池的兼容转换策略拒绝（`compatibility=false` 时为明确的 400；开启后会在上游 Responses 回包的 `logprobs` 字段上触发 502，属于既有兼容层的严格字段校验，未在本次改动）。DSH 对 OpenAI 系模型走 Responses，不受影响。
 - droid 截图里的 “GPT-5.4 Mini Fast Mode” 对应模型 ID 是 `gpt-5.4-mini-fast`；`gpt-5.4-mini-fast-mode` 上游直接 400 Invalid model ID。
 
+## 组织套餐不包含的模型 ID（2026-11-24）
+
+现场：new-api 渠道 245 对 `gemini-4-neon` 连续报 400，正文为 Factory 结构化信封
+`{"detail":"Invalid model ID in request body","status":400,"title":"Bad Request","requestId":"yul1::…"}`。
+同一个模型 ID、同一个池，另一批请求却全部 200。
+
+排查结论（逐条实测，不是推断）：
+
+- 错误**不是**模型 ID 拼错、不是工具 schema、不是请求体问题：同样的最小请求体
+  在本池另一账号上 200。
+- 差别在**账号所属组织（`factoryTier`）**：`GET api.factory.ai/api/organization/managed-settings`
+  （抓包见 `docs/factory-cli-endpoints.md` 3.3）返回该账号的 tier。实测
+  `factoryTier:"pro_plus"` 的组织对 `gemini-4-argon/carbon/hydrogen/neon` 一律
+  400 "Invalid model ID in request body"，`factoryTier:"team"` 的组织同一批模型
+  全部 200。Factory 把"这个 tier 没有这个模型"和"模型 ID 写错"用同一句话回，
+  所以只看错误文本会误判成客户端问题。
+- 该账号**本身健康**：同一把 key 调 `claude-sonnet-5`、`glm-5.3`、
+  `gemini-3.8-flash`、`gemini-3.1-pro-preview` 全部 200。`gemini-4-*` 之外不受影响，
+  所以不能因此停用/隔离账号，也不能把整池所有模型都判为不可用。
+
+处理（`rules.DefaultFactoryErrorRules` 的 `factory-model-id-rejected`）：
+
+- 作用域 `model`、动作 `cooldown`：只冷却**本号×本模型**，默认 24h、最长 7d；
+  到点自动再探一次，组织升级后无需人工恢复。
+- 该规则是本池唯一允许**覆盖显式 stop** 的账号×模型冷却：模型级冷却的含义是
+  "这个账号的套餐没有这个模型"，换号即可服务；账号级冷却/隔离（403/429 等）
+  照旧遵守 stop，不换号。`internal/server/proxy.go` 的 `modelEntitlement` 是这一条例外。
+- **不扣健康分**：账号对其它模型仍可用，模型级套餐差异不是健康信号。
+- 所有账号都不接受时回下游 503，而不是把上游 400 原样透传给 new-api（400 会被当成
+  调用方的错，不会换渠道）。学习完成后（两个号×该模型都在冷却）调度直接给出
+  `model <id> is not included in any upstream account's plan`，不带 Retry-After——
+  套餐差异不会因为等待而消失。
+
+注意：错误/重试规则是每池独立保存的显式列表，**新增默认规则不会自动写入已有的
+自定义列表**（与模型目录的 Gemini 补齐不同）。旧配置需要手工加一条同样条件的
+规则，或在设置页新增：状态码 `400`、正文包含 `invalid model id in request body`、
+作用域 `model`、动作 `cooldown`、默认冷却 `24h`。
+
 ## 状态与边界
 
 出口 IP/网络指纹审计见 [factory-egress-privacy.md](factory-egress-privacy.md)。本版本参考 [magpie-community/plugins 的 Factory 插件](https://github.com/magpie-community/plugins/tree/main/packages/factory)，固定研究版本 `d24fd5d1824e1078e7c8c56732813f8263fcf728`。采用认证、模型路由元数据、只读身份/额度接口、Fast Mode字段映射、`anthropic-tools.mjs`的工具schema包装/结果解包，以及Droid客户端请求头与系统提示词开头（`factoryHeaders`/`droidBody`/`anthropicBody`）；不是该插件的完整移植。MIT许可与来源见`THIRD_PARTY_NOTICES.md`。另复用本项目的有限协议桥接，而非将该插件误描述为通用协议桥。
@@ -476,6 +514,7 @@ Responses续传只认已确认、未过期、同Key/Base/代理来源的原账�
 - `content_policy_rejected`执行层强制停止，不扣Key健康分、不换号/出口、不改组织/内容；即使自定义switch-account规则也不能覆盖。
 - 401短暂账号冷却；402停止且不付款；403停止、不直接判封号；429默认停止，完整遵守秒数或日期Retry-After；明确HTTP5xx可在安全条件和尝试预算内重试。
 - 已发送结果不确定、流已输出、有状态续传不重放；截断流记失败，不伪造DONE。Responses需真正终止事件。
+- 400 `Invalid model ID in request body` 按**账号×模型**套餐差异处理（见上一节）：只冷却该对并换号，不扣健康分、不透露成调用方的错；本池唯一允许模型级冷却覆盖 stop 的情形，账号级 stop 不变。
 - 请求/错误摘要、关联失败详情沿既有设施；Factory详情默认关且独立，每体最多64KiB并受共享更小预算约束，Key/Cookie/会话标识脱敏。保留天数/总量是全局共享，只读展示，保存Factory不改变别池。
 
 ## 全局号池启停

@@ -452,7 +452,14 @@ func (p *Pool) unavailableLocked(cfg *config.Config, a config.Account, model str
 			return "cooldown"
 		}
 		if model != "" {
-			if _, ok := st.Models[model]; ok {
+			if ms, ok := st.Models[model]; ok {
+				// Factory's org tier refusing a model ID is an entitlement gap,
+				// not a transient cooldown: report it as such so a request no
+				// account can serve reads "not included in any plan" instead of
+				// "cooling down, retry later".
+				if a.Provider == config.ProviderFactory && ms.RuleID == "factory-model-id-rejected" {
+					return "not-entitled"
+				}
 				return "model-cooldown"
 			}
 			if len(st.Classes) > 0 {
