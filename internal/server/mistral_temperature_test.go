@@ -35,7 +35,7 @@ func TestMistralDeepSeekTemperatureRejectsBeforeAdmission(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, fields), func(t *testing.T) {
 				status, reply := e.post(t, "/v1/chat/completions", fmt.Sprintf(`{"model":"deepseek-v4-1-flash-1017","stream":%v,%s,"messages":[{"role":"user","content":"private-question"}]}`, stream, fields), nil)
-				if status != http.StatusBadRequest || e.count() != 0 || !strings.Contains(reply, "invalid_mistral_request") || !strings.Contains(reply, "temperature") {
+				if status != http.StatusBadRequest || e.count() != 0 || !strings.Contains(reply, `"code":"invalid_request"`) || strings.Contains(strings.ToLower(reply), "mistral") || !strings.Contains(reply, "temperature") {
 					t.Fatalf("temperature was not rejected locally: %d %s attempts=%d", status, reply, e.count())
 				}
 				if strings.Contains(reply, "private-") || strings.Contains(reply, "1.62") {

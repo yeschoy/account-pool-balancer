@@ -205,7 +205,7 @@ func TestMistralContentResponseAndUnsupportedNoReplay(t *testing.T) {
 					t.Fatal("non-Chat response rewritten")
 				}
 			default:
-				if !strings.Contains(body, "mistral_content_unsupported") || strings.Contains(body, "[DONE]") {
+				if !strings.Contains(body, "upstream_content_unsupported") || strings.Contains(strings.ToLower(body), "mistral") || strings.Contains(body, "[DONE]") {
 					t.Fatal("conversion error hidden or fabricated completion")
 				}
 				logs, _ := e.s.logs.Query("requests", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)

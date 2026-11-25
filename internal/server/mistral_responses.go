@@ -40,6 +40,6 @@ func mistralResponsesTerminal(event string, data []byte) bool {
 func mistralResponsesTruncated(res *attemptResult) *attemptResult {
 	res.kind, res.result, res.status = outFailed, "failed", http.StatusBadGateway
 	res.terminal, res.category, res.contentType = "incomplete_stream", "network", "application/json"
-	res.body = []byte(`{"type":"error","error":{"type":"api_error","code":"mistral_response_incomplete","message":"Mistral Responses stream ended before a terminal event; the request was not replayed"}}`)
+	res.body = []byte(`{"type":"error","error":{"type":"api_error","code":"upstream_response_incomplete","message":"The upstream Responses stream ended before a terminal event; the request was not replayed"}}`)
 	return res
 }

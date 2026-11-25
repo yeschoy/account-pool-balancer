@@ -107,7 +107,7 @@ func TestMistralParameterRejectionsAreLocal(t *testing.T) {
 	} {
 		t.Run(tc.fields, func(t *testing.T) {
 			st, reply := e.post(t, "/v1/chat/completions", `{"model":"deepseek-v4-1-flash-1017",`+tc.fields+`}`, nil)
-			if st != 400 || e.count() != 0 || !strings.Contains(reply, tc.message) || !strings.Contains(reply, "invalid_mistral_request") || strings.Contains(reply, "private-body") {
+			if st != 400 || e.count() != 0 || !strings.Contains(reply, tc.message) || !strings.Contains(reply, `"code":"invalid_request"`) || strings.Contains(reply, "private-body") {
 				t.Fatalf("not rejected safely before upstream: %d %s", st, reply)
 			}
 		})

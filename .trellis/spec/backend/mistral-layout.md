@@ -31,7 +31,7 @@
 
 ## 5. 可见性
 
-- 适配请求保留`X-Mistral-Layout`已有兼容计数头；不新增兜底明细、内部错误文本或错误码到对外响应。功能不依赖中间层转发。
+- 适配请求通过中性的`X-Conversation-Layout`保留已有兼容计数头；不新增兜底明细、内部错误文本或错误码到对外响应。功能不依赖中间层转发。
 - 管理员 `requestLog.mistralLayout.fallback` 只记录按默认顺序处理的历史条数，与 `restored` 分开；`rejected` 只识别旧日志。沿现有admin/no-store权限，不新增正文或公开API。未启用路径/其他池不产生布局字段。
 
 ## 6. 必要验证

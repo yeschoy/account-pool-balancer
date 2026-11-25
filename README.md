@@ -388,7 +388,7 @@ curl -X POST https://your-host.example/open/v1/perch/import \
 |---|---|
 | 上游 401/403（尝试换号后仍失败） | `502 upstream_account_auth_failed` |
 | 模型滚动窗口用尽 `model_limit_exceeded`、套餐并发上限 `tier_limit_exceeded`（上游均为 400） | `429` + 按网关重置时刻计算的精确 `Retry-After` |
-| Mistral 后端容量不足（HTTP 429 + code 3505） | `429 mistral_backend_out_of_capacity` + 原始 `Retry-After`（不换号） |
+| Mistral 后端容量不足（HTTP 429 + code 3505） | `429 upstream_backend_out_of_capacity` + 原始 `Retry-After`（不换号） |
 | 余额不足 `insufficient_balance`（402/429）、套餐不含该模型 `tier_model_not_entitled` / Mistral 1910 | `503` |
 | 上游网关自身供应商凭据故障 `upstream_provider_*`（上游 500） | `502`（不扣账号健康分、不冷却账号） |
 | 其他上游 429 | `429` + `Retry-After` |

@@ -222,7 +222,7 @@ func TestMistralLayoutUntrustedHistoryFallsBackOverHTTP(t *testing.T) {
 				if err != nil || resp.StatusCode != 200 || e.count() != wantCount {
 					t.Fatalf("continue failed or retried: status=%d attempts=%d reply=%s err=%v", resp.StatusCode, e.count(), reply, err)
 				}
-				if strings.Contains(resp.Header.Get("X-Mistral-Layout"), "fallback") || resp.Header.Get("Retry-After") != "" {
+				if strings.Contains(resp.Header.Get("X-Conversation-Layout"), "fallback") || resp.Header.Get("Retry-After") != "" {
 					t.Fatal("public response exposed internal fallback or suggested retry")
 				}
 				e.s.requests.Wait()
@@ -251,7 +251,7 @@ func TestMistralLayoutUntrustedHistoryFallsBackOverHTTP(t *testing.T) {
 				}
 			}
 			resp, rec := send(history, 1)
-			if rec.MistralLayout.Fallback != 1 || rec.MistralLayout.Restored != 0 || rec.MistralLayout.Captured != 1 || !strings.Contains(resp.Header.Get("X-Mistral-Layout"), "restored=0") {
+			if rec.MistralLayout.Fallback != 1 || rec.MistralLayout.Restored != 0 || rec.MistralLayout.Captured != 1 || !strings.Contains(resp.Header.Get("X-Conversation-Layout"), "restored=0") {
 				t.Fatalf("fallback was not labeled distinctly: %+v", rec.MistralLayout)
 			}
 			assertUpload(0, fallbackContent, "")
@@ -319,7 +319,7 @@ func TestMistralLayoutNormalServerRestartAndPrivacy(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("X-Mistral-Layout"), "restored=1") || e.count() != 2 {
+	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("X-Conversation-Layout"), "restored=1") || e.count() != 2 {
 		t.Fatal("normal restart did not restore layout through real HTTP")
 	}
 	var root struct {

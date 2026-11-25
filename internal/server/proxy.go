@@ -697,8 +697,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if !poolPathOK(rec.Provider, r.URL.Path) {
 		// River serves only OpenAI Chat Completions and Responses
 		rec.ErrorCategory = "request"
-		writeLocalError(w, proto, http.StatusNotFound, "invalid_request_error", "unsupported_endpoint",
-			"this pool ("+rec.Provider+") does not serve "+r.URL.Path, 0)
+		msg := "this pool (" + rec.Provider + ") does not serve " + r.URL.Path
+		if rec.Provider == config.ProviderMistral {
+			msg = "This API endpoint is not supported."
+		}
+		writeLocalError(w, proto, http.StatusNotFound, "invalid_request_error", "unsupported_endpoint", msg, 0)
 		finish(http.StatusNotFound, "failed")
 		return
 	}
@@ -789,7 +792,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if aliasErr != nil {
 			rec.ErrorCategory = "request"
-			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", aliasErr.Error(), 0)
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_request", mistralPublicRequestMessage(aliasErr), 0)
 			finish(400, "failed")
 			return
 		}
@@ -835,7 +838,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if rec.Provider == config.ProviderMistral {
 		if rec.Model == "" {
 			rec.ErrorCategory = "request"
-			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_model", "Mistral requires a nonempty model", 0)
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_model", "Provide a nonempty model.", 0)
 			finish(400, "failed")
 			return
 		}
@@ -843,7 +846,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// continuation/storage fields or pick a different owner for them.
 		if strings.HasPrefix(r.URL.Path, "/v1/responses") && (obj["previous_response_id"] != nil || obj["store"] != nil && obj["store"] != false) {
 			rec.ErrorCategory = "request"
-			writeLocalError(w, proto, 400, "invalid_request_error", "stateless_responses", "Mistral Responses is stateless; send full history in input, omit previous_response_id and use store=false", 0)
+			writeLocalError(w, proto, 400, "invalid_request_error", "stateless_responses", "This Responses endpoint is stateless; send full history in input, omit previous_response_id and use store=false", 0)
 			finish(400, "failed")
 			return
 		}
@@ -924,12 +927,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if err == nil && rec.mistralLayoutScope != "" {
 			body, err = s.mistralLayouts.restore(originalMistralBody, body, rec.mistralLayoutScope, rec.MistralLayout)
 			if err == nil {
-				w.Header().Set("X-Mistral-Layout", rec.MistralLayout.header())
+				w.Header().Set("X-Conversation-Layout", rec.MistralLayout.header())
 			}
 		}
 		if err != nil {
 			rec.ErrorCategory = "request"
-			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_mistral_request", err.Error(), 0)
+			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_request", mistralPublicRequestMessage(err), 0)
 			finish(400, "failed")
 			return
 		}
@@ -1071,7 +1074,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				finish(http.StatusTooManyRequests, "failed")
 			case errors.As(err, &ue) && ue.Details["not-entitled"] > 0 && ue.Details["not-entitled"] == sumCounts(ue.Details):
 				rec.ErrorCategory, rec.BlockedBy = "unavailable", "not-entitled"
-				writeLocalError(w, proto, http.StatusServiceUnavailable, "api_error", "model_not_entitled", "model "+rec.Model+" is not included in any upstream account's plan", 0)
+				msg := "model " + rec.Model + " is not included in any upstream account's plan"
+				if rec.Provider == config.ProviderMistral {
+					msg = "The requested model is not included in any upstream account's plan."
+				}
+				writeLocalError(w, proto, http.StatusServiceUnavailable, "api_error", "model_not_entitled", msg, 0)
 				finish(http.StatusServiceUnavailable, "failed")
 			case errors.As(err, &ue):
 				rec.ErrorCategory, rec.BlockedBy = "unavailable", "unavailable"
@@ -1228,7 +1235,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.Switched = true
 	}
 	res = last
-	status := s.writeFailure(w, cfg, proto, last, len(rec.Attempts))
+	status := s.writeFailure(w, cfg, proto, rec.Provider, last, len(rec.Attempts))
 	rec.ErrorCategory = last.category
 	if status == http.StatusTooManyRequests {
 		ra := ceilSeconds(last.retryAfter)
@@ -1554,7 +1561,7 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 // writeFailure answers the client for a request whose last attempt failed
 // before writing anything. Account problems never reach the client as
 // 401/402/403: a relay such as new-api would disable the whole channel.
-func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto string, res *attemptResult, attempts int) int {
+func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto, provider string, res *attemptResult, attempts int) int {
 	w.Header().Set("X-Attempts", strconv.Itoa(attempts))
 	if (res.ruleID == "mistral-service-unavailable" || res.mistralCapacity) && res.header != nil {
 		if hint := res.header.Get("Retry-After"); hint != "" {
@@ -1585,7 +1592,14 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 		case ds == http.StatusForbidden && strings.Contains(res.ruleID, "policy-refusal"):
 			typ, msg = "permission_error", "upstream policy refused this request; no account or egress replay was attempted"
 		}
-		writeLocalError(w, proto, ds, typ, strings.ReplaceAll(res.ruleID, "-", "_"), msg, ra)
+		code := strings.ReplaceAll(res.ruleID, "-", "_")
+		if provider == config.ProviderMistral {
+			code = strings.TrimPrefix(code, "mistral_")
+			if code == "" || hasMistralErrorBrand([]byte(code)) {
+				_, code, _ = mistralPublicUpstreamError(ds)
+			}
+		}
+		writeLocalError(w, proto, ds, typ, code, msg, ra)
 		return ds
 	case st == 401 || st == 403:
 		writeLocalError(w, proto, http.StatusBadGateway, "api_error", "upstream_account_auth_failed", "upstream account authentication failed", 0)
@@ -1597,7 +1611,7 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 			// Keep the original service hint, including HTTP dates, rather
 			// than replacing a missing/unknown reset with an invented 1s.
 			ra = 0
-			code, msg = "mistral_backend_out_of_capacity", "upstream model backend is out of capacity, retry later"
+			code, msg = "upstream_backend_out_of_capacity", "upstream model backend is out of capacity, retry later"
 		}
 		writeLocalError(w, proto, http.StatusTooManyRequests, "rate_limit_error", code, msg, ra)
 		return http.StatusTooManyRequests
@@ -1606,6 +1620,11 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 		return http.StatusServiceUnavailable
 	case res.mistralRejection.code != "":
 		writeLocalError(w, proto, st, "invalid_request_error", res.mistralRejection.code, res.mistralRejection.message, 0)
+		return st
+	}
+	if provider == config.ProviderMistral && hasMistralErrorBrand(res.body) {
+		typ, code, msg := mistralPublicUpstreamError(st)
+		writeLocalError(w, proto, st, typ, code, msg, 0)
 		return st
 	}
 	ct := res.contentType
@@ -2777,7 +2796,11 @@ func (s *Server) relayStream(w http.ResponseWriter, r *http.Request, cfg *config
 					}
 				}
 				if isErr {
-					outEvent = []byte(redactSecrets(cfg, string(m.ev)))
+					if mistral && hasMistralErrorBrand(m.ev) {
+						outEvent = mistralPublicErrorEvent(st)
+					} else {
+						outEvent = []byte(redactSecrets(cfg, string(m.ev)))
+					}
 				}
 				if lag := time.Since(m.at).Microseconds(); lag >= 0 {
 					res.streamEvents++

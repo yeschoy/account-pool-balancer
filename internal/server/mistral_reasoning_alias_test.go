@@ -78,7 +78,7 @@ func TestMistralReasoningAliasAmbiguityRejectedBeforeUpstream(t *testing.T) {
 		`"reasoning":"a","content":"answer","content":"different"`,
 	} {
 		st, reply := e.post(t, "/v1/chat/completions", `{"model":"deepseek-v4-1-flash-1017","messages":[{"role":"assistant",`+fields+`}]}`, nil)
-		if st != 400 || e.count() != 0 || !strings.Contains(reply, "invalid_mistral_request") {
+		if st != 400 || e.count() != 0 || !strings.Contains(reply, `"code":"invalid_request"`) {
 			t.Fatalf("ambiguous thought discarded or forwarded: %d %s", st, reply)
 		}
 	}

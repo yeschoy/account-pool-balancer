@@ -166,7 +166,7 @@ func TestMistralThreeModelReasoningRejectsAmbiguity(t *testing.T) {
 					`"reasoning":"private-body"`,
 				} {
 					st, reply := e.post(t, path, fmt.Sprintf(`{"model":%q,%s,"messages":[],"input":"mock"}`, model, fields), nil)
-					if st != 400 || e.count() != 0 || !strings.Contains(reply, "invalid_mistral_request") || strings.Contains(reply, "private-body") {
+					if st != 400 || e.count() != 0 || !strings.Contains(reply, `"code":"invalid_request"`) || strings.Contains(reply, "private-body") {
 						t.Fatalf("ambiguous effort forwarded/disclosed: %d %s", st, reply)
 					}
 				}

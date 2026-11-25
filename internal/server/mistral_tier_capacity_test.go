@@ -71,7 +71,7 @@ func TestMistralTierDenialExhaustedReturns503(t *testing.T) {
 		fmt.Fprint(w, `{"code":1910,"type":"tier_not_allowed"}`)
 	})
 	st, b := e.post(t, "/v1/chat/completions", `{"model":"m","messages":[]}`, nil)
-	if st != 503 || e.count() != 2 || !strings.Contains(b, "mistral_tier_not_allowed") {
+	if st != 503 || e.count() != 2 || !strings.Contains(b, `"code":"tier_not_allowed"`) || strings.Contains(strings.ToLower(b), "mistral") {
 		t.Fatalf("tier failure leaked channel-disabling 403 or unbounded retry: status=%d calls=%d reply=%s", st, e.count(), b)
 	}
 	for _, v := range e.s.pool.Views(e.s.cfg.Get()) {
@@ -105,7 +105,7 @@ func TestMistralBackendCapacityStopsAndPreservesRetryAfter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != 429 || resp.Header.Get("Retry-After") != hint || e.count() != 1 || !strings.Contains(string(reply), "mistral_backend_out_of_capacity") {
+			if resp.StatusCode != 429 || resp.Header.Get("Retry-After") != hint || e.count() != 1 || !strings.Contains(string(reply), "upstream_backend_out_of_capacity") || strings.Contains(strings.ToLower(string(reply)), "mistral") {
 				t.Fatalf("capacity failure rotated accounts or lost classification/Retry-After: status=%d hint=%q calls=%d reply=%s", resp.StatusCode, resp.Header.Get("Retry-After"), e.count(), reply)
 			}
 			for _, v := range e.s.pool.Views(e.s.cfg.Get()) {
@@ -217,7 +217,7 @@ func TestMistralCapacityRetryHeaderDoesNotAffectOtherRules(t *testing.T) {
 		// Rule IDs are only unique within a pool. A different provider may
 		// legitimately save a rule with the same ID; it is not Mistral.
 		r := &attemptResult{status: 429, ruleID: id, terminal: "upstream_http", header: http.Header{"Retry-After": []string{"123"}}}
-		if st := s.writeFailure(w, config.Default(), "openai", r, 1); st != 429 || w.Header().Get("Retry-After") != "1" || strings.Contains(w.Body.String(), "mistral_backend_out_of_capacity") {
+		if st := s.writeFailure(w, config.Default(), "openai", config.ProviderOpenCodeGo, r, 1); st != 429 || w.Header().Get("Retry-After") != "1" || strings.Contains(w.Body.String(), "upstream_backend_out_of_capacity") {
 			t.Fatal("Mistral capacity handling changed unrelated/provider-colliding rules")
 		}
 	}

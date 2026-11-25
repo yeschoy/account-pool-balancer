@@ -66,9 +66,9 @@ func TestMistralBadRequestReturnsUsableErrorWithoutEcho(t *testing.T) {
 		name, wire, code, hint string
 		status                 int
 	}{
-		{"oversized GIF", gifError(100 << 10), "mistral_animated_gif_unsupported", "static PNG or JPEG", 400},
-		{"small GIF", gifError(4000), "mistral_animated_gif_unsupported", "conversation history", 400},
-		{"unknown oversized error", `{"detail":{"message":"` + gifMessage + private + strings.Repeat("A", 100<<10) + `"}}`, "mistral_error_body_truncated", "request ID", 400},
+		{"oversized GIF", gifError(100 << 10), "animated_gif_unsupported", "static PNG or JPEG", 400},
+		{"small GIF", gifError(4000), "animated_gif_unsupported", "conversation history", 400},
+		{"unknown oversized error", `{"detail":{"message":"` + gifMessage + private + strings.Repeat("A", 100<<10) + `"}}`, "upstream_error_body_truncated", "request ID", 400},
 		{"known distinct rejection", imageLimit, "", "", 400},
 		{"nested content is not the error message", nested, "", "", 400},
 		{"other status", gifError(20), "", "", 422},
@@ -93,13 +93,62 @@ func TestMistralBadRequestReturnsUsableErrorWithoutEcho(t *testing.T) {
 			var envelope struct {
 				Error struct{ Code, Message, Type string }
 			}
-			if json.Unmarshal([]byte(reply), &envelope) != nil || envelope.Error.Type != "invalid_request_error" || envelope.Error.Code != tc.code || !strings.Contains(envelope.Error.Message, tc.hint) || len(reply) > 500 || strings.Contains(reply, "data:image/") || strings.Contains(reply, private) {
+			if json.Unmarshal([]byte(reply), &envelope) != nil || envelope.Error.Type != "invalid_request_error" || envelope.Error.Code != tc.code || !strings.Contains(envelope.Error.Message, tc.hint) || len(reply) > 500 || strings.Contains(reply, "data:image/") || strings.Contains(reply, private) || strings.Contains(strings.ToLower(reply), "mistral") {
 				t.Fatal("missing parseable, bounded, actionable response or echoed attachment")
 			}
 			logs, _ := e.s.logs.Query("errors", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
 			var row errorLog
 			if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &row) != nil || row.Reason != envelope.Error.Message || row.Status != st || row.UpstreamStatus == nil || *row.UpstreamStatus != st || row.ResponseBodyTruncated != (len(tc.wire) > 64<<10) || row.ResponseBytes != min(len(tc.wire), 64<<10) || row.HealthAction != "none" || row.RetryDecision != "stop" || row.Switched || strings.Contains(string(logs.Items[0]), private) || strings.Contains(string(logs.Items[0]), "data:image/") {
 				t.Fatal("incorrect error diagnosis, retry/health decision, or attachment privacy")
+			}
+		})
+	}
+}
+
+func TestMistralPublicFailuresHideProvider(t *testing.T) {
+	const chunk = `{"choices":[{"delta":{"content":"The word Mistral can appear in legitimate model output."}}]}`
+	const escapedError = `{"type":"error","error":{"message":"Mistr\u0061l failed (synthetic-upstream-diagnostic)","code":"provider_failure"}}`
+	const req = `{"model":"deepseek-v4-1-flash-1017","stream":true,"messages":[{"role":"user","content":"hello"}]}`
+	for _, tc := range []struct {
+		name, path, request, upstream, contentType, want string
+		upstreamStatus, status, calls                    int
+	}{
+		{"unsupported endpoint", "/v1/messages", req, "", "", "This API endpoint is not supported.", 0, 404, 0},
+		{"local invalid model", "/v1/chat/completions", `{"messages":[]}`, "", "", "invalid_model", 0, 400, 0},
+		{"native branded HTTP failure", "/v1/chat/completions", req, `{"error":{"message":"MiStRaL error: synthetic-upstream-diagnostic","code":3051}}`, "application/json", "upstream_request_rejected", 400, 400, 1},
+		{"native escaped first error", "/v1/chat/completions", req, "event: error\ndata: " + strings.Replace(escapedError, `"type":"error"`, `"type":"error","status":400`, 1) + "\n\n", "text/event-stream", "upstream_request_rejected", 200, 400, 1},
+		{"native escaped committed error", "/v1/chat/completions", req, "data: " + chunk + "\n\nevent: error\ndata: " + escapedError + "\n\n", "text/event-stream", "upstream_request_failed", 200, 200, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newMistralEnv(t)
+			e.setHandler(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.upstreamStatus == 0 {
+					t.Error("local rejection contacted upstream")
+					return
+				}
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(tc.upstreamStatus)
+				fmt.Fprint(w, tc.upstream)
+			})
+			st, reply := e.post(t, tc.path, tc.request, nil)
+			if tc.status == 200 {
+				prefix := "data: " + chunk + "\n\n"
+				if !strings.HasPrefix(reply, prefix) {
+					t.Fatal("changed previously committed model content")
+				}
+				reply = strings.TrimPrefix(reply, prefix)
+				if !strings.HasPrefix(reply, "event: error\ndata: ") || strings.Contains(reply, "[DONE]") {
+					t.Fatal("lost the failure event or fabricated successful termination")
+				}
+			}
+			if st != tc.status || e.count() != tc.calls || !strings.Contains(reply, tc.want) || strings.Contains(strings.ToLower(reply), "mistral") || strings.Contains(reply, "synthetic-upstream-diagnostic") {
+				t.Fatalf("unexpected status/attempts or unsanitized failure: %d attempts=%d reply=%s", st, e.count(), reply)
+			}
+			if tc.upstreamStatus == 400 {
+				logs, _ := e.s.logs.Query("errors", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
+				if len(logs.Items) != 1 || !strings.Contains(string(logs.Items[0]), "synthetic-upstream-diagnostic") {
+					t.Fatal("client-facing sanitization lost the admin diagnostic")
+				}
 			}
 		})
 	}

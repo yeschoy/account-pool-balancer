@@ -80,10 +80,10 @@ func TestMistralResponsesMissingTerminalIsFailureWithoutReplay(t *testing.T) {
 				fmt.Fprint(w, tc.wire)
 			})
 			status, body := e.post(t, "/v1/responses", `{"model":"m","stream":true,"input":"mock"}`, nil)
-			if status != tc.status || e.count() != 1 || !strings.Contains(body, "mistral_response_incomplete") {
+			if status != tc.status || e.count() != 1 || !strings.Contains(body, "upstream_response_incomplete") || strings.Contains(strings.ToLower(body), "mistral") {
 				t.Fatalf("truncation hidden or replayed: %d %q calls=%d", status, body, e.count())
 			}
-			if strings.Count(body, "mistral_response_incomplete") != 1 || strings.Count(body, "[DONE]") > strings.Count(tc.wire, "[DONE]") {
+			if strings.Count(body, "upstream_response_incomplete") != 1 || strings.Count(body, "[DONE]") > strings.Count(tc.wire, "[DONE]") {
 				t.Fatal("duplicate error or fabricated completion")
 			}
 			rec := mistralTerminalRequestLog(t, e)

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var errMistralContent = errors.New("Mistral Chat content cannot be represented as text and reasoning_content without loss")
+var errMistralContent = errors.New("Upstream chat content cannot be represented as text and reasoning_content without loss")
 
 // mistralChatResponse adapts only native Chat content lists. RawMessage preserves
 // tool arguments, token counts and unknown fields; ordinary string chunks retain
@@ -191,6 +191,6 @@ func mistralChatEvent(event []byte) ([]byte, error) {
 func mistralResponseFailure(res *attemptResult) *attemptResult {
 	res.kind, res.status, res.terminal, res.category = outFailed, http.StatusBadGateway, "compatibility", "compatibility"
 	res.contentType = "application/json"
-	res.body, _ = json.Marshal(map[string]any{"error": map[string]string{"type": "api_error", "code": "mistral_content_unsupported", "message": errMistralContent.Error()}})
+	res.body, _ = json.Marshal(map[string]any{"error": map[string]string{"type": "api_error", "code": "upstream_content_unsupported", "message": errMistralContent.Error()}})
 	return res
 }

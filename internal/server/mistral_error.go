@@ -3,7 +3,10 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strconv"
+	"strings"
 )
 
 type mistralRequestRejection struct {
@@ -15,12 +18,12 @@ type mistralRequestRejection struct {
 func mistralBadRequest(body []byte, truncated bool) mistralRequestRejection {
 	if mistralHasAnimatedGIFError(body) {
 		return mistralRequestRejection{
-			"mistral_animated_gif_unsupported",
-			"Mistral does not support animated GIF images. Replace the GIF in this request or conversation history with a static PNG or JPEG, or start a new conversation without it.",
+			"animated_gif_unsupported",
+			"Animated GIF images are not supported. Replace the GIF in this request or conversation history with a static PNG or JPEG, or start a new conversation without it.",
 		}
 	}
 	if truncated {
-		return mistralRequestRejection{"mistral_error_body_truncated", "Mistral rejected the request (HTTP 400). Its error body exceeded the size limit. Check the request or contact the operator with the request ID."}
+		return mistralRequestRejection{"upstream_error_body_truncated", "The upstream service rejected the request (HTTP 400). Its error body exceeded the size limit. Check the request or contact support with the request ID."}
 	}
 	return mistralRequestRejection{}
 }
@@ -56,6 +59,54 @@ func mistralHasAnimatedGIFError(body []byte) bool {
 		i = skipSpace(body, comma+1)
 	}
 	return false
+}
+
+func mistralPublicRequestMessage(err error) string {
+	msg := strings.TrimPrefix(err.Error(), "Mistral ")
+	if hasMistralErrorBrand([]byte(msg)) {
+		return "The request could not be prepared for this endpoint. Check the parameters or contact support with the request ID."
+	}
+	return msg
+}
+
+// Inspect only failures, not generated content or request data. Also recognize
+// JSON string escapes so upstream cannot accidentally disclose an escaped name.
+func hasMistralErrorBrand(body []byte) bool {
+	const brand = "mistral"
+	if bytes.Contains(bytes.ToLower(body), []byte(brand)) {
+		return true
+	}
+	if !bytes.Contains(body, []byte(`\u`)) {
+		return false
+	}
+	for i := bytes.IndexByte(body, '"'); i >= 0; i = bytes.IndexByte(body, '"') {
+		end := skipString(body, i)
+		if end < 0 {
+			return true // an escaped prefix cut mid-string cannot be checked safely
+		}
+		if raw := body[i:end]; bytes.Contains(raw, []byte(`\u`)) && strings.Contains(strings.ToLower(mistralString(raw)), brand) {
+			return true
+		}
+		body = body[end:]
+	}
+	return false
+}
+
+func mistralPublicUpstreamError(status int) (typ, code, message string) {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error", "upstream_rate_limited", "The upstream service is rate limited. Retry later."
+	case status >= 400 && status < 500:
+		return "invalid_request_error", "upstream_request_rejected", fmt.Sprintf("The upstream service rejected the request (HTTP %d). Check the request or contact support with the request ID.", status)
+	default:
+		return "api_error", "upstream_request_failed", "The upstream request failed. Contact support with the request ID if the error persists."
+	}
+}
+
+func mistralPublicErrorEvent(status int) []byte {
+	typ, code, msg := mistralPublicUpstreamError(status)
+	body, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": typ, "code": code, "message": msg}})
+	return append(append([]byte("event: error\ndata: "), body...), '\n', '\n')
 }
 
 // Only schema coordinates/types may leave the validation parser. In particular,

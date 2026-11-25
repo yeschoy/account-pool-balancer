@@ -28,7 +28,7 @@ const (
 	mistralLayoutTTL         = 24 * time.Hour
 )
 
-var errMistralLayout = errors.New("cannot replay saved Mistral history layout")
+var errMistralLayout = errors.New("cannot replay saved conversation history layout")
 
 type mistralLayoutBlock struct {
 	Kind      string `json:"kind"` // text | thinking

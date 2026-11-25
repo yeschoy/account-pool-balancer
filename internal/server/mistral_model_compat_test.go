@@ -169,7 +169,7 @@ func TestMistralThreeModelInvalidChatControlsAreLocal(t *testing.T) {
 				`"messages":[{"role":"assistant","reasoning":{"text":"private-body"}}]`,
 			} {
 				status, reply := e.post(t, "/v1/chat/completions", fmt.Sprintf(`{"model":%q,%s}`, model, fields), nil)
-				if status != 400 || e.count() != 0 || !strings.Contains(reply, "invalid_mistral_request") || strings.Contains(reply, "private-body") {
+				if status != 400 || e.count() != 0 || !strings.Contains(reply, `"code":"invalid_request"`) || strings.Contains(reply, "private-body") {
 					t.Fatalf("invalid controls/history forwarded or leaked: %d %s", status, reply)
 				}
 			}
