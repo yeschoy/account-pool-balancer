@@ -6,7 +6,59 @@ import (
 	"strconv"
 )
 
-// Only schema coordinates/types may leave the error parser. In particular,
+type mistralRequestRejection struct {
+	code, message string
+}
+
+// Classify only the fixed Mistral HTTP 400 message, even if the large echoed
+// image runs past the read limit. Never copy the message or the image URL.
+func mistralBadRequest(body []byte, truncated bool) mistralRequestRejection {
+	if mistralHasAnimatedGIFError(body) {
+		return mistralRequestRejection{
+			"mistral_animated_gif_unsupported",
+			"Mistral does not support animated GIF images. Replace the GIF in this request or conversation history with a static PNG or JPEG, or start a new conversation without it.",
+		}
+	}
+	if truncated {
+		return mistralRequestRejection{"mistral_error_body_truncated", "Mistral rejected the request (HTTP 400). Its error body exceeded the size limit. Check the request or contact the operator with the request ID."}
+	}
+	return mistralRequestRejection{}
+}
+
+func mistralHasAnimatedGIFError(body []byte) bool {
+	i := skipSpace(body, 0)
+	if i >= len(body) || body[i] != '{' {
+		return false
+	}
+	for i = skipSpace(body, i+1); i < len(body) && body[i] == '"'; {
+		ke := skipString(body, i)
+		if ke < 0 {
+			return false
+		}
+		colon := skipSpace(body, ke)
+		if colon >= len(body) || body[colon] != ':' {
+			return false
+		}
+		vs := skipSpace(body, colon+1)
+		if mistralString(body[i:ke]) == "message" {
+			// Observed native envelope has a top-level message. Don't search
+			// arbitrary details or echoed inputs for this phrase.
+			return bytes.HasPrefix(body[vs:], []byte(`"Image is an animated GIF. Image URL: `))
+		}
+		end := skipValue(body, vs)
+		if end < 0 {
+			return false
+		}
+		comma := skipSpace(body, end)
+		if comma >= len(body) || body[comma] != ',' {
+			return false
+		}
+		i = skipSpace(body, comma+1)
+	}
+	return false
+}
+
+// Only schema coordinates/types may leave the validation parser. In particular,
 // validation input/ctx and free-form messages may contain an echoed prompt.
 type mistralValidation struct {
 	Loc  []any  `json:"loc"`

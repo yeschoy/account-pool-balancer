@@ -246,6 +246,7 @@ type attemptResult struct {
 	privateIdentities []string // request-local only; never serialized
 	wrapped           bool
 	mistralCapacity   bool // matched Mistral service-capacity policy, not just a user-chosen rule ID
+	mistralRejection  mistralRequestRejection
 	mistralLayout     *mistralLayoutCapture
 	mistralTiming     *mistralAttemptTiming
 	accountScoped     bool
@@ -1305,11 +1306,14 @@ type evaluation struct {
 // to the client, logs it, and says whether to switch accounts.
 func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string, res *attemptResult, rid string, idx int, keyID, keyName string) evaluation {
 	now := time.Now()
-	reasonBody := res.body
-	if acct.Provider == config.ProviderTokenHarbor || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider) {
-		reasonBody, _ = thBodyPreview(reasonBody, res.privateIdentities, 16<<10)
+	reason, truncated := res.mistralRejection.message, false
+	if reason == "" {
+		reasonBody := res.body
+		if acct.Provider == config.ProviderTokenHarbor || acct.Provider == config.ProviderMistral || config.NativeGateway(acct.Provider) {
+			reasonBody, _ = thBodyPreview(reasonBody, res.privateIdentities, 16<<10)
+		}
+		reason, truncated = errorReason(cfg, reasonBody, res.contentType)
 	}
-	reason, truncated := errorReason(cfg, reasonBody, res.contentType)
 	redacted := redactSecrets(cfg, clip(string(res.body), 16<<10))
 	matchText := strings.ToLower(redacted)
 	el := errorLog{TS: now.UTC(), RequestID: rid, AttemptIndex: idx, ClientKeyID: keyID, ClientKeyName: keyName, Provider: acct.Provider, AccountID: acct.ID, AccountName: acct.Name, Model: model,
@@ -1600,6 +1604,9 @@ func (s *Server) writeFailure(w http.ResponseWriter, cfg *config.Config, proto s
 	case st == 402 || (res.accountScoped && st >= 400 && st < 500):
 		writeLocalError(w, proto, http.StatusServiceUnavailable, "api_error", "upstream_account_unavailable", "upstream account temporarily unavailable", 0)
 		return http.StatusServiceUnavailable
+	case res.mistralRejection.code != "":
+		writeLocalError(w, proto, st, "invalid_request_error", res.mistralRejection.code, res.mistralRejection.message, 0)
+		return st
 	}
 	ct := res.contentType
 	if ct == "" || res.terminal == "upstream_envelope" {
@@ -2046,6 +2053,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return res
 		}
 		res.kind, res.status, res.body, res.terminal, res.category = outFailed, resp.StatusCode, b, "upstream_http", "upstream"
+		if acct.Provider == config.ProviderMistral && resp.StatusCode == http.StatusBadRequest {
+			res.mistralRejection = mistralBadRequest(b, res.bodyTruncated)
+		}
 		return res
 	}
 	if acct.Provider == config.ProviderFactory && rec.factoryPlan != nil && len(rec.factoryPlan.tools) > 0 {

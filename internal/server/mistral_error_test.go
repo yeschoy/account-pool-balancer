@@ -54,6 +54,57 @@ func TestMistralValidationDetailsBoundedAndPrivate(t *testing.T) {
 	}
 }
 
+func TestMistralBadRequestReturnsUsableErrorWithoutEcho(t *testing.T) {
+	const gifMessage = `Image is an animated GIF. Image URL: data:image/gif;base64,`
+	const private = "synthetic-private-attachment"
+	gifError := func(size int) string {
+		return `{"object":"error","message":"` + gifMessage + private + strings.Repeat("A", size) + `","type":"invalid_request_error","code":"3310","raw_status_code":400}`
+	}
+	const imageLimit = `{"object":"error","message":"Total number of images exceeds the maximum allowed of 20.","code":"3051"}`
+	const nested = `{"detail":{"message":"` + gifMessage + `not-a-top-level-error"}}`
+	for _, tc := range []struct {
+		name, wire, code, hint string
+		status                 int
+	}{
+		{"oversized GIF", gifError(100 << 10), "mistral_animated_gif_unsupported", "static PNG or JPEG", 400},
+		{"small GIF", gifError(4000), "mistral_animated_gif_unsupported", "conversation history", 400},
+		{"unknown oversized error", `{"detail":{"message":"` + gifMessage + private + strings.Repeat("A", 100<<10) + `"}}`, "mistral_error_body_truncated", "request ID", 400},
+		{"known distinct rejection", imageLimit, "", "", 400},
+		{"nested content is not the error message", nested, "", "", 400},
+		{"other status", gifError(20), "", "", 422},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newMistralEnv(t)
+			e.setHandler(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.wire)
+			})
+			st, reply := e.post(t, "/v1/chat/completions", `{"model":"deepseek-v4-1-flash-1017","stream":true,"messages":[{"role":"user","content":"describe the image"}]}`, nil)
+			if st != tc.status || e.count() != 1 {
+				t.Fatalf("wrong status or replay: %d, %d attempts", st, e.count())
+			}
+			if tc.code == "" {
+				if reply != tc.wire {
+					t.Fatal("unrelated complete error changed")
+				}
+				return
+			}
+			var envelope struct {
+				Error struct{ Code, Message, Type string }
+			}
+			if json.Unmarshal([]byte(reply), &envelope) != nil || envelope.Error.Type != "invalid_request_error" || envelope.Error.Code != tc.code || !strings.Contains(envelope.Error.Message, tc.hint) || len(reply) > 500 || strings.Contains(reply, "data:image/") || strings.Contains(reply, private) {
+				t.Fatal("missing parseable, bounded, actionable response or echoed attachment")
+			}
+			logs, _ := e.s.logs.Query("errors", map[string]string{"provider": "mistral"}, time.Time{}, time.Time{}, 10, 0)
+			var row errorLog
+			if len(logs.Items) != 1 || json.Unmarshal(logs.Items[0], &row) != nil || row.Reason != envelope.Error.Message || row.Status != st || row.UpstreamStatus == nil || *row.UpstreamStatus != st || row.ResponseBodyTruncated != (len(tc.wire) > 64<<10) || row.ResponseBytes != min(len(tc.wire), 64<<10) || row.HealthAction != "none" || row.RetryDecision != "stop" || row.Switched || strings.Contains(string(logs.Items[0]), private) || strings.Contains(string(logs.Items[0]), "data:image/") {
+				t.Fatal("incorrect error diagnosis, retry/health decision, or attachment privacy")
+			}
+		})
+	}
+}
+
 func TestMistralOversizedValidationErrorNoReplayOrPromptLog(t *testing.T) {
 	for _, size := range []int{64 << 10, 100 << 10} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
