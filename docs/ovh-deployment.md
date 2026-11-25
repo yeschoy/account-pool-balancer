@@ -38,7 +38,14 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 动图 GIF 错误回传（2026-11-25 10:46 UTC，ee64139）
+## 当前部署：客户端错误隐藏供应商名称（2026-11-25 11:23 UTC，870bea5）
+
+- 用户要求 Mistral 池的客户端报错不暴露线路。上线前 NewAPI 渠道 180 已有 4 条 GIF 错误含供应商名。`870bea583ad900d1d9f78c29c84559d5ed138267` 把 GIF、超长错误、入参、容量/规则映射、内容不兼容及 Responses 中断的公开消息/错误码改为中性；含供应商品牌的上游 HTTP 或已识别 SSE 错误返回中性结构化错误，原始错误诊断仍按原策略留管理员日志。计数头改 `X-Conversation-Layout`。未改变 HTTP 状态、重试、健康、上游或成功输出，不回写历史日志。
+- 干净 Git 归档构建 **11:23:16.429–11:23:24.165 UTC**，仅用线上 Compose 叠加 image。旧实例 **11:23:24.322** 退出，一致备份 **11:23:27.405** 就绪（98,188,822 字节 `data.tgz`，gzip 校验并记录 SHA256）；**11:23:27.407** 切换，**11:23:27.615** 新启动，**11:23:28.710** 首次宿主机健康，**11:23:57.988** Docker healthy，**11:23:58.745** NewAPI 容器到两个内网别名 `/healthz` 均通过；公网 `/healthz` 200。备份了旧 Compose 和配置，在线配置字节不变，323 账号 / 20 下游 Key / revision 6926；未改或重启 NewAPI。健康等待不算停机时间。
+- 全仓普通/竞态测试、vet、构建通过；本地覆盖未提交/已提交 SSE、未命名错误原样、正常内容保留及管理员诊断。**11:25:34 UTC** 用渠道 180 的现有号池入口验证：超限 `temperature` 本地 400 `invalid_request`（零上游请求，`req_a62a660cb9a695673c4c9c46`）；合成两帧 GIF 单次真实上游拒绝，400 `animated_gif_unsupported`，保留静态图片建议（`req_2fefeb29bbed77bd1f436fbf`）；错误正文、码和响应头均不带供应商名字，未回显附件。此合成探针直连号池，未重放用户历史。截至 **11:25:32 UTC**，NewAPI 两渠道分别 41/6 次成功、均无新错误样本，不将无错误记成 NewAPI GIF 受控复现。
+- 镜像 `account-pool-balancer:release-870bea5-20261125T112315Z`，release `/home/ubuntu/project/account-pool-balancer-releases/20261125T112315Z-870bea5/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261125T112315Z-public-errors-870bea5/`；回退 `account-pool-balancer:rollback-20261125T112315Z`，只切旧 image，不覆盖线上数据。合成图片和诊断只在远端内存中使用，无独立临时文件。
+
+## 前次部署：Mistral 动图 GIF 错误回传（2026-11-25 10:46 UTC，ee64139）
 
 - NewAPI 渠道 180 的 17 条 `status_code=400, bad response status code 400` 按 NewAPI 请求 ID 与运行日志逐条吻合：Mistral 拒绝动图 GIF，原错误把 Base64 放进 `message`，号池 64KiB 上限截断 JSON 后 NewAPI 才显示通用 400。「整段请求最多 20 张图片」是另一类上游拒绝。本轮不删图、不截断会话、不自动转静帧或换模型。
 - `ee641399b97892875a29fb501a4e0ee86c84343e` 已推送 `origin/master`；识别固定 GIF 前缀，返回并记录简短、可读且不带附件的结构化 400。其他超限 Mistral 400 返回原因未知的合法错误，完整的其他错误及既有重试/健康规则保持不变。全仓普通/竞态测试、vet、构建通过。
