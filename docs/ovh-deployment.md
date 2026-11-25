@@ -38,7 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral DeepSeek 工具签名兼容与长历史分配优化（2026-11-24 16:42 UTC，c0d205c）
+## 当前部署：Mistral 动图 GIF 错误回传（2026-11-25 10:46 UTC，ee64139）
+
+- NewAPI 渠道 180 的 17 条 `status_code=400, bad response status code 400` 按 NewAPI 请求 ID 与运行日志逐条吻合：Mistral 拒绝动图 GIF，原错误把 Base64 放进 `message`，号池 64KiB 上限截断 JSON 后 NewAPI 才显示通用 400。「整段请求最多 20 张图片」是另一类上游拒绝。本轮不删图、不截断会话、不自动转静帧或换模型。
+- `ee641399b97892875a29fb501a4e0ee86c84343e` 已推送 `origin/master`；识别固定 GIF 前缀，返回并记录简短、可读且不带附件的结构化 400。其他超限 Mistral 400 返回原因未知的合法错误，完整的其他错误及既有重试/健康规则保持不变。全仓普通/竞态测试、vet、构建通过。
+- 从干净 `git archive` 构建，未改旧分叉工作树。UTC **10:45:20.943–10:45:28.722** 构建镜像 `account-pool-balancer:release-ee64139-20261125T104520Z`。旧容器 **10:45:28.911** 退出，一致备份 **10:45:31.983** 完成（`data.tgz` 97,694,959 字节，gzip 验证并记录 SHA256）；Compose **10:45:31.985** 仅切 image，**10:45:32.310** 新实例启动、**10:45:33.448** 首次宿主机健康、**10:46:02.721** Docker healthy。健康等待不计为停机。**10:46:02.807** NewAPI 容器到两个内网别名 `/healthz` 均成功；公网 `/healthz` 200。配置字节不变，323 账号、20 下游 Key、revision 6926 保留；未改或重启 NewAPI。
+- **10:49:51–10:49:54 UTC** 经渠道 180 的现有号池入口凭据直测真实上游：合成 98,752 字节的两帧 GIF 位于会话历史中，原上游 400 超过 64KiB；号池单次回 266 字节合法 JSON，错误码 `mistral_animated_gif_unsupported`，无图片回显、不换号、不扣健康（`req_07514ee8aca5e83c5e3bba72`）。单张合成静态 PNG 对照 200，识别为红色，228 输入 / 96 输出 token（`req_73cca5a0509afec4dc33a4cc`）。未重放用户历史。**截至 10:52:59 UTC**，渠道 180 该模型自然流量有 252 次成功、2 次明确 GIF 400（NewAPI 日志 5184385、5184448，无 Base64）、0 次旧式通用 400。
+- release `/home/ubuntu/project/account-pool-balancer-releases/20261125T104520Z-ee64139/`；受限备份 `/home/ubuntu/backups/account-pool-balancer/20261125T104520Z-mistral-gif-ee64139/`；保留回退镜像 `account-pool-balancer:rollback-20261125T104520Z`，沿原 Compose 切旧 image，不恢复旧数据覆盖新写入。诊断、合成媒体与探针均在内存运行，无新增独立临时文件或凭据副本。
+
+## 前次部署：Mistral DeepSeek 工具签名兼容与长历史分配优化（2026-11-24 16:42 UTC，c0d205c）
 
 - `44d5dcd` 与 `c0d205c011d3e63d185a8399c21825c09e0bd604` 均推送 `origin/master`。目标镜像保留精确 DeepSeek Chat 的跨供应商工具签名适配和长历史复制优化；同提交通过本地全仓/竞态/vet/构建，不修改线上规则、端点或额度配置。
 - 固定提交 `git archive` 共 985 个文件，从 `/home/ubuntu/project/account-pool-balancer-releases/20261124T163954Z-c0d205c/` 构建，未改旧工作树。构建 **16:39:54.474–16:40:59.839 UTC**；镜像 `account-pool-balancer:release-c0d205c-20261124T163954Z`，OCI revision `c0d205c`，ID `sha256:926c43c5aa89b9b226afa764a6e1f3ec711c29bccab64a2c87624aa7eb6dda23`。
