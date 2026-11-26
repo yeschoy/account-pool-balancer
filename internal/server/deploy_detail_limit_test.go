@@ -91,13 +91,18 @@ func TestDeployDetailBodyLimit(t *testing.T) {
 			e.mu.Unlock()
 			const prefix = `{"model":"native","messages":[{"role":"user","content":"`
 			const suffix = `"}]}`
-			body := prefix + strings.Repeat("p", tc.bodyBytes-len(prefix)-len(suffix)) + suffix
+			const added = `,"cache_preference":64`
+			size := tc.bodyBytes
+			if tc.status != 200 {
+				size -= len(added) // a failed attempt records the wire body, so size that one
+			}
+			body := prefix + strings.Repeat("p", size-len(prefix)-len(suffix)) + suffix
 			rsp, out := e.do(t, "/v1/chat/completions", body, nil)
 			if rsp.StatusCode != tc.status || out != response {
 				t.Fatal("detail limit changed the downstream response")
 			}
 			calls := e.snapshot()
-			if len(calls) != 1 || calls[0].body != body {
+			if len(calls) != 1 || calls[0].body != strings.TrimSuffix(body, "}")+added+"}" {
 				t.Fatal("detail limit changed or replayed the native request")
 			}
 			page, err := e.s.logs.Query("details", map[string]string{"requestId": rsp.Header.Get("X-Request-Id")}, time.Time{}, time.Time{}, 10, 0)
@@ -117,14 +122,18 @@ func TestDeployDetailBodyLimit(t *testing.T) {
 			if err := json.Unmarshal(page.Items[0], &d); err != nil {
 				t.Fatal(err)
 			}
-			if d.RequestBodyBytes != len(body) || d.RequestBodyTruncated != tc.requestCut || d.ResponseBodyTruncated != tc.responseCut {
+			recorded := body
+			if tc.status != 200 {
+				recorded = calls[0].body
+			}
+			if d.RequestBodyBytes != len(recorded) || d.RequestBodyTruncated != tc.requestCut || d.ResponseBodyTruncated != tc.responseCut {
 				t.Fatalf("wrong lengths/truncation: request bytes=%d cut=%t response cut=%t", d.RequestBodyBytes, d.RequestBodyTruncated, d.ResponseBodyTruncated)
 			}
 			limit := capBytes
 			if len(d.RequestBody) > limit+256 || len(d.ResponseBody) > limit+256 {
 				t.Fatal("detail exceeded the body cap including bounded truncation marker")
 			}
-			if !tc.requestCut && (d.RequestBody != body || !json.Valid([]byte(d.RequestBody))) {
+			if !tc.requestCut && (d.RequestBody != recorded || !json.Valid([]byte(d.RequestBody))) {
 				t.Fatal("request within limit was not fully retained")
 			}
 			if !tc.responseCut {

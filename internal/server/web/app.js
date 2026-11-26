@@ -1803,6 +1803,7 @@ async function loadSettings() {
   $('#deploy-base').value = s.deploy?.baseUrl || 'https://api.deploy.com/api/v1';
   $('#deploy-sync').value = s.deploy?.modelSyncSec ?? 600;
   $('#deploy-detail-log').checked = s.deploy?.detailLog === true;
+  $('#deploy-cache-preference').value = s.deploy?.cachePreference ?? 64;
   $('#deploy-quota-note').textContent = s.deploy?.quotaReason || '余额未知；仅绑定推理 Key，未绑定组织控制台会话。';
   $('#quota-settings-title').textContent = isDeploy() ? '模型目录周期检查' : '额度轮询';
   $('#rules-retry-note').textContent = isFactory() ? '独立规则；content_policy_rejected强制停止且不扣健康分，不能用自定义规则绕过。默认权限/计费/429停止轮换；已输出流或发送结果未知不得重放。' : (isDeploy() || isX50()) ? '命中后停止换号，即使错误规则已冷却本号；停用/删除停止规则可允许符合安全条件的换号。未知发送结果或已输出流不能重放。每池独立保存。' : '命中后停止换号；账号冷却/隔离规则优先，已发送或流式输出的安全门不允许重放。错误/重试规则每池独立，上方标签切换';
@@ -1885,7 +1886,11 @@ $('#btn-save-settings').addEventListener('click', async () => {
   }
   if (isALTapi()) body.altapi = { lowBalanceDisable: $('#altapi-low-balance-disable').checked, minBalanceUsd: Number($('#altapi-min-balance').value) };
   if (isX50()) body.x50 = { baseUrl: $('#x50-pool-base').value.trim(), modelSyncSec: Number($('#x50-pool-sync').value), detailLog: $('#x50-pool-detail').checked, requestLog: $('#x50-pool-requests').checked, errorLog: $('#x50-pool-errors').checked };
-  if (isDeploy()) body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked };
+  if (isDeploy()) {
+    const cachePreference = $('#deploy-cache-preference').value.trim() === '' ? NaN : Number($('#deploy-cache-preference').value);
+    if (!Number.isInteger(cachePreference) || cachePreference < 0 || cachePreference > 100000) { toast('缓存优先度须为 0–100000 的整数（0 表示不补）'); return; }
+    body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked, cachePreference };
+  }
   if (isModelStudio()) body.modelStudio = { region: $('#ms-region').value, modelSyncSec: Number($('#ms-sync').value), detailLog: $('#ms-detail-log').checked, planOverrides: (s.modelStudio && s.modelStudio.planOverrides) || {} };
   if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), workspaceQuotaTtlSec: Number($('#mistral-workspace-ttl').value || 0), detailLog: $('#mistral-detail-log').checked,
     bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance) };

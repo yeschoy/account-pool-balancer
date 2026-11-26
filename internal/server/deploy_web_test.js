@@ -48,7 +48,9 @@ vm.runInContext(source.slice(source.indexOf('async function accountAction('), so
   // 重发验证：只有"已注册、未验证、无会话、不在跑"的行才出现按钮
   assert.match(registrationSource, /data-dr-resend=\"/);
   assert.match(registrationSource, /resend-verification/);
-  assert.match(source, /if \(isDeploy\(\)\) body\.deploy =/);
+  assert.match(source, /body\.deploy = \{[^}]*cachePreference/);
+  assert.match(source, /deploy-cache-preference'\)\.value\.trim\(\) === '' \? NaN/);
+  assert.match(html, /id="deploy-cache-preference" type="number" min="0" max="100000"/);
   assert.match(source, /el\.disabled = isDeploy\(\)/);
   console.log('Deploy web tests passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

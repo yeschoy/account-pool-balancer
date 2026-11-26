@@ -798,6 +798,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		body = prepared
 	}
+	if rec.Provider == config.ProviderDeploy && r.URL.Path == "/v1/chat/completions" {
+		body = deployWithCachePreference(body, cfg.Deploy.EffectiveCachePreference())
+	}
 	rec.Model, _ = obj["model"].(string)
 	if gmodel, gstream, ok := factory.ParseGeminiPath(r.URL.Path); ok {
 		// Google puts the model in the path, not the body. It is the routing

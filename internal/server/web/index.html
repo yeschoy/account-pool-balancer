@@ -1431,6 +1431,8 @@
           <label for="deploy-base">API Base（含 /api/v1）</label><input id="deploy-base" placeholder="https://api.deploy.com/api/v1" autocomplete="off">
           <label for="deploy-sync">目录刷新间隔（秒）</label><input id="deploy-sync" type="number" min="0" max="86400">
           <span></span><span class="hint">默认600秒；0关闭周期目录读取，首次及手动刷新仍可用；启用时60–86400秒。可按官方文档手动选定 SF/VA/CDN 根，不自动切换区域或账号代理。</span>
+          <label for="deploy-cache-preference">缓存优先度 cache_preference</label><input id="deploy-cache-preference" type="number" min="0" max="100000" step="1">
+          <span></span><span class="hint">Deploy 官方选节点参数（官方默认 8）：越大越偏向已缓存本对话前缀的节点，越小越偏向低延迟。客户端已传该字段时原样保留；本池默认 64，0 表示不补。2026-11-26 实测相同前缀重复请求：8 有 7–21% 完全未命中，64 为 1/60。</span>
           <label for="deploy-detail-log">本池详情日志</label><label class="check"><input id="deploy-detail-log" type="checkbox">开启</label>
           <span></span><span class="hint">默认关闭，独立于其他池；采集请求/响应头体时沿用凭据/会话脱敏及大小限制，普通请求与错误摘要始终保留。日志保留/容量为全局共享，本池只读，保存不会修改其他池。</span>
         </div>

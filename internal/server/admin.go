@@ -1525,11 +1525,12 @@ type altapiSettings struct {
 }
 
 type deploySettings struct {
-	BaseURL      string `json:"baseUrl"`
-	ModelSyncSec int    `json:"modelSyncSec"`
-	DetailLog    *bool  `json:"detailLog,omitempty"`
-	QuotaState   string `json:"quotaState,omitempty"`
-	QuotaReason  string `json:"quotaReason,omitempty"`
+	BaseURL         string `json:"baseUrl"`
+	ModelSyncSec    int    `json:"modelSyncSec"`
+	DetailLog       *bool  `json:"detailLog,omitempty"`
+	CachePreference *int   `json:"cachePreference,omitempty"`
+	QuotaState      string `json:"quotaState,omitempty"`
+	QuotaReason     string `json:"quotaReason,omitempty"`
 }
 
 // modelStudioSettings is the projection of the Model Studio pool's own
@@ -1579,7 +1580,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		defaults["factoryModels"] = config.DefaultFactoryModels()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":   settingsDoc{Factory: &c.Factory, X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
+		"settings":   settingsDoc{Factory: &c.Factory, X50: &x50Settings{BaseURL: c.X50.BaseURL, ModelSyncSec: c.X50.ModelSyncSec, DetailLog: &c.X50.DetailLog, RequestLog: c.X50.RequestLog, ErrorLog: c.X50.ErrorLog}, Revision: c.Revision, Upstream: c.Upstream, Routing: c.ForProvider(prov).Routing, Quota: c.ForProvider(prov).Quota, Logs: c.Logs, Pricing: c.ForProvider(prov).Pricing, Deploy: &deploySettings{BaseURL: c.Deploy.BaseURL, ModelSyncSec: c.Deploy.ModelSyncSec, DetailLog: &c.Deploy.DetailLog, CachePreference: func() *int { v := c.Deploy.EffectiveCachePreference(); return &v }(), QuotaState: "not-connected", QuotaReason: quota.DeployQuotaReason}, ErrorRules: errRules, RetryRules: retRules, OpenCode: &c.OpenCode, Mistral: &c.Mistral, TokenHarbor: &tokenHarborSettings{BaseURL: c.TokenHarbor.BaseURL, ModelSyncSec: c.TokenHarbor.ModelSyncSec, AccountSyncSec: c.TokenHarbor.AccountSyncSec, DetailLog: &c.TokenHarbor.DetailLog}, ALTAPI: &altapiSettings{BaseURL: c.ALTAPI.BaseURL, QuotaPerUnit: &c.ALTAPI.QuotaPerUnit, ModelSyncSec: &c.ALTAPI.ModelSyncSec, DetailLog: &c.ALTAPI.DetailLog, LowBalanceDisable: &c.ALTAPI.LowBalanceDisable, MinBalanceUSD: &c.ALTAPI.MinBalanceUSD}, ModelStudio: &modelStudioSettings{Region: c.ModelStudio.Region, ModelSyncSec: c.ModelStudio.ModelSyncSec, DetailLog: c.ModelStudio.DetailLog, PlanOverrides: c.ModelStudio.PlanOverrides, Console: modelStudioConsoleView{Enabled: c.ModelStudio.Console.Enabled, Endpoint: c.ModelStudio.Console.Endpoint, State: quota.ModelStudioQuotaNotConnected, Reason: quota.ModelStudioQuotaReason, SubscriptionPath: modelStudioSubscriptionPath}}},
 		"provider":   prov,
 		"strategies": config.Strategies,
 		"defaults":   defaults,
@@ -1669,6 +1670,10 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 				c.Deploy.BaseURL, c.Deploy.ModelSyncSec = in.Deploy.BaseURL, in.Deploy.ModelSyncSec
 				if in.Deploy.DetailLog != nil {
 					c.Deploy.DetailLog = *in.Deploy.DetailLog
+				}
+				if in.Deploy.CachePreference != nil {
+					v := *in.Deploy.CachePreference
+					c.Deploy.CachePreference = &v
 				}
 			}
 			c.Deploy.Routing, c.Deploy.Quota, c.Deploy.Pricing = &in.Routing, &in.Quota, &in.Pricing

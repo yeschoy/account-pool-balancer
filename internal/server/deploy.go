@@ -34,6 +34,27 @@ func deployOverviewFor(views []accountView) *deployOverview {
 	return out
 }
 
+// deployWithCachePreference adds Deploy's node-selection knob when the caller
+// did not choose one. The field is spliced in after the last member, so every
+// byte the client sent is forwarded unchanged. body must be validated JSON.
+func deployWithCachePreference(body []byte, pref int) []byte {
+	if pref <= 0 {
+		return body
+	}
+	o := scanMistralObject(body)
+	if o == nil || o.get("cache_preference") != nil {
+		return body
+	}
+	at, field := o.end, `"cache_preference":`+strconv.Itoa(pref)
+	if n := len(o.fields); n > 0 {
+		at, field = o.fields[n-1].end, ","+field
+	}
+	out := make([]byte, 0, len(body)+len(field))
+	out = append(out, body[:at]...)
+	out = append(out, field...)
+	return append(out, body[at:]...)
+}
+
 const deployTransportPrefix = "\x00deploy:"
 
 // Use the existing transport owner/cache, but with Deploy's connection caps.

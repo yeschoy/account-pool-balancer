@@ -147,7 +147,8 @@ func TestDeployNativeChatAndUnsupportedPaths(t *testing.T) {
 		t.Fatal("native result", rsp.StatusCode, out)
 	}
 	calls := e.snapshot()
-	if len(calls) != 1 || calls[0].path != "/api/v1/chat/completions" || calls[0].body != body || calls[0].auth != "Bearer mock_deploy_secret_1" || calls[0].apiKey != "" {
+	wantBody := strings.TrimSuffix(body, " }") + `,"cache_preference":64 }` // only the documented cache knob is appended
+	if len(calls) != 1 || calls[0].path != "/api/v1/chat/completions" || calls[0].body != wantBody || calls[0].auth != "Bearer mock_deploy_secret_1" || calls[0].apiKey != "" {
 		t.Fatal("native request/root/auth changed")
 	}
 	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/embeddings", "/v1/chat/completions/other", "/v1/models"} {
@@ -420,7 +421,7 @@ func TestDeployNeverStripsToolsOrReplaysUnknownOutcomes(t *testing.T) {
 			body := `{"model":"native","messages":[],"tools":[{"type":"web_search"}]}`
 			rsp, _ := e.do(t, "/v1/chat/completions", body, nil)
 			calls := e.snapshot()
-			if len(calls) != 1 || calls[0].body != body || rsp.StatusCode < 400 {
+			if len(calls) != 1 || calls[0].body != strings.TrimSuffix(body, "}")+`,"cache_preference":64}` || rsp.StatusCode < 400 {
 				t.Fatal("request replayed/rewritten or unknown outcome succeeded")
 			}
 		})

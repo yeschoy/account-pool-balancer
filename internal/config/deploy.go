@@ -13,6 +13,10 @@ const (
 	ProviderDeploy     = "deploy"
 	DeployDefaultBase  = "https://api.deploy.com/api/v1"
 	DeployDefaultModel = "deepseek-ai/deepseek-v4.1-flash-1017"
+	// Deploy's own default is 8. Measured 2026-11-26 on byte-identical 16K/64K
+	// prompts: 8 left 7–21% of repeats uncached, 64 left 1 of 60.
+	DeployDefaultCachePreference = 64
+	DeployMaxCachePreference     = 100000
 )
 
 // Deploy is an explicitly selected opaque-key pool. Its API root includes
@@ -24,6 +28,9 @@ type Deploy struct {
 	ModelSyncSec int             `json:"modelSyncSec"`
 	DetailLog    bool            `json:"detailLog"`
 	Pricing      *pricing.Config `json:"pricing,omitempty"`
+	// CachePreference is sent as Deploy's documented cache_preference when
+	// the caller omits it; nil means the pool default, 0 sends nothing.
+	CachePreference *int `json:"cachePreference,omitempty"`
 }
 
 func DefaultDeploy() Deploy {
@@ -53,6 +60,13 @@ func (d Deploy) EffectiveQuota() Quota {
 	return deployQuotaDefaults
 }
 
+func (d Deploy) EffectiveCachePreference() int {
+	if d.CachePreference == nil {
+		return DeployDefaultCachePreference
+	}
+	return *d.CachePreference
+}
+
 func DefaultDeployPricing() pricing.Config {
 	return pricing.Config{Models: []pricing.Entry{
 		{Model: DeployDefaultModel, Currency: "USD", Input: 0.10, CachedInput: 0.003, Output: 0.35, Note: "Deploy 官方价格表（2026-11-13），仅估算，非账单"},
@@ -78,6 +92,9 @@ func (c *Config) normalizeDeploy() error {
 	}
 	if d.ModelSyncSec != 0 && (d.ModelSyncSec < 60 || d.ModelSyncSec > 86400) {
 		return fmt.Errorf("deploy.modelSyncSec must be 0 or 60–86400")
+	}
+	if p := d.CachePreference; p != nil && (*p < 0 || *p > DeployMaxCachePreference) {
+		return fmt.Errorf("deploy.cachePreference must be 0 (do not send) or 1–%d", DeployMaxCachePreference)
 	}
 	if d.Quota != nil {
 		if err := normalizeQuota(d.Quota); err != nil {

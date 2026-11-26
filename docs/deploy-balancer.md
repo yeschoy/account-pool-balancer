@@ -17,7 +17,12 @@
 - `GET /v1/models`
 - `POST /v1/chat/completions`（原生非流式/SSE）
 
-NewAPI渠道选OpenAI，Base填Balancer地址（不要填上游`/api/v1`），使用Deploy分组下游密钥。Responses、Messages、Embeddings及未知路径本地拒绝，不隐式转换协议。不重编码原生请求，不删除工具，不改模型ID或伪造reasoning/缓存读数。
+NewAPI渠道选OpenAI，Base填Balancer地址（不要填上游`/api/v1`），使用Deploy分组下游密钥。Responses、Messages、Embeddings及未知路径本地拒绝，不隐式转换协议。不重编码原生请求，不删除工具，不改模型ID或伪造reasoning/缓存读数。唯一的出站补充是下面的 `cache_preference`。
+
+### 缓存优先度 `cache_preference`
+Deploy 官方模型参数（[DeepSeek-V4.1-Flash-1017](https://docs.deploy.com/deepseek-v4-1-flash-1017.md)）：整数，官方默认 8，越大越偏向已缓存更多输入前缀的节点，越小越偏向低延迟。设置页「缓存优先度」默认 64；客户端已传该顶层字段（含 null）时原样保留，0 表示不补。补充时只把 `,"cache_preference":N` 插在最后一个字段之后，其余字节不变；同一请求的各次尝试发送相同正文，失败尝试详情记录实际发出的正文。
+
+2026-11-26 OVH 直连实测（字节相同的长前缀，重复请求的完全未命中次数）：16K token 前缀时默认 8 为 7/33、64 为 1/33、1000 为 0/33；64K token 前缀时 8 为 2/27，16/32/64/128 均为 0/27。命中请求的延迟中位数在 16–64 之间没有明显变化，128 的尾延迟变差。同一 Key 下 `X-Affinity`、`Session_id`/`X-Session-Id`/`X-Session-Affinity`、正文 `prompt_cache_key`、`user` 均不改变未命中率（13–21%，与不带时相当）；锁定 SF/VA 区域也无改善。缓存跨账号共享（A 预热后 B 首次即命中），空闲约 10 分钟内大多保留，15 分钟后全部失效，后者无法由请求参数改变。
 
 批量导入每行：
 ```text

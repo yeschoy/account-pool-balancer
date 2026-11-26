@@ -6,7 +6,8 @@
 ## 2. Signatures
 - `config.ProviderDeploy="deploy"`; 保留默认分组`deploy`。
 - `Config.ForProvider("deploy")`, `RulesFor`, `RuntimeBase`, `NativeBindingSource`；`Deploy.EffectiveRouting/Quota/Pricing`。
-- `GET/PUT /api/settings?provider=deploy`：顶层routing/quota/pricing/errorRules/retryRules，deploy对象含baseUrl/modelSyncSec/detailLog。
+- `GET/PUT /api/settings?provider=deploy`：顶层routing/quota/pricing/errorRules/retryRules，deploy对象含baseUrl/modelSyncSec/detailLog/cachePreference（GET返回生效值）。
+- `Deploy.CachePreference *int`、`EffectiveCachePreference()`：nil=64，0=不发送，1–100000。
 - 复用`/api/accounts` CRUD/import、`/api/accounts/{id}/test`、`/refresh-quota`，以及client/import Key管理。
 - 下游仅`GET /v1/models`、`POST /v1/chat/completions`。其他协议/方法/子路径本地拒绝。
 
@@ -22,7 +23,7 @@ Deploy独立Routing/Quota/ModelSyncSec/DetailLog/Pricing/ErrorRules/RetryRules�
 目录200不证明Key已active或推理授权。当前推理Secret无官方余额查询契约，组织credit需另绑portal会话，本次未绑定。账号`deploy.{quotaState:"not-connected",quotaReason,catalogState,catalogFresh,catalogAt,catalogError,models}`；quotaFresh=false。手动刷新成功返回`{ok:true,catalogRefreshed:true,quotaRefreshed:false,message,diagnosis}`；失败不能toast额度已刷新。不从目录、促销、402/405伪造金额，也不多Key累计共享组织余额。
 
 ### 推理、错误与日志
-原生Chat/SSE不重编码、不别名化模型、不删除工具、不补假reasoning或缓存读数。默认测试模型`deepseek-ai/deepseek-v4.1-flash-1017`，保留手填；真实测试max_tokens=256含reasoning，content=null不等同鉴权失败。
+原生Chat/SSE不重编码、不别名化模型、不删除工具、不补假reasoning或缓存读数。唯一例外：客户端未传顶层`cache_preference`时，在最后一个字段后追加`,"cache_preference":N`（N=生效设置，0不追加），其余字节不变，所有尝试同一正文；客户端已传（含null）原样保留。依据：官方参数，2026-11-26实测默认8重复未命中7–21%，64约1/60；X-Affinity/会话头/prompt_cache_key/user均无效。默认测试模型`deepseek-ai/deepseek-v4.1-flash-1017`，保留手填；真实测试max_tokens=256含reasoning，content=null不等同鉴权失败。
 
 405精确组织暂停文案独立识别，可能涉及余额/条款，不证明封禁或零余额。429遵守完整秒数/日期Retry-After，冷却和停止换号均生效。Deploy的stop优先于错误规则的换号建议，但错误动作仍执行；其他池维持原语义。未知发送结果/已提交流输出不能被自定义规则绕过；截断流不计成功、不伪造DONE、不重放。
 
@@ -31,7 +32,7 @@ Deploy独立Routing/Quota/ModelSyncSec/DetailLog/Pricing/ErrorRules/RetryRules�
 ## 4. Validation & Error Matrix
 | 条件 | 结果 |
 |---|---|
-| 非法base/sync、混池分组、funding scope | 拒绝，旧内存和文件不变 |
+| 非法base/sync、cachePreference<0或>100000、混池分组、funding scope | 拒绝，旧内存和文件不变 |
 | 外池导入Key或Deploy批量行试图跨池 | 拒绝，不创建账号 |
 | 目录失败/过期/缺字段/晚返回 | 保留历史并标未知/失败；旧来源不发布 |
 | 目录成功、无portal会话 | catalogFresh可真，quotaFresh仍假，余额未知 |
@@ -52,6 +53,7 @@ Bad：把目录200当Key激活、用注册赠金填余额、把405组织暂停�
 - `internal/quota/deploy*_test.go`：成功/失败保历史、JSON往返、sync0/手动强制、来源迟到/重定向、独立并发预算。
 - `internal/pool/deploy_test.go`：来源/过期/错误目录门禁，无OpenDesign funding污染。
 - `internal/server/deploy_test.go`：原生字节/工具/大整数/Key隔离、路径本地拒绝、规则实际换号与stop、配置磁盘与跨池、导入/auth/CSRF、默认模型与未知余额、详情脱敏/流截断/未知结果不重放/凭据不重定向。
+- `internal/server/deploy_cache_preference_test.go`：原位追加字节、客户端值/null保留、0不发送、设置默认64/保存/重载/非法拒绝、重试各尝试同一正文。
 - `internal/server/deploy_detail_limit_test.go`：1.37MB成功/失败正文完整保留、5MiB边界/超限标记、响应采集预算、共享限额64/128KiB不压低本池预算、详情关闭、凭据与会话脱敏及TH/Mistral仍64KiB；不得用截断预览冒充完整失败请求。
 - `node internal/server/deploy_web_test.js`与真实本地浏览器：入口可见，设置/规则保存刷新核对API/磁盘，未知与错误转义，目录不冒充额度，Mock/真实小额推理严格区分。部署需另行授权。
 
