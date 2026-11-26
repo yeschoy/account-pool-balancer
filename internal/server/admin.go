@@ -919,11 +919,15 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 				apiError(w, http.StatusConflict, errors.New("本次检测未完成，请重新刷新"))
 				return
 			}
-			if q.Mistral.CheckedAt.Before(started) {
+			// A read answered from the shared workspace record keeps the reading
+			// key's CheckedAt, which can precede this click. That is a real
+			// answer, not a timeout, so judge the reuse by its own timestamp.
+			fresh := q.FreshMistral(time.Now(), time.Duration(current.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
+			reused := q.Mistral.ReusedFromWorkspace && !q.Mistral.ReusedAt.Before(started)
+			if q.Mistral.CheckedAt.Before(started) && !reused {
 				apiError(w, http.StatusConflict, errors.New("本次检测未完成或等待超时，请稍后重试；旧读数不代表当前额度"))
 				return
 			}
-			fresh := q.FreshMistral(time.Now(), time.Duration(current.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
 			message := "套餐额度未知或过期，请查看检测结果"
 			if fresh {
 				message = "套餐额度已刷新"

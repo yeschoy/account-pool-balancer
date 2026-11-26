@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -289,4 +290,67 @@ func refreshMistralQuota(t *testing.T, e *mistralEnv, id string) (int, string) {
 	w := httptest.NewRecorder()
 	e.s.apiAccountAction(w, r)
 	return w.Code, w.Body.String()
+}
+
+// Two keys of one Mistral workspace share a single budget read. A manual
+// refresh of the second key is answered from that recent read, so its
+// CheckedAt belongs to the key that actually read and precedes the click.
+// That is a real answer: reporting it as "检测未完成或等待超时" told the
+// operator to retry a refresh that had already succeeded.
+func TestMistralRefreshReusesWorkspaceWithoutReportingTimeout(t *testing.T) {
+	s := newMistralWorkspaceServer(t)
+	e := &mistralEnv{s: s}
+	if code, body := refreshMistralQuota(t, e, "w2"); code != 200 {
+		t.Fatalf("sibling refresh failed: %d %s", code, body)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if code, body := refreshMistralQuota(t, e, "w1"); code != 200 {
+		t.Fatalf("first refresh failed: %d %s", code, body)
+	}
+	time.Sleep(80 * time.Millisecond)
+	// The budget came from the workspace record written moments ago by w2:
+	// CheckedAt did not move, but the refresh completed.
+	code, body := refreshMistralQuota(t, e, "w1")
+	if code == http.StatusConflict || strings.Contains(body, "超时") {
+		t.Fatalf("a workspace reuse is not a timeout: %d %s", code, body)
+	}
+	if got := s.quota.Get("w1"); got == nil || got.Mistral == nil || got.Mistral.Budget == nil {
+		t.Fatal("the reused budget was not recorded")
+	}
+}
+
+// newMistralWorkspaceServer serves Mistral endpoints that report one shared
+// workspace, so two keys exercise the per-workspace reuse.
+func newMistralWorkspaceServer(t *testing.T) *Server {
+	t.Helper()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/vibe/whoami":
+			fmt.Fprint(w, `{"plan_type":"API","plan_name":"FREE","customer_id":"8d8f124d-00aa-4e2a-a80d-fba8dd14d721"}`)
+		case "/v1/billing/subscription":
+			fmt.Fprint(w, `{"plan_name":"Pro","payg_enabled":false,"vibe_payg_enabled":false}`)
+		case "/v1/billing/budget":
+			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":0,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, time.Now().Add(96*time.Hour).Format(time.RFC3339))
+		default:
+			fmt.Fprint(w, `{"object":"list","data":[{"id":"m"}]}`)
+		}
+	}))
+	t.Cleanup(up.Close)
+	s, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.stopPerch(); s.logs.Close() })
+	if _, err := s.cfg.Update(-1, func(c *config.Config) error {
+		c.Quota.Enabled = false
+		c.Mistral.BaseURL = up.URL + "/v1"
+		c.Accounts = []config.Account{
+			{ID: "w1", Provider: config.ProviderMistral, RuntimeKey: "mstrl_ws_1", Enabled: true, MaxConc: 1, Priority: 1},
+			{ID: "w2", Provider: config.ProviderMistral, RuntimeKey: "mstrl_ws_2", Enabled: true, MaxConc: 1, Priority: 2},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

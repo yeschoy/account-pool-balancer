@@ -44,6 +44,15 @@ type MistralState struct {
 	CheckedAt    time.Time            `json:"checkedAt,omitzero"`
 	Error        string               `json:"error,omitempty"`
 	Failures     int                  `json:"failures,omitempty"`
+	// ReusedFromWorkspace records that the most recent read for this key was
+	// answered from the shared workspace record instead of by spending the
+	// three upstream requests. CheckedAt then belongs to the key that actually
+	// read, so it can precede a manual refresh and must not be read as a
+	// timeout. In memory only: after a restart the next read establishes it.
+	ReusedFromWorkspace bool `json:"-"`
+	// ReusedAt is when the reuse happened, i.e. when the workspace read was
+	// adopted. It is newer than CheckedAt and proves the refresh did run.
+	ReusedAt time.Time `json:"-"`
 }
 
 type MistralBudget struct {
@@ -248,6 +257,9 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 	if s.Mistral != nil && s.Mistral.Source == source {
 		if p.workspaceFreshFor(a.ID, cfg, source, s.Mistral.CheckedAt, now) {
 			s.NextAt = schedule(now.Add(interval))
+			// The budget came from a sibling's recent read; CheckedAt stays
+			// with that read, so record that this refresh was answered here.
+			s.Mistral.ReusedFromWorkspace, s.Mistral.ReusedAt = true, now
 			p.store(a.ID, s)
 			return catalogErr
 		}
@@ -258,6 +270,8 @@ func (p *Poller) fetchMistral(ctx context.Context, cfg *config.Config, a config.
 			s.Mistral = &MistralState{Source: source}
 		}
 		s.Mistral.CheckedAt, s.Mistral.Error = now, err.Error()
+		// A failed read is this key's own attempt, not an adopted result.
+		s.Mistral.ReusedFromWorkspace, s.Mistral.ReusedAt = false, time.Time{}
 		s.LastError, s.LastErrorAt = err.Error(), now
 		s.Mistral.Failures++
 		s.Failures = max(s.Failures, s.Mistral.Failures)
