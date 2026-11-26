@@ -38,7 +38,17 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Mistral 刷新失败不再冒充“账号来源已变化”（2026-11-26 14:03 UTC，9570e78）
+## 当前部署：Mistral 复用同工作区额度不再被判超时（2026-11-26 15:51 UTC，488aa6b）
+
+- 现场：`9570e78` 上线后，刷新 `kevin-11.26-02-vibe-花钱` 弹出「本次检测未完成或等待超时，请稍后重试；旧读数不代表当前额度」，但同一行已显示真实额度 Vibe USD 300。线上快照显示两把 Key 同属 org `8d8f124d`，`studio.checkedAt=23:28:58`、`vibe.checkedAt=23:38:59`，相隔整 10 分钟（`workspaceQuotaTtlSec` 默认 600）。
+- 根因：Mistral 预算属于工作区，`fetchMistral` 在 `workspaceFreshFor` 命中时直接用兄弟 Key 的近期读数作答（`3eebe98` 的工作区合并），**不推进 `CheckedAt`**（时间戳属于真正读取的 Key）。而 handler 用 `CheckedAt >= started` 判定"本次检测完成"，于是复用被误判成超时。`9570e78` 只是把错误分类拆开，没有处理这条复用路径。
+- `488aa6b`：`MistralState` 增加**仅内存**的 `ReusedFromWorkspace`/`ReusedAt`（`json:"-"`，不落盘、不影响持久化格式），复用路径写入、本 Key 真实读取或失败时清除；handler 对「复用且 `ReusedAt` 不早于本次请求」放行，真正没完成的读取仍报超时。新增 `TestMistralRefreshReusesWorkspaceWithoutReportingTimeout`（构造同 org 双 Key，含 `customer_id` 的 mock whoami）。本地复现：修复前 `409 本次检测未完成或等待超时`，修复后 `200 套餐额度已刷新`。全仓 `go test ./...`、`go vet ./...`、`go test -race ./internal/server ./internal/quota` 通过。
+- 干净 `git archive` 986 文件，**15:50:24.384–15:50:32.162 UTC** 构建镜像 `account-pool-balancer:release-488aa6b-20261126T154958Z`（`sha256:dd6f628c…`）。一致备份 `data.tgz` 104,729,237 字节（`gzip -t` 通过）。**15:51:08.612** 切换，**15:51:09.262** 启动，**15:51:39.417** Docker healthy（0 重启、非 OOM、1000:1000、8GiB），`opendesign-balancer` 别名保留。健康等待不计停机。
+- 验收：`new-api` 容器到两个内网别名 `/healthz` 均 `{"ok":true}`，宿主机 200；`config.json` 字节不变（`441112ac…`），`revision 6985`、329 账号、20 下游 Key、329 条额度快照保留；截图涉及的两个号额度仍在（studio `29.997 USD`、vibe `300 USD`），出口 `167.114.158.4:21000` 复测 `TLS_OK`。
+- 镜像 `account-pool-balancer:release-488aa6b-20261126T154958Z`；回退 `account-pool-balancer:rollback-20261126T154958Z`（= `9570e78`），只切 image。release `/home/ubuntu/project/account-pool-balancer-releases/20261126T154958Z-488aa6b/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261126T154958Z-mistral-reuse-488aa6b/`。
+- 未做：管理员接口需登录，本轮仍**没有用凭据做浏览器端点击验收**；功能结论来自同一份代码的自动化复现（同 org 双 Key、复用窗口）。这 6 个号只有 `API` Key 拿 30 USD、缺 `CHAT`(Vibe) Key 的问题仍未处理。
+
+## 前次部署：Mistral 刷新失败不再冒充“账号来源已变化”（2026-11-26 14:03 UTC，9570e78）
 
 - 现场：2026-11-26 新增的 6 个 Mistral 号（`kevin-11.26-*`）绑定 `51.222.52.200/.201/.202:1080`，该出口能完成 SOCKS 认证但到 Mistral 的 TLS 握手超时（容器内实测 `handshake operation timed out`）。推理侧 12:24–12:36 共 14 次全部 502 `errorCategory=network`，每次两发 15s；额度侧 `mistral.error=Mistral 账号类型读取失败: network error`、`authFailed=false`。12:37/12:38 池子自动切到 `167.114.158.4:21000` 后恢复 200，额度也全部回到 `lastError=None`。
 - 代码问题：`admin.go` 的 Mistral 刷新分支把 5 个判断（来源变化 / 快照缺失 / 额度块缺失 / Source 不匹配 / CheckedAt 过期）合成一个 409「账号来源已变化或本次检测未完成」。网络读失败会写入 `CheckedAt` 和 `Error`（首次失败还会把 `Source` 写成当前值），因此读失败被报成"账号被改过"。实测确认：只有刷新进行中修改 key/代理/BaseURL 才会真正命中 409。
