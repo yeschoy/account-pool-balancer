@@ -197,3 +197,96 @@ func TestMistralRefreshPermissionDoesNotReportSuccess(t *testing.T) {
 		t.Fatalf("permission failure not isolated: %s", w.Body)
 	}
 }
+
+// A refresh that reaches the upstream but gets nothing back reports the failed
+// read. It must not be described as a changed account: an unreachable egress
+// leaves the Key intact, and calling it "账号来源已变化" sent the operator
+// looking for an edit nobody made.
+func TestMistralRefreshReportsUnreachableUpstream(t *testing.T) {
+	e := newMistralEnv(t)
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.BaseURL = deadURL + "/v1"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := refreshMistralQuota(t, e, "m1")
+	var payload map[string]any
+	if json.Unmarshal([]byte(body), &payload) != nil {
+		t.Fatalf("invalid body: %s", body)
+	}
+	msg, _ := payload["message"].(string)
+	if code == http.StatusConflict {
+		t.Fatalf("an unreachable upstream is not a changed account: %d %s", code, body)
+	}
+	if !strings.Contains(msg, "上游不可达") || strings.Contains(msg, "来源已变化") {
+		t.Fatalf("the failure reason is missing: %d %s", code, body)
+	}
+	if q := e.s.quota.Get("m1"); q == nil || q.Mistral == nil || q.Mistral.Error == "" || q.AuthFailed {
+		t.Fatalf("the failed read was not recorded honestly: %+v", q)
+	}
+}
+
+// Only an actual edit of the binding is answered as 账号来源已变化.
+func TestMistralRefreshNamesBindingChange(t *testing.T) {
+	e := newMistralEnv(t)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(slow.Close)
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.BaseURL = slow.URL + "/v1"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Change the proxy while the refresh is in flight: the binding moves under
+	// the read, so the store discards it and the operator is told to refresh.
+	changed := make(chan struct{})
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		_, _ = e.s.cfg.Update(-1, func(c *config.Config) error {
+			c.Accounts[0].ProxyURL = "socks5://u:p@127.0.0.1:9"
+			return nil
+		})
+		close(changed)
+	}()
+	code, body := refreshMistralQuota(t, e, "m1")
+	<-changed
+	if code != http.StatusConflict || !strings.Contains(body, "账号来源已变化") {
+		t.Fatalf("a mid-read edit must be reported as a binding change: %d %s", code, body)
+	}
+}
+
+// The egress label names the route without echoing the proxy credential, which
+// lives in the URL's userinfo and must never reach the browser.
+func TestMistralEgressLabelHidesCredential(t *testing.T) {
+	cases := map[string]string{
+		"":    "直连",
+		"   ": "直连",
+		"socks5://proxyuser:s3cret@51.222.52.200:1080": "经代理 51.222.52.200:1080",
+		"http://198.51.100.7:8080":                     "经代理 198.51.100.7:8080",
+	}
+	for in, want := range cases {
+		got := mistralEgressLabel(in)
+		if got != want {
+			t.Fatalf("label(%q) = %q, want %q", in, got, want)
+		}
+		if strings.Contains(got, "s3cret") || strings.Contains(got, "proxyuser") {
+			t.Fatalf("label(%q) leaked the credential: %q", in, got)
+		}
+	}
+}
+
+func refreshMistralQuota(t *testing.T, e *mistralEnv, id string) (int, string) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/"+id+"/refresh-quota", nil)
+	r.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	e.s.apiAccountAction(w, r)
+	return w.Code, w.Body.String()
+}

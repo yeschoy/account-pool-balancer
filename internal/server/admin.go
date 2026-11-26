@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -158,6 +159,19 @@ func readBody(r *http.Request, v any) error {
 
 func apiError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// mistralEgressLabel names the route a quota read used without echoing the
+// proxy credential, which lives in the URL's userinfo.
+func mistralEgressLabel(proxyURL string) string {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return "直连"
+	}
+	if u, err := url.Parse(proxyURL); err == nil && u.Host != "" {
+		return "经代理 " + u.Host
+	}
+	return "经代理"
 }
 
 func (s *Server) configError(w http.ResponseWriter, err error) {
@@ -879,8 +893,34 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 			current := s.cfg.Get()
 			next, exists := current.Account(id)
 			q := s.quota.Get(id)
-			if !exists || quota.ResponseBindingSource(cfg, a) != quota.ResponseBindingSource(current, next) || q == nil || q.Mistral == nil || q.Mistral.Source != quota.ResponseBindingSource(current, next) || q.Mistral.CheckedAt.Before(started) {
-				apiError(w, http.StatusConflict, errors.New("账号来源已变化或本次检测未完成，请重新刷新"))
+			// A failed read and a changed key are different answers. The read
+			// writes CheckedAt and Error but leaves Mistral.Source empty, so
+			// folding every branch into one 409 told an operator whose egress
+			// had timed out that the account had been changed underneath them.
+			if !exists || quota.ResponseBindingSource(cfg, a) != quota.ResponseBindingSource(current, next) {
+				apiError(w, http.StatusConflict, errors.New("账号来源已变化（运行密钥 / 代理 / BaseURL 被修改），请重新刷新"))
+				return
+			}
+			source := quota.ResponseBindingSource(current, next)
+			if q == nil || q.Mistral == nil || q.Mistral.Source != source {
+				if q != nil && q.Mistral != nil && q.Mistral.Error != "" {
+					// The refresh ran and reached the upstream; it just got nothing
+					// back. Say which part failed instead of blaming the binding.
+					status, message := http.StatusBadGateway, "额度刷新失败："+q.Mistral.Error
+					if q.Mistral.Error == "Mistral 账号类型读取失败: network error" {
+						message = "额度刷新失败：上游不可达（" + mistralEgressLabel(a.ProxyURL) + "）。账号 Key 未失效，请先检测出口或更换代理后重试"
+						if q.CatalogError == "" {
+							status = http.StatusServiceUnavailable
+						}
+					}
+					apiError(w, status, errors.New(message))
+					return
+				}
+				apiError(w, http.StatusConflict, errors.New("本次检测未完成，请重新刷新"))
+				return
+			}
+			if q.Mistral.CheckedAt.Before(started) {
+				apiError(w, http.StatusConflict, errors.New("本次检测未完成或等待超时，请稍后重试；旧读数不代表当前额度"))
 				return
 			}
 			fresh := q.FreshMistral(time.Now(), time.Duration(current.ForProvider(a.Provider).Quota.StaleSec)*time.Second)
@@ -892,6 +932,11 @@ func (s *Server) apiAccountAction(w http.ResponseWriter, r *http.Request) {
 				}
 			} else if q.Mistral.Error != "" {
 				message = q.Mistral.Error
+				if q.Mistral.Error == "Mistral 账号类型读取失败: network error" {
+					// The egress never reached the upstream: the Key is intact and
+					// the operator's next move is the route, not the account.
+					message = "额度刷新失败：上游不可达（" + mistralEgressLabel(a.ProxyURL) + "）。账号 Key 未失效，请先检测出口或更换代理后重试"
+				}
 			}
 			s.metaDirty.Store(true)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": fresh, "quotaRefreshed": fresh, "message": message})
