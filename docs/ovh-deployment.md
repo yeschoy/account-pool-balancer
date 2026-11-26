@@ -38,7 +38,18 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
-## 当前部署：Deploy 默认发送 cache_preference（2026-11-26 08:23 UTC，4bf1f15）
+## 当前部署：Mistral 刷新失败不再冒充“账号来源已变化”（2026-11-26 14:03 UTC，9570e78）
+
+- 现场：2026-11-26 新增的 6 个 Mistral 号（`kevin-11.26-*`）绑定 `51.222.52.200/.201/.202:1080`，该出口能完成 SOCKS 认证但到 Mistral 的 TLS 握手超时（容器内实测 `handshake operation timed out`）。推理侧 12:24–12:36 共 14 次全部 502 `errorCategory=network`，每次两发 15s；额度侧 `mistral.error=Mistral 账号类型读取失败: network error`、`authFailed=false`。12:37/12:38 池子自动切到 `167.114.158.4:21000` 后恢复 200，额度也全部回到 `lastError=None`。
+- 代码问题：`admin.go` 的 Mistral 刷新分支把 5 个判断（来源变化 / 快照缺失 / 额度块缺失 / Source 不匹配 / CheckedAt 过期）合成一个 409「账号来源已变化或本次检测未完成」。网络读失败会写入 `CheckedAt` 和 `Error`（首次失败还会把 `Source` 写成当前值），因此读失败被报成"账号被改过"。实测确认：只有刷新进行中修改 key/代理/BaseURL 才会真正命中 409。
+- `9570e78`：拆开回答——真正来源变化才回 409 并指明"运行密钥 / 代理 / BaseURL 被修改"；读到了上游但没拿到结果时回报失败原因，网络错误额外给出出口标识（`mistralEgressLabel`，只取 host，**不回显代理用户名密码**）并提示"账号 Key 未失效"；`CheckedAt` 过久单独提示超时。新增 `TestMistralRefreshReportsUnreachableUpstream`、`TestMistralRefreshNamesBindingChange`、`TestMistralEgressLabelHidesCredential`；全仓 `go test ./...`、`go vet ./...`、`go test -race ./internal/server -run TestMistral` 通过。
+- 干净 `git archive` 986 文件，**14:01:59.935–14:03:05.656 UTC** 构建镜像 `account-pool-balancer:release-9570e78-20261126T140120Z`（`sha256:971a8fb7…`）。一致备份 `data.tgz` 103,782,959 字节（`gzip -t` 通过），含 compose/`.env`/`config.json`/`metadata.json`。**14:03:28.765** 切换，**14:03:29.473** 新容器启动，**14:03:59.625** Docker healthy（0 重启、非 OOM、1000:1000、8GiB），`Config.Healthcheck` 存在，`ai-internal` 别名 `opendesign-balancer` 保留。健康等待不计为停机。
+- 验收：`new-api` 容器到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`，宿主机 200。`config.json` 字节不变（`441112ac8ff815cd`），`revision 6985`、329 账号、20 下游 Key、329 条额度快照保留。运行中二进制 `/usr/local/bin/odb` 含新文案。
+- 功能状态：`zxg-07-studio-key` 仍走 `51.222.52.201`，出口复测仍 `handshake operation timed out`；按其真实快照（`network error`、`authFailed=false`）新逻辑会给出「额度刷新失败：上游不可达（经代理 51.222.52.201:1080）。账号 Key 未失效，请先检测出口或更换代理后重试」。**管理员接口需登录，本轮未用凭据调用，因此该条是按代码与快照推演，不是浏览器端到端点击验收。**
+- 镜像 `account-pool-balancer:release-9570e78-20261126T140120Z`；回退 `account-pool-balancer:rollback-20261126T140120Z`（= `4bf1f15`），只切 image，不覆盖线上数据。release `/home/ubuntu/project/account-pool-balancer-releases/20261126T140120Z-9570e78/`；备份 `/home/ubuntu/backups/account-pool-balancer/20261126T140120Z-mistral-refresh-error-9570e78/`。
+- 未修：坏出口 `51.222.52.20x` 本身（属代理侧问题，池子已自动切换）；这 6 个新号只有 `API` Key 拿 30 USD、缺 `CHAT`(Vibe) Key 的 300 USD 额度（另一独立问题，待处理）。
+
+## 前次部署：Deploy 默认发送 cache_preference（2026-11-26 08:23 UTC，4bf1f15）
 
 - Deploy Flash 24h 约 81% token 命中、约 13% 的 ≥20k 输入请求零缓存。直连探针确认 X-Affinity/会话头/`prompt_cache_key`/`user` 无效、缓存跨账号共享；官方 `cache_preference`（默认 8）在同一 16K 提示上 8→64 把未命中从 7/33 降到 1/33。`4bf1f156b34a3bcf5dea0e3a126f17caf1c119cf` 在客户端未带该字段时为 Deploy `/v1/chat/completions` 追加 `cache_preference`（默认 64，设置页可改，0=不发送），客户端自带值不覆盖。线上 `config.json` 未写入该字段，按默认 64 生效。
 - 干净 Git 归档（986 文件）构建 **08:06:40.406–08:06:51.371 UTC**，镜像 `account-pool-balancer:release-4bf1f15-20261126T080640Z`（`sha256:61d00749…`）。Compose 有效配置仅 image 不同。旧实例 **08:23:32.372** 退出，一致备份 **08:23:36.147** 就绪（`data.tgz` 107,438,279 字节，gzip 校验并记录 SHA256）；**08:23:36.150** 切换，**08:23:36.406** 新启动，**08:23:36.708** 首次宿主机健康，**08:24:06.982** Docker healthy（Healthcheck 存在、0 重启、非 OOM、1000:1000、8GiB）。**08:24:07.312** NewAPI 容器到两个内网别名 `/healthz` 均通过；公网 `/healthz` 200。`config.json` 字节不变；未改或重启 NewAPI。健康等待不算停机。
