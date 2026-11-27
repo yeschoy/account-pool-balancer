@@ -37,7 +37,7 @@ func TestMistralOverviewTotalsApiBudgetOnly(t *testing.T) {
 		// a Studio key of another workspace with money left
 		mistralView(t, "s1", "ws-studio", "API", "Pro", "USD", 30, 22.5, 25, true, 24*time.Hour),
 	}
-	o := mistralOverviewFor(views, time.Now())
+	o := mistralOverviewFor(views, time.Now(), false)
 	var chat, studio *mistralWorkspaceView
 	for i := range o.Workspaces {
 		switch o.Workspaces[i].Workspace {
@@ -75,7 +75,7 @@ func TestMistralOverviewTotalsApiBudgetOnly(t *testing.T) {
 // TestMistralOverviewOmitsMissingVibe: a workspace with no Vibe plan is not an
 // error and shows nothing for it, rather than a zero.
 func TestMistralOverviewOmitsMissingVibe(t *testing.T) {
-	o := mistralOverviewFor([]accountView{chatView(t, "a", "ws", "USD", 30, 50, 0, 0, true, time.Hour)}, time.Now())
+	o := mistralOverviewFor([]accountView{chatView(t, "a", "ws", "USD", 30, 50, 0, 0, true, time.Hour)}, time.Now(), false)
 	if len(o.Workspaces) != 1 || o.Workspaces[0].Vibe != nil {
 		t.Fatalf("workspace = %+v", o.Workspaces)
 	}
@@ -223,5 +223,48 @@ func TestMistral402BudgetExhaustedCoolsToReset(t *testing.T) {
 	}
 	if generic == nil {
 		t.Fatal("other 402 no longer uses the generic rule")
+	}
+}
+
+// TestMistralOverviewUsesPayingWindowInPlanKeyMode: the same production shape
+// must be reported as 300 left once the pool sends the Vibe client marker,
+// because that is the window a request then spends. The api window stays
+// visible as the counterpart so the number is never mistaken for it again.
+func TestMistralOverviewUsesPayingWindowInPlanKeyMode(t *testing.T) {
+	views := []accountView{chatView(t, "v1", "ws-chat", "USD", 30, 100, 300, 0, true, 24*time.Hour)}
+
+	off := mistralOverviewFor(views, time.Now(), false)
+	if len(off.Workspaces) != 1 || len(off.Groups) != 1 {
+		t.Fatalf("unexpected shape: %+v", off)
+	}
+	if w := off.Workspaces[0]; w.Budget != "api" || w.Remaining != 0 || w.Vibe == nil || w.Vibe.Remaining != 300 {
+		t.Fatalf("off: workspace = %+v, want 0 api left with vibe shown beside it", w)
+	}
+	if off.Groups[0].Remaining != 0 {
+		t.Fatalf("off total = %v, want 0", off.Groups[0].Remaining)
+	}
+
+	on := mistralOverviewFor(views, time.Now(), true)
+	w := on.Workspaces[0]
+	if w.Budget != "vibe" || w.Remaining != 300 || w.Total != 300 {
+		t.Fatalf("on: workspace = %+v, want the Vibe allowance as the balance", w)
+	}
+	if w.API == nil || w.API.Remaining != 0 {
+		t.Fatalf("on: api counterpart = %+v, want the spent api_budget kept for reference", w.API)
+	}
+	if on.Groups[0].Remaining != 300 {
+		t.Fatalf("on total = %v, want 300", on.Groups[0].Remaining)
+	}
+
+	// A Studio key is unaffected: nothing about it is billed to vibe_budget.
+	studio := []accountView{mistralView(t, "s1", "ws-studio", "API", "Pro", "USD", 30, 22.5, 25, true, 24*time.Hour)}
+	if got := mistralOverviewFor(studio, time.Now(), true); got.Workspaces[0].Budget != "api" || got.Workspaces[0].Remaining != 22.5 {
+		t.Fatalf("studio in plan-key mode = %+v, want api_budget", got.Workspaces[0])
+	}
+
+	// An unread key still contributes nothing rather than a made-up zero.
+	unknown := []accountView{chatView(t, "v9", "ws-unknown", "USD", 30, 100, 300, 0, false, 24*time.Hour)}
+	if got := mistralOverviewFor(unknown, time.Now(), true); got.UnknownAccounts != 1 || len(got.Workspaces) != 0 {
+		t.Fatalf("stale read entered the total: %+v", got)
 	}
 }

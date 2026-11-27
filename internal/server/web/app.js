@@ -762,32 +762,37 @@ function mistralBudgetWindows(o, st) {
   if (!m) return '<p class="muted">额度数据不可用，请刷新后重试。</p>';
   const totals = (m.groups || []).map((g) => {
     const used = g.total > 0 ? (g.used / g.total) * 100 : 0;
-    return `<div class="win"><div class="row"><b>${esc(g.currency)} 号池可用合计剩余（api_budget）</b><span class="muted"><b>${esc(mistralAmount(g.remaining, g.currency))}</b></span></div>`
+    return `<div class="win"><div class="row"><b>${esc(g.currency)} 号池可用合计剩余</b><span class="muted"><b>${esc(mistralAmount(g.remaining, g.currency))}</b></span></div>`
       + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
       + `<div class="acc-sub">总额 ${esc(mistralAmount(g.total, g.currency))} · ${num(g.workspaces)} 个工作区 · ${num(g.accounts)} 个账号共享 · 已用 ${used.toFixed(1)}%</div></div>`;
   }).join('');
   const rows = (m.workspaces || []).map((w) => {
     const used = w.total > 0 ? Math.min(100, Math.max(0, (w.total - w.remaining) / w.total * 100)) : w.usedPercent;
     const flags = [w.mixedTypes ? '<span class="badge warn">同工作区Key类型不一致</span>' : '', w.payg === true ? '<span class="badge">PAYG 已开</span>' : ''].filter(Boolean).join(' ');
-    const vibe = w.vibe
-      ? `<div class="acc-sub" title="${esc(w.vibe.note || MISTRAL_VIBE_NOTE)}">Vibe 预算（仅供查看，不计入合计/排序）约剩余 ${esc(mistralAmount(w.vibe.remaining, w.vibe.currency))} / ${esc(mistralAmount(w.vibe.total, w.vibe.currency))} · 已用 ${esc(num(w.vibe.usedPercent))}% · ${esc(w.vibe.note || MISTRAL_VIBE_NOTE)}</div>`
-      : '';
+    // The other window is shown for reference: which one is a balance is
+    // already decided by w.budget, so this only adds the counterpart number.
+    const isVibe = w.budget === 'vibe';
+    const other = isVibe
+      ? (w.api ? `<div class="acc-sub">对照 api_budget 约剩余 ${esc(mistralAmount(w.api.remaining, w.api.currency))} / ${esc(mistralAmount(w.api.total, w.api.currency))}（计划键模式下号池调用不扣此项）</div>` : '')
+      : (w.vibe ? `<div class="acc-sub" title="${esc(MISTRAL_VIBE_NOTE)}">Vibe 预算约剩余 ${esc(mistralAmount(w.vibe.remaining, w.vibe.currency))} / ${esc(mistralAmount(w.vibe.total, w.vibe.currency))} · ${esc(MISTRAL_VIBE_NOTE)}</div>` : '');
     return `<div class="win"><div class="row"><b>${esc(mistralPlanLabel(w.keyType))} · ${esc(w.plan || '订阅未知')}</b>`
-      + `<span class="muted" title="号池流量按 api_budget 计费">号池可用 剩余约 <b>${esc(mistralAmount(w.remaining, w.currency))}</b> / ${esc(mistralAmount(w.total, w.currency))}</span></div>`
+      + `<span class="muted">${esc(mistralWindowLabel(w.budget))} 剩余约 <b>${esc(mistralAmount(w.remaining, w.currency))}</b> / ${esc(mistralAmount(w.total, w.currency))}</span></div>`
       + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
       + `<div class="acc-sub">已用 ${esc(num(w.usedPercent))}% · 重置 ${esc(fmtTime(w.resetsAt, true))} · ${num(w.accounts)} 个账号 · 检测 ${esc(fmtTime(w.readAt))} ${flags}</div>`
-      + vibe
+      + other
       + `<div class="acc-sub">${esc(w.workspace)}</div></div>`;
   }).join('');
   return (totals || '') + (rows || '<p class="muted">还没有可汇总的预算：请到账号页对账号「刷新额度」。未知不计 0。</p>')
     + `<p class="muted small">${esc(m.unknownRule)} 24h 请求 ${num(st.r)}，成功率 ${st.r && st.r > st.c ? pct(st.s / (st.r - st.c)) : '—'}。</p>`;
 }
 
-// The Vibe allowance is read for reference only: Mistral bills this pool's
-// /v1/chat/completions traffic to api_budget, so vibe_budget never ranks or
-// totals here. Saying so next to the number keeps "300 left" from looking
-// like spendable balance.
-const MISTRAL_VIBE_NOTE = '仅限 Mistral 官方产品，号池调用不扣此项';
+// Which allowance pays depends on the key and on the pool's plan-key mode:
+// without the Vibe client marker a CHAT key's traffic still bills api_budget,
+// with it the same key bills vibe_budget. The backend decides once
+// (quota.MistralState.UsableBudget) and labels the window, so this file only
+// renders what it was told instead of asserting a rule of its own.
+const MISTRAL_VIBE_NOTE = '计划键关闭时此项不计入；开启后号池调用扣此项';
+function mistralWindowLabel(kind) { return kind === 'vibe' ? 'Vibe 预算（vibe_budget）' : kind === 'api' ? '号池可用（api_budget）' : '号池可用'; }
 function mistralQuotaHTML(a) {
   const m = a.quota?.mistral, b = m?.budget;
   const type = m?.keyType === 'API' ? 'Studio API' : m?.keyType === 'CHAT' ? 'Vibe' : 'Key 类型未知';
@@ -803,14 +808,14 @@ function mistralQuotaHTML(a) {
   }
   if (b) {
     const money = (v) => esc(b.currency) + ' ' + Number(v).toFixed(2);
-    text += `<div class="acc-sub" title="号池流量按 api_budget 计费（CHAT / API Key 相同）">${fresh ? '' : '上次'}号池可用（api_budget）约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
+    text += `<div class="acc-sub">${fresh ? '' : '上次'}号池可用（api_budget）约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
     if (!fresh) text += '<div class="acc-sub">当前额度未知/过期，以上历史值不可视为当前余额</div>';
     text += `<div class="acc-sub">PAYG ${b.payg === true ? '官网已开启' : b.payg === false ? '官网未开启' : '状态未知'}（本服务不代改）</div>`;
   } else text += '<div class="acc-sub">套餐额度未知，点击刷新额度读取</div>';
   const v = m?.vibeBudget;
   if (v) {
     const money = (x) => esc(v.currency) + ' ' + Number(x).toFixed(2);
-    text += `<div class="acc-sub" title="${esc(MISTRAL_VIBE_NOTE)}">Vibe 预算（仅供查看，不计入合计/排序）约剩余 ${money(v.remaining)} / ${money(v.total)} · 已用 ${esc(num(v.usedPercent))}% · ${esc(MISTRAL_VIBE_NOTE)}</div>`;
+    text += `<div class="acc-sub" title="${esc(MISTRAL_VIBE_NOTE)}">Vibe 预算约剩余 ${money(v.remaining)} / ${money(v.total)} · 已用 ${esc(num(v.usedPercent))}% · ${esc(MISTRAL_VIBE_NOTE)}</div>`;
   } else if (m?.budget) text += '<div class="acc-sub">Vibe 预算：上游未返回该项（不是 0）</div>';
   if (m?.error) text += `<div class="acc-sub">${esc(m.error)}</div>`;
   if (m?.checkedAt) text += `<div class="acc-sub">检测 ${esc(fmtTime(m.checkedAt))}${m.at ? ' · 上次成功 ' + esc(fmtTime(m.at)) : ''}</div>`;
@@ -2003,7 +2008,7 @@ function mistralOverviewCards(o) {
   const totals = (m.groups || []).map((g) => mistralAmount(g.total, g.currency)).join(' + ');
   const used = (m.groups || []).map((g) => `${g.currency} ${g.total ? ((g.used / g.total) * 100).toFixed(1) : '0.0'}%`).join(' · ');
   return [
-    ['Mistral 总额度剩余', remaining || '未知', `按 api_budget 计（号池实际可用的余额，CHAT/API Key 相同）；vibe_budget 不参与。总额 ${totals || '—'} · ${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
+    ['Mistral 总额度剩余', remaining || '未知', `按「实际扣费的那本账」计：计划键关闭时为 api_budget，开启后 Vibe Key 走 vibe_budget。总额 ${totals || '—'} · ${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
     ['Mistral 额度数据', `${num(m.freshAccounts)} / ${num(m.accounts)}`, `新鲜 / 账号总数 · 未知 ${num(m.unknownAccounts)}；未知不计 0，也不按 Key 重复累加`],
   ];
 }

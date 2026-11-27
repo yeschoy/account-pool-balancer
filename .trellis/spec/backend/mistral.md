@@ -245,3 +245,32 @@ Good：订阅号在 `chat-key` 模式下由号池补上官方客户端的计费�
 
 ### Wrong vs Correct
 Wrong：默认开启、对调用方 metadata 做合并、为「功能完整」放开任意 call_source、把 issue 的消融实验当上游契约、或以本池改动宣称 402 已解决。Correct：默认关闭、只追加缺失字段、值枚举锁定、作用域限定 Chat 与正确 Key 类型、把「本地已实现 / 未部署 / 未对真实上游验证」分开陈述。
+
+## 15. 余额口径跟随实际扣费窗口（2026-11-28）
+
+### Scope / Trigger
+计划键模式开启后，Vibe Key 的 Chat/Responses 记到 `vibe_budget`（实测同 §14）。此前 `api_budget` 被当作唯一余额：界面显示「已用尽 100%」、选号把可用号排后，与实际可用性相反。
+
+### Signatures
+`quota.MistralState.UsableBudget(planKeyForVibe bool) *MistralBudget` 与 `UsableBudgetKind(...) string`（"api"/"vibe"/""）；`config.Mistral.PlanKeyForVibe() bool`；`mistralOverviewFor(views, now, planKeyForVibe bool)`；工作区视图新增 `budget` 与 `api` 对照字段。
+
+### Contracts
+- 判定只此一处：CHAT + 计划键开启 → `vibe_budget`；否则 → `api_budget`；两者都不可用 → nil（未知，不得当 0）。`vibe.Total==0` 不算可用（FREE 计划的 0 额度）。
+- `mistral.budget` 持久化字段含义不变（api 原始读数），判定只在读取侧；不改快照格式，旧数据可直接读。
+- 选号 seat、概览合计、工作区行、账号行、前端标签全部走同一判定，不允许任一处单独硬编码 api_budget。
+- 计划键关闭时，所有输出必须与改动前一致（回归 `TestMistralOverviewTotalsApiBudgetOnly`、`TestMistralChatKeyRanksByApiBudget` 保持通过）。
+
+### Validation & Error Matrix
+| 账号/模式 | 余额 | 另一本 |
+|---|---|---|
+| CHAT + 开启 | vibe_budget | api 作对照，不排序/不合计 |
+| CHAT + 关闭 | api_budget | vibe 作对照 |
+| API + 任意 | api_budget | vibe 作对照 |
+| 类型未知 | api_budget（有则用） | 不猜 CHAT |
+| 未读/过期 | 不参与（未知） | 不参与 |
+
+### Tests Required
+`internal/quota`：`TestMistralUsableBudgetFollowsPayingWindow`（7 组，含 TOTAL=0、未知类型、空状态）。`internal/pool`：`TestMistralVibeKeyRanksByVibeBudgetWhenPlanKeyOn`（同快照开关两态排序相反；Studio 不受影响）。`internal/server`：`TestMistralOverviewUsesPayingWindowInPlanKeyMode`（off=0/on=300、api 对照、Studio 不变、过期不进合计）。`mistral_web_test.js`：两种 verdict 的标题与对照文案互斥。
+
+### Wrong vs Correct
+Wrong：按 Key 类型直接假定 vibe 有钱（Studio Key 与关闭模式下会误判）、把 `vibe_budget` 无条件加进合计、把未知读成 0。Correct：以「谁扣费」为唯一依据、另一本明确标注为对照、未知保持未知。

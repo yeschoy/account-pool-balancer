@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
 )
 
 // mistralOverview summarizes the pool's own budget reads for the overview page.
@@ -17,10 +18,11 @@ import (
 // expired, or whose budget reset already passed contributes nothing and is
 // counted as unknown instead of as zero.
 //
-// Every figure here is api_budget: Mistral charges this pool's /v1/chat/
-// completions traffic to api_budget for Vibe and Studio keys alike, so
-// vibe_budget is the official products' allowance and never enters a total,
-// a percentage or a ranking. It is mirrored as display-only per workspace.
+// Every figure here is the window a request actually spends, chosen once by
+// quota.MistralState.UsableBudget: api_budget normally, and vibe_budget for a
+// Vibe key the pool sends the Vibe client marker for (plan-key mode). Without
+// that marker a CHAT key bills api_budget, so this cannot be decided from the
+// key type alone and must follow the same rule as ranking.
 type mistralOverview struct {
 	// Accounts is the pool's account count these figures cover.
 	Accounts int `json:"accounts"`
@@ -53,10 +55,17 @@ type mistralWorkspaceView struct {
 	ReadAt     time.Time `json:"readAt"`     // last successful budget read
 	CheckedAt  time.Time `json:"checkedAt"`  // last attempt, successful or not
 	MixedTypes bool      `json:"mixedTypes"` // the workspace's keys disagree about key type
-	// Vibe is vibe_budget for reference only. Mistral's official products
-	// spend it and this pool's traffic does not, so it is never added to
-	// Total/Remaining nor used to rank the workspace.
+	// Budget is which window Total/Remaining above describe: "api" or "vibe".
+	// A workspace whose keys are billed to vibe_budget reports the Vibe
+	// allowance as its balance, because that is what a request spends.
+	Budget string `json:"budget,omitempty"`
+	// Vibe is vibe_budget for reference: the paying window when Budget is
+	// "vibe", otherwise the allowance this pool's traffic does not touch.
 	Vibe *mistralVibeView `json:"vibe,omitempty"`
+	// API is api_budget for reference when Budget is "vibe": it is then the
+	// window a request does NOT spend, and showing it next to the real balance
+	// is what used to mislead ("300 left" while the paying account was spent).
+	API *mistralVibeView `json:"api,omitempty"`
 }
 
 // mistralVibeView is one workspace's vibe_budget, shown as display-only.
@@ -83,12 +92,13 @@ type mistralCurrencyTotal struct {
 
 const mistralUnknownRule = "只汇总本服务读取成功且未过期的预算；同一组织多个 Key 共享同一份 api_budget，已按工作区去重。读取失败、过期或重置时间已过的 Key 计为未知，不按 0 计入，也不按 Key 重复累加。合计与排序只用 api_budget：号池调用 /v1/chat/completions 的用量按 Mistral 规定只扣 api_budget，vibe_budget 仅限官方产品，不参与合计。"
 
-func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
+func mistralOverviewFor(views []accountView, now time.Time, planKeyForVibe bool) *mistralOverview {
 	out := &mistralOverview{Workspaces: []mistralWorkspaceView{}, Groups: []mistralCurrencyTotal{}, UnknownRule: mistralUnknownRule}
 	type acc struct {
 		view  accountView
 		fresh bool
 		ws    string
+		kind  string // "api" or "vibe": which window the fresh reading is
 	}
 	var accounts []acc
 	// Keys of one organization may report currency or reset time slightly
@@ -104,12 +114,15 @@ func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
 		// a measured budget also needs a currency and a positive total before
 		// it may join a sum.
 		ok := v.QuotaFresh && v.Quota != nil && v.Quota.Mistral != nil
+		var b *quota.MistralBudget
+		var kind string
 		if ok {
 			m := v.Quota.Mistral
-			b := m.Budget
+			b = m.UsableBudget(planKeyForVibe)
 			ok = m.Error == "" && b != nil && b.Currency != "" && b.Total >= 0 && b.Remaining >= 0
+			kind = m.UsableBudgetKind(planKeyForVibe)
 		}
-		a := acc{view: v, fresh: ok}
+		a := acc{view: v, fresh: ok, kind: kind}
 		if ok {
 			a.ws = v.Quota.WorkspaceID
 			if a.ws == "" {
@@ -129,7 +142,7 @@ func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
 			continue
 		}
 		m := a.view.Quota.Mistral
-		b := m.Budget
+		b := m.UsableBudget(planKeyForVibe)
 		w := byWS[a.ws]
 		if w == nil {
 			w = &mistralWorkspaceView{Workspace: a.ws, KeyType: m.KeyType, Plan: m.Plan, Currency: b.Currency,
@@ -155,9 +168,20 @@ func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
 				w.Vibe.ResetsAt = v.ResetsAt
 			}
 		}
+		// When the paying window is vibe_budget, the api_budget beside it is the
+		// one a request does NOT spend; keeping it visible is what prevents the
+		// old "300 left" reading of a spent account.
+		if a.kind == "vibe" && w.API == nil {
+			if ab := m.Budget; ab != nil && ab.Currency != "" {
+				w.API = &mistralVibeView{Currency: ab.Currency, ResetsAt: ab.ResetsAt, Note: "计划键模式下号池调用不扣此项", Total: ab.Total, Remaining: ab.Remaining, UsedPct: ab.UsedPercent}
+			}
+		}
 		w.Accounts++
 		if m.KeyType != "" && w.KeyType != "" && m.KeyType != w.KeyType {
 			w.MixedTypes = true
+		}
+		if w.Budget == "" || a.kind > w.Budget { // a workspace reporting both windows says so
+			w.Budget = a.kind
 		}
 		if b.Currency > w.Currency { // one currency per workspace; keep a stable, non-empty one
 			w.Currency = b.Currency

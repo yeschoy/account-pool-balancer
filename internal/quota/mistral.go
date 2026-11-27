@@ -125,6 +125,47 @@ func (m *MistralState) clone() *MistralState {
 	return &c
 }
 
+// UsableBudget is the allowance this pool's traffic actually draws on, given
+// the key type the workspace reported and whether the pool sends the Vibe
+// client marker (the plan-key mode).
+//
+// A Vibe (CHAT) key with that marker on is billed to vibe_budget — measured
+// 2026-11-28: a CHAT key whose api_budget was 100% spent returned 200 and moved
+// vibe_budget by 5e-6% while api_budget stayed put. So for those keys api_budget
+// says nothing about what is left, and ranking or totalling it would make a
+// usable account look empty.
+//
+// It returns nil when neither window is a usable reading, which callers must
+// surface as unknown rather than as zero: an unread or stale key is not a
+// spent one.
+func (m *MistralState) UsableBudget(planKeyForVibe bool) *MistralBudget {
+	if m == nil {
+		return nil
+	}
+	api, vibe := m.Budget, m.VibeBudget
+	if planKeyForVibe && m.KeyType == "CHAT" && vibe != nil && vibe.Currency != "" && vibe.Total > 0 {
+		return vibe
+	}
+	if api != nil && api.Currency != "" && api.Total > 0 {
+		return api
+	}
+	return nil
+}
+
+// UsableBudgetKind names the window UsableBudget picked, so a view can say
+// which allowance its number describes instead of implying api_budget.
+func (m *MistralState) UsableBudgetKind(planKeyForVibe bool) string {
+	b := m.UsableBudget(planKeyForVibe)
+	switch {
+	case b == nil:
+		return ""
+	case planKeyForVibe && m.KeyType == "CHAT" && b == m.VibeBudget:
+		return "vibe"
+	default:
+		return "api"
+	}
+}
+
 // ApiBudgetReset is when the workspace's api_budget resets, or the zero time
 // when no usable read holds one. It is the deadline a
 // billing_api_budget_exhausted (402/2303) refusal lasts until.

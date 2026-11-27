@@ -34,7 +34,7 @@ func TestMistralOverviewDedupesWorkspaces(t *testing.T) {
 		// an unreadable key must not become zero
 		{ID: "d", Provider: config.ProviderMistral, Quota: nil, QuotaFresh: false},
 	}
-	o := mistralOverviewFor(views, time.Now())
+	o := mistralOverviewFor(views, time.Now(), false)
 	if o.Accounts != 4 || o.FreshAccounts != 3 || o.UnknownAccounts != 1 {
 		t.Fatalf("counts = %d/%d/%d", o.Accounts, o.FreshAccounts, o.UnknownAccounts)
 	}
@@ -68,7 +68,7 @@ func TestMistralOverviewExcludesStaleAndUnknownKeys(t *testing.T) {
 	stale := mistralView(t, "a", "ws-1", "API", "", "USD", 100, 100, 0, false, 24*time.Hour)
 	nobudget := accountView{ID: "b", Provider: config.ProviderMistral, QuotaFresh: true, Quota: &quota.Snapshot{Mistral: &quota.MistralState{KeyType: "API"}}}
 	other := accountView{ID: "c", Provider: config.ProviderModal, QuotaFresh: true}
-	o := mistralOverviewFor([]accountView{stale, nobudget, other}, time.Now())
+	o := mistralOverviewFor([]accountView{stale, nobudget, other}, time.Now(), false)
 	if o.Accounts != 2 || o.FreshAccounts != 0 || o.UnknownAccounts != 2 {
 		t.Fatalf("counts = %+v", o)
 	}
@@ -80,7 +80,7 @@ func TestMistralOverviewExcludesStaleAndUnknownKeys(t *testing.T) {
 func TestMistralOverviewUnnamedWorkspaceIsNotMerged(t *testing.T) {
 	a := mistralView(t, "k1", "", "API", "", "USD", 10, 5, 50, true, time.Hour)
 	b := mistralView(t, "k2", "", "API", "", "USD", 20, 20, 0, true, time.Hour)
-	o := mistralOverviewFor([]accountView{a, b}, time.Now())
+	o := mistralOverviewFor([]accountView{a, b}, time.Now(), false)
 	if len(o.Workspaces) != 2 {
 		t.Fatalf("unnamed keys merged into one workspace: %+v", o.Workspaces)
 	}
@@ -91,7 +91,7 @@ func TestMistralOverviewUnnamedWorkspaceIsNotMerged(t *testing.T) {
 
 func TestMistralOverviewIsNilForOtherPools(t *testing.T) {
 	views := []accountView{mistralView(t, "a", "ws", "API", "", "USD", 1, 1, 0, true, time.Hour)}
-	if o := mistralOverviewFor(nil, time.Now()); o.Accounts != 0 || o.Groups == nil || o.Workspaces == nil {
+	if o := mistralOverviewFor(nil, time.Now(), false); o.Accounts != 0 || o.Groups == nil || o.Workspaces == nil {
 		t.Fatalf("empty pool must render as empty, not null: %+v", o)
 	}
 	_ = views

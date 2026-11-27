@@ -215,6 +215,26 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 - `GET https://api.mistral.ai/v1/billing/subscription`：读取 `plan_name`、`payg_enabled`、`vibe_payg_enabled` 等套餐信息，不是剩余额度本身。
 - `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。**两项预算对 Studio 和 Vibe Key 都会返回，但号池一律取 `api_budget`**：Mistral 规定第三方工具或网关调用 `/v1/chat/completions` 的用量只计入 `api_budget`（[官方订阅说明](https://docs.mistral.ai/admin/billing-usage/subscriptions#included-monthly-usage)），`vibe_budget` 只供 Mistral 官方产品（Vibe CLI/Web）使用。剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
 
+### 余额口径随计划键模式切换（2026-11-28，已实现未部署）
+
+上一条「号池可用余额是 api_budget」在**计划键关闭时**成立：不带 `metadata.call_source` 的请求确实只扣 `api_budget`。开启计划键后，Vibe Key 的请求改扣 `vibe_budget`（2026-11-28 实测：带标记的 5 次 Chat 让 vibe 从 1e-6% 到 6e-6%，api 不动），此时再把 `api_budget` 当余额就是错的——界面会让一个能用的号显示「已用尽 100%」，选号也会把可用号排到最后。
+
+现契约（`quota.MistralState.UsableBudget` 是唯一判定，选号/概览/前端都走它）：
+
+| 账号 | 计划键 | 余额取哪本 | 另一本 |
+|---|---|---|---|
+| CHAT（Vibe） | 开启 | `vibe_budget` | `api_budget` 作为「对照」显示，不参与排序/合计 |
+| CHAT（Vibe） | 关闭 | `api_budget` | `vibe_budget` 作为对照显示 |
+| API（Studio） | 任意 | `api_budget` | `vibe_budget` 对照 |
+| 类型未知/未读 | — | `api_budget`（有就读） | 维持原规则，不按 CHAT 猜 |
+
+- `mistral.budget`（快照里的字段）**保持**为 api_budget，作为原始读数；判定只在读取侧做，不改持久化格式，旧快照仍可读。
+- 概览「合计剩余」用实际扣费那本账；工作区行新增 `budget: "api" | "vibe"`，前端据此渲染标签（`号池可用（api_budget）` 或 `Vibe 预算（vibe_budget）`），并显示另一本作为对照。切换模式后同一份快照会得到不同合计，这是预期，不是数据错误。
+- 选号（smart / least-used / pace）同样按实际扣费那本账排；计划键关闭时行为与旧版完全一致。
+- 未知/过期仍不计 0，不伪造余额。
+
+**未做**：未部署；未用真实流量核对切换模式后概览数字与上游实际扣费是否一致（需部署后用 kevin 的 Vibe 号观察一轮）。若上游以后又改计费归属，`UsableBudget` 是唯一要改的地方。
+
 ### 号池可用余额是 api_budget（2026-11-27 生产确认）
 
 `kevin-11.26` 的三把 CHAT（Vibe）Key 实测 `GET /v1/billing/budget` 返回 `vibe_budget` 300 USD / 已用 0%，而 `api_budget` 30 USD / 已用 100%，推理请求全部返回 `402 {"type":"billing_api_budget_exhausted","code":"2303"}`。旧实现按「CHAT 取 vibe_budget」显示，于是界面写「剩 300」、选号排序和概览合计也按 300 计算，与实际不符。

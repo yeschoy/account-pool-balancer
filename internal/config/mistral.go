@@ -76,6 +76,15 @@ func (m Mistral) EffectiveChatMetadata() (MistralChatMetadata, bool) {
 	return *c, true
 }
 
+// PlanKeyForVibe reports whether the pool sends the Vibe client marker to
+// Chat/Responses with Vibe keys, i.e. whether a CHAT key's usage is billed to
+// vibe_budget rather than api_budget. Ranking, totals and the console read this
+// one function so they cannot disagree about which window is the real balance.
+func (m Mistral) PlanKeyForVibe() bool {
+	_, on := m.EffectiveChatMetadata()
+	return on
+}
+
 // chatMetadataError validates a submitted template. It is separate from
 // normalization so a bad value is reported to the administrator rather than
 // silently reset to off.

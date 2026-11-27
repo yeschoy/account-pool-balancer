@@ -2133,7 +2133,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {
 	bindingLimit, bindingIndependent := s.pool.BindingCapacityFor(want)
 	var mistralView *mistralOverview
 	if want == config.ProviderMistral {
-		mistralView = mistralOverviewFor(views, now)
+		mistralView = mistralOverviewFor(views, now, cfg.Mistral.PlanKeyForVibe())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"go":                      goView,

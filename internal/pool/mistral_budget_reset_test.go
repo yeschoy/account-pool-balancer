@@ -259,3 +259,52 @@ func (p *Pool) SeatForTest(cfg *config.Config, a config.Account, model string, n
 	defer p.mu.Unlock()
 	return p.seatLocked(cfg, a, model, now)
 }
+
+// With the plan-key mode on, a CHAT key's traffic is billed to vibe_budget, so
+// that window — not the spent api_budget — is what ranking must read. The same
+// snapshot must rank differently with the mode off, which is the only reason
+// the mode is part of the seat calculation at all.
+func TestMistralVibeKeyRanksByVibeBudgetWhenPlanKeyOn(t *testing.T) {
+	cfg := testConfig(config.Account{ID: "vibe", Provider: config.ProviderMistral, Group: config.MistralGroup, RuntimeKey: "mstrl_vibe"})
+	a := cfg.Accounts[0]
+	now := time.Now()
+	snap := mistralChatSeat(t, cfg, a, 100, 20) // api spent, 80% of vibe left
+	spent, both := snap.Mistral.Budget, snap.Mistral.VibeBudget
+
+	t.Run("off reads api_budget", func(t *testing.T) {
+		p := New(func(string) *quota.Snapshot { return snap })
+		seat := p.SeatForTest(cfg, a, "m", now)
+		if !seat.Known || seat.Used != spent.UsedPercent || seat.Soon[0] != spent.ResetsAt {
+			t.Fatalf("seat = %+v, want api_budget's %v%%", seat, spent.UsedPercent)
+		}
+	})
+
+	on := cfg.Clone()
+	on.Mistral.ChatMetadata = &config.MistralChatMetadata{Mode: config.MistralChatMetadataChatKey, CallSource: config.MistralCallSourceVibeCode}
+	if err := on.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !on.Mistral.PlanKeyForVibe() {
+		t.Fatal("plan-key mode not recognized")
+	}
+	p := New(func(string) *quota.Snapshot { return snap })
+	seat := p.SeatForTest(on, a, "m", now)
+	if !seat.Known || seat.Used != both.UsedPercent || seat.Soon[0] != both.ResetsAt {
+		t.Fatalf("seat = %+v, want vibe_budget's %v%% once the plan key is sent", seat, both.UsedPercent)
+	}
+	if seat.Pace <= 0 {
+		t.Fatalf("pace = %v: a usable Vibe allowance must not rank as spent", seat.Pace)
+	}
+
+	// A Studio (API) key keeps reading api_budget in either mode: the marker
+	// only changes where a CHAT key's usage is billed.
+	studio := snap.Mistral
+	studioSnapshot := &quota.Snapshot{CatalogSource: snap.CatalogSource, Mistral: &quota.MistralState{
+		Source: studio.Source, At: now, KeyType: "API",
+		Budget: &quota.MistralBudget{Total: 30, UsedPercent: 40, Remaining: 18, Currency: "USD", ResetsAt: now.Add(12 * time.Hour)},
+	}}
+	p2 := New(func(string) *quota.Snapshot { return studioSnapshot })
+	if got := p2.SeatForTest(on, a, "m", now); !got.Known || got.Used != 40 {
+		t.Fatalf("Studio seat = %+v, want api_budget's 40%%", got)
+	}
+}

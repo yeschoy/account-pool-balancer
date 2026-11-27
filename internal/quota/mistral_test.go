@@ -525,3 +525,37 @@ func TestMistralApiResetSurvivesMetadata(t *testing.T) {
 		t.Fatal("clone aliases the vibe budget")
 	}
 }
+
+// UsableBudget picks the window a request actually spends. A CHAT key with the
+// plan-key marker on bills vibe_budget (measured 2026-11-28), so its spent
+// api_budget says nothing about what is left; with the marker off the same key
+// bills api_budget and the Vibe allowance is irrelevant.
+func TestMistralUsableBudgetFollowsPayingWindow(t *testing.T) {
+	reset := time.Now().Add(24 * time.Hour)
+	api := &MistralBudget{Total: 30, UsedPercent: 100, Remaining: 0, Currency: "USD", ResetsAt: reset}
+	vibe := &MistralBudget{Total: 300, UsedPercent: 5, Remaining: 285, Currency: "USD", ResetsAt: reset}
+	for _, tc := range []struct {
+		name     string
+		state    *MistralState
+		planKey  bool
+		want     *MistralBudget
+		wantKind string
+	}{
+		{"chat, plan key on", &MistralState{KeyType: "CHAT", Budget: api, VibeBudget: vibe}, true, vibe, "vibe"},
+		{"chat, plan key off", &MistralState{KeyType: "CHAT", Budget: api, VibeBudget: vibe}, false, api, "api"},
+		{"studio, plan key on", &MistralState{KeyType: "API", Budget: api, VibeBudget: vibe}, true, api, "api"},
+		{"chat, no vibe read", &MistralState{KeyType: "CHAT", Budget: api}, true, api, "api"},
+		{"chat, zero-total vibe not preferred", &MistralState{KeyType: "CHAT", Budget: api, VibeBudget: &MistralBudget{Total: 0, Currency: "USD", ResetsAt: reset}}, true, api, "api"},
+		{"nothing read", nil, true, nil, ""},
+		{"unknown type", &MistralState{Budget: api, VibeBudget: vibe}, true, api, "api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.state.UsableBudget(tc.planKey); got != tc.want {
+				t.Fatalf("UsableBudget = %+v, want %+v", got, tc.want)
+			}
+			if got := tc.state.UsableBudgetKind(tc.planKey); got != tc.wantKind {
+				t.Fatalf("kind = %q, want %q", got, tc.wantKind)
+			}
+		})
+	}
+}

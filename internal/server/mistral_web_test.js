@@ -69,7 +69,12 @@ const budgetOverview = context.mistralBudgetWindows({
 }, { r: 0, s: 0, c: 0 });
 // The card and the total row lead with what is left; the row names the
 // budget that actually pays, because the Vibe budget does not.
-assert.match(budgetOverview, /USD 号池可用合计剩余（api_budget）/);
+assert.match(budgetOverview, /USD 号池可用合计剩余/);
+// The window label comes from the backend's verdict, not from a rule baked
+// into the page: an api verdict says api_budget, a vibe verdict says vibe.
+assert.match(budgetOverview, /号池可用 剩余约/);
+assert.match(source, /function mistralWindowLabel\(kind\)/);
+assert.match(source, /kind === 'vibe' \? 'Vibe 预算（vibe_budget）'/);
 assert.match(budgetOverview, /<b>USD 22\.50<\/b>/);
 assert.match(budgetOverview, /总额 USD 30\.00/);
 const overviewCards = context.mistralOverviewCards({ mistral: { accounts: 2, freshAccounts: 2, unknownAccounts: 0,
@@ -89,11 +94,26 @@ const withVibe = context.mistralBudgetWindows({
     unknownRule: '只汇总本服务读取成功且未过期的预算',
   },
 }, { r: 0, s: 0, c: 0 });
-assert.match(withVibe, /号池可用合计剩余（api_budget）/);
-assert.match(withVibe, /<b>USD 0\.00<\/b>/, 'the spendable total is the spent api budget');
-assert.match(withVibe, /Vibe 预算（仅供查看，不计入合计\/排序）约剩余 USD 300\.00/);
-assert.match(withVibe, /仅限 Mistral 官方产品，号池调用不扣此项/);
-assert.doesNotMatch(withVibe, /<b>USD 300\.00<\/b>/, 'the Vibe amount must never be the headline');
+assert.match(withVibe, /号池可用合计剩余/);
+assert.match(withVibe, /<b>USD 0\.00<\/b>/, 'with the plan key off the total is the spent api budget');
+assert.match(withVibe, /Vibe 预算约剩余 USD 300\.00/, 'the untouched Vibe window is shown as the counterpart');
+assert.doesNotMatch(withVibe, /<b>USD 300\.00<\/b>/, 'the Vibe amount must not be the headline while the plan key is off');
+
+// With the plan key on the backend reports "vibe" as the paying window; the
+// page must then lead with the Vibe allowance and show api_budget as the
+// counterpart, which is the exact inverse of the case above.
+const payingVibe = context.mistralBudgetWindows({
+  mistral: {
+    accounts: 1, freshAccounts: 1, unknownAccounts: 0,
+    groups: [{ currency: 'USD', total: 300, remaining: 300, used: 0, workspaces: 1, accounts: 1 }],
+    workspaces: [{ workspace: 'ws-3', keyType: 'CHAT', plan: 'Pro', budget: 'vibe', accounts: 2, total: 300, remaining: 300, usedPercent: 0, currency: 'USD', resetsAt: new Date(Date.now() + 3600e3).toISOString(), readAt: new Date().toISOString(),
+      api: { total: 30, remaining: 0, usedPercent: 100, currency: 'USD', resetsAt: new Date(Date.now() + 3600e3).toISOString() } }],
+    unknownRule: '只汇总本服务读取成功且未过期的预算',
+  },
+}, { r: 0, s: 0, c: 0 });
+assert.match(payingVibe, /Vibe 预算（vibe_budget） 剩余约/);
+assert.match(payingVibe, /<b>USD 300\.00<\/b>/);
+assert.match(payingVibe, /对照 api_budget 约剩余 USD 0\.00/, 'the spent api window is shown as the counterpart');
 const emptyBudget = context.mistralBudgetWindows({ mistral: { accounts: 2, freshAccounts: 0, unknownAccounts: 2, groups: [], workspaces: [], unknownRule: 'x' } }, { r: 0, s: 0, c: 0 });
 assert.match(emptyBudget, /未知不计 0/);
 assert.doesNotMatch(emptyBudget, /USD 0\.00/);
