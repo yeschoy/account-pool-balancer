@@ -38,6 +38,16 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 账号行改读实际扣费窗口（2026-11-27 20:20 UTC，2da50ac）
+
+- 现场（用户截图）：`kevin-11.26-03-vibe-花钱` 账号行显示「号池可用（api_budget）约剩余 USD 0.00 / 30.00 · 已用 100%」，而同一行下面又写「Vibe 预算约剩余 USD 300.00」。上一版只把**概览合计与选号**改到 `UsableBudget`，**账号行仍直接读 `quota.mistral.budget`（api_budget）并把标签写死**，于是同一把号在两处给出相反的结论。
+- `2da50ac`：`accountView` 新增 `mistralBudgetWindow`（"api"/"vibe"/""），取自与排序同一个 `UsableBudgetKind`；前端 `mistralQuotaHTML` 按该字段选窗口，把另一本作为**明确标注的对照**（`对照 api_budget … 计划键模式下号池调用不扣此项`），标签不再写死。三处（选号 / 概览 / 账号行）从此共用同一判定。
+- 新增 `TestMistralAccountViewNamesPayingWindow`（CHAT+开启→vibe、关闭→api、Studio→api）与 `mistral_web_test.js` 两种 verdict 的账号行互斥断言（含截图里的真实形态）。
+- **20:19:46 UTC** push 后 `git archive` 至 `/home/ubuntu/project/account-pool-balancer-releases/20261127T201950Z-2da50ac/`，构建 `account-pool-balancer:release-2da50ac-20261127T201950Z`（`sha256:d8745f74…`）。旧镜像保留为 `rollback-20261127T201950Z`。备份 `data.tgz`（SHA256 前16位 `caab02ffb8fa3b79`，`gzip -t` 通过）。
+- **20:20:0x** 切换，**20:20:54** Docker healthy（0 重启、非 OOM、1000:1000、Healthcheck 存在）。停机约 5 秒。双内网别名 `{"ok":true}`、公网 200。
+- 实测（管理员账号视图）：`kevin-11.26-0{1,2,3}-vibe` 三把 `window=vibe`、`apiRem=0`、`vibeRem=300`；同批三把 studio 号 `window=api`、`apiRem=0`——判定与真实可用性一致。公网 `/assets/app.js?v=14a8e1e43b` 含 `mistralBudgetWindow` 逻辑（5 处）。
+- 回退 `account-pool-balancer:rollback-20261127T201950Z`（= `670c5f0`）。
+
 ## 恢复 kevin-11.26 三把 Vibe 号的硬隔离（2026-11-28 04:1x UTC）
 
 - 现场：三把 `kevin-11.26-0{1,2,3}-vibe-花钱` 均为 `enabled=true`、`keyType=CHAT`、`vibeRem≈300`、无错误，但被 `hardQuarantined=true / ruleId=402` 挡在选号之外——是**计划键修复之前**累积的 402 隔离（更新时间 11-27 21:24、11-28 00:19、11-28 03:55），修复只改新请求的行为，不会回滚历史状态。
