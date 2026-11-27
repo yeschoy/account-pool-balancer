@@ -60,6 +60,42 @@ type Reset struct {
 	// account (reset by a success), up to Max: with no control key there is
 	// no other way to learn when money comes back.
 	Escalate bool `json:"escalate,omitempty"`
+	// BudgetReset cools until the account's own measured quota window resets
+	// (Mistral: api_budget.reset_at from the last budget read), which is when
+	// the upstream itself says the spent allowance comes back. The status
+	// code that says "this allowance is exhausted" carries no time. When no
+	// usable read holds a reset time, the longest of Max and Fallback applies
+	// and the console shows that the end is an estimate.
+	BudgetReset bool `json:"budgetReset,omitempty"`
+}
+
+// ResetBudget is what the account's own measured quota window says about a
+// cooldown: when that window resets. A zero Reset means no usable read holds
+// one.
+type ResetBudget struct {
+	Reset time.Time
+}
+
+// CooldownFor is CooldownAfter for a response that a measured quota window can
+// answer. A rule with Reset.BudgetReset lasts until that instant; with no known
+// window it takes the rule's Fallback, raised to Max when Max is longer, since
+// the allowance may well be out for the whole period and a short guess only
+// re-trips the same refusal.
+func CooldownFor(r *ErrorRule, h http.Header, body string, now time.Time, strikes int, budget ResetBudget) time.Duration {
+	if r == nil || r.Reset == nil || !r.Reset.BudgetReset {
+		return CooldownAfter(r, h, body, now, strikes)
+	}
+	if !budget.Reset.IsZero() && budget.Reset.After(now) {
+		return budget.Reset.Sub(now)
+	}
+	d, _ := ParseDuration(r.Reset.Fallback)
+	if d <= 0 {
+		d = 30 * time.Second
+	}
+	if mx, err := ParseDuration(r.Reset.Max); err == nil && mx > d {
+		d = mx
+	}
+	return d
 }
 
 type ErrorRule struct {
@@ -423,6 +459,12 @@ func ValidateErrorRules(rs []ErrorRule) error {
 			}
 			if r.Reset.Header != "" && r.Reset.Format == "" {
 				return fmt.Errorf("errorRules[%s]: reset.header needs reset.format", r.ID)
+			}
+			if r.Reset.BudgetReset && r.Reset.Header != "" {
+				return fmt.Errorf("errorRules[%s]: reset.budgetReset cannot be combined with reset.header", r.ID)
+			}
+			if r.Reset.BudgetReset && len(r.Reset.BodyAfter) > 0 {
+				return fmt.Errorf("errorRules[%s]: reset.budgetReset cannot be combined with reset.bodyAfter", r.ID)
 			}
 		default:
 			return fmt.Errorf("errorRules[%s]: invalid action", r.ID)

@@ -62,7 +62,7 @@ Mistral 预算按工作区计费，但每次预算读取要 3 个上游请求（
 - 同一精确 DeepSeek Chat 的 user 图片块中，先清除 NewAPI 泄漏的空内部 `MimeType:""/null`（已实测被上游以 `extra_forbidden` 拒绝），再将仅含 `url` 的 `image_url:{"url":"..."}` 对象转成原生字符串 `image_url:"..."`，支持 data URL，保留图片和原有文本/顺序；带 detail 等额外选项的对象保留这些选项，不丢弃语义，非空 MimeType 不擅自删除。其他模型/协议/号池不套用此转换。
 - **2026-11-11 13:05 UTC已随00ba86a部署OVH**：精确 DeepSeek Chat 的 assistant 文本块仅清除无内容的 `annotations:[]/null`（数组内空白和转义字段名同样处理）。真实422明确拒绝空注解；真实非空引用/注解、未知类型仍保留交上游校验，不靠丢弃语义换成功。重复字段本地400；完整思考/正文/工具/图片/缓存键保持，其他角色、模型及协议不套用。安全错误坐标可显示固定字段名 `annotations`，不记录引用内容。
 - 除上述明确的缓存补齐、思考格式及精确模型参数兼容外，原生字段/工具/模型ID/实际客户端UA保持不变；没有转换的正文保留原字节。精确 DeepSeek Flash 1017、GLM 5.3 和 GLM 5.3 Flash 的 Chat 仅省略不支持的根 `store:false/null`，`store:true`、错误类型和重复字段本地拒绝；不修改缓存键或 `metadata.store`，其他模型/协议不套用该规则。未知字段不静默丢弃，不支持时明确报错。
-- 401 隔离失效 Key；402 冷却；429 尊重完整 `Retry-After`；其他临时 5xx 短冷却。明确的503+顶层code3800视为模型服务不可用，不扣账号健康、不重复换号，并保留上游Retry-After；旧的完整出厂规则自动升级，任何自定义规则/顺序/备注/空列表保留。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
+- 401 隔离失效 Key；402 冷却——其中精确 `402` + 顶层 code `2303`（`billing_api_budget_exhausted`）命中默认规则 `mistral-api-budget-exhausted`，**冷却到该工作区 `api_budget.reset_at` 后自动恢复**，不 hard-quarantine、不扣全局健康、不累加翻倍；上游这份错误不带时间，快照里没有可用重置时间时按最长 24 小时兜底，账号状态行会注明「未读取到重置时间，按最长兜底冷却（估计值）」。其他 402 仍按原规则 10 分钟起逐次翻倍、最长 6 小时。429 尊重完整 `Retry-After`；其他临时 5xx 短冷却。明确的503+顶层code3800视为模型服务不可用，不扣账号健康、不重复换号，并保留上游Retry-After；旧的完整出厂规则自动升级，任何自定义规则/顺序/备注/空列表保留。确定性请求/权限错误不遍历账号。固定代理失败不回退直连；已发送且结果未知或流已输出的请求不重放；凭证请求不跟随重定向。
 
 ## DeepSeek 用户历史的 1h 缓存提示 422（2026-11-24，已部署）
 
@@ -213,7 +213,19 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 
 - `GET https://console.mistral.ai/api/vibe/whoami`：按 `plan_type` 区分 Studio/API (`API`) 与 Vibe (`CHAT`)，不要仅由账号名称猜测。
 - `GET https://api.mistral.ai/v1/billing/subscription`：读取 `plan_name`、`payg_enabled`、`vibe_payg_enabled` 等套餐信息，不是剩余额度本身。
-- `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。Studio 使用 `api_budget`，Vibe 使用 `vibe_budget`；剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
+- `GET https://api.mistral.ai/v1/billing/budget`：返回 `api_budget`、`vibe_budget`，窗口字段含 `initial_budget`、`usage_percentage`、`currency`、`reset_at`、`payg_enabled`。**两项预算对 Studio 和 Vibe Key 都会返回，但号池一律取 `api_budget`**：Mistral 规定第三方工具或网关调用 `/v1/chat/completions` 的用量只计入 `api_budget`（[官方订阅说明](https://docs.mistral.ai/admin/billing-usage/subscriptions#included-monthly-usage)），`vibe_budget` 只供 Mistral 官方产品（Vibe CLI/Web）使用。剩余约为 `initial_budget × max(0, 1 − usage_percentage / 100)`，金额由百分比推算，并非额外测得的钱包余额。
+
+### 号池可用余额是 api_budget（2026-11-27 生产确认）
+
+`kevin-11.26` 的三把 CHAT（Vibe）Key 实测 `GET /v1/billing/budget` 返回 `vibe_budget` 300 USD / 已用 0%，而 `api_budget` 30 USD / 已用 100%，推理请求全部返回 `402 {"type":"billing_api_budget_exhausted","code":"2303"}`。旧实现按「CHAT 取 vibe_budget」显示，于是界面写「剩 300」、选号排序和概览合计也按 300 计算，与实际不符。
+
+现契约：
+
+- 账号页「号池可用（api_budget）约剩余」是唯一代表号池实际可用的余额，CHAT 与 API 两种 Key 相同；它参与 smart / least-used / pace 的余量排序与概览合计。
+- `vibe_budget` 仍读取并展示为「Vibe 预算（仅供查看，不计入合计/排序）」，并标注**「仅限 Mistral 官方产品，号池调用不扣此项」**；它不参与排序，也不进入概览「总额度剩余」。上游没返回该项时显示「上游未返回该项（不是 0）」。
+- 缺 `api_budget` 即视为读取失败，**不回退**到 `vibe_budget`；`vibe_budget` 缺失或非法只影响这一项展示。
+- 同一工作区按 org 去重的规则不变（概览仍是一个工作区一行，取该工作区读到的最大值一次，不按 Key 累加）。
+- 快照新增可选字段 `mistral.vibeBudget`，落盘与克隆均按值拷贝；旧快照里的 `budget` 会被视为 api 预算。
 
 本次取 `zxg-01`、`zxg-10` 两组四把真实 Key，经各组固定代理读取 whoami/budget 均为 HTTP200；两类 Key 都能看到所属组织的两项预算，但必须按类型分别归属，不能在每把 Key 上重复累计。同组织相同预算只计一次，币种以上游字段为准，不假定 EUR；样本为 USD，重置时间由 `reset_at` 给出。初始接口采样未覆盖全部账号；后续接入现有自动/手动刷新。2026-11-08 `77e9709`已上线，生产40把Key预算新鲜、组织订阅全部成功持久化（Student6/Pro34，可能共享组织预算），CHAT/API两类各一次真实手动刷新通过。新增显示由Node与生产API投影核验，未做本轮真实生产管理员浏览器保存往返或主动推理；完整部署/验收边界见`docs/ovh-deployment.md`。
 

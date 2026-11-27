@@ -27,18 +27,31 @@ func FetchMistralCatalog(ctx context.Context, hc *http.Client, base, key, seed s
 	return cat, nil
 }
 
-// MistralState records only the budget this key spends, never both organization
-// budgets and never identity details returned by whoami.
+// MistralState records the budget this key's gateway traffic actually spends
+// and, separately, the Vibe budget the official products spend. Identity
+// details returned by whoami are never kept.
 type MistralState struct {
 	Source string `json:"source"`
 	// Org is whoami's customer_id: the billing workspace behind the key. Two
 	// keys of one workspace report the same value and spend the same
 	// api_budget/vibe_budget, so callers may deduplicate on it. It is an
 	// organization identifier, not a key secret.
-	Org          string               `json:"org,omitempty"`
-	KeyType      string               `json:"keyType,omitempty"`
-	Plan         string               `json:"plan,omitempty"`
-	Budget       *MistralBudget       `json:"budget,omitempty"`
+	Org     string `json:"org,omitempty"`
+	KeyType string `json:"keyType,omitempty"`
+	Plan    string `json:"plan,omitempty"`
+	// Budget is the pool's usable balance: api_budget's reset window, for
+	// CHAT (Vibe) and API keys alike. Mistral charges usage made by a
+	// third-party tool or gateway calling /v1/chat/completions to api_budget
+	// whether the key is a Vibe or a Studio key, so vibe_budget is left 0%
+	// while this one empties. Only this budget ranks candidates, feeds pace
+	// and reaches the overview total.
+	Budget *MistralBudget `json:"budget,omitempty"`
+	// VibeBudget is the same reset window read from vibe_budget. It is shown
+	// so the workspace's two allowances are both visible, but the official
+	// product budget pays for Vibe CLI/Web usage only and is never spent by
+	// this pool: it never ranks an account, never feeds pace and never joins
+	// a total. Its absence is normal (a workspace with no Vibe plan).
+	VibeBudget   *MistralBudget       `json:"vibeBudget,omitempty"`
 	Subscription *MistralSubscription `json:"subscription,omitempty"`
 	At           time.Time            `json:"at,omitzero"`
 	CheckedAt    time.Time            `json:"checkedAt,omitzero"`
@@ -101,7 +114,25 @@ func (m *MistralState) clone() *MistralState {
 			b.PAYG = &v
 		}
 	}
+	if m.VibeBudget != nil {
+		b := *m.VibeBudget
+		c.VibeBudget = &b
+		if b.PAYG != nil {
+			v := *b.PAYG
+			b.PAYG = &v
+		}
+	}
 	return &c
+}
+
+// ApiBudgetReset is when the workspace's api_budget resets, or the zero time
+// when no usable read holds one. It is the deadline a
+// billing_api_budget_exhausted (402/2303) refusal lasts until.
+func (s *MistralState) ApiBudgetReset() time.Time {
+	if s == nil || s.Budget == nil {
+		return time.Time{}
+	}
+	return s.Budget.ResetsAt
 }
 
 func (s *Snapshot) FreshMistral(now time.Time, stale time.Duration) bool {
@@ -128,25 +159,44 @@ func FetchMistralBudget(ctx context.Context, hc *http.Client, base, key, seed st
 	if kind != "API" && kind != "CHAT" {
 		return nil, errors.New("Mistral Key 类型未知，不能选择套餐预算")
 	}
-	type detail struct {
-		Total    *float64  `json:"initial_budget"`
-		Used     *float64  `json:"usage_percentage"`
-		Currency string    `json:"currency"`
-		Reset    time.Time `json:"reset_at"`
-		PAYG     *bool     `json:"payg_enabled"`
-	}
 	var budgets struct {
-		API  *detail `json:"api_budget"`
-		Vibe *detail `json:"vibe_budget"`
+		API  *mistralBudgetWindow `json:"api_budget"`
+		Vibe *mistralBudgetWindow `json:"vibe_budget"`
 	}
 	client.Base = base
 	if err := client.get(ctx, key, "/billing/budget", "", seed, &budgets); err != nil {
 		return nil, fmt.Errorf("Mistral 套餐读取失败: %w", err)
 	}
-	b := budgets.API
-	if kind == "CHAT" {
-		b = budgets.Vibe
+	// Both key types are billed from api_budget for traffic that comes from a
+	// third party or gateway calling /v1/chat/completions; vibe_budget only
+	// covers the official Vibe products. So the pool's balance is always
+	// api_budget, and using vibe_budget for a CHAT key showed an allowance this
+	// pool never spends.
+	api, err := mistralReadBudget(budgets.API)
+	if err != nil {
+		return nil, err
 	}
+	// vibe_budget is display-only. A missing or invalid one must not fail the
+	// read: a workspace without a Vibe plan is the normal case.
+	vibe, _ := mistralReadBudget(budgets.Vibe)
+	return &MistralState{Org: mistralOrgID(who.Customer), KeyType: kind, Plan: mistralPlanName(who.Plan), Subscription: fetchMistralSubscription(ctx, client, key, seed), Budget: api, VibeBudget: vibe}, nil
+}
+
+// mistralBudgetWindow is one of /v1/billing/budget's reset windows
+// (api_budget, vibe_budget).
+type mistralBudgetWindow struct {
+	Total    *float64  `json:"initial_budget"`
+	Used     *float64  `json:"usage_percentage"`
+	Currency string    `json:"currency"`
+	Reset    time.Time `json:"reset_at"`
+	PAYG     *bool     `json:"payg_enabled"`
+}
+
+// mistralReadBudget validates one reset window. total/used must be present,
+// finite and non-negative, the currency a three-letter code, and the reset
+// time in the future: an expired window says nothing about what is left now,
+// and a missing field is unknown rather than zero.
+func mistralReadBudget(b *mistralBudgetWindow) (*MistralBudget, error) {
 	if b == nil || b.Total == nil || b.Used == nil || math.IsNaN(*b.Total) || math.IsInf(*b.Total, 0) ||
 		math.IsNaN(*b.Used) || math.IsInf(*b.Used, 0) || *b.Total < 0 || *b.Used < 0 {
 		return nil, errors.New("Mistral 套餐额度字段缺失或无效")
@@ -157,10 +207,10 @@ func FetchMistralBudget(ctx context.Context, hc *http.Client, base, key, seed st
 	if b.Reset.IsZero() || !b.Reset.After(time.Now()) {
 		return nil, errors.New("Mistral 套餐重置时间未知或已过期")
 	}
-	return &MistralState{Org: mistralOrgID(who.Customer), KeyType: kind, Plan: mistralPlanName(who.Plan), Subscription: fetchMistralSubscription(ctx, client, key, seed), Budget: &MistralBudget{
+	return &MistralBudget{
 		Total: *b.Total, UsedPercent: *b.Used, Remaining: *b.Total * math.Max(0, 1-*b.Used/100),
 		Currency: b.Currency, ResetsAt: b.Reset, PAYG: b.PAYG,
-	}}, nil
+	}, nil
 }
 
 // mistralOrgID keeps whoami's customer_id only in a shape that is safe to

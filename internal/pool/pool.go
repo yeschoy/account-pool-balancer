@@ -766,6 +766,11 @@ func (p *Pool) seatLocked(cfg *config.Config, a config.Account, model string, no
 		return s
 	}
 	if a.Provider == config.ProviderMistral {
+		// MistralState.Budget is api_budget for both key types: a gateway
+		// calling /v1/chat/completions spends that window whether the key is a
+		// Vibe or a Studio key. vibe_budget is display-only and never ranks an
+		// account, so a CHAT key whose api_budget is empty is still ranked as
+		// empty instead of showing the untouched Vibe allowance.
 		if snap != nil && snap.CatalogSource == quota.ResponseBindingSource(cfg, a) && snap.FreshMistral(now, stale) && snap.Mistral.Budget.Total > 0 {
 			b := snap.Mistral.Budget
 			s.Known, s.Used = true, min(100, b.UsedPercent)

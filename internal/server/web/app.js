@@ -762,23 +762,32 @@ function mistralBudgetWindows(o, st) {
   if (!m) return '<p class="muted">额度数据不可用，请刷新后重试。</p>';
   const totals = (m.groups || []).map((g) => {
     const used = g.total > 0 ? (g.used / g.total) * 100 : 0;
-    return `<div class="win"><div class="row"><b>${esc(g.currency)} 合计剩余</b><span class="muted"><b>${esc(mistralAmount(g.remaining, g.currency))}</b></span></div>`
+    return `<div class="win"><div class="row"><b>${esc(g.currency)} 号池可用合计剩余（api_budget）</b><span class="muted"><b>${esc(mistralAmount(g.remaining, g.currency))}</b></span></div>`
       + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
       + `<div class="acc-sub">总额 ${esc(mistralAmount(g.total, g.currency))} · ${num(g.workspaces)} 个工作区 · ${num(g.accounts)} 个账号共享 · 已用 ${used.toFixed(1)}%</div></div>`;
   }).join('');
   const rows = (m.workspaces || []).map((w) => {
     const used = w.total > 0 ? Math.min(100, Math.max(0, (w.total - w.remaining) / w.total * 100)) : w.usedPercent;
     const flags = [w.mixedTypes ? '<span class="badge warn">同工作区Key类型不一致</span>' : '', w.payg === true ? '<span class="badge">PAYG 已开</span>' : ''].filter(Boolean).join(' ');
+    const vibe = w.vibe
+      ? `<div class="acc-sub" title="${esc(w.vibe.note || MISTRAL_VIBE_NOTE)}">Vibe 预算（仅供查看，不计入合计/排序）约剩余 ${esc(mistralAmount(w.vibe.remaining, w.vibe.currency))} / ${esc(mistralAmount(w.vibe.total, w.vibe.currency))} · 已用 ${esc(num(w.vibe.usedPercent))}% · ${esc(w.vibe.note || MISTRAL_VIBE_NOTE)}</div>`
+      : '';
     return `<div class="win"><div class="row"><b>${esc(mistralPlanLabel(w.keyType))} · ${esc(w.plan || '订阅未知')}</b>`
-      + `<span class="muted">剩余约 <b>${esc(mistralAmount(w.remaining, w.currency))}</b> / ${esc(mistralAmount(w.total, w.currency))}</span></div>`
+      + `<span class="muted" title="号池流量按 api_budget 计费">号池可用 剩余约 <b>${esc(mistralAmount(w.remaining, w.currency))}</b> / ${esc(mistralAmount(w.total, w.currency))}</span></div>`
       + `<div class="bar ${used >= 98 ? 'bad' : used >= 90 ? 'warn' : ''}"><i data-w="${used}"></i></div>`
       + `<div class="acc-sub">已用 ${esc(num(w.usedPercent))}% · 重置 ${esc(fmtTime(w.resetsAt, true))} · ${num(w.accounts)} 个账号 · 检测 ${esc(fmtTime(w.readAt))} ${flags}</div>`
+      + vibe
       + `<div class="acc-sub">${esc(w.workspace)}</div></div>`;
   }).join('');
   return (totals || '') + (rows || '<p class="muted">还没有可汇总的预算：请到账号页对账号「刷新额度」。未知不计 0。</p>')
     + `<p class="muted small">${esc(m.unknownRule)} 24h 请求 ${num(st.r)}，成功率 ${st.r && st.r > st.c ? pct(st.s / (st.r - st.c)) : '—'}。</p>`;
 }
 
+// The Vibe allowance is read for reference only: Mistral bills this pool's
+// /v1/chat/completions traffic to api_budget, so vibe_budget never ranks or
+// totals here. Saying so next to the number keeps "300 left" from looking
+// like spendable balance.
+const MISTRAL_VIBE_NOTE = '仅限 Mistral 官方产品，号池调用不扣此项';
 function mistralQuotaHTML(a) {
   const m = a.quota?.mistral, b = m?.budget;
   const type = m?.keyType === 'API' ? 'Studio API' : m?.keyType === 'CHAT' ? 'Vibe' : 'Key 类型未知';
@@ -794,13 +803,18 @@ function mistralQuotaHTML(a) {
   }
   if (b) {
     const money = (v) => esc(b.currency) + ' ' + Number(v).toFixed(2);
-    text += `<div class="acc-sub">${fresh ? '' : '上次'}约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
+    text += `<div class="acc-sub" title="号池流量按 api_budget 计费（CHAT / API Key 相同）">${fresh ? '' : '上次'}号池可用（api_budget）约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
     if (!fresh) text += '<div class="acc-sub">当前额度未知/过期，以上历史值不可视为当前余额</div>';
     text += `<div class="acc-sub">PAYG ${b.payg === true ? '官网已开启' : b.payg === false ? '官网未开启' : '状态未知'}（本服务不代改）</div>`;
   } else text += '<div class="acc-sub">套餐额度未知，点击刷新额度读取</div>';
+  const v = m?.vibeBudget;
+  if (v) {
+    const money = (x) => esc(v.currency) + ' ' + Number(x).toFixed(2);
+    text += `<div class="acc-sub" title="${esc(MISTRAL_VIBE_NOTE)}">Vibe 预算（仅供查看，不计入合计/排序）约剩余 ${money(v.remaining)} / ${money(v.total)} · 已用 ${esc(num(v.usedPercent))}% · ${esc(MISTRAL_VIBE_NOTE)}</div>`;
+  } else if (m?.budget) text += '<div class="acc-sub">Vibe 预算：上游未返回该项（不是 0）</div>';
   if (m?.error) text += `<div class="acc-sub">${esc(m.error)}</div>`;
   if (m?.checkedAt) text += `<div class="acc-sub">检测 ${esc(fmtTime(m.checkedAt))}${m.at ? ' · 上次成功 ' + esc(fmtTime(m.at)) : ''}</div>`;
-  return text + '<div class="acc-sub">按百分比估算，非钱包余额；同组织同类预算共享，不按 Key 重复累加</div>';
+  return text + '<div class="acc-sub">按百分比估算，非钱包余额；同组织同一预算共享，不按 Key 重复累加</div>';
 }
 
 function modelStudioQuotaHTML(a) {
@@ -926,6 +940,14 @@ function accountRow(a) {
   if (a.proxyHealth) status += `<div class="acc-sub">出口 ${esc(a.proxyHealth.status)}${a.proxyHealth.reason ? ' · ' + esc(a.proxyHealth.reason) : ''}</div>`;
   if (a.egress) status += `<div class="acc-sub" title="${esc('上次校验 ' + fmtTime(a.egress.checkedAt) + '；校验只能发现漂移，固定 IP 需由静态网络保障')}">${esc(GO_EGRESS_LABEL[a.egress.status] || a.egress.status)}${a.egress.observedIp ? ' · ' + esc(a.egress.observedIp) : ''}</div>`;
   if (st.cooldownUntil) status += `<div class="acc-sub">至 ${esc(fmtTime(st.cooldownUntil, true))}</div>`;
+  if (st.ruleId === 'mistral-api-budget-exhausted' && st.cooldownUntil) {
+    // The default rule cools to the workspace's own api_budget.reset_at. If
+    // that read holds no reset time the rule fell back to its longest guess,
+    // and the operator has to know the end is an estimate, not upstream's.
+    const reset = a.quota?.mistral?.budget?.resetsAt;
+    const exact = reset && Date.parse(reset) > Date.now() && Math.abs(Date.parse(reset) - Date.parse(st.cooldownUntil)) < 120000;
+    status += `<div class="acc-sub">api_budget 用尽（402/2303）：${exact ? '冷却到 api_budget 重置时间，到期自动恢复' : '未读到重置时间，按最长兜底冷却（估计值），到期自动恢复'}</div>`;
+  }
   if (st.ruleId) status += `<div class="acc-sub">规则 ${esc(st.ruleId)}${st.statusCode ? ' · ' + st.statusCode : ''}</div>`;
   if (st.learnedConcurrency || st.learnedRpm) status += `<div class="acc-sub" title="网关 tier_limit_exceeded 告知的套餐上限；点「恢复」清除">学到上限：${st.learnedConcurrency ? '并发 ' + st.learnedConcurrency : ''}${st.learnedRpm ? ' RPM ' + st.learnedRpm : ''}</div>`;
   const classes = Object.entries(st.classes || {});
@@ -1632,7 +1654,7 @@ const matchSummary = (w) => {
 function errActionHTML(r) {
   const act = { ignore: ['忽略', ''], 'switch-account': ['仅换号', ''], degrade: ['仅降级', 'warn'], cooldown: ['冷却', 'warn'], 'hard-quarantine': ['隔离', 'bad'] }[r.action] || [r.action, ''];
   let sub = SCOPES[r.scope] || r.scope;
-  if (r.action === 'cooldown' && r.reset) sub += `，默认 ${r.reset.fallback}${r.reset.max ? '，最长 ' + r.reset.max : ''}${r.reset.escalate ? '，连续命中翻倍' : ''}`;
+  if (r.action === 'cooldown' && r.reset) sub += r.reset.budgetReset ? `，冷却到额度重置时间${r.reset.max ? '（未知时最长 ' + r.reset.max + '）' : ''}` : `，默认 ${r.reset.fallback}${r.reset.max ? '，最长 ' + r.reset.max : ''}${r.reset.escalate ? '，连续命中翻倍' : ''}`;
   if (r.refreshQuota) sub += '，并刷新额度';
   if (r.downstreamStatus) sub += `，回给下游 ${r.downstreamStatus}`;
   return `<span class="badge ${act[1]}">${esc(act[0])}</span><div class="acc-sub">${esc(sub)}</div>`;
@@ -1701,6 +1723,7 @@ async function editRule(kind, arr, idx) {
       <label>响应头格式</label><select id="r-rf">${opts(RESET_FORMATS, rs.format || '')}</select>
       <label>正文时间前缀</label><textarea id="r-ba" rows="2" placeholder="每行一个，如 try again after">${esc((rs.bodyAfter || []).join('\n'))}</textarea><span class="hint">正文中这些词后面跟的 RFC3339 时间作为恢复时间</span>
       <span></span><label class="check"><input type="checkbox" id="r-esc" ${rs.escalate ? 'checked' : ''}>连续命中时冷却翻倍（成功一次清零）</label>
+      <span></span><label class="check"><input type="checkbox" id="r-br" ${rs.budgetReset ? 'checked' : ''}>冷却到额度重置时间（Mistral api_budget.reset_at）</label><span class="hint">勾选后忽略响应头与正文时间；读不到重置时间时用默认冷却，若最长冷却更长则用最长冷却</span>
     </div>
     <span></span><label class="check"><input type="checkbox" id="r-rq" ${r.refreshQuota ? 'checked' : ''}>${isDeploy() ? '同时刷新模型目录（不是余额）' : '同时立即刷新该账号额度'}</label>
     <label>回给下游状态码</label><input id="r-ds" type="number" value="${r.downstreamStatus || ''}" placeholder="默认"><span class="hint">最后一次失败时返回给下游的状态码（400–599），留空用默认映射</span>` : ''}
@@ -1726,10 +1749,13 @@ async function editRule(kind, arr, idx) {
         out.downstreamStatus = ds || undefined;
         if (out.action === 'cooldown') {
           if (!$('#r-fb').value.trim()) throw new Error('冷却动作必须填默认冷却时长');
-          const rh = $('#r-rh').value.trim(), rf = $('#r-rf').value;
+          const rh = $('#r-rh').value.trim(), rf = $('#r-rf').value, budgetReset = $('#r-br').checked;
           if (rh && !rf) throw new Error('填了响应头就要选响应头格式');
-          out.reset = { header: rh || undefined, format: rf || undefined, bodyAfter: lines($('#r-ba').value).length ? lines($('#r-ba').value) : undefined,
-            fallback: $('#r-fb').value.trim(), max: $('#r-max').value.trim() || undefined, escalate: $('#r-esc').checked || undefined };
+          if (budgetReset && (rh || lines($('#r-ba').value).length)) throw new Error('冷却到额度重置时间时不能同时读响应头或正文时间');
+          out.reset = { header: budgetReset ? undefined : (rh || undefined), format: budgetReset ? undefined : (rf || undefined),
+            bodyAfter: !budgetReset && lines($('#r-ba').value).length ? lines($('#r-ba').value) : undefined,
+            fallback: $('#r-fb').value.trim(), max: $('#r-max').value.trim() || undefined, escalate: $('#r-esc').checked || undefined,
+            budgetReset: budgetReset || undefined };
         } else delete out.reset;
       }
       if (idx >= 0) arr[idx] = out; else arr.push(out);
@@ -1963,7 +1989,7 @@ function mistralOverviewCards(o) {
   const totals = (m.groups || []).map((g) => mistralAmount(g.total, g.currency)).join(' + ');
   const used = (m.groups || []).map((g) => `${g.currency} ${g.total ? ((g.used / g.total) * 100).toFixed(1) : '0.0'}%`).join(' · ');
   return [
-    ['Mistral 总额度剩余', remaining || '未知', `总额 ${totals || '—'} · ${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
+    ['Mistral 总额度剩余', remaining || '未知', `按 api_budget 计（号池实际可用的余额，CHAT/API Key 相同）；vibe_budget 不参与。总额 ${totals || '—'} · ${num((m.groups || []).reduce((s, g) => s + g.workspaces, 0))} 个工作区去重（${num(m.accounts)} 个账号）· 已用 ${used || '—'}`],
     ['Mistral 额度数据', `${num(m.freshAccounts)} / ${num(m.accounts)}`, `新鲜 / 账号总数 · 未知 ${num(m.unknownAccounts)}；未知不计 0，也不按 Key 重复累加`],
   ];
 }

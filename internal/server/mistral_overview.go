@@ -16,6 +16,11 @@ import (
 // Only values this service already measured go in; a key whose read failed,
 // expired, or whose budget reset already passed contributes nothing and is
 // counted as unknown instead of as zero.
+//
+// Every figure here is api_budget: Mistral charges this pool's /v1/chat/
+// completions traffic to api_budget for Vibe and Studio keys alike, so
+// vibe_budget is the official products' allowance and never enters a total,
+// a percentage or a ranking. It is mirrored as display-only per workspace.
 type mistralOverview struct {
 	// Accounts is the pool's account count these figures cover.
 	Accounts int `json:"accounts"`
@@ -48,7 +53,23 @@ type mistralWorkspaceView struct {
 	ReadAt     time.Time `json:"readAt"`     // last successful budget read
 	CheckedAt  time.Time `json:"checkedAt"`  // last attempt, successful or not
 	MixedTypes bool      `json:"mixedTypes"` // the workspace's keys disagree about key type
+	// Vibe is vibe_budget for reference only. Mistral's official products
+	// spend it and this pool's traffic does not, so it is never added to
+	// Total/Remaining nor used to rank the workspace.
+	Vibe *mistralVibeView `json:"vibe,omitempty"`
 }
+
+// mistralVibeView is one workspace's vibe_budget, shown as display-only.
+type mistralVibeView struct {
+	Total      float64   `json:"total"`
+	Remaining  float64   `json:"remaining"`
+	UsedPct    float64   `json:"usedPercent"`
+	Currency   string    `json:"currency"`
+	ResetsAt   time.Time `json:"resetsAt"`
+	Note       string    `json:"note"`
+}
+
+const mistralVibeNote = "仅限 Mistral 官方产品，号池调用不扣此项"
 
 // mistralCurrencyTotal is what can honestly be added up: one currency.
 type mistralCurrencyTotal struct {
@@ -60,7 +81,7 @@ type mistralCurrencyTotal struct {
 	Accounts   int     `json:"accounts"`
 }
 
-const mistralUnknownRule = "只汇总本服务读取成功且未过期的预算；同一组织多个 Key 共享 api_budget / vibe_budget，已按工作区去重。读取失败、过期或重置时间已过的 Key 计为未知，不按 0 计入，也不按 Key 重复累加。"
+const mistralUnknownRule = "只汇总本服务读取成功且未过期的预算；同一组织多个 Key 共享同一份 api_budget，已按工作区去重。读取失败、过期或重置时间已过的 Key 计为未知，不按 0 计入，也不按 Key 重复累加。合计与排序只用 api_budget：号池调用 /v1/chat/completions 的用量按 Mistral 规定只扣 api_budget，vibe_budget 仅限官方产品，不参与合计。"
 
 func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
 	out := &mistralOverview{Workspaces: []mistralWorkspaceView{}, Groups: []mistralCurrencyTotal{}, UnknownRule: mistralUnknownRule}
@@ -114,6 +135,25 @@ func mistralOverviewFor(views []accountView, now time.Time) *mistralOverview {
 			w = &mistralWorkspaceView{Workspace: a.ws, KeyType: m.KeyType, Plan: m.Plan, Currency: b.Currency,
 				ResetsAt: b.ResetsAt, PAYG: b.PAYG, ReadAt: m.At, CheckedAt: m.CheckedAt}
 			byWS[a.ws] = w
+		}
+		if v := m.VibeBudget; v != nil && v.Currency != "" {
+			// Same rule as the api figures: several keys of one workspace
+			// report one allowance, so the largest reading is kept once.
+			if w.Vibe == nil {
+				w.Vibe = &mistralVibeView{Currency: v.Currency, ResetsAt: v.ResetsAt, Note: mistralVibeNote}
+			}
+			if v.Total > w.Vibe.Total {
+				w.Vibe.Total = v.Total
+			}
+			if v.Remaining > w.Vibe.Remaining {
+				w.Vibe.Remaining = v.Remaining
+			}
+			if v.UsedPercent > w.Vibe.UsedPct {
+				w.Vibe.UsedPct = v.UsedPercent
+			}
+			if v.ResetsAt.After(w.Vibe.ResetsAt) {
+				w.Vibe.ResetsAt = v.ResetsAt
+			}
 		}
 		w.Accounts++
 		if m.KeyType != "" && w.KeyType != "" && m.KeyType != w.KeyType {

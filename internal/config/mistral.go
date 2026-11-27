@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
@@ -106,19 +105,16 @@ func (c *Config) normalizeMistral() error {
 		}
 	}
 	errors, retries := rules.DefaultMistralErrorRules(), rules.DefaultMistralRetryRules()
-	// The two shipped factory versions differed only by the leading 3800
-	// service rule. Remove just this upgrade's additions to recognize both;
-	// any administrator edit (notes/order/disabled/empty included) still wins.
-	previousErrors := slices.DeleteFunc(slices.Clone(errors), func(r rules.ErrorRule) bool {
-		return r.ID == "mistral-tier-not-allowed" || r.ID == "mistral-backend-out-of-capacity"
-	})
-	previousRetries := slices.DeleteFunc(slices.Clone(retries), func(r rules.RetryRule) bool {
-		return r.ID == "mistral-backend-out-of-capacity"
-	})
-	if c.MistralErrorRules == nil || reflect.DeepEqual(c.MistralErrorRules, previousErrors) || reflect.DeepEqual(c.MistralErrorRules, previousErrors[1:]) {
+	// Four factory error lists have shipped: the original one (no 3800
+	// service rule), the tier/capacity one (3800 first), the one that also
+	// cools a spent api_budget to its reset (2303), and now the same list with
+	// that rule in its final place. Only an exact, unmodified older list is
+	// replaced; any administrator edit (notes/order/items/disabled/empty
+	// included) is kept as it is.
+	if c.MistralErrorRules == nil || !reflect.DeepEqual(c.MistralErrorRules, errors) && isShippedMistralErrorList(c.MistralErrorRules) {
 		c.MistralErrorRules = errors
 	}
-	if c.MistralRetryRules == nil || reflect.DeepEqual(c.MistralRetryRules, previousRetries) || reflect.DeepEqual(c.MistralRetryRules, previousRetries[1:]) {
+	if c.MistralRetryRules == nil || isShippedMistralRetryList(c.MistralRetryRules) {
 		c.MistralRetryRules = retries
 	}
 	if err := rules.ValidateErrorRules(c.MistralErrorRules); err != nil {
@@ -142,4 +138,63 @@ func (m Mistral) ModelInterval() int {
 // enabled; Mistral Responses remains stateless and has no server-side bindings.
 func WriteOnlyCredentials(provider string) bool {
 	return StrictResponses(provider) || provider == ProviderMistral || provider == ProviderDeploy
+}
+
+// The factory lists that have shipped, written out rather than derived from
+// the current defaults: a derived copy would silently follow a new default
+// and upgrade itself. Each was captured from the release that shipped it.
+func shippedMistralErrorLists() [][]rules.ErrorRule {
+	// The original list, and the same list once the service rule was
+	// prepended (shipping as shippedMistralRules "before-service").
+	original := []rules.ErrorRule{
+		{ID: "mistral-invalid-key", Scope: rules.ScopeAccount, Action: rules.ActionHardQuarantine, DownstreamStatus: 502,
+			When: rules.Match{Statuses: []int{401}}, Note: "Mistral API Key 无效或已撤销，更换后恢复"},
+		{ID: "mistral-insufficient-credits", Scope: rules.ScopeAccount, Action: rules.ActionCooldown, DownstreamStatus: 503,
+			When: rules.Match{Statuses: []int{402}}, Reset: &rules.Reset{Fallback: "10m", Max: "6h", Escalate: true}, Note: "余额或支出上限不足，冷却后恢复；余额未知"},
+		{ID: "mistral-rate-limited", Scope: rules.ScopeAccount, Action: rules.ActionCooldown,
+			When: rules.Match{Statuses: []int{429}}, Reset: &rules.Reset{Header: "Retry-After", Format: "retry-after", Fallback: "30s"}, Note: "遵守完整 Retry-After；同工作区的 Key 可能共享限额"},
+		{ID: "mistral-server-error", Scope: rules.ScopeAccount, Action: rules.ActionCooldown,
+			When: rules.Match{Statuses: []int{500, 502, 503, 504}}, Reset: &rules.Reset{Header: "Retry-After", Format: "retry-after", Fallback: "5s"}, Note: "上游暂时故障，短暂冷却后换号"},
+	}
+	service := rules.ErrorRule{ID: "mistral-service-unavailable", Scope: rules.ScopeModel, Action: rules.ActionIgnore,
+		When: rules.Match{Statuses: []int{503}, BodyCodes: []string{"3800"}}, Note: "上游模型服务暂不可用，不扣账号健康；停止无收益换号，由客户端稍后重试"}
+	tier := rules.ErrorRule{ID: "mistral-tier-not-allowed", Scope: rules.ScopeModel, Action: rules.ActionCooldown, DownstreamStatus: 503,
+		When: rules.Match{Statuses: []int{403}, BodyCodes: []string{"1910"}}, Reset: &rules.Reset{Fallback: "24h"}, Note: "套餐不包含此模型：仅该账号×模型冷却24小时后复查，不隔离整号、不扣全局健康；资格变更后可手动恢复"}
+	capacity := rules.ErrorRule{ID: "mistral-backend-out-of-capacity", Scope: rules.ScopeModel, Action: rules.ActionIgnore,
+		When: rules.Match{Statuses: []int{429}, BodyCodes: []string{"3505"}}, Note: "上游后端容量不足，不是账号RPM或余额不足；不扣健康、不换号，保留429及Retry-After，由客户端退避"}
+	// The tier/capacity release put 3800, 1910 and 3505 first. The api_budget
+	// rule then shipped first (DefaultMistralErrorRules before the list was
+	// ordered as it is now). Both orders of the four leading rules shipped.
+	tierFirst := append([]rules.ErrorRule{service, tier, capacity}, original...)
+	budgetFirst := append([]rules.ErrorRule{
+		{ID: "mistral-api-budget-exhausted", Scope: rules.ScopeAccount, Action: rules.ActionCooldown, DownstreamStatus: 503,
+			When:  rules.Match{Statuses: []int{402}, BodyCodes: []string{"2303"}},
+			Reset: &rules.Reset{Fallback: "10m", Max: "24h", BudgetReset: true},
+			Note:  "api_budget 用尽（402/2303）：冷却到该工作区 api_budget 的重置时间后自动恢复，不隔离账号、不扣全局健康；未读到重置时间时按最长 24 小时冷却并标注为估计值"},
+	}, tierFirst...)
+	return [][]rules.ErrorRule{{service, original[0], original[1], original[2], original[3]}, original, tierFirst, budgetFirst}
+}
+
+func isShippedMistralErrorList(rs []rules.ErrorRule) bool {
+	for _, shipped := range shippedMistralErrorLists() {
+		if reflect.DeepEqual(rs, shipped) {
+			return true
+		}
+	}
+	return false
+}
+
+func isShippedMistralRetryList(rs []rules.RetryRule) bool {
+	request := rules.RetryRule{ID: "mistral-request-error", Decision: rules.DecisionStop,
+		When: rules.Match{Statuses: []int{400, 403, 404, 405, 409, 413, 422}}, Note: "请求、模型或权限错误停止，不遍历账号"}
+	service := rules.RetryRule{ID: "mistral-service-unavailable", Decision: rules.DecisionStop,
+		When: rules.Match{Statuses: []int{503}, BodyCodes: []string{"3800"}}, Note: "明确的上游服务故障停止换号，避免同一失败重复等待；429保留原策略"}
+	capacity := rules.RetryRule{ID: "mistral-backend-out-of-capacity", Decision: rules.DecisionStop,
+		When: rules.Match{Statuses: []int{429}, BodyCodes: []string{"3505"}}, Note: "明确的后端容量不足停止本次换号；保留其他账号限流429的原有恢复策略"}
+	for _, shipped := range [][]rules.RetryRule{{request}, {service, request}, {service, capacity, request}} {
+		if reflect.DeepEqual(rs, shipped) {
+			return true
+		}
+	}
+	return false
 }

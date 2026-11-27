@@ -1466,7 +1466,21 @@ func (s *Server) evaluate(cfg *config.Config, acct config.Account, model string,
 					}
 					strikes = s.pool.Strike(acct.ID, key)
 				}
-				d := rules.CooldownAfter(rule, res.header, redacted, now, strikes)
+				var budget rules.ResetBudget
+				if acct.Provider == config.ProviderMistral && rule.Reset != nil && rule.Reset.BudgetReset {
+					// Cool to the workspace's own api_budget reset. Reading the
+					// snapshot here costs nothing; a key that has never read a
+					// budget leaves it zero and the rule's fallback applies.
+					snapshot := s.quota.Get(acct.ID)
+					if snapshot != nil && snapshot.Mistral != nil {
+						budget.Reset = snapshot.Mistral.ApiBudgetReset()
+					}
+					// A 402/2303 comes from an empty window, which the last
+					// read may predate: read again so the console shows the
+					// full budget rather than the old percentage.
+					s.quota.Refresh(acct.ID)
+				}
+				d := rules.CooldownFor(rule, res.header, redacted, now, strikes, budget)
 				if acct.Provider == config.ProviderFactory && rule.ID == "factory-funding" {
 					// A 402 is a window that is spent, not a transient limit: read
 					// the reset Factory named and refresh the snapshot so the

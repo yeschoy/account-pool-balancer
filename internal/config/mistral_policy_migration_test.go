@@ -24,6 +24,39 @@ const shippedMistralRules = `{
  ]
 }`
 
+// shippedMistralTierCapacityRules is the list that shipped after the
+// tier/capacity upgrade (service rule first, then 1910 and 3505) and before
+// the api_budget 2303 rule. It is frozen too: a list derived from the current
+// defaults would upgrade itself and prove nothing.
+const shippedMistralTierCapacityRules = `{
+ "errors":[
+  {"id":"mistral-service-unavailable","scope":"model","action":"ignore","when":{"statuses":[503],"bodyCodes":["3800"]},"note":"上游模型服务暂不可用，不扣账号健康；停止无收益换号，由客户端稍后重试"},
+  {"id":"mistral-tier-not-allowed","scope":"model","action":"cooldown","downstreamStatus":503,"when":{"statuses":[403],"bodyCodes":["1910"]},"reset":{"fallback":"24h"},"note":"套餐不包含此模型：仅该账号×模型冷却24小时后复查，不隔离整号、不扣全局健康；资格变更后可手动恢复"},
+  {"id":"mistral-backend-out-of-capacity","scope":"model","action":"ignore","when":{"statuses":[429],"bodyCodes":["3505"]},"note":"上游后端容量不足，不是账号RPM或余额不足；不扣健康、不换号，保留429及Retry-After，由客户端退避"},
+  {"id":"mistral-invalid-key","scope":"account","action":"hard-quarantine","downstreamStatus":502,"when":{"statuses":[401]},"note":"Mistral API Key 无效或已撤销，更换后恢复"},
+  {"id":"mistral-insufficient-credits","scope":"account","action":"cooldown","downstreamStatus":503,"when":{"statuses":[402]},"reset":{"fallback":"10m","max":"6h","escalate":true},"note":"余额或支出上限不足，冷却后恢复；余额未知"},
+  {"id":"mistral-rate-limited","scope":"account","action":"cooldown","when":{"statuses":[429]},"reset":{"header":"Retry-After","format":"retry-after","fallback":"30s"},"note":"遵守完整 Retry-After；同工作区的 Key 可能共享限额"},
+  {"id":"mistral-server-error","scope":"account","action":"cooldown","when":{"statuses":[500,502,503,504]},"reset":{"header":"Retry-After","format":"retry-after","fallback":"5s"},"note":"上游暂时故障，短暂冷却后换号"}
+ ],
+ "retries":[
+  {"id":"mistral-service-unavailable","decision":"stop","when":{"statuses":[503],"bodyCodes":["3800"]},"note":"明确的上游服务故障停止换号，避免同一失败重复等待；429保留原策略"},
+  {"id":"mistral-backend-out-of-capacity","decision":"stop","when":{"statuses":[429],"bodyCodes":["3505"]},"note":"明确的后端容量不足停止本次换号；保留其他账号限流429的原有恢复策略"},
+  {"id":"mistral-request-error","decision":"stop","when":{"statuses":[400,403,404,405,409,413,422]},"note":"请求、模型或权限错误停止，不遍历账号"}
+ ]
+}`
+
+func shippedMistralTierCapacityPolicy(t *testing.T) ([]rules.ErrorRule, []rules.RetryRule) {
+	t.Helper()
+	var doc struct {
+		Errors  []rules.ErrorRule `json:"errors"`
+		Retries []rules.RetryRule `json:"retries"`
+	}
+	if err := json.Unmarshal([]byte(shippedMistralTierCapacityRules), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc.Errors, doc.Retries
+}
+
 func shippedMistralPolicy(t *testing.T, beforeServiceRule bool) ([]rules.ErrorRule, []rules.RetryRule) {
 	t.Helper()
 	var doc struct {
@@ -40,12 +73,14 @@ func shippedMistralPolicy(t *testing.T, beforeServiceRule bool) ([]rules.ErrorRu
 }
 
 func TestMistralTierCapacityFactoryMigration(t *testing.T) {
-	for _, version := range []string{"before-service", "shipped", "nil", "current"} {
+	for _, version := range []string{"before-service", "shipped", "shipped-tier", "nil", "current"} {
 		t.Run(version, func(t *testing.T) {
 			c := Default()
 			switch version {
 			case "before-service", "shipped":
 				c.MistralErrorRules, c.MistralRetryRules = shippedMistralPolicy(t, version == "before-service")
+			case "shipped-tier":
+				c.MistralErrorRules, c.MistralRetryRules = shippedMistralTierCapacityPolicy(t)
 			case "nil":
 				c.MistralErrorRules, c.MistralRetryRules = nil, nil
 			}
@@ -61,6 +96,9 @@ func TestMistralTierCapacityFactoryMigration(t *testing.T) {
 			}
 			if r := rules.MatchRetry(c.MistralRetryRules, 429, `{"code":3505}`, nil); r == nil || r.ID != "mistral-backend-out-of-capacity" {
 				t.Fatal("upgrade did not install capacity stop policy")
+			}
+			if r := rules.MatchError(c.MistralErrorRules, 402, `{"type":"billing_api_budget_exhausted","code":"2303"}`, nil); r == nil || r.ID != "mistral-api-budget-exhausted" {
+				t.Fatal("upgrade did not install the api_budget reset cooldown")
 			}
 			for _, provider := range []string{ProviderOpenDesign, ProviderRiver, ProviderOllama, ProviderModal, ProviderTokenHarbor, ProviderOpenCodeZen, ProviderOpenCodeGo} {
 				a, b := before.RulesFor(provider)

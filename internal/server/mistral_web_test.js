@@ -50,8 +50,9 @@ const budgetOverview = context.mistralBudgetWindows({
     unknownRule: '只汇总本服务读取成功且未过期的预算',
   },
 }, { r: 0, s: 0, c: 0 });
-// The card and the total row lead with what is left; the budget is context.
-assert.match(budgetOverview, /USD 合计剩余/);
+// The card and the total row lead with what is left; the row names the
+// budget that actually pays, because the Vibe budget does not.
+assert.match(budgetOverview, /USD 号池可用合计剩余（api_budget）/);
 assert.match(budgetOverview, /<b>USD 22\.50<\/b>/);
 assert.match(budgetOverview, /总额 USD 30\.00/);
 const overviewCards = context.mistralOverviewCards({ mistral: { accounts: 2, freshAccounts: 2, unknownAccounts: 0,
@@ -60,6 +61,22 @@ assert.equal(overviewCards[0][1], 'USD 22.50', 'the headline is remaining only')
 assert.match(overviewCards[0][2], /总额 USD 30\.00/);
 assert.match(budgetOverview, /1 个工作区 · 2 个账号共享/);
 assert.match(budgetOverview, /只汇总本服务读取成功且未过期的预算/);
+// A workspace that also reported a Vibe budget shows it marked display-only,
+// and the Vibe amount never reaches the total.
+const withVibe = context.mistralBudgetWindows({
+  mistral: {
+    accounts: 1, freshAccounts: 1, unknownAccounts: 0,
+    groups: [{ currency: 'USD', total: 30, remaining: 0, used: 30, workspaces: 1, accounts: 1 }],
+    workspaces: [{ workspace: 'ws-2', keyType: 'CHAT', plan: 'Pro', accounts: 2, total: 30, remaining: 0, usedPercent: 100, currency: 'USD', resetsAt: new Date(Date.now() + 3600e3).toISOString(), readAt: new Date().toISOString(),
+      vibe: { total: 300, remaining: 300, usedPercent: 0, currency: 'USD', resetsAt: new Date(Date.now() + 3600e3).toISOString(), note: '仅限 Mistral 官方产品，号池调用不扣此项' } }],
+    unknownRule: '只汇总本服务读取成功且未过期的预算',
+  },
+}, { r: 0, s: 0, c: 0 });
+assert.match(withVibe, /号池可用合计剩余（api_budget）/);
+assert.match(withVibe, /<b>USD 0\.00<\/b>/, 'the spendable total is the spent api budget');
+assert.match(withVibe, /Vibe 预算（仅供查看，不计入合计\/排序）约剩余 USD 300\.00/);
+assert.match(withVibe, /仅限 Mistral 官方产品，号池调用不扣此项/);
+assert.doesNotMatch(withVibe, /<b>USD 300\.00<\/b>/, 'the Vibe amount must never be the headline');
 const emptyBudget = context.mistralBudgetWindows({ mistral: { accounts: 2, freshAccounts: 0, unknownAccounts: 2, groups: [], workspaces: [], unknownRule: 'x' } }, { r: 0, s: 0, c: 0 });
 assert.match(emptyBudget, /未知不计 0/);
 assert.doesNotMatch(emptyBudget, /USD 0\.00/);

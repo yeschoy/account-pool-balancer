@@ -99,15 +99,23 @@ func TestMistralBudgetTypesAndValidation(t *testing.T) {
 		name, kind, body string
 		status           int
 		want             float64
+		vibe             float64
 		fail             bool
 	}{
-		{name: "studio", kind: "API", body: valid, want: 22.5},
-		{name: "vibe", kind: "CHAT", body: valid, want: 270},
-		{name: "zero measured", kind: "API", body: strings.Replace(valid, `"initial_budget":30,`, `"initial_budget":0,`, 1)},
-		{name: "overage", kind: "API", body: strings.Replace(valid, `"usage_percentage":25`, `"usage_percentage":110`, 1)},
+		{name: "studio", kind: "API", body: valid, want: 22.5, vibe: 270},
+		// A CHAT key spends api_budget through this gateway, not the Vibe
+		// allowance: it must read 22.5 (api) and 270 only as display-only.
+		{name: "vibe", kind: "CHAT", body: valid, want: 22.5, vibe: 270},
+		{name: "zero measured", kind: "API", body: strings.Replace(valid, `"initial_budget":30,`, `"initial_budget":0,`, 1), vibe: 270},
+		{name: "overage", kind: "API", body: strings.Replace(valid, `"usage_percentage":25`, `"usage_percentage":110`, 1), vibe: 270},
 		{name: "missing percentage", kind: "API", body: strings.Replace(valid, `"usage_percentage":25,`, "", 1), fail: true},
 		{name: "missing total", kind: "API", body: strings.Replace(valid, `"initial_budget":30,`, "", 1), fail: true},
-		{name: "wrong budget", kind: "CHAT", body: `{"api_budget":{}}`, fail: true},
+		{name: "wrong budget", kind: "API", body: `{"api_budget":{}}`, fail: true},
+		// A CHAT key with no api budget cannot borrow the Vibe one: this pool
+		// would show an allowance it never spends.
+		{name: "chat without api budget", kind: "CHAT", body: `{"vibe_budget":{"initial_budget":300,"usage_percentage":0,"currency":"USD","reset_at":"2099-01-01T00:00:00Z"}}`, fail: true},
+		{name: "missing vibe budget is not fatal", kind: "CHAT", body: strings.Replace(valid, `,"vibe_budget":{"initial_budget":300,"usage_percentage":10,"currency":"EUR","reset_at":"`+future+`","payg_enabled":true}`, "", 1), want: 22.5},
+		{name: "invalid vibe budget is display-only", kind: "API", body: `{"api_budget":{"initial_budget":30,"usage_percentage":25,"currency":"USD","reset_at":"` + future + `"},"vibe_budget":{"initial_budget":300}}`, want: 22.5},
 		{name: "negative", kind: "API", body: strings.Replace(valid, `"usage_percentage":25`, `"usage_percentage":-1`, 1), fail: true},
 		{name: "missing currency", kind: "API", body: strings.Replace(valid, `"currency":"USD",`, "", 1), fail: true},
 		{name: "expired", kind: "API", body: strings.ReplaceAll(valid, future, "2000-01-01T00:00:00Z"), fail: true},
@@ -149,6 +157,13 @@ func TestMistralBudgetTypesAndValidation(t *testing.T) {
 			if m.KeyType != tc.kind || m.Budget.Remaining != tc.want {
 				t.Fatalf("wrong selected budget: %+v", m)
 			}
+			if tc.vibe == 0 {
+				if m.VibeBudget != nil {
+					t.Fatalf("vibe budget should not be recorded from this body: %+v", m.VibeBudget)
+				}
+			} else if m.VibeBudget == nil || m.VibeBudget.Remaining != tc.vibe {
+				t.Fatalf("vibe budget not mirrored read-only: %+v", m.VibeBudget)
+			}
 			b, _ := json.Marshal(m)
 			if strings.Contains(string(b), "private@example") || strings.Contains(string(b), "untrusted.invalid") {
 				t.Fatal("identity persisted")
@@ -171,7 +186,7 @@ func TestMistralBudgetFailurePreservesValueAndMetadata(t *testing.T) {
 				fmt.Fprint(w, `{"error":"private-secret-body"}`)
 				return
 			}
-			fmt.Fprintf(w, `{"vibe_budget":{"initial_budget":300,"usage_percentage":10,"currency":"USD","reset_at":%q}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+			fmt.Fprintf(w, `{"api_budget":{"initial_budget":300,"usage_percentage":10,"currency":"USD","reset_at":%q},"vibe_budget":{"initial_budget":300,"usage_percentage":0,"currency":"USD","reset_at":%q}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339), time.Now().Add(24*time.Hour).Format(time.RFC3339))
 		}
 	}))
 	defer up.Close()
@@ -380,7 +395,7 @@ func TestMistralBudgetRecordsWorkspace(t *testing.T) {
 		case "/api/vibe/whoami":
 			fmt.Fprint(w, `{"plan_type":"CHAT","plan_name":"FREE","customer_id":"5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10"}`)
 		case "/v1/billing/budget":
-			fmt.Fprintf(w, `{"vibe_budget":{"initial_budget":10,"usage_percentage":50,"currency":"EUR","reset_at":%q}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":25,"currency":"EUR","reset_at":%q},"vibe_budget":{"initial_budget":10,"usage_percentage":50,"currency":"EUR","reset_at":%q}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339), time.Now().Add(24*time.Hour).Format(time.RFC3339))
 		case "/v1/billing/subscription":
 			fmt.Fprint(w, `{"plan_name":"INDIVIDUAL"}`)
 		default:
@@ -402,8 +417,11 @@ func TestMistralBudgetRecordsWorkspace(t *testing.T) {
 	if got == nil || got.Org != "5c2f8f7e-1d3a-4c2b-9f01-7a6d2b8e4c10" {
 		t.Fatalf("org not recorded: %+v", got)
 	}
-	if got.KeyType != "CHAT" || got.Budget.Currency != "EUR" {
+	if got.KeyType != "CHAT" || got.Budget.Currency != "EUR" || got.Budget.Total != 30 {
 		t.Fatalf("state changed: %+v", got)
+	}
+	if got.VibeBudget == nil || got.VibeBudget.Total != 10 {
+		t.Fatalf("vibe budget not kept for display: %+v", got.VibeBudget)
 	}
 }
 
@@ -421,5 +439,89 @@ func TestMistralOrgIDRejectsUnsafeValues(t *testing.T) {
 		if got := mistralOrgID(in); got != want {
 			t.Fatalf("mistralOrgID(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestMistralChatKeyReadsApiBudget is the production case this contract fixes:
+// a Vibe (CHAT) key whose workspace still shows the untouched 300 USD Vibe
+// allowance next to a fully spent 30 USD api budget, because the gateway's
+// /v1/chat/completions traffic is charged to api_budget. The pool's balance
+// must be the api budget; the Vibe one is kept only to be displayed.
+func TestMistralChatKeyReadsApiBudget(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/vibe/whoami":
+			fmt.Fprint(w, `{"plan_type":"CHAT","plan_name":"INDIVIDUAL","customer_id":"8d8f124d-0000-4000-8000-000000000001"}`)
+		case "/v1/billing/budget":
+			fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":100,"currency":"USD","reset_at":%q,"payg_enabled":false},`+
+				`"vibe_budget":{"initial_budget":300,"usage_percentage":0,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, future, future)
+		case "/v1/billing/subscription":
+			fmt.Fprint(w, `{"plan_name":"INDIVIDUAL","payg_enabled":false}`)
+		case "/v1/models":
+			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-1-flash-1017","enabled":true}]}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Mistral.BaseURL = up.URL + "/v1"
+	cfg.Accounts = []config.Account{{ID: "vibe", Provider: config.ProviderMistral, RuntimeKey: "mstrl_chat_key", Enabled: true}}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPoller(func() *config.Config { return cfg }, func(string) *http.Client { return up.Client() })
+	if err := p.RefreshNow(context.Background(), cfg.Accounts[0]); err != nil {
+		t.Fatal(err)
+	}
+	m := p.Get("vibe").Mistral
+	if m == nil || m.KeyType != "CHAT" {
+		t.Fatalf("state = %+v", m)
+	}
+	if m.Budget.Total != 30 || m.Budget.UsedPercent != 100 || m.Budget.Remaining != 0 {
+		t.Fatalf("CHAT key must spend the api budget, got %+v", m.Budget)
+	}
+	if m.VibeBudget == nil || m.VibeBudget.Total != 300 || m.VibeBudget.Remaining != 300 {
+		t.Fatalf("vibe budget must stay readable for display, got %+v", m.VibeBudget)
+	}
+	if !m.ApiBudgetReset().Equal(m.Budget.ResetsAt) {
+		t.Fatalf("api reset = %v, budget reset = %v", m.ApiBudgetReset(), m.Budget.ResetsAt)
+	}
+	if m.Budget.PAYG == nil || *m.Budget.PAYG {
+		t.Fatalf("payg state changed: %+v", m.Budget.PAYG)
+	}
+}
+
+// TestMistralApiResetSurvivesMetadata: the reset time a 402/2303 cooldown
+// ends at is read from the persisted snapshot, so it must survive a restart.
+func TestMistralApiResetSurvivesMetadata(t *testing.T) {
+	future := time.Now().Add(6 * time.Hour).UTC().Truncate(time.Second)
+	raw, err := json.Marshal(map[string]*Snapshot{"m": {Mistral: &MistralState{
+		Org: "ws-1", KeyType: "CHAT",
+		Budget:     &MistralBudget{Total: 30, UsedPercent: 100, Currency: "USD", ResetsAt: future},
+		VibeBudget: &MistralBudget{Total: 300, UsedPercent: 0, Remaining: 300, Currency: "USD", ResetsAt: future},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewPoller(func() *config.Config { return config.Default() }, func(string) *http.Client { return http.DefaultClient })
+	var saved map[string]*Snapshot
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	p.Load(saved)
+	m := p.Get("m").Mistral
+	if !m.ApiBudgetReset().Equal(future) {
+		t.Fatalf("api reset lost in metadata: %v", m.ApiBudgetReset())
+	}
+	// A clone must not alias either budget.
+	c := m.clone()
+	c.Budget.ResetsAt = future.Add(time.Hour)
+	if m.ApiBudgetReset().Equal(c.ApiBudgetReset()) {
+		t.Fatal("clone aliases the api budget")
+	}
+	if c.VibeBudget == nil || m.VibeBudget == c.VibeBudget {
+		t.Fatal("clone aliases the vibe budget")
 	}
 }

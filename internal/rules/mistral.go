@@ -10,6 +10,15 @@ func DefaultMistralErrorRules() []ErrorRule {
 			When: Match{Statuses: []int{403}, BodyCodes: []string{"1910"}}, Reset: &Reset{Fallback: "24h"}, Note: "套餐不包含此模型：仅该账号×模型冷却24小时后复查，不隔离整号、不扣全局健康；资格变更后可手动恢复"},
 		{ID: "mistral-backend-out-of-capacity", Scope: ScopeModel, Action: ActionIgnore,
 			When: Match{Statuses: []int{429}, BodyCodes: []string{"3505"}}, Note: "上游后端容量不足，不是账号RPM或余额不足；不扣健康、不换号，保留429及Retry-After，由客户端退避"},
+		// Mistral answers a spent api_budget with 402 and the code 2303, and
+		// says nothing about when it resets. The budget read knows: cool the
+		// account until that workspace's api_budget.reset_at and let it come
+		// back by itself. This precedes the generic 402 rule so the specific
+		// code is not cooled for an arbitrary ten minutes.
+		{ID: "mistral-api-budget-exhausted", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
+			When:  Match{Statuses: []int{402}, BodyCodes: []string{"2303"}},
+			Reset: &Reset{Fallback: "10m", Max: "24h", BudgetReset: true},
+			Note:  "api_budget 用尽（402/2303）：冷却到该工作区 api_budget 的重置时间后自动恢复，不隔离账号、不扣全局健康；未读到重置时间时按最长 24 小时冷却并标注为估计值"},
 		{ID: "mistral-invalid-key", Scope: ScopeAccount, Action: ActionHardQuarantine, DownstreamStatus: 502,
 			When: Match{Statuses: []int{401}}, Note: "Mistral API Key 无效或已撤销，更换后恢复"},
 		{ID: "mistral-insufficient-credits", Scope: ScopeAccount, Action: ActionCooldown, DownstreamStatus: 503,
