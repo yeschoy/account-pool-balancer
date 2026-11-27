@@ -65,7 +65,10 @@ func TestMistralNativeThoughtAliasConservative(t *testing.T) {
 		{"ambiguous-native-not-folded", "zai-glm-5-3", "thought", `,"type":"thinking"`, "thought", 2},
 		{"signed-native-not-folded", "zai-glm-5-3", "thought", `,"signature":"synthetic-signature"`, "thought", 2},
 		{"unknown-metadata-not-folded", "zai-glm-5-3", "thought", `,"future_metadata":true`, "thought", 2},
-		{"other-model-unchanged", "mistral-large-4-0", "thought", "", "thought", 2},
+		// Every model accepts the native chunk and rejects the legacy field, so
+		// the redundant thought is folded for all of them; only the conservative
+		// cases above (different/signed/unknown/ambiguous) still keep both.
+		{"other-model-now-folds-too", "mistral-large-4-0", "thought", "", "thought", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"assistant","reasoning_content":%q,"content":[{"type":"thinking","thinking":[{"type":"text","text":%q}]%s},{"type":"text","text":"answer"}]}]}`, tc.model, tc.legacy, tc.thinking, tc.extra))

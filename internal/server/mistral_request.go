@@ -650,10 +650,21 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 						return nil, false, err
 					}
 				}
-				reasoning := message.get("reasoning_content")
+				// Every Mistral model rejects the OpenAI/Anthropic history
+				// extensions as extra_forbidden (measured 2026-11-28: the same
+				// 422 for reasoning_content, reasoning and thinking on
+				// mistral-small-latest), and all of them accept the native
+				// thinking chunk that carries the same thought. So the extra
+				// field is consumed for every model, not only the three exact
+				// reasoning models: dropping it would turn a 422 into a silent
+				// loss of the model's own reasoning on the next turn.
+				reasoning, err := mistralLegacyThoughtFields(message)
+				if err != nil {
+					return nil, false, err
+				}
 				// All three reasoning models use Mistral's native typed chunks.
 				// Preserve legacy assistant reasoning via the same representation.
-				if alias := message.get("reasoning"); reasoningAlias && alias != nil {
+				if alias := message.get("reasoning"); reasoningAlias && alias != nil && reasoning == nil {
 					if err := message.unique("reasoning", "reasoning_content", "content"); err != nil {
 						return nil, false, err
 					}
@@ -681,7 +692,10 @@ func mistralChatMessages(raw []byte, deepSeek, reasoningAlias bool) ([]byte, boo
 					if err := message.unique("content", "reasoning_content"); err != nil {
 						return nil, false, err
 					}
-					if err := mistralAssistantReasoning(message, reasoning, reasoningAlias); err != nil {
+					// Dedupe against native thought for every model: the chunk
+					// form is what all of them accept, so the same-thought case
+					// must not be prepended twice.
+					if err := mistralAssistantReasoning(message, reasoning, true); err != nil {
 						return nil, false, err
 					}
 				}
@@ -809,6 +823,56 @@ func mistralNativeThoughtMatches(chunks []json.RawMessage, text string) bool {
 		found = true
 	}
 	return found && offset == len(text)
+}
+
+// mistralLegacyThoughtFields removes the thinking aliases a Chat history may
+// carry and returns the thought they hold, as the raw JSON string the alias
+// used. Every Mistral model rejects these fields as extra_forbidden (measured
+// 2026-11-28: reasoning_content, reasoning and thinking all 422 on
+// mistral-small-latest), while all of them accept the native thinking chunk —
+// so the value is kept, not dropped, and the caller rewrites it.
+//
+// The aliases are folded in a fixed order (reasoning, then thinking) because
+// which one a client sends depends on the source model. Only a blank value
+// loses to a real thought; two different real thoughts cannot be merged without
+// inventing one, so they are refused locally instead of forwarded.
+func mistralLegacyThoughtFields(message *mistralWireObject) ([]byte, error) {
+	fields := []string{"reasoning", "thinking"}
+	if err := message.unique(append([]string{"reasoning_content"}, fields...)...); err != nil {
+		return nil, err
+	}
+	chosen := message.get("reasoning_content")
+	var chosenText *string
+	if chosen != nil {
+		if json.Unmarshal(chosen, &chosenText) != nil {
+			return nil, errors.New("Mistral assistant reasoning_content must be a string or null")
+		}
+	}
+	// An explicit null canonical field is no thought at all.
+	if chosenText == nil {
+		chosen = nil
+	}
+	for _, key := range fields {
+		raw := message.get(key)
+		if raw == nil {
+			continue
+		}
+		var text *string
+		if json.Unmarshal(raw, &text) != nil {
+			return nil, errors.New("Mistral assistant " + key + " must be a string or null")
+		}
+		if text != nil && strings.TrimSpace(*text) != "" {
+			if chosenText != nil && strings.TrimSpace(*chosenText) != "" && *chosenText != *text {
+				return nil, errors.New("Mistral assistant " + key + " conflicts with reasoning_content; neither thought was discarded")
+			}
+			chosen, chosenText = raw, text
+		}
+		message.set(key, nil)
+	}
+	// The canonical field is removed here too; the caller re-adds the thought
+	// as a native chunk through mistralAssistantReasoning.
+	message.set("reasoning_content", nil)
+	return chosen, nil
 }
 
 func mistralAssistantReasoning(message *mistralWireObject, reasoning []byte, preserveNative bool) error {

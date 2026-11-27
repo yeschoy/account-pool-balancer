@@ -431,3 +431,82 @@ func TestMistralPlanKeyUnknownTypeIsReadOnce(t *testing.T) {
 		})
 	}
 }
+
+// Issue #7216 section 7: a history replayed from another provider carries
+// reasoning fields Mistral forbids. Measured 2026-11-28 against the live
+// upstream with a Vibe key: reasoning_content, reasoning and thinking each
+// return 422 extra_forbidden on mistral-small-latest, while the native thinking
+// chunk returns 200 — for every model tried, not only the exact reasoning ones.
+func TestMistralThoughtFieldsConsumedForEveryModel(t *testing.T) {
+	e := newMistralEnv(t)
+	var mu sync.Mutex
+	var bodies []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			fmt.Fprint(w, `{"object":"list","data":[{"id":"any-model"}]}`)
+			return
+		case "/api/vibe/whoami", "/v1/billing/budget", "/v1/billing/subscription":
+			w.WriteHeader(500)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(b, &fields) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		// A model that refuses the extension fields, like the live upstream.
+		var msgs []map[string]json.RawMessage
+		_ = json.Unmarshal(fields["messages"], &msgs)
+		for _, m := range msgs {
+			for _, key := range []string{"reasoning_content", "reasoning", "thinking"} {
+				// reasoning_content is the pool's own canonical field and is
+				// always consumed before sending, so its presence is a bug too.
+				if _, bad := m[key]; bad {
+					w.WriteHeader(422)
+					fmt.Fprintf(w, `{"detail":[{"type":"extra_forbidden","loc":["body","messages",0,"assistant",%q]}]}`, key)
+					return
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"ok","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer up.Close()
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.BaseURL = up.URL + "/v1"
+		c.Quota.Enabled = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"mistral-small-latest", "mistral-large-4-0", "zai-glm-5-3", "deepseek-v4-1-flash-1017", "any-model"} {
+		for _, field := range []string{"reasoning_content", "reasoning", "thinking"} {
+			body := fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"q"},{"role":"assistant","content":"answer",%q:"thought"},{"role":"user","content":"again"}]}`, model, field)
+			if st, resp := e.post(t, "/v1/chat/completions", body, nil); st != 200 {
+				t.Fatalf("%s/%s: %d %s", model, field, st, resp)
+			}
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, b := range bodies {
+		// The native chunk legitimately contains "thinking":[...] and
+		// "type":"thinking"; only the OpenAI/Anthropic fields may not appear.
+		for _, leaked := range []string{`"reasoning_content"`, `"reasoning":`, `"thinking":`} {
+			if leaked == `"thinking":` && !strings.Contains(b, `"content":"answer"`) {
+				continue // the native chunk form, checked separately below
+			}
+			if strings.Contains(b, leaked) {
+				t.Fatalf("extension field reached the upstream: %s", b)
+			}
+		}
+		if !strings.Contains(b, `"type":"thinking"`) {
+			t.Fatalf("the thought was dropped instead of converted: %s", b)
+		}
+	}
+}

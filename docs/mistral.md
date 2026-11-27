@@ -311,6 +311,20 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 
 请求日志的模型列出现「计划键」徽标（`mistralPlanKey`），表示这一次实际带上了由号池追加的元数据；调用方自带的 metadata 不会让该标记为真，也不会被记录内容。
 
+### issue #7216 第二节：其他模型历史里的推理字段（2026-11-28 实测并修复）
+
+报告评论区提到「切到 Mistral 后带 `reasoning_content` 的旧会话被 422 `extra_forbidden` 拒绝」。用同一把 Vibe Key 对真实上游复核：**`reasoning_content`、`reasoning`、`thinking` 三个字段各自都会触发 422**（`mistral-small-latest`，位置 `body.messages[0].assistant.<字段>`），加不加 `call_source` 都一样；而**原生 thinking 块**（`content:[{"type":"thinking","thinking":[{"type":"text",...}]}]`）在 `mistral-small-latest`、`zai-glm-5-3` 上都返回 200。
+
+因此 Chat 历史的扩展字段兼容**从三个精确推理模型扩展到所有模型**：
+
+- 任何模型的 assistant 消息里出现 `reasoning` / `thinking` / `reasoning_content` 时，取值后改写成原生 thinking 块（保留原回答、工具调用、数字与顺序），不再原样转发去吃 422。
+- 值相同则合并成一个思考块；一方是空白占位、另一方是真思考时取真的那个（保留原始字节，不做 trim）；**两个不同的真思考**本地 400 并说明冲突，不擅自挑一个、也不转发。
+- 新值会与已有的原生 thinking 块比对：完全一致就不再重复插入（此前只有三个精确模型做这个去重）。
+- 显式 `null` 视为「没有思考」，直接移除该字段。
+- effort 别名（`reasoning:{effort}` → `reasoning_effort`）仍然只在三个精确模型的 Chat 上生效，不随本次外溢。
+
+这个改动的意义是**不丢信息**：issue 建议的本地代理做法是把这些字段全删掉，那会让模型下一轮看不到自己上一轮的思考；本池改成换成上游接受的原生表示。
+
 ### 2026-11-27 线上实测（三把 kevin-11.26 Vibe Key）
 
 在 OVH 上直接读取 `data/config.json` 里 `kevin-11.26-0{1,2,3}-vibe-花钱` 的 Key（只经 TLS 直连 api.mistral.ai 使用，不落盘、不回显、不写日志），对同一 endpoint 做单变量对照。三把 Key 结果完全一致：

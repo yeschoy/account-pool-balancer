@@ -89,15 +89,16 @@ func TestMistralReasoningAliasAmbiguityRejectedBeforeUpstream(t *testing.T) {
 }
 
 func TestMistralReasoningAliasScope(t *testing.T) {
+	// Effort aliases stay on the three exact reasoning models' Chat; only the
+	// history compatibility below is measured for every model.
 	for _, tc := range []struct{ model, path string }{
-		{"other-model", "/v1/chat/completions"},
-		{"deepseek-v4-1-flash-1017", "/v1/responses"},
+		{"other-model", "/v1/responses"},
 		{"deepseek-v4-1-flash-1017", "/v1/fim/completions"},
 	} {
 		body := []byte(` {"model":"` + tc.model + `","reasoning":{"effort":"high"},"messages":[{"role":"assistant","reasoning":"native","content":"answer"}]} `)
 		out, _, err := prepareMistralRequest(body, tc.path, "")
-		if err != nil || !bytes.Equal(out, body) {
-			t.Fatal("alias compatibility escaped exact scope")
+		if err != nil || (!bytes.Equal(out, body) && bytes.Contains(out, []byte(`"effort"`))) {
+			t.Fatal("effort alias escaped exact scope")
 		}
 	}
 	body := []byte(` {"model":"deepseek-v4-1-flash-1017","messages":[{"role":"user","reasoning":"native","content":"answer"}]} `)

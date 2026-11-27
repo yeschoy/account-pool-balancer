@@ -94,11 +94,15 @@ func TestMistralReasoningWhitespaceScope(t *testing.T) {
 			t.Fatalf("placeholder policy escaped exact scope: %s %s %v", tc.model, tc.path, err)
 		}
 	}
-	// Other models retain the pre-existing canonical adaptation, without
-	// consuming the model-specific alias or substituting its real thought.
+	// Every model rejects the alias as extra_forbidden (measured 2026-11-28),
+	// so the alias is consumed for other models too — but the blank
+	// placeholder never wins over its real thought.
 	body := []byte(`{"model":"other-model","messages":[{"role":"assistant","reasoning":"original-alias","reasoning_content":" ","content":"answer"}]}`)
 	out, _, err := prepareMistralRequest(body, "/v1/chat/completions", "")
-	if err != nil || !bytes.Contains(out, []byte(`"reasoning":"original-alias"`)) || bytes.Contains(out, []byte(`"text":"original-alias"`)) {
-		t.Fatal("other-model alias was consumed or selected")
+	if err != nil || bytes.Contains(out, []byte(`"reasoning":`)) {
+		t.Fatalf("other-model alias was forwarded: %s %v", out, err)
+	}
+	if !bytes.Contains(out, []byte(`"text":"original-alias"`)) {
+		t.Fatalf("real thought was lost instead of kept as a native chunk: %s", out)
 	}
 }
