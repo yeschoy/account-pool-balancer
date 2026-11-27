@@ -38,6 +38,19 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：余额与选号改按实际扣费窗口（2026-11-27 20:07 UTC，670c5f0）
+
+- 背景：计划键开启后，Vibe Key 的 Chat/Responses 扣 `vibe_budget`（2026-11-28 实测）。而界面与选号仍按 `api_budget`，于是 `kevin-11.26-0x-vibe` 这三把（api 30 USD 已 100%、vibe 300 USD 未动）在界面显示「已用尽」、在排序里被排到最后——能用的号被当成不能用。
+- `670c5f0`：新增唯一判定 `quota.MistralState.UsableBudget(planKeyForVibe)`——CHAT + 计划键开启取 `vibe_budget`，否则取 `api_budget`，都没有则 nil（未知，不当 0）；`vibe.Total==0` 不算可用。选号 seat、概览合计、工作区行、账号行、前端标签全部改走这一处；`mistral.budget` 持久化字段含义不变（仍是 api 原始读数），判定只在读取侧，旧快照可直接读。计划键关闭时输出与改动前逐字一致（既有 `TestMistralOverviewTotalsApiBudgetOnly`、`TestMistralChatKeyRanksByApiBudget` 仍通过）。
+- 新增测试：`TestMistralUsableBudgetFollowsPayingWindow`（7 组，含 TOTAL=0/未知类型/空状态）、`TestMistralVibeKeyRanksByVibeBudgetWhenPlanKeyOn`（同一快照开关两态排序相反、Studio 不受影响）、`TestMistralOverviewUsesPayingWindowInPlanKeyMode`（off=0 / on=300、api 作对照、Studio 不变、过期不进合计）、`mistral_web_test.js` 两种 verdict 标题互斥。提交前 `gofmt`、`go vet ./...`、`go build ./cmd/odb`、`go test ./internal/...` 全通过。
+- **20:06:26 UTC** push `670c5f0`，远端 `git archive` 至 `/home/ubuntu/project/account-pool-balancer-releases/20261127T200629Z-670c5f0/`，构建 `account-pool-balancer:release-670c5f0-20261127T200629Z`（`sha256:69c92025…`）。旧镜像保留为 `rollback-20261127T200629Z`。
+- 备份 **20:06:47**：`data.tgz`（SHA256 前16位 `e99e2d772679291b`，`gzip -t` 通过）存 `/home/ubuntu/backups/account-pool-balancer/20261127T200629Z-mistral-paying-window-670c5f0/`。
+- **20:06:49** 切换，**20:07:33** Docker healthy（0 重启、非 OOM、1000:1000、Healthcheck 存在）。停机约 5 秒。
+- 验收：`ai-internal` 双别名保留，`new-api` 容器到 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`；公网 `/healthz` 200；329 账号 / 20 下游 Key / `chatMetadata=chat-key` 保留；启动后 5 分钟日志无 error/panic；10 次全新会话全部 200。
+- 口径实证（只读快照）：`kevin-11.26-03-vibe-花钱` 旧判定 `api used=100%`（视为已用尽），新判定取 vibe `used=0.0000%`（视为 300 USD 可用）；同批三把 studio 号仍是 api=0、不受影响。
+- 未做：管理员概览页需登录，本轮未做浏览器点击核对；概览数字与上游实际扣费的对照需在真实流量跑满窗口后再核。若上游再改计费归属，只需改 `UsableBudget` 一处。
+- 镜像 `account-pool-balancer:release-670c5f0-20261127T200629Z`；回退 `account-pool-balancer:rollback-20261127T200629Z`（= `c6c1132`）。
+
 ## 计划键修复的真·端到端验证（2026-11-28 03:52–03:56 UTC，未改代码，只操作配置）
 
 用户指出此前只用「池外直连」证明，没有跑过「key 进池 → Balancer → 上游」的完整链路。用用户提供的 `mstrl_Gpw4…`（与池内 `kevin-11.26-02-vibe-花钱` 同一把，org `8d8f124d`）补齐。
