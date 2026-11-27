@@ -38,6 +38,20 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 号池余额改取 api_budget、402/2303 冷却到重置时间（2026-11-27 06:37 UTC，874e1c8）
+
+- 线上问题：`kevin-11.26` 六把号（三 vivo + 三 studio）的 `api_budget` 均 30 USD、已用 100%，而 `vibe_budget` 300 USD、已用 0%；推理请求全部 `402 {"type":"billing_api_budget_exhausted","code":"2303"}`。旧实现按「CHAT 取 vibe_budget」显示「剩 300」，排序与概览合计也按 300 计算。Mistral 规定第三方工具/网关调用 `/v1/chat/completions` 只扣 `api_budget`。
+- `874e1c8`：账号余额一律取 `api_budget`；`vibe_budget` 只展示并标注「仅限 Mistral 官方产品，号池调用不扣此项」，不参与排序/合计；新增出厂规则 `mistral-api-budget-exhausted` 把 402/2303 冷却到 `api_budget.reset_at`（无可用重读取 `max(24h, fallback)` 并在账号状态行注明是估计值），不隔离、不扣健康；其他 402 不变；规则升级只替换与历史出厂列表逐字相同的列表。同提交 `go test ./...`、`go vet ./...`、`go test -race ./internal/server ./internal/quota` 全部通过，17 个 Node 前端测试通过，并在本地用假 Key + Mock 上游的真实浏览器完成额度刷新与概览核对（截图见本地记录）。
+- 一次预检：线上旧镜像 `release-488aa6b-20261126T154958Z`，healthy、0 重启、非 OOM、`User=1000:1000`、8GiB、`Config.Healthcheck` 存在；旧工作树 `05e0044` 不是构建源，未在其中构建。磁盘余量 238GiB。
+- 从远端 `git fetch` 的目标提交 `git archive` 提取 989 文件至 `/home/ubuntu/project/account-pool-balancer-releases/20261127T063642Z-874e1c8/`。**06:37:00.627–06:37:08.529 UTC** 构建镜像 `account-pool-balancer:release-874e1c8-20261127T063642Z`（`sha256:5c748db0…`，OCI revision `874e1c8`）。旧镜像保留为 `account-pool-balancer:rollback-20261127T063642Z`。
+- 一致备份 **06:37:25.438–06:37:28.825** 完成：`data.tgz` 109,999,840 字节（`gzip -t` 通过，SHA256 前16位 `a6aad9e0ecd86cea`），连同 compose、`.env`、`config.json` 存 `/home/ubuntu/backups/account-pool-balancer/20261127T063642Z-mistral-api-budget-874e1c8/`（0700）。Compose 有效配置对比**仅 image 不同**（网络别名、Healthcheck、资源、挂载均保留）。
+- **06:37:38.412** 请求切换，**06:37:39.040** 新容器启动，**06:38:09.412** Docker healthy（0 重启、非 OOM、1000:1000、Healthcheck 存在）。健康等待不计为停机。
+- 验收：`new-api` 容器到 `http://account-pool-balancer:8790/healthz` 与 `http://opendesign-balancer:8790/healthz` 均 `{"ok":true}`，宿主机 `/healthz` 200；`ai-internal` 保留 `account-pool-balancer` 与 `opendesign-balancer` 两个别名。`config.json` 字节不变（SHA256 前16位 `84b031e4067278a8`），`revision 6991`、329 账号、20 下游 Key、11 条 Mistral 错误规则全部保留。运行中 `/usr/local/bin/odb` 含 `mistral-api-budget-exhausted`；公网 `https://ods.yeschoy.io/healthz` 200，`/assets/app.js?v=4e7e7452ea` 含「号池可用（api_budget）」与「仅限 Mistral 官方产品」文案。
+- 数据侧实证（只读）：部署后后台轮询已按新契约写入——`kevin-11.26-01-studio-花钱`（API）与 `kevin-11.26-01-vibe-花钱`（CHAT）的 `mistral.budget` 均为 **30 USD / 100%**，并各自带 `vibeBudget 300 / 0%`；两者同一 org 去重。其余四把（`02`/`03` 的 studio 与 vibe）在 14:35 已读到 api 30/100%，但仍是旧程序写的、未保存 `vibeBudget` 字段的快照，下一轮轮询或手动刷新后同一界面即按 api_budget 显示（不再显示「剩 300」）。
+- 未做：本轮**未用凭据登录生产管理台做浏览器点击验收**（管理员 API 需登录）；功能结论来自同提交的本地浏览器+Mock 实操作与线上只读数据核对，不冒充生产 UI 点击验收。也未主动发生产推理、未重放 402 请求，因此尚未采集部署后自然发生的 2303 冷却样本。另有 97 个 Mistral 账号额度读取 `HTTP 401`（`zxg-11.19-*`、`kevin-11.19-*`、`tang-11.24-*` 等，`kevin-11.26` 不在其中），属既有 Key 失效，本轮未处理。
+- 回退：沿线上 Compose 叠加 `deploy-image.override.yml` 改回 `account-pool-balancer:rollback-20261127T063642Z`，`up -d --no-build --no-deps account-pool-balancer`；不自动用旧 data 覆盖上线后写入。注意：旧版不认识 `mistral.vibeBudget` 与 `reset.budgetReset`，回退后 CHAT 号会重新显示 vibe 金额。
+- release `/home/ubuntu/project/account-pool-balancer-releases/20261127T063642Z-874e1c8/`（含 `deploy-image.override.yml`）。
+
 ## Deploy 缓存命中排查（2026-11-26 16:09–16:25 UTC，只读，未部署）
 
 - **官方文档核对**（`docs.deploy.com/prompt-caching`、`/errors-and-limits`）：缓存全自动，官方只承诺"共享前缀 + 紧邻发送"；**官方文档没有 `cache_preference` 字段**。`internal/config/deploy.go:31` 注释称其为 "Deploy's documented"，这个依据不成立（字段本身实测有效，见下）。
