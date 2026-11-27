@@ -55,6 +55,9 @@ type Server struct {
 	secret         []byte
 	mistralAudit   *mistralCacheAudit // opt-in, per-key/TTL/budget bounded; no routing effect
 	mistralLayouts *mistralLayouts    // bounded type/length/digest replay metadata, no text
+	// mistralTypeRead serializes the on-demand one-off key-type read that the
+	// plan-key mode needs for an account whose quota was never read.
+	mistralTypeRead flightSet
 
 	poolWorkMu     sync.Mutex
 	poolWork       map[string]context.Context

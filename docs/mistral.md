@@ -276,7 +276,7 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 | 配置 | 行为 |
 |---|---|
 | `off`（默认/缺省） | 一个字节都不加，调用方 body 原样转发 |
-| `chat-key` | 仅对**本池账号**中工作区额度读取已确认 `keyType=CHAT`（Vibe Key）的账号追加；未读过的 Key 视为未知，不注入 |
+| `chat-key` | 仅对判为 Vibe Key 的账号追加。判定只认 `GET /api/vibe/whoami` 的 `plan_type == "CHAT"`（实测：vibe = `CHAT/INDIVIDUAL`，studio = `API/FREE`，两种 Key 长度和形状完全相同，按名字/前缀猜不出来）。**类型没读过时，会为该账号按需读一次（单飞、20 秒上限）再决定**；读不到才不注入 |
 | `all-keys` | 本池所有 Key 的 Chat 都追加 |
 
 `call_source` 只接受 `vibe_code`（留空即此值），`client_name` 只接受空或 `vibe_programmatic`。两者都是枚举字面量：本池不提供任意 body 模板，避免把请求稳定记到错误的那本账或伪造计费来源。配置为自由值或未知 mode 时保存直接 400，不落盘。
@@ -323,6 +323,16 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 - 502/402 的差异与出口无关：02 号配置的 SOCKS 代理当时连不通（`socks hello failed`），同一把 Key 直连即正常，说明问题不在代理也不在 Key 本身。
 - 因此**路由范围扩到 `/v1/responses`**（实测同样 200），`/v1/embeddings` 也验证可行但本轮按「只动生成请求」的既定范围**不接入**；`input_tokens`、FIM 无实测证据，保持原字节不动。
 - 客户端若自己带了 `metadata.call_source`（哪怕值不对），本池一律不改——那是它自己的计费选择，池子不替它纠正。
+
+### 未知类型不再默认成「不是 vibekey」（2026-11-28）
+
+上一版把「没读过的 Key」直接当成非 Vibe 处理，静默不注入——那正好会漏掉刚导入、还没轮询到额度的新号（kevin 三把 studio/vibe 导入时就属于这种状态），现象就是「明明配了开关还是 402」。
+
+现在 `chat-key` 模式下的判定是：已读过 → 按 `keyType` 走；没读过 → 对该账号按需执行一次 `RefreshNow`（同账号单飞，避免并发重复读；20 秒上限，慢出口不会拖住请求），拿到 `plan_type` 再决定。仍然读不到（网络/出口问题）就不注入，不会假装它是 Vibe Key。
+
+代价：一个从未读过额度的 Vibe 号，它的**第一条** Chat/Responses 请求会多等一次 whoami+budget+subscription 读取（正常出口约百毫秒级，配额轮询随后接管）。之后命中缓存快照，不再读。
+
+注意这里读的是**整份额度快照**，会顺带把该号的 `api_budget`/`vibe_budget` 刷新到界面——这不是新行为，手动刷新和后台轮询本来就会做同样的事，只是这次由请求触发。
 
 ### 未做 / 仍属未知
 

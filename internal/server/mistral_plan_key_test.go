@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,14 +92,12 @@ func TestMistralPlanKeyScopesAndKeyType(t *testing.T) {
 		{"token counting untouched", all, "/v1/responses/input_tokens", vibe, mistralAccount, false},
 		{"FIM untouched", all, "/v1/fim/completions", vibe, mistralAccount, false},
 		{"embeddings untouched", all, "/v1/embeddings", vibe, mistralAccount, false},
-		{"chat-key with a read CHAT key", chatKey, "/v1/chat/completions", vibe, mistralAccount, true},
-		{"chat-key with a read API key", chatKey, "/v1/chat/completions", studio, mistralAccount, false},
-		{"chat-key with an unread key", chatKey, "/v1/chat/completions", nil, mistralAccount, false},
-		{"chat-key without a Mistral state", chatKey, "/v1/chat/completions", &quota.Snapshot{}, mistralAccount, false},
-		{"chat-key never decides another pool's account", chatKey, "/v1/chat/completions", vibe, config.Account{ID: "x", Provider: config.ProviderFactory}, false},
+		{"chat-key with a Vibe verdict", chatKey, "/v1/chat/completions", vibe, mistralAccount, true},
+		{"chat-key with a Studio verdict", chatKey, "/v1/chat/completions", studio, mistralAccount, false},
+		{"chat-key without a read verdict", chatKey, "/v1/chat/completions", nil, mistralAccount, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, applied := applyMistralPlanKey(body, tc.path, tc.tpl, tc.acct, tc.snap)
+			out, applied := applyMistralPlanKey(body, tc.path, tc.tpl, tc.acct, tc.snap != nil && tc.snap.Mistral != nil && tc.snap.Mistral.KeyType == "CHAT")
 			if applied != tc.want {
 				t.Fatalf("applied=%v want %v", applied, tc.want)
 			}
@@ -349,8 +349,85 @@ func TestMistralPlanKeyMeasuredShapes(t *testing.T) {
 	}
 	// Token counting and FIM returned no measurement: they keep their bytes.
 	for _, path := range []string{"/v1/responses/input_tokens", "/v1/fim/completions"} {
-		if _, applied := applyMistralPlanKey([]byte(`{"model":"m"}`), path, tpl, config.Account{Provider: config.ProviderMistral}, nil); applied {
+		if _, applied := applyMistralPlanKey([]byte(`{"model":"m"}`), path, tpl, config.Account{Provider: config.ProviderMistral}, true); applied {
 			t.Fatalf("%s must stay unverified and untouched", path)
 		}
+	}
+}
+
+// A key whose type was never read must not be treated as a Studio key: that
+// would silently keep the 402 the mode exists to fix. The request reads the
+// type once, then decides from the workspace's own answer.
+func TestMistralPlanKeyUnknownTypeIsReadOnce(t *testing.T) {
+	for _, kind := range []string{"CHAT", "API"} {
+		t.Run(kind, func(t *testing.T) {
+			e := newMistralEnv(t)
+			var reads int
+			var sent []string
+			var mu sync.Mutex
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/vibe/whoami":
+					mu.Lock()
+					reads++
+					mu.Unlock()
+					fmt.Fprintf(w, `{"plan_type":%q,"plan_name":"INDIVIDUAL","customer_id":"ws-1234567890"}`, kind)
+				case "/v1/billing/budget":
+					fmt.Fprintf(w, `{"api_budget":{"initial_budget":30,"usage_percentage":100,"currency":"USD","reset_at":%q,"payg_enabled":false}}`, time.Now().Add(24*time.Hour).Format(time.RFC3339))
+				case "/v1/billing/subscription":
+					fmt.Fprint(w, `{"plan_name":"INDIVIDUAL","payg_enabled":false,"vibe_payg_enabled":false}`)
+				case "/v1/models":
+					fmt.Fprint(w, `{"object":"list","data":[{"id":"m"}]}`)
+				default:
+					b, _ := io.ReadAll(r.Body)
+					mu.Lock()
+					sent = append(sent, string(b))
+					mu.Unlock()
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{"id":"reply","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+				}
+			}))
+			defer up.Close()
+			if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+				c.Mistral.BaseURL = up.URL + "/v1"
+				c.Mistral.ChatMetadata = &config.MistralChatMetadata{Mode: config.MistralChatMetadataChatKey, CallSource: config.MistralCallSourceVibeCode}
+				r := c.Routing
+				r.MaxAccounts = 1
+				c.Mistral.Routing = &r
+				c.Quota.Enabled = false
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if snap := e.s.quota.View("m1"); snap != nil && snap.Mistral != nil {
+				t.Fatalf("precondition: type must start unknown: %+v", snap.Mistral)
+			}
+			if st, resp := e.post(t, "/v1/chat/completions", `{"model":"m","messages":[]}`, nil); st != 200 {
+				t.Fatalf("%d %s", st, resp)
+			}
+			mu.Lock()
+			first := reads
+			mu.Unlock()
+			if first == 0 {
+				t.Fatal("an unknown key type was not read before deciding")
+			}
+			mu.Lock()
+			body := sent[len(sent)-1]
+			mu.Unlock()
+			has := strings.Contains(body, `"call_source":"vibe_code"`)
+			if has != (kind == "CHAT") {
+				t.Fatalf("%s key injected=%v: %s", kind, has, body)
+			}
+			// A second request must reuse the read, not go to whoami again.
+			if st, _ := e.post(t, "/v1/chat/completions", `{"model":"m","messages":[]}`, nil); st != 200 {
+				t.Fatal("second request failed")
+			}
+			mu.Lock()
+			second := reads
+			mu.Unlock()
+			if second != first {
+				t.Fatalf("type was re-read per request: %d -> %d", first, second)
+			}
+		})
 	}
 }

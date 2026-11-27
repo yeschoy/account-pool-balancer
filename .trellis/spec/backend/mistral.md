@@ -219,7 +219,7 @@ Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
 - 只在根上**没有** `metadata` 字段时追加 `"metadata":{"call_source":"vibe_code"[,"client_name":"vibe_programmatic"]}`；调用方自带的对象或显式 `null` 一律不动（可能是它自己选的账本）。不合并、不覆盖、不重排既有字节；尾部空白/换行保持在对象之外。
 - 值枚举：`callSource ∈ {"", "vibe_code"}`（空→`vibe_code`），`clientName ∈ {"", "vibe_programmatic"}`。不提供任意 body/header 模板：任意值会把请求稳定记到错误的账本，等于伪造计费来源。
 - 仅 Chat 与 Responses（`mistralPlanKeyPath`）；`/responses/input_tokens`、FIM、Embeddings 与非 Mistral 池永不追加（前两者无实测，后者按「只动生成请求」范围排除）。
-- `chat-key` 只对工作区额度读取确认 `mistral.keyType == "CHAT"` 的本池账号生效；未读、读取失败或残留快照缺失视为未知 → 不注入，也不按 Key 字符串/账号名猜测。
+- `chat-key` 只对判为 Vibe 的本池账号生效。判定只认 `whoami.plan_type == "CHAT"`（实测 vibe=`CHAT/INDIVIDUAL`、studio=`API/FREE`，Key 长度形状一致，不能按名字/前缀猜）。`mistralKeyIsVibe` 对**未知类型**按需读一次（`flightSet` 单飞 + `mistralKeyTypeReadTimeout` 20s，走既有 `quota.Poller.RefreshNow`），读到再决定；读不到才不注入。不得把「未知」默认成「非 Vibe」（会静默漏掉新导入的号、继续 402），也不得默认成 Vibe（会给没有该额度的 Key 打计费标记）。
 - 不改 prompt_cache_key / X-Affinity / 身份 HMAC / 布局记录 / 会话绑定 / 额度排序 / 错误规则；`all-keys` 追加发生在准备之后，重试与换号复用同一份已准备 body（同一请求内 payload 稳定）。
 - 不承诺额度提升：注入生效与否以后续真实 `/v1/billing/budget` 读数与 402/2303 是否消失为准；如果生效，消耗会转到 `vibe_budget` 而 `api_budget` 不再下降，界面「号池可用（api_budget）」因此不再代表实际消耗速度——这个口径变化须等真实读数再决定，不在本轮改语义。
 
@@ -229,7 +229,9 @@ Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
 | 未配置 / `off` | 调用方 body 逐字节转发，日志无 `mistralPlanKey` |
 | `all-keys`，根无 metadata | 追加一次；重试/换号 body 相同、标记仍只有一个 |
 | `all-keys`，根有 metadata 对象或 `null` | 不改任何字节，不标记 |
-| `chat-key`，CHAT Key / API Key / 未读 Key | 追加 / 不追加 / 不追加 |
+| `chat-key`，CHAT Key / API Key | 追加 / 不追加 |
+| `chat-key`，类型未读 | 按需读一次后按真实类型决定；这次请求最多多 20s，读后同账号并发不重复读 |
+| `chat-key`，类型读取失败 | 不注入（不假装是 Vibe），下次请求重试 |
 | Responses | 与 Chat 同样追加（实测 200） |
 | 计数、FIM、Embeddings | 永不追加 |
 | mode 非枚举、callSource 非 `vibe_code`、clientName 非 `vibe_programmatic` | 保存 400，线上配置不变 |

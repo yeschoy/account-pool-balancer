@@ -2,15 +2,17 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"account-pool-balancer/internal/config"
-	"account-pool-balancer/internal/quota"
 )
 
 // mistralWireObject is a view over already validated JSON. Replacement values
@@ -299,20 +301,78 @@ func planKeyTemplate(cfg *config.Config) config.MistralChatMetadata {
 // With mode chat-key the decision belongs to the sending account, so this runs
 // in the attempt after selection and uses the workspace's read key type rather
 // than the key string: an unread key is unknown and is not assumed to be Vibe.
-func applyMistralPlanKey(body []byte, path string, t config.MistralChatMetadata, acct config.Account, snap *quota.Snapshot) ([]byte, bool) {
+func applyMistralPlanKey(body []byte, path string, t config.MistralChatMetadata, acct config.Account, vibe bool) ([]byte, bool) {
 	if !mistralPlanKeyPath(path) {
 		return body, false
 	}
 	switch t.Mode {
 	case config.MistralChatMetadataAllKeys:
 	case config.MistralChatMetadataChatKey:
-		if !mistralVibeKey(acct, snap) {
+		if !vibe {
 			return body, false
 		}
 	default:
 		return body, false
 	}
 	return appendMistralPlanKeyMetadata(body, t)
+}
+
+// mistralKeyIsVibe reports whether this account's key was read as a CHAT
+// (Vibe) key, resolving an unknown type on demand. A key the pool has never
+// read is not evidence of a Studio key: guessing "not Vibe" would silently keep
+// sending the 402 the mode exists to fix, and guessing "Vibe" would attach a
+// billing marker to a key that may not have that allowance. So an unknown type
+// is read once (bounded, single-flight per account) and the answer comes from
+// the workspace's own whoami — the only field that separates the two, as both
+// key kinds are the same length and shape.
+func (s *Server) mistralKeyIsVibe(ctx context.Context, acct config.Account) bool {
+	if acct.Provider != "" && acct.Provider != config.ProviderMistral {
+		return false
+	}
+	if snap := s.quota.View(acct.ID); snap != nil && snap.Mistral != nil && snap.Mistral.KeyType != "" {
+		return snap.Mistral.KeyType == "CHAT"
+	}
+	if !s.mistralTypeRead.begin(acct.ID) {
+		return false // a read is already in flight; this request keeps its bytes
+	}
+	defer s.mistralTypeRead.done(acct.ID)
+	rctx, cancel := context.WithTimeout(ctx, mistralKeyTypeReadTimeout)
+	defer cancel()
+	if err := s.quota.RefreshNow(rctx, acct); err != nil {
+		return false
+	}
+	snap := s.quota.View(acct.ID)
+	return snap != nil && snap.Mistral != nil && snap.Mistral.KeyType == "CHAT"
+}
+
+// mistralKeyTypeReadTimeout bounds the one-off read that decides the plan-key
+// scope. A slow or unreachable egress must not hold the request that triggered
+// it: the pool retries the read on the next request instead.
+const mistralKeyTypeReadTimeout = 20 * time.Second
+
+// flightSet serializes one on-demand key-type read per account.
+type flightSet struct {
+	mu sync.Mutex
+	on map[string]bool
+}
+
+func (f *flightSet) begin(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.on == nil {
+		f.on = map[string]bool{}
+	}
+	if f.on[id] {
+		return false
+	}
+	f.on[id] = true
+	return true
+}
+
+func (f *flightSet) done(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.on, id)
 }
 
 // mistralPlanKeyPath lists the generation endpoints where the measured
@@ -342,15 +402,6 @@ func appendMistralPlanKeyMetadata(body []byte, t config.MistralChatMetadata) ([]
 	out = append(out, field...)
 	out = append(out, o.body[o.end:]...)
 	return out, true
-}
-
-// mistralVibeKey reports whether this account's key was read as a CHAT (Vibe)
-// key. The type comes only from the workspace quota read.
-func mistralVibeKey(acct config.Account, snap *quota.Snapshot) bool {
-	if acct.Provider != "" && acct.Provider != config.ProviderMistral {
-		return false
-	}
-	return snap != nil && snap.Mistral != nil && snap.Mistral.KeyType == "CHAT"
 }
 
 // mistralPlanKeyTemplate renders the constrained template as a JSON object.

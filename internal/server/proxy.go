@@ -1850,8 +1850,14 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// that the first-party client sends, or the upstream bills the spent
 		// developer API budget and answers 402 even with Vibe allowance left.
 		// The decision is this attempt's account, so chat-key mode appends here,
-		// after selection; all-keys mode already appended in prepare.
-		withPlanKey, applied := applyMistralPlanKey(body, r.URL.Path, planKeyTemplate(cfg), acct, s.quota.View(acct.ID))
+		// after selection; all-keys mode already appended in prepare. An account
+		// whose key type was never read is read once here rather than assumed.
+		planKeyMode := planKeyTemplate(cfg)
+		vibe := false
+		if planKeyMode.Mode == config.MistralChatMetadataChatKey {
+			vibe = s.mistralKeyIsVibe(actx, acct)
+		}
+		withPlanKey, applied := applyMistralPlanKey(body, r.URL.Path, planKeyMode, acct, vibe)
 		body, res.mistralPlanKey = withPlanKey, applied
 		if applied {
 			rec.MistralPlanKey = true
