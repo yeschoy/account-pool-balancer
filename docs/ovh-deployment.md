@@ -38,6 +38,14 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 恢复 kevin-11.26 三把 Vibe 号的硬隔离（2026-11-28 04:1x UTC）
+
+- 现场：三把 `kevin-11.26-0{1,2,3}-vibe-花钱` 均为 `enabled=true`、`keyType=CHAT`、`vibeRem≈300`、无错误，但被 `hardQuarantined=true / ruleId=402` 挡在选号之外——是**计划键修复之前**累积的 402 隔离（更新时间 11-27 21:24、11-28 00:19、11-28 03:55），修复只改新请求的行为，不会回滚历史状态。
+- 处理：通过管理员会话调用既有 `POST /api/accounts/{id}/recover`（等价 `Pool.Recover`，只清运行时状态，不改配置/凭据），三把 `{"ok":true}`；随后 `POST .../refresh-quota` 两把返回「套餐额度已刷新」。
+- 复核（管理员账号视图）：三把均 `quarantined=None`、`quotaFresh=true`、`keyType=CHAT`、`apiRem=0`、`vibeRem=300`；`metadata.json` 中 `accountStates` 已无这三条硬隔离记录。
+- 业务验证：恢复后 8 次全新会话全部 200；日志出现 `kevin-11.26-03-vibe-花钱 / 200 / mistralPlanKey=true`，说明它重新参与选号且注入生效。
+- 未改代码、未重启容器（`SIGHUP`/无）；管理员密码仅在远端内存使用，未回显、未落盘。
+
 ## 当前部署：余额与选号改按实际扣费窗口（2026-11-27 20:07 UTC，670c5f0）
 
 - 背景：计划键开启后，Vibe Key 的 Chat/Responses 扣 `vibe_budget`（2026-11-28 实测）。而界面与选号仍按 `api_budget`，于是 `kevin-11.26-0x-vibe` 这三把（api 30 USD 已 100%、vibe 300 USD 未动）在界面显示「已用尽」、在排序里被排到最后——能用的号被当成不能用。
