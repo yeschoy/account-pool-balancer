@@ -38,6 +38,21 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：Mistral 计划键元数据注入（2026-11-27 08:54 UTC，3475058）
+
+- 背景（issue `yetone/magpie#7216`）：上游按请求体里有没有 `metadata.call_source` 决定把一笔 Chat/Responses 记到 `api_budget`（$30，第三方网关默认）还是 `vibe_budget`（订阅 300 USD）。`kevin-11.26` 三把 Vibe Key 的 `api_budget` 已 100%、`vibe_budget` 为 0% 使用，所以号池固定 402/2303。
+- **上线前实测**（OVH 上直连上游，三把 Key 单变量对照，三把一致）：裸 body 402；`metadata.call_source`（`vibe_code` 或 `other`）200；只有 `client_name`、`metadata:{}`、顶层 `call_source` 均 402。`/v1/responses`、`/v1/embeddings` 同为 402→200。钱包归属：带 call_source 的 5 次 Chat 后 `vibe_budget` 1e-6%→6e-6%、`api_budget` 不动，确实记到 Vibe 账上。
+- `3475058`：新增默认关闭的「Chat 计划键元数据」（`off` / `chat-key` / `all-keys`），只在根上完全没有 `metadata` 时 append-only 追加一个字段，调用方自带 metadata（含 null）一字不改；值枚举 `vibe_code` / `vibe_programmatic`；范围 Chat + Responses，计数/FIM/Embeddings 不动；`chat-key` 按工作区读取的 `keyType=CHAT` 决定，未读 Key 视为未知不注入；请求日志新增 `mistralPlanKey` 标记。顺带修复控制台编辑「同工作区额度复用窗口」保存被丢弃的问题。提交前 `gofmt`/`go vet ./...`/`go build ./cmd/odb`/`go test ./internal/...`（go1.26.8）与 `node mistral_web_test.js` 全部通过。
+- 预检：线上旧镜像 `release-874e1c8-20261127T063642Z` healthy、0 重启、非 OOM、`User=1000:1000`、8GiB、Healthcheck 存在；`config.json` SHA256 前16位 `84b031e4067278a8`、revision 6991、329 账号、20 下游 Key、11 条 Mistral 规则。磁盘余量 237G。
+- **08:54:35 UTC** push `3475058` 到 origin，远端 `git fetch` 后 `git archive` 提取 991 文件至 `/home/ubuntu/project/account-pool-balancer-releases/20261127T085439Z-3475058/`。**08:54:42–08:54:53** 构建 `account-pool-balancer:release-3475058-20261127T085439Z`（`sha256:728ac659…`，OCI revision `3475058`）。旧镜像保留为 `rollback-20261127T085439Z`。
+- 一致备份 **08:54:57–08:55:04**：`data.tgz` 111,242,295 字节（SHA256 前16位 `f9ca2fbd7840598d`，`tar tzf` 校验通过，129 项含 `config.json`/`metadata.json`）。`tar` 报 `data: file changed as we read it`——线上进程仍在写日志，归档可解、关键业务文件已核对包含，属已知的非静默窗口。另存 compose、`.env`、`config.json` 到 `/home/ubuntu/backups/account-pool-balancer/20261127T085439Z-mistral-plan-key-3475058/`（0700）。
+- **08:55:21** 请求切换，**08:55:26** 新容器启动，**08:56:04** Docker healthy（0 重启、非 OOM、1000:1000、Healthcheck 存在、8GiB）。健康等待不计停机。
+- 验收：网络别名 `ai-internal=[account-pool-balancer, opendesign-balancer]` 保留；从 `new-api` 容器请求 `http://account-pool-balancer:8790/healthz` 与 `http://opendesign-balancer:8790/healthz` 均 `{"ok":true}`（该镜像无 curl，改用 `wget`）；宿主机 healthz 200、公网 `https://ods.yeschoy.io/healthz` 200，`/assets/app.js?v=b44c159100` 含新控件（6 处匹配）。`config.json` 字节不变（`84b031e4…`）、revision 6991、329 账号、20 Key、11 条规则全部保留。
+- **配置生效**：按用户本次明确要求写入 `mistral.chatMetadata={mode:"chat-key",callSource:"vibe_code",clientName:"vibe_programmatic"}`，`docker kill -s HUP` 后日志出现 `config reloaded`（未重启容器，0 重启）；切换前配置另存 `config.json.pre-plan-key` 便于回退。
+- **端到端验证（经线上 Balancer，真实上游）**：裸 Chat 请求 58 次（含 40 条不同会话）全部 200，请求日志 `mistralPlanKey=true` 且 `selectionReason` 为 `strategy:smart`/`binding`；调用方自带 `metadata.call_source:"other"` 的请求 200 且 `mistralPlanKey` 为空（未改写调用方 metadata）。号池当前因 `smart` 排序与会话绑定集中在 `tang-11.24-vibekey-10`，未自然轮到 kevin 三把；因此对三把 kevin Vibe Key 用**与 `appendMistralPlanKeyMetadata` 完全相同的字节拼接 body** 直连上游复核：三把均 `bare=402 / spliced=200`，证明 `chat-key` 模式下它们会被注入且注入有效。kevin 三把在池内 `keyType=CHAT`（`metadata.json` 快照，vibe 余 299.9999），`cooldownUntil/ruleId` 为空。
+- 镜像 `account-pool-balancer:release-3475058-20261127T085439Z`；回退 `account-pool-balancer:rollback-20261127T085439Z`（= `874e1c8`），只改 image。回退时注意旧版不认识 `mistral.chatMetadata`，会忽略该字段（不会报错），但注入随之失效、kevin 三把重新 402/2303。
+- 未做/未变：未改额度展示与排序口径（注入生效后消耗记在 `vibe_budget`，界面「号池可用（api_budget）」会停在 100%，这需要另行决定是否把 Vibe 预算纳入排序/合计）；未改 402/2303 冷却规则；未对 `input_tokens`/FIM 启用注入（无实测）；未验证上游是否会新增版本/客户端指纹校验。实测脚本均只在远端内存使用 Key，不落盘不回显，运行后已删除。
+
 ## 当前部署：Mistral 号池余额改取 api_budget、402/2303 冷却到重置时间（2026-11-27 06:37 UTC，874e1c8）
 
 - 线上问题：`kevin-11.26` 六把号（三 vivo + 三 studio）的 `api_budget` 均 30 USD、已用 100%，而 `vibe_budget` 300 USD、已用 0%；推理请求全部 `402 {"type":"billing_api_budget_exhausted","code":"2303"}`。旧实现按「CHAT 取 vibe_budget」显示「剩 300」，排序与概览合计也按 300 计算。Mistral 规定第三方工具/网关调用 `/v1/chat/completions` 只扣 `api_budget`。
