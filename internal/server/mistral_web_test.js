@@ -37,6 +37,23 @@ assert.match(html, /id="mistral-workspace-ttl"/);
 assert.match(source, /workspaceQuotaTtlSec: Number\(\$\('#mistral-workspace-ttl'\)/);
 assert.match(source, /\$\('#mistral-workspace-ttl'\)\.value = s\.mistral\?\.workspaceQuotaTtlSec/);
 assert.match(source, /读取失败或过期时标为未知并保留历史值/);
+// Plan-key metadata (#7216) is a visible, saved selector with enumerated
+// values, and it is never presented as an allowance guarantee.
+assert.match(html, /id="mistral-chat-metadata"/);
+assert.match(html, /<option value="off">/);
+assert.match(html, /<option value="chat-key">/);
+assert.match(html, /<option value="all-keys">/);
+assert.match(html, /id="mistral-chat-metadata-source"/);
+assert.match(html, /id="mistral-chat-metadata-client"/);
+assert.match(source, /chatMetadata: \{ mode: planMode/);
+assert.match(source, /\$\('#mistral-chat-metadata'\)\.value = mcm\.mode \|\| 'off'/);
+assert.match(source, /callSource: planMode === 'off' \? '' : \(callSource \|\| 'vibe_code'\)/);
+assert.match(source, /toast\('call_source 只接受 vibe_code/);
+assert.match(source, /toast\('client_name 只接受 vibe_programmatic/);
+assert.match(html, /根上完全没有 metadata 字段/);
+assert.match(html, /未读过的 Key 视为未知、不注入/);
+assert.match(html, /这不是额度提升/);
+assert.doesNotMatch(html, /开启后.*(一定|即可|永久).*额度/);
 // The overview must sum budgets per workspace, never once per key, and must
 // never turn an unknown read into zero.
 vm.runInContext('globalThis.esc = (v) => String(v ?? ""); globalThis.num = (v) => String(v ?? 0); globalThis.pct = (v) => (v * 100).toFixed(1) + "%"; globalThis.fmtTime = (v) => String(v || "");'

@@ -1846,6 +1846,12 @@ async function loadSettings() {
   $('#mistral-workspace-ttl').value = s.mistral?.workspaceQuotaTtlSec ?? 0;
   $('#mistral-detail-log').checked = s.mistral?.detailLog ?? s.logs.detail;
   $('#mistral-binding-capacity').value = s.mistral?.bindingCapacity ?? 0;
+  const mcm = s.mistral?.chatMetadata || {};
+  $('#mistral-chat-metadata').value = mcm.mode || 'off';
+  // An unset call_source is the documented default, never an empty value:
+  // rendering it keeps "save" from silently switching the template off.
+  $('#mistral-chat-metadata-source').value = mcm.callSource || 'vibe_code';
+  $('#mistral-chat-metadata-client').value = mcm.clientName || '';
   renderForm($('#form-mistral-performance'), MISTRAL_PERFORMANCE_FIELDS, s.mistral?.performance ?? settingsCache.defaults.mistralPerformance, 'mp');
   $('#tokenharbor-settings').classList.toggle('hidden', !isTokenHarbor());
   $('#th-base').value = s.tokenHarbor?.baseUrl || 'https://tokenharbor.ai/v1';
@@ -1918,8 +1924,16 @@ $('#btn-save-settings').addEventListener('click', async () => {
     body.deploy = { baseUrl: $('#deploy-base').value.trim(), modelSyncSec: Number($('#deploy-sync').value), detailLog: $('#deploy-detail-log').checked, cachePreference };
   }
   if (isModelStudio()) body.modelStudio = { region: $('#ms-region').value, modelSyncSec: Number($('#ms-sync').value), detailLog: $('#ms-detail-log').checked, planOverrides: (s.modelStudio && s.modelStudio.planOverrides) || {} };
-  if (isMistral()) body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), workspaceQuotaTtlSec: Number($('#mistral-workspace-ttl').value || 0), detailLog: $('#mistral-detail-log').checked,
-    bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance) };
+  if (isMistral()) {
+    const planMode = $('#mistral-chat-metadata').value;
+    const callSource = $('#mistral-chat-metadata-source').value.trim();
+    const clientName = $('#mistral-chat-metadata-client').value.trim();
+    if (planMode !== 'off' && callSource !== '' && callSource !== 'vibe_code') { toast('call_source 只接受 vibe_code（留空即此值）'); return; }
+    if (clientName !== '' && clientName !== 'vibe_programmatic') { toast('client_name 只接受 vibe_programmatic，或留空不发送'); return; }
+    body.mistral = { baseUrl: $('#mistral-base').value.trim(), modelSyncSec: Number($('#mistral-sync').value), workspaceQuotaTtlSec: Number($('#mistral-workspace-ttl').value || 0), detailLog: $('#mistral-detail-log').checked,
+      bindingCapacity: Number($('#mistral-binding-capacity').value), performance: readForm(MISTRAL_PERFORMANCE_FIELDS, 'mp', s.mistral?.performance ?? settingsCache.defaults.mistralPerformance),
+      chatMetadata: { mode: planMode, callSource: planMode === 'off' ? '' : (callSource || 'vibe_code'), clientName: planMode === 'off' ? '' : clientName } };
+  }
   if (isTokenHarbor()) body.tokenHarbor = { baseUrl: $('#th-base').value.trim(), modelSyncSec: Number($('#th-sync').value), accountSyncSec: Number($('#th-account-sync').value), detailLog: $('#th-detail-log').checked };
   if (isOpenCode()) {
     body.opencode = readForm(openCodeFields(), 'oc', s.opencode || {});
@@ -2093,7 +2107,7 @@ function requestFirstCell(r) {
 }
 function requestRow(r) {
   const tok = [r.inputTokens, r.outputTokens, r.cachedTokens].map((v) => v === null || v === undefined ? '—' : num(v)).join(' / ');
-  return `<tr data-rid="${esc(r.requestId)}"><td class="num">${esc(fmtTime(r.ts))}</td><td><span class="acc-sub">${esc(r.protocol || r.inboundProtocol || '—')}</span>${r.clientFamily ? `<div class="acc-sub">${esc(r.clientFamily)}</div>` : ''}</td><td>${esc(r.model)}${r.stream ? ' <span class="badge">流</span>' : ''}</td>
+  return `<tr data-rid="${esc(r.requestId)}"><td class="num">${esc(fmtTime(r.ts))}</td><td><span class="acc-sub">${esc(r.protocol || r.inboundProtocol || '—')}</span>${r.clientFamily ? `<div class="acc-sub">${esc(r.clientFamily)}</div>` : ''}</td><td>${esc(r.model)}${r.stream ? ' <span class="badge">流</span>' : ''}${r.mistralPlanKey ? ' <span class="badge">计划键</span>' : ''}</td>
     <td>${keyCell(r)}</td>
     <td>${esc(r.accountName || '—')}${r.switched ? ' <span class="badge warn">换号</span>' : ''}${r.overflow ? ' <span class="badge warn">溢出</span>' : ''}</td>
     <td>${statusBadge(r.status, r.result)}${r.upstreamStatus && r.upstreamStatus !== r.status ? `<div class="acc-sub">上游 ${esc(r.upstreamStatus)}</div>` : ''}${r.errorCategory ? `<div class="acc-sub">${esc(r.errorCategory)}${r.blockedBy ? '/' + esc(r.blockedBy) : ''}</div>` : ''}</td>

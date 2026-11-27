@@ -259,6 +259,79 @@ NewAPI里的`deepseek-v4.1-flash-1017`、`glm-5.3`等客户端别名应由渠道
 - 非流式尝试没有首事件字段，只记录到响应头；已发出请求后失败仍保留连接与请求写入事实，不伪造响应头。
 - 写阻塞（`maxWriteFlushUs`）、事件队列滞后（`streamMaxLagUs`）与上游模型耗时分开；日志分段不含 NewAPI/Nginx/公网，不能据此判定供应商解码速度或客户端首正文时间。
 
+## 计划键元数据 metadata.call_source（issue #7216，2026-11-27 线上实测通过，未部署）
+
+上游用**请求体** `metadata.call_source` 决定一笔 `/v1/chat/completions` 记到哪个钱包：带该键的请求按 Vibe 客户端处理，记入订阅的 `vibe_budget`；不带则当作普通开发者 API，记入 `api_budget`。`kevin-11.26` 这类订阅号的 `api_budget` 已 100% 用完、`vibe_budget` 仍有余量，因此直连网关一律 `402 {"type":"billing_api_budget_exhausted","code":"2303"}`，而官方 `vibe` CLI、桌面 App 正常——它们每次都带这个键。
+
+依据（`yetone/magpie#7216`，2026-11-19）：
+
+- 同一把 Key、同一 endpoint、只改 body：裸 body 6 次中 5 次 402；`metadata.call_source` 任意值 6 次全 200；只放 `client_name` 无效；`call_source` 放在 body 顶层无效。与 header、UA、cookie、`x-affinity` 无关。
+- 官方 CLI 的形状是 `Authorization: Bearer`、`x-affinity == metadata.session_id`，body 带 `metadata.call_source = "vibe_code"`、`client_name = "vibe_programmatic"`。
+- issue 评论补充：切换 provider 后历史里带 `reasoning_content` 的 assistant 消息会被上游 `422 extra_forbidden` 拒绝（与本次注入无关，本池既有思考格式兼容已覆盖）。
+
+### 本池实现（默认关闭）
+
+路由设置新增「Chat 计划键元数据」：
+
+| 配置 | 行为 |
+|---|---|
+| `off`（默认/缺省） | 一个字节都不加，调用方 body 原样转发 |
+| `chat-key` | 仅对**本池账号**中工作区额度读取已确认 `keyType=CHAT`（Vibe Key）的账号追加；未读过的 Key 视为未知，不注入 |
+| `all-keys` | 本池所有 Key 的 Chat 都追加 |
+
+`call_source` 只接受 `vibe_code`（留空即此值），`client_name` 只接受空或 `vibe_programmatic`。两者都是枚举字面量：本池不提供任意 body 模板，避免把请求稳定记到错误的那本账或伪造计费来源。配置为自由值或未知 mode 时保存直接 400，不落盘。
+
+注入规则（`internal/server/mistral_request.go` 的 `appendMistralPlanKeyMetadata`）：
+
+- 只在根上**完全没有** `metadata` 字段时，在根对象末尾追加一个字节、一个 `"metadata":{"call_source":...}` 字段；原有字节（含数字、转义、空白、尾部换行）位置不变。调用方自己带的 `metadata`（对象或显式 `null`）一律不改——那可能是它自己选择的账本。
+- 只作用于 Chat。`/v1/responses`、`/v1/responses/input_tokens`、`/v1/fim/completions`、`/v1/embeddings` 与非 Mistral 池永不追加（报告只证明 Chat 的路由字段）。
+- `all-keys` 在**请求准备阶段**（身份、缓存键、审计、详情之后，选号之前）追加，因此重试与换号复用同一份已准备 body，请求日志的入站/准备/实际上行指纹和会话身份都对得上。
+- `chat-key` 只能在**选中账号之后**决定，因此在每次上游尝试前追加；它只新增根字段，不改 prompt_cache_key、模型、参数校验结果或内容——`prepareUs`、`X-Affinity`、布局还原与思考/图片/工具兼容全部照旧。
+- 该追加不进入账号粘性、会话 HMAC、布局记录和额度排序；不做任何「换号重试直到成功」的新逻辑。
+
+请求日志的模型列出现「计划键」徽标（`mistralPlanKey`），表示这一次实际带上了由号池追加的元数据；调用方自带的 metadata 不会让该标记为真，也不会被记录内容。
+
+### 2026-11-27 线上实测（三把 kevin-11.26 Vibe Key）
+
+在 OVH 上直接读取 `data/config.json` 里 `kevin-11.26-0{1,2,3}-vibe-花钱` 的 Key（只经 TLS 直连 api.mistral.ai 使用，不落盘、不回显、不写日志），对同一 endpoint 做单变量对照。三把 Key 结果完全一致：
+
+| 请求体 | 01 | 02 | 03 |
+|---|---|---|---|
+| 裸 body（无 metadata） | 402/2303 | 402/2303 | 402/2303 |
+| `metadata:{"call_source":"vibe_code"}` | **200** | **200** | **200** |
+| `metadata:{"call_source":"vibe_code","client_name":"vibe_programmatic"}` | **200** | **200** | **200** |
+| `metadata:{"client_name":"vibe_programmatic"}`（无 call_source） | 402 | 402 | 402 |
+| `metadata:{"call_source":"other"}` | **200** | **200** | **200** |
+| `metadata:{}` 空对象 | 402 | 402 | 402 |
+| 顶层 `call_source`（不在 metadata 内） | 402 | 402 | 402 |
+
+钱包归属直接证据：01 号连续 5 次带 `call_source` 的 Chat 全部 200，前后各读一次 `/v1/billing/budget`，`vibe_budget` 使用率从 `1e-6`% 升到 `6e-6`%（300 USD 下约 0.015 USD），`api_budget` 保持 100% / 30 USD 不动——**真的记到 Vibe 账上了**，不是绕过计费。
+
+路径范围（01 号，其余两把同一现象）：
+
+| 路径 | 裸 body | 带 `metadata.call_source` |
+|---|---|---|
+| `/v1/chat/completions` | 402 | 200 |
+| `/v1/responses` | 402 | **200** |
+| `/v1/embeddings` | 402 | **200** |
+| `/v1/responses/input_tokens`、`/v1/fim/completions` | 未测 | 未测 |
+
+由此可见：
+
+- 上游**不校验 `call_source` 的值**，`vibe_code`、`other` 都放行——它只判断「metadata 里有没有这个键」。本池仍然只用 `vibe_code`，因为这是官方客户端实测发送的值，没有理由发一个上游可能随时收紧的任意值。
+- `client_name` 单独存在**无效**，`metadata:{}` **无效**：注入必须带 `call_source` 才有意义。
+- 502/402 的差异与出口无关：02 号配置的 SOCKS 代理当时连不通（`socks hello failed`），同一把 Key 直连即正常，说明问题不在代理也不在 Key 本身。
+- 因此**路由范围扩到 `/v1/responses`**（实测同样 200），`/v1/embeddings` 也验证可行但本轮按「只动生成请求」的既定范围**不接入**；`input_tokens`、FIM 无实测证据，保持原字节不动。
+- 客户端若自己带了 `metadata.call_source`（哪怕值不对），本池一律不改——那是它自己的计费选择，池子不替它纠正。
+
+### 未做 / 仍属未知
+
+- **尚未部署**：线上仍是 `488aa6b` 镜像，`config.json` 的 `mistral.chatMetadata` 为空（`off`），所以生产流量暂时仍会 402/2303。开关要随新镜像上线才生效。
+- 没有经过号池端到端验证：上面的对照是直连上游的请求级验证，不是「部署后走 Balancer 再 200」。上线后需要一次真实调用确认（日志出现「计划键」标记且不再 402）。
+- 额度读数的**方向变了**：注入生效后实际消耗记在 `vibe_budget`，界面「号池可用（api_budget）」会停在 100% 用尽不动，而 Vibe 预算缓慢下降。本轮没有擅自改额度展示与排序口径，是否要把 Vibe 预算纳入排序/合计，需要你决定——注意它现在是**真实会被消耗的那本账**了，这跟前面「vibe_budget 仅限官方产品」的结论并不矛盾，而是「网关带上官方客户端标记后，上游把它当官方产品计费」。
+- 402/2303 的既有冷却规则不变：开关关着或调用方自带 metadata 时，仍然按 `api_budget.reset_at` 冷却。
+- 未验证上游未来是否会加版本/客户端指纹校验，也未验证 Web/CLI 相同的其他字段是否必需（本次证明只 `call_source` 就够）。
+
 ### 本地同轮基准（HEAD `64c7b0c` vs 本轮工作树）
 
 Apple M4 / Go 1.26.8，`-cpu 2 -count 5` 取中位；128 KiB / 512 KiB / 2 MiB 合成 Chat 历史（system + 64 轮 user/assistant，带 `reasoning_content`），对象在 HEAD 独立工作树与本树同轮运行：

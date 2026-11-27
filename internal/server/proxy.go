@@ -131,8 +131,12 @@ type requestLog struct {
 	ClientSessionHeaderStatus     map[string]string   `json:"clientSessionHeaderStatus,omitempty"`
 	ClientRequestHeadersTruncated bool                `json:"clientRequestHeadersTruncated,omitempty"`
 
-	MistralTiming      *mistralRequestTiming `json:"mistralTiming,omitempty"`
-	MistralLayout      *mistralLayoutLog     `json:"mistralLayout,omitempty"`
+	MistralTiming *mistralRequestTiming `json:"mistralTiming,omitempty"`
+	MistralLayout *mistralLayoutLog     `json:"mistralLayout,omitempty"`
+	// MistralPlanKey marks a request whose outbound Chat body was given the
+	// pool's plan-key metadata. It records only that the pool applies the
+	// template, never the caller's own metadata bytes.
+	MistralPlanKey     bool                  `json:"mistralPlanKey,omitempty"`
 	mistralLayoutScope string                // private, never serialized or sent upstream
 	CacheAudit         *mistralCacheAuditLog `json:"cacheAudit,omitempty"`
 	cacheAudit         *mistralAuditRequest  // private ephemeral per-request fingerprint state
@@ -249,6 +253,7 @@ type attemptResult struct {
 	mistralRejection  mistralRequestRejection
 	mistralLayout     *mistralLayoutCapture
 	mistralTiming     *mistralAttemptTiming
+	mistralPlanKey    bool // this attempt's body carried the pool's plan-key metadata
 	accountScoped     bool
 	evaluated         bool
 	retryAfter        time.Duration
@@ -938,6 +943,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			writeLocalError(w, proto, 400, "invalid_request_error", "invalid_request", mistralPublicRequestMessage(err), 0)
 			finish(400, "failed")
 			return
+		}
+		// Prepared here, on the payload, so the plan-key marker belongs to the
+		// body that audit/detail and every attempt see: a retry reuses the same
+		// prepared bytes. In chat-key mode the account is not chosen yet, so the
+		// attempt appends it instead (same append-only field, same bytes).
+		if planKey := planKeyTemplate(cfg); planKey.Mode == config.MistralChatMetadataAllKeys && mistralPlanKeyPath(r.URL.Path) {
+			if prepared, ok := appendMistralPlanKeyMetadata(body, planKey); ok {
+				body = prepared
+				rec.MistralPlanKey = true
+			}
 		}
 		if generatedCacheKey != "" {
 			detailIdentities = append(detailIdentities, generatedCacheKey)
@@ -1831,6 +1846,16 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if acct.Provider == config.ProviderMistral {
 		res.mistralTiming = newMistralAttemptTiming(start, r.URL.Path)
 		res.mistralTiming.attach(trace)
+		// Plan-key mode: a CHAT (Vibe) key needs the body-level call_source
+		// that the first-party client sends, or the upstream bills the spent
+		// developer API budget and answers 402 even with Vibe allowance left.
+		// The decision is this attempt's account, so chat-key mode appends here,
+		// after selection; all-keys mode already appended in prepare.
+		withPlanKey, applied := applyMistralPlanKey(body, r.URL.Path, planKeyTemplate(cfg), acct, s.quota.View(acct.ID))
+		body, res.mistralPlanKey = withPlanKey, applied
+		if applied {
+			rec.MistralPlanKey = true
+		}
 	}
 	generate := rec.factoryPlan != nil && rec.factoryPlan.generate
 	countTokens := rec.factoryPlan != nil && rec.factoryPlan.countTokens

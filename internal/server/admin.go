@@ -1744,6 +1744,14 @@ func (s *Server) apiSaveSettings(w http.ResponseWriter, r *http.Request) {
 					v := *in.Mistral.Performance
 					c.Mistral.Performance = &v
 				}
+				if in.Mistral.WorkspaceQuotaTTLSec != nil {
+					v := *in.Mistral.WorkspaceQuotaTTLSec
+					c.Mistral.WorkspaceQuotaTTLSec = &v
+				}
+				if in.Mistral.ChatMetadata != nil {
+					v := *in.Mistral.ChatMetadata
+					c.Mistral.ChatMetadata = &v
+				}
 			}
 			c.Mistral.Quota = &in.Quota
 			c.Mistral.Routing = &in.Routing

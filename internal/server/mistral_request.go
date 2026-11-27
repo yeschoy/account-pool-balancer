@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"account-pool-balancer/internal/config"
+	"account-pool-balancer/internal/quota"
 )
 
 // mistralWireObject is a view over already validated JSON. Replacement values
@@ -264,6 +265,108 @@ func prepareMistralRequest(body []byte, path, cacheKey string) ([]byte, string, 
 		o.set("prompt_cache_key", key)
 	}
 	return o.render(), generated, nil
+}
+
+// planKeyTemplate is the validated Chat metadata template the pool may inject,
+// or "off" when the pool has no plan-key mode. It never invents a template: an
+// unconfigured pool keeps the caller's bytes exactly.
+func planKeyTemplate(cfg *config.Config) config.MistralChatMetadata {
+	if v, ok := cfg.Mistral.EffectiveChatMetadata(); ok {
+		return v
+	}
+	return config.MistralChatMetadata{Mode: config.MistralChatMetadataOff}
+}
+
+// applyMistralPlanKey appends the plan-key client markers to one upstream body.
+// Measured on 2026-11-27 with the three kevin-11.26 Vibe keys: a Chat request
+// without metadata.call_source is always answered 402 billing_api_budget_exhausted
+// (code 2303) — the workspace's $30 api_budget is spent while $300 vibe_budget
+// is untouched — and the same request with call_source returns 200 and debits
+// vibe_budget. The first-party client always sends it, which is why the official
+// product works through the same endpoint.
+//
+// The rewrite is an append-only byte splice: every original byte, including a
+// caller's own metadata object, keeps its position. Only an absent root
+// metadata field is added; a present object (or explicit null) is the caller's
+// own billing decision and stays untouched. The upstream ignores client_name
+// alone, a root-level call_source and an empty metadata object (measured
+// 402), so an injection must carry call_source to mean anything.
+//
+// Scope is Chat and Responses: measured 200/402/200 on Chat, Responses and
+// Embeddings for the same three keys, while token counting and FIM are not
+// verified and stay untouched.
+//
+// With mode chat-key the decision belongs to the sending account, so this runs
+// in the attempt after selection and uses the workspace's read key type rather
+// than the key string: an unread key is unknown and is not assumed to be Vibe.
+func applyMistralPlanKey(body []byte, path string, t config.MistralChatMetadata, acct config.Account, snap *quota.Snapshot) ([]byte, bool) {
+	if !mistralPlanKeyPath(path) {
+		return body, false
+	}
+	switch t.Mode {
+	case config.MistralChatMetadataAllKeys:
+	case config.MistralChatMetadataChatKey:
+		if !mistralVibeKey(acct, snap) {
+			return body, false
+		}
+	default:
+		return body, false
+	}
+	return appendMistralPlanKeyMetadata(body, t)
+}
+
+// mistralPlanKeyPath lists the generation endpoints where the measured
+// call_source routing applies. Token counting and FIM returned no evidence and
+// therefore keep the caller's bytes exactly.
+func mistralPlanKeyPath(path string) bool {
+	return path == "/v1/chat/completions" || path == "/v1/responses"
+}
+
+// appendMistralPlanKeyMetadata performs the append-only splice. A body that
+// already has a root metadata field is returned unchanged.
+func appendMistralPlanKeyMetadata(body []byte, t config.MistralChatMetadata) ([]byte, bool) {
+	open := skipSpace(body, 0)
+	if open >= len(body) || body[open] != '{' {
+		return body, false
+	}
+	o := scanMistralObject(body)
+	if o == nil || o.get("metadata") != nil {
+		return body, false
+	}
+	field := append([]byte(`"metadata":`), mistralPlanKeyTemplate(t)...)
+	out := make([]byte, 0, len(body)+len(field)+1)
+	out = append(out, o.body[:o.end]...)
+	if len(o.fields) > 0 {
+		out = append(out, ',')
+	}
+	out = append(out, field...)
+	out = append(out, o.body[o.end:]...)
+	return out, true
+}
+
+// mistralVibeKey reports whether this account's key was read as a CHAT (Vibe)
+// key. The type comes only from the workspace quota read.
+func mistralVibeKey(acct config.Account, snap *quota.Snapshot) bool {
+	if acct.Provider != "" && acct.Provider != config.ProviderMistral {
+		return false
+	}
+	return snap != nil && snap.Mistral != nil && snap.Mistral.KeyType == "CHAT"
+}
+
+// mistralPlanKeyTemplate renders the constrained template as a JSON object.
+// Values were validated at configuration time, so only known literals appear.
+func mistralPlanKeyTemplate(t config.MistralChatMetadata) []byte {
+	var b bytes.Buffer
+	b.WriteString(`{"call_source":`)
+	source, _ := json.Marshal(t.CallSource)
+	b.Write(source)
+	if t.ClientName != "" {
+		name, _ := json.Marshal(t.ClientName)
+		b.WriteString(`,"client_name":`)
+		b.Write(name)
+	}
+	b.WriteByte('}')
+	return b.Bytes()
 }
 
 func mistralString(raw []byte) string {

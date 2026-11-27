@@ -116,3 +116,64 @@ func TestMistralValidation(t *testing.T) {
 		t.Fatal("invalid routing accepted")
 	}
 }
+
+// The plan-key template is a constrained literal, never a free-form body
+// injection: mode and both values are enumerated, and an unset call_source
+// normalizes to the documented Vibe value instead of an empty one.
+func TestMistralChatMetadataValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   *MistralChatMetadata
+		ok   bool
+		want MistralChatMetadata
+		on   bool
+	}{
+		{name: "absent", in: nil, ok: true},
+		{name: "off", in: &MistralChatMetadata{Mode: "off"}, ok: true},
+		{name: "empty mode is off", in: &MistralChatMetadata{}, ok: true},
+		{name: "chat-key fills the default source", in: &MistralChatMetadata{Mode: "chat-key"}, ok: true, on: true,
+			want: MistralChatMetadata{Mode: "chat-key", CallSource: MistralCallSourceVibeCode}},
+		{name: "all-keys with client name", in: &MistralChatMetadata{Mode: " all-keys ", CallSource: "vibe_code", ClientName: "vibe_programmatic"}, ok: true, on: true,
+			want: MistralChatMetadata{Mode: "all-keys", CallSource: "vibe_code", ClientName: "vibe_programmatic"}},
+		{name: "unknown mode rejected", in: &MistralChatMetadata{Mode: "always"}},
+		{name: "free call_source rejected", in: &MistralChatMetadata{Mode: "all-keys", CallSource: "other"}},
+		{name: "free client_name rejected", in: &MistralChatMetadata{Mode: "all-keys", ClientName: "my-app"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.Mistral.ChatMetadata = tc.in
+			err := c.Normalize()
+			if !tc.ok {
+				if err == nil {
+					t.Fatal("invalid template accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, on := c.Mistral.EffectiveChatMetadata()
+			if on != tc.on || got != tc.want {
+				t.Fatalf("got %+v on=%v want %+v on=%v", got, on, tc.want, tc.on)
+			}
+		})
+	}
+	// A decoded document round-trips: saving and reloading must not lose the
+	// template or turn it into a different billing source.
+	c := Default()
+	c.Mistral.ChatMetadata = &MistralChatMetadata{Mode: "chat-key", CallSource: MistralCallSourceVibeCode, ClientName: MistralClientNameVibeProgrammat}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Config
+	if json.Unmarshal(data, &back) != nil || back.Normalize() != nil {
+		t.Fatal("reload failed")
+	}
+	if got, on := back.Mistral.EffectiveChatMetadata(); !on || got != *c.Mistral.ChatMetadata {
+		t.Fatalf("template not preserved: %+v", got)
+	}
+}

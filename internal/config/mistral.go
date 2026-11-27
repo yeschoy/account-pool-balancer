@@ -32,6 +32,71 @@ type Mistral struct {
 	// 0 uses the default; it is never unbounded, so usage still tracks.
 	WorkspaceQuotaTTLSec *int                `json:"workspaceQuotaTtlSec,omitempty"`
 	Performance          *MistralPerformance `json:"performance,omitempty"`
+	// ChatMetadata (plan-key mode) makes Chat generation calls that carry no
+	// metadata object of their own look like a first-party Vibe client, so a
+	// subscription key's usage is routed to the workspace's Vibe allowance
+	// instead of a spent developer API budget. "off" (default) sends exactly
+	// what the caller sent. Keys that already send a metadata object are never
+	// touched. Values are constrained so a typo cannot silently send an
+	// unknown call_source that Mistral might bill as API traffic.
+	ChatMetadata *MistralChatMetadata `json:"chatMetadata,omitempty"`
+}
+
+// MistralChatMetadata is the plan-key metadata template. CallSource must be
+// "vibe_code" (Mistral routes any present metadata.call_source to the Vibe
+// allowance; the observed first-party value is preserved rather than
+// invented) and ClientName must be empty or "vibe_programmatic".
+type MistralChatMetadata struct {
+	Mode       string `json:"mode"`
+	CallSource string `json:"callSource,omitempty"`
+	ClientName string `json:"clientName,omitempty"`
+}
+
+// Mistral Chat metadata modes. "chat-key" only prepares calls actually sent
+// with a CHAT (Vibe) key; "all-keys" prepares every key of the pool. Both are
+// prepared before admission so the prepared body identifies the payload.
+const (
+	MistralChatMetadataOff     = "off"
+	MistralChatMetadataChatKey = "chat-key"
+	MistralChatMetadataAllKeys = "all-keys"
+)
+
+const (
+	MistralCallSourceVibeCode       = "vibe_code"
+	MistralClientNameVibeProgrammat = "vibe_programmatic"
+)
+
+// EffectiveChatMetadata validates the template and reports whether it may be
+// applied. "off"/absent means no injection at all.
+func (m Mistral) EffectiveChatMetadata() (MistralChatMetadata, bool) {
+	c := m.ChatMetadata
+	if c == nil || c.Mode == "" || c.Mode == MistralChatMetadataOff {
+		return MistralChatMetadata{}, false
+	}
+	return *c, true
+}
+
+// chatMetadataError validates a submitted template. It is separate from
+// normalization so a bad value is reported to the administrator rather than
+// silently reset to off.
+func chatMetadataError(c *MistralChatMetadata) error {
+	if c == nil {
+		return nil
+	}
+	switch c.Mode {
+	case "", MistralChatMetadataOff:
+		return nil
+	case MistralChatMetadataChatKey, MistralChatMetadataAllKeys:
+	default:
+		return fmt.Errorf("mistral.chatMetadata.mode must be off, chat-key or all-keys")
+	}
+	if s := c.CallSource; s != "" && s != MistralCallSourceVibeCode {
+		return fmt.Errorf("mistral.chatMetadata.callSource must be empty or %q", MistralCallSourceVibeCode)
+	}
+	if s := c.ClientName; s != "" && s != MistralClientNameVibeProgrammat {
+		return fmt.Errorf("mistral.chatMetadata.clientName must be empty or %q", MistralClientNameVibeProgrammat)
+	}
+	return nil
 }
 
 // MistralPerformance bounds local resources, not upstream token throughput.
@@ -90,6 +155,23 @@ func (c *Config) normalizeMistral() error {
 	case v == nil || *v == 0:
 	case *v < 0 || *v > 86400:
 		return fmt.Errorf("mistral.workspaceQuotaTtlSec must be 0 (default) or 1–86400")
+	}
+	if c := m.ChatMetadata; c != nil {
+		c.Mode = strings.TrimSpace(c.Mode)
+		c.CallSource = strings.TrimSpace(c.CallSource)
+		c.ClientName = strings.TrimSpace(c.ClientName)
+		if c.Mode == "" {
+			c.Mode = MistralChatMetadataOff
+		}
+		// An unset call_source means the documented default, not the empty
+		// string: an empty key would produce a metadata object that sends the
+		// request back to the API budget it was meant to escape.
+		if c.CallSource == "" {
+			c.CallSource = MistralCallSourceVibeCode
+		}
+	}
+	if err := chatMetadataError(m.ChatMetadata); err != nil {
+		return err
 	}
 	if p := m.Performance; p != nil {
 		for _, v := range []struct {

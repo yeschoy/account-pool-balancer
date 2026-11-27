@@ -199,3 +199,47 @@ Sources: https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
 - `ttftMs` 语义不变（首个可转发事件前时间，可能是角色/思考/生命周期帧）；`firstEventFlushUs` 与其同为 handler 相对可直接对照，但都不是客户端首正文。管理台 Mistral「首事件 / 首输出」第二行显示第一帧非空白可见正文或实质工具调用（名称/参数）中最早者、标明类别，思考不当正文。旧日志/无命中显示「输出 —」；亚微秒观测可显示 0。点「首字分段」查看各类首帧。`maxWriteFlushUs`（含下游背压）和 `streamMaxLagUs`（写前队列/解析滞后）必须单列，不得当成模型解码速度。
 - 观测本身不得增加额外读写/Flush、让首帧等待观测解析、缓冲整流或改变响应字节。输出分类只发生在原始 Write+Flush 成功后；首内容探测遇超限帧（原始 data 或重新适配的输出帧大于 64KiB）停止分类剩余未知类别并标 `outputProbeSkipped`，不能把后续可解析帧假报为实际首次。已有首内容记录保留。失败的 Flush 不生成首/末输出或终态 Flush；`lastEventReadUs` 可存在，即使未成功写入。无终态观测不改 Chat 既有 EOF 兼容，Responses 终态门禁不变。
 - 验证：`mistral_timing_test.go`、`mistral_timing_integration_test.go`（nil/0、非流、迟到回调快照、Chat/Responses 思考/工具/正文、失败 Flush、超限、无响应头、换号、跨池隔离、末事件读取和写入分离）；`mistral_web_test.js`（旧日志、首正文和首工具选择、缺字段/零值及转义）。本地 Mock 或新增计时都不是上游首字改善。
+
+## 14. 计划键元数据注入（issue #7216，2026-11-27 已线上实测）
+
+### Scope / Trigger
+上游按请求体内 `metadata.call_source` 是否存在，决定一笔请求记到 `api_budget`（$30，第三方网关默认）还是 `vibe_budget`（订阅额度）。订阅号 api_budget 用尽后网关固定 `402 billing_api_budget_exhausted / 2303`，官方客户端正常，因为它每次都带该键。
+
+**2026-11-27 实测（OVH 上三把 `kevin-11.26-0{1,2,3}-vibe-花钱`，直连上游单变量对照，三把一致）**：裸 Chat/Responses/Embeddings = 402；`metadata.call_source` 存在（`vibe_code` 或 `other`）= 200；只有 `client_name`、`metadata:{}`、顶层 `call_source` = 402。钱包归属：带 call_source 的 5 次 Chat 后 `vibe_budget` 1e-6%→6e-6%、`api_budget` 保持 100%/30 USD——真的记到 Vibe 账上。值不做校验；仍只发 `vibe_code`。范围据此定为 Chat + Responses；Embeddings 实测可行但不接入（只动生成请求）；input_tokens/FIM 无证据不动。
+
+### Signatures
+- `config.Mistral.ChatMetadata *config.MistralChatMetadata{mode,callSource,clientName}`；`Mistral.EffectiveChatMetadata() (MistralChatMetadata, bool)`；`chatMetadataError` 由 `normalizeMistral` 调用（保存非法值 → 配置更新 400，不改线上）。
+- `appendMistralPlanKeyMetadata(body []byte, t config.MistralChatMetadata) ([]byte, bool)`：纯函数，append-only splice，已含根 `metadata` 时原样返回。
+- `applyMistralPlanKey(body, path, t, acct, snap) ([]byte, bool)`：每次上游尝试调用，决定 `chat-key` 模式的账号级作用域。
+- `prepareMistralRequest` 签名保持 `(body, path, cacheKey)`；`all-keys` 由 `proxy.go` 在准备阶段调用 append（身份/缓存键/审计之后、选号之前）。`requestLog.MistralPlanKey`（`json:"mistralPlanKey,omitempty"`）标记「本次真的被号池追加」，与调用方自带 metadata 区分。
+- 前端：`#mistral-chat-metadata` / `#mistral-chat-metadata-source` / `#mistral-chat-metadata-client`，保存进 `body.mistral.chatMetadata`；`apiSaveSettings` 的 Mistral 分支同时持久化 `workspaceQuotaTtlSec`（此前 UI 有字段但保存被丢弃）。
+
+### Contracts
+- `off`/缺省：零改动，body 逐字节转发。
+- 只在根上**没有** `metadata` 字段时追加 `"metadata":{"call_source":"vibe_code"[,"client_name":"vibe_programmatic"]}`；调用方自带的对象或显式 `null` 一律不动（可能是它自己选的账本）。不合并、不覆盖、不重排既有字节；尾部空白/换行保持在对象之外。
+- 值枚举：`callSource ∈ {"", "vibe_code"}`（空→`vibe_code`），`clientName ∈ {"", "vibe_programmatic"}`。不提供任意 body/header 模板：任意值会把请求稳定记到错误的账本，等于伪造计费来源。
+- 仅 Chat 与 Responses（`mistralPlanKeyPath`）；`/responses/input_tokens`、FIM、Embeddings 与非 Mistral 池永不追加（前两者无实测，后者按「只动生成请求」范围排除）。
+- `chat-key` 只对工作区额度读取确认 `mistral.keyType == "CHAT"` 的本池账号生效；未读、读取失败或残留快照缺失视为未知 → 不注入，也不按 Key 字符串/账号名猜测。
+- 不改 prompt_cache_key / X-Affinity / 身份 HMAC / 布局记录 / 会话绑定 / 额度排序 / 错误规则；`all-keys` 追加发生在准备之后，重试与换号复用同一份已准备 body（同一请求内 payload 稳定）。
+- 不承诺额度提升：注入生效与否以后续真实 `/v1/billing/budget` 读数与 402/2303 是否消失为准；如果生效，消耗会转到 `vibe_budget` 而 `api_budget` 不再下降，界面「号池可用（api_budget）」因此不再代表实际消耗速度——这个口径变化须等真实读数再决定，不在本轮改语义。
+
+### Validation & Error Matrix
+| 配置/请求 | 结果 |
+|---|---|
+| 未配置 / `off` | 调用方 body 逐字节转发，日志无 `mistralPlanKey` |
+| `all-keys`，根无 metadata | 追加一次；重试/换号 body 相同、标记仍只有一个 |
+| `all-keys`，根有 metadata 对象或 `null` | 不改任何字节，不标记 |
+| `chat-key`，CHAT Key / API Key / 未读 Key | 追加 / 不追加 / 不追加 |
+| Responses | 与 Chat 同样追加（实测 200） |
+| 计数、FIM、Embeddings | 永不追加 |
+| mode 非枚举、callSource 非 `vibe_code`、clientName 非 `vibe_programmatic` | 保存 400，线上配置不变 |
+| 调用方已有 `metadata.call_source="other"` | 保持原值，号池不纠正 |
+
+### Good / Base / Bad Cases
+Good：订阅号在 `chat-key` 模式下由号池补上官方客户端的计费路由标记，调用方协议字节其余不变。Base：`off` 与所有非 Chat 路径行为完全等于上线前。Bad：把模板做成自由 body 注入、改写调用方自己的 metadata、假装「注入=额度翻倍」、或对真实 Key 声称已验证。
+
+### Tests Required
+`internal/server/mistral_plan_key_test.go`：append-only splice（缺 metadata / 已有对象 / 显式 null / 尾部空白 / 已准备幂等）、client_name 模板且 `call_source` 不落根、路径与 Key 类型矩阵（含未读与跨池账号）、与 `prepareMistralRequest` 及缓存键互不影响、真实 HTTP `chat-key` 只让 CHAT 号带标记、`all-keys` 重试后两次 body 相同且各只带一个 metadata、默认 off 透传、设置保存/重载往返与非法值 400、请求日志 `mistralPlanKey` 标记。`internal/config/mistral_test.go`：模板归一化与枚举校验、序列化往返。`mistral_web_test.js`：三个控件、保存/回填、非法 toast、提示文案不承诺额度。Mock 成功不代表上游真的改账本。
+
+### Wrong vs Correct
+Wrong：默认开启、对调用方 metadata 做合并、为「功能完整」放开任意 call_source、把 issue 的消融实验当上游契约、或以本池改动宣称 402 已解决。Correct：默认关闭、只追加缺失字段、值枚举锁定、作用域限定 Chat 与正确 Key 类型、把「本地已实现 / 未部署 / 未对真实上游验证」分开陈述。
