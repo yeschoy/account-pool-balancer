@@ -291,34 +291,39 @@ func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {
 // ---- accounts ----
 
 type accountView struct {
-	ID             string                     `json:"id"`
-	Provider       string                     `json:"provider"`
-	Name           string                     `json:"name"`
-	Email          string                     `json:"email"`
-	UserID         string                     `json:"userId"`
-	Note           string                     `json:"note"`
-	Group          string                     `json:"group"`
-	Enabled        bool                       `json:"enabled"`
-	RuntimeKey     string                     `json:"runtimeKey"`
-	ControlKey     string                     `json:"controlKey"`
-	HasControlKey  bool                       `json:"hasControlKey"`
-	MaxConcurrent  int                        `json:"maxConcurrent"`
-	MaxRPM         int                        `json:"maxRpm"`
-	Weight         int                        `json:"weight"`
-	Priority       int                        `json:"priority"`
-	HasProxy       bool                       `json:"hasProxy"`
-	ProxyURL       string                     `json:"proxyUrl"`
-	UserAgent      string                     `json:"userAgent,omitempty"`
-	ProxyHealth    *proxyHealthView           `json:"proxyHealth,omitempty"`
-	EgressIP       string                     `json:"egressIp,omitempty"`
-	Egress         *goEgressView              `json:"egress,omitempty"`
-	CreatedAt      time.Time                  `json:"createdAt"`
-	Runtime        pool.View                  `json:"runtime"`
-	Quota          *quota.Snapshot            `json:"quota"`
-	QuotaFresh     bool                       `json:"quotaFresh"`
-	Diagnosis      *quota.OpenDesignDiagnosis `json:"diagnosis,omitempty"`
-	RoutableModels *int                       `json:"routableModels,omitempty"`
-	SharedWith     []string                   `json:"sharedWorkspaceWith,omitempty"`
+	ID            string           `json:"id"`
+	Provider      string           `json:"provider"`
+	Name          string           `json:"name"`
+	Email         string           `json:"email"`
+	UserID        string           `json:"userId"`
+	Note          string           `json:"note"`
+	Group         string           `json:"group"`
+	Enabled       bool             `json:"enabled"`
+	RuntimeKey    string           `json:"runtimeKey"`
+	ControlKey    string           `json:"controlKey"`
+	HasControlKey bool             `json:"hasControlKey"`
+	MaxConcurrent int              `json:"maxConcurrent"`
+	MaxRPM        int              `json:"maxRpm"`
+	Weight        int              `json:"weight"`
+	Priority      int              `json:"priority"`
+	HasProxy      bool             `json:"hasProxy"`
+	ProxyURL      string           `json:"proxyUrl"`
+	UserAgent     string           `json:"userAgent,omitempty"`
+	ProxyHealth   *proxyHealthView `json:"proxyHealth,omitempty"`
+	EgressIP      string           `json:"egressIp,omitempty"`
+	Egress        *goEgressView    `json:"egress,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	Runtime       pool.View        `json:"runtime"`
+	Quota         *quota.Snapshot  `json:"quota"`
+	QuotaFresh    bool             `json:"quotaFresh"`
+	// MistralBudgetWindow names the window quota.mistral.budget figures should
+	// be read as: "api" normally, "vibe" for a Vibe key the pool sends the Vibe
+	// client marker for, "" when neither is usable. The console must not decide
+	// this itself, or the account row and the pool view drift apart.
+	MistralBudgetWindow string                     `json:"mistralBudgetWindow,omitempty"`
+	Diagnosis           *quota.OpenDesignDiagnosis `json:"diagnosis,omitempty"`
+	RoutableModels      *int                       `json:"routableModels,omitempty"`
+	SharedWith          []string                   `json:"sharedWorkspaceWith,omitempty"`
 	// TokenIncomplete flags a Modal proxy token that is only its Token ID:
 	// nothing reads with it, and every host says so with the same 401.
 	TokenIncomplete bool `json:"tokenIncomplete,omitempty"`
@@ -392,6 +397,11 @@ func (s *Server) accountViews(cfg *config.Config) []accountView {
 		if a.Provider == config.ProviderOpenDesign {
 			v.Diagnosis = snaps[a.ID].OpenDesignDiagnosis(now, time.Duration(cfg.Quota.StaleSec)*time.Second)
 			v.Diagnosis.AutoRefresh = cfg.Quota.Enabled
+		}
+		if a.Provider == config.ProviderMistral {
+			if q := snaps[a.ID]; q != nil && q.Mistral != nil {
+				v.MistralBudgetWindow = q.Mistral.UsableBudgetKind(cfg.Mistral.PlanKeyForVibe())
+			}
 		}
 		if config.IsOpenCode(a.Provider) {
 			ph := s.openCodeProxyView(a.ProxyURL)

@@ -70,12 +70,12 @@ type mistralWorkspaceView struct {
 
 // mistralVibeView is one workspace's vibe_budget, shown as display-only.
 type mistralVibeView struct {
-	Total      float64   `json:"total"`
-	Remaining  float64   `json:"remaining"`
-	UsedPct    float64   `json:"usedPercent"`
-	Currency   string    `json:"currency"`
-	ResetsAt   time.Time `json:"resetsAt"`
-	Note       string    `json:"note"`
+	Total     float64   `json:"total"`
+	Remaining float64   `json:"remaining"`
+	UsedPct   float64   `json:"usedPercent"`
+	Currency  string    `json:"currency"`
+	ResetsAt  time.Time `json:"resetsAt"`
+	Note      string    `json:"note"`
 }
 
 const mistralVibeNote = "仅限 Mistral 官方产品，号池调用不扣此项"

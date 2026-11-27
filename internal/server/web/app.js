@@ -794,7 +794,15 @@ function mistralBudgetWindows(o, st) {
 const MISTRAL_VIBE_NOTE = '计划键关闭时此项不计入；开启后号池调用扣此项';
 function mistralWindowLabel(kind) { return kind === 'vibe' ? 'Vibe 预算（vibe_budget）' : kind === 'api' ? '号池可用（api_budget）' : '号池可用'; }
 function mistralQuotaHTML(a) {
-  const m = a.quota?.mistral, b = m?.budget;
+  const m = a.quota?.mistral;
+  // The backend names the window a request actually spends
+  // (mistralBudgetWindow); this row reads that one so it cannot disagree with
+  // the pool view or with ranking. Without the hint the api window is used,
+  // which is the pre-plan-key behaviour.
+  const win = a.mistralBudgetWindow;
+  const b = win === 'vibe' ? m?.vibeBudget : m?.budget;
+  const other = win === 'vibe' ? m?.budget : m?.vibeBudget;
+  const label = mistralWindowLabel(win || 'api');
   const type = m?.keyType === 'API' ? 'Studio API' : m?.keyType === 'CHAT' ? 'Vibe' : 'Key 类型未知';
   const fresh = !!a.quotaFresh && !m?.error && !!b && Date.parse(b.resetsAt) > Date.now();
   let text = `<span class="badge ${fresh ? 'ok' : 'warn'}">${esc(type)}${m?.plan ? ' · Key访问等级 ' + esc(m.plan) : ''}</span>`;
@@ -808,14 +816,17 @@ function mistralQuotaHTML(a) {
   }
   if (b) {
     const money = (v) => esc(b.currency) + ' ' + Number(v).toFixed(2);
-    text += `<div class="acc-sub">${fresh ? '' : '上次'}号池可用（api_budget）约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
+    text += `<div class="acc-sub">${fresh ? '' : '上次'}${esc(label)} 约剩余 <b>${money(b.remaining)}</b> / ${money(b.total)}</div><div class="acc-sub">已用 ${esc(num(b.usedPercent))}% · 重置 ${esc(fmtTime(b.resetsAt, true))}</div>`;
     if (!fresh) text += '<div class="acc-sub">当前额度未知/过期，以上历史值不可视为当前余额</div>';
     text += `<div class="acc-sub">PAYG ${b.payg === true ? '官网已开启' : b.payg === false ? '官网未开启' : '状态未知'}（本服务不代改）</div>`;
   } else text += '<div class="acc-sub">套餐额度未知，点击刷新额度读取</div>';
-  const v = m?.vibeBudget;
-  if (v) {
-    const money = (x) => esc(v.currency) + ' ' + Number(x).toFixed(2);
-    text += `<div class="acc-sub" title="${esc(MISTRAL_VIBE_NOTE)}">Vibe 预算约剩余 ${money(v.remaining)} / ${money(v.total)} · 已用 ${esc(num(v.usedPercent))}% · ${esc(MISTRAL_VIBE_NOTE)}</div>`;
+  if (other) {
+    // The counterpart window, labelled for what it is: not a second balance.
+    const money = (x) => esc(other.currency) + ' ' + Number(x).toFixed(2);
+    const note = win === 'vibe' ? '计划键模式下号池调用不扣此项' : MISTRAL_VIBE_NOTE;
+    text += `<div class="acc-sub" title="${esc(note)}">${win === 'vibe' ? '对照 api_budget ' : 'Vibe 预算 '}约剩余 ${money(other.remaining)} / ${money(other.total)} · 已用 ${esc(num(other.usedPercent))}% · ${esc(note)}</div>`;
+  } else if (win === 'vibe') {
+    text += '<div class="acc-sub">对照 api_budget：上游未返回该项（不是 0）</div>';
   } else if (m?.budget) text += '<div class="acc-sub">Vibe 预算：上游未返回该项（不是 0）</div>';
   if (m?.error) text += `<div class="acc-sub">${esc(m.error)}</div>`;
   if (m?.checkedAt) text += `<div class="acc-sub">检测 ${esc(fmtTime(m.checkedAt))}${m.at ? ' · 上次成功 ' + esc(fmtTime(m.at)) : ''}</div>`;

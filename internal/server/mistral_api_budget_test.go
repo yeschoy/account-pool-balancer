@@ -268,3 +268,60 @@ func TestMistralOverviewUsesPayingWindowInPlanKeyMode(t *testing.T) {
 		t.Fatalf("stale read entered the total: %+v", got)
 	}
 }
+
+// The account row must read the same window as ranking and the pool view. It
+// used to read quota.mistral.budget directly, so a Vibe account with 300 left
+// displayed "api_budget 0.00 / 30.00, used 100%" and looked unusable.
+func TestMistralAccountViewNamesPayingWindow(t *testing.T) {
+	e := newMistralEnv(t)
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.ChatMetadata = &config.MistralChatMetadata{Mode: config.MistralChatMetadataChatKey, CallSource: config.MistralCallSourceVibeCode}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	e.s.quota.Load(map[string]*quota.Snapshot{"m1": {Mistral: &quota.MistralState{
+		KeyType: "CHAT", At: now, CheckedAt: now,
+		Budget:     &quota.MistralBudget{Total: 30, UsedPercent: 100, Remaining: 0, Currency: "USD", ResetsAt: now.Add(24 * time.Hour)},
+		VibeBudget: &quota.MistralBudget{Total: 300, UsedPercent: 0, Remaining: 300, Currency: "USD", ResetsAt: now.Add(24 * time.Hour)},
+	}}})
+	views := e.s.accountViews(e.s.cfg.Get())
+	var got accountView
+	for _, v := range views {
+		if v.ID == "m1" {
+			got = v
+		}
+	}
+	if got.MistralBudgetWindow != "vibe" {
+		t.Fatalf("window = %q, want vibe for a CHAT key with the marker on", got.MistralBudgetWindow)
+	}
+	// With the marker off the same key bills api_budget and the row says so.
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.ChatMetadata = &config.MistralChatMetadata{Mode: config.MistralChatMetadataOff}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range e.s.accountViews(e.s.cfg.Get()) {
+		if v.ID == "m1" && v.MistralBudgetWindow != "api" {
+			t.Fatalf("window = %q, want api with the plan key off", v.MistralBudgetWindow)
+		}
+	}
+	// A Studio key is never labelled vibe, even in plan-key mode.
+	if _, err := e.s.cfg.Update(-1, func(c *config.Config) error {
+		c.Mistral.ChatMetadata = &config.MistralChatMetadata{Mode: config.MistralChatMetadataAllKeys, CallSource: config.MistralCallSourceVibeCode}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.s.quota.Load(map[string]*quota.Snapshot{"m1": {Mistral: &quota.MistralState{
+		KeyType: "API", At: now, CheckedAt: now,
+		Budget: &quota.MistralBudget{Total: 30, UsedPercent: 40, Remaining: 18, Currency: "USD", ResetsAt: now.Add(24 * time.Hour)},
+	}}})
+	for _, v := range e.s.accountViews(e.s.cfg.Get()) {
+		if v.ID == "m1" && v.MistralBudgetWindow != "api" {
+			t.Fatalf("Studio window = %q, want api", v.MistralBudgetWindow)
+		}
+	}
+}

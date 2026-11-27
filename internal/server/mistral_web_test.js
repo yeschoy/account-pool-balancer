@@ -181,6 +181,23 @@ budgetAccount.quota.mistral.error='';
 budgetAccount.quota.mistral.budget.resetsAt='2000-01-01T00:00:00Z';
 assert.match(context.mistralQuotaHTML(budgetAccount),/当前额度未知/);
 assert.match(context.mistralQuotaHTML({provider:'mistral'}),/套餐额度未知/);
+// The account row must show the window the backend says pays. This is the
+// production shape from the screenshot: a Vibe key, api 30 USD spent, vibe
+// 300 USD untouched, plan-key mode on.
+const vibePaying = { provider:'mistral', quotaFresh:true, mistralBudgetWindow:'vibe', quota:{mistral:{keyType:'CHAT', plan:'Pro', at:new Date().toISOString(), checkedAt:new Date().toISOString(),
+  budget:{total:30,usedPercent:100,remaining:0,currency:'USD',resetsAt:future,payg:false},
+  vibeBudget:{total:300,usedPercent:0,remaining:300,currency:'USD',resetsAt:future}} } };
+const vibeRow = context.mistralQuotaHTML(vibePaying);
+assert.match(vibeRow, /Vibe 预算（vibe_budget） 约剩余 <b>USD 300\.00<\/b> \/ USD 300\.00/, 'the paying window leads');
+assert.match(vibeRow, /对照 api_budget 约剩余 USD 0\.00/, 'the spent api window is only a counterpart');
+assert.doesNotMatch(vibeRow, /号池可用（api_budget） 约剩余 <b>USD 0\.00/, 'the spent window must not be the headline');
+// The same account with the plan key off leads with api_budget.
+const apiPaying = { ...vibePaying, mistralBudgetWindow:'api' };
+const apiRow = context.mistralQuotaHTML(apiPaying);
+assert.match(apiRow, /号池可用（api_budget） 约剩余 <b>USD 0\.00<\/b> \/ USD 30\.00/);
+assert.match(apiRow, /Vibe 预算 约剩余 USD 300\.00/);
+assert.doesNotMatch(apiRow, /号池可用（api_budget） 约剩余 <b>USD 300/);
+
 const subscribed = { provider:'mistral',quotaFresh:true,quota:{mistral:{keyType:'API',plan:'Free',subscription:{plan:'Student',payg:true,vibePayg:false},budget:{total:15,remaining:13.5,usedPercent:10,currency:'USD',resetsAt:future}}} };
 assert.match(context.mistralQuotaHTML(subscribed),/Key访问等级 Free.*组织订阅：Student/s);
 subscribed.quota.mistral.subscription.error='HTTP403 <private>';
