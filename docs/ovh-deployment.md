@@ -38,6 +38,15 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 历史推理字段对所有模型兼容（2026-11-27 20:42 UTC，26c2048）
+
+- 依据 issue `yetone/magpie#7216` 第二节：切到 Mistral 后带 `reasoning_content` 的旧会话被 `422 extra_forbidden`。真实上游复核（Vibe Key）：`reasoning_content` / `reasoning` / `thinking` 三者各自 422，位置 `body.messages[0].assistant.<字段>`，与 `call_source` 无关；**原生 thinking 块**在 `mistral-small-latest`、`zai-glm-5-3` 上均 200。
+- `26c2048`：把原本只作用于三个精确推理模型的历史折叠扩展到**所有模型**——取值后改写成原生 thinking 块，保留回答/工具/数字/顺序；空白占位让位于真思考；两个不同真思考本地 400；与已有原生块同文则不重复插入；显式 `null` 移除。effort 别名仍不外溢。修复过程中发现 `set()` 无法读回 additions 里的键，改为由折叠函数直接返回思考原文。
+- 测试：新增 `TestMistralThoughtFieldsConsumedForEveryModel`（5 模型 × 3 字段真实 HTTP，上游模拟「见到即 422」，断言上行无这些字段且含原生块）；更新 `TestMistralNativeThoughtAliasConservative` 的 `other-model` 期望（现在同样折叠）与两处作用域测试。`gofmt`/`go vet ./...`/`go test ./internal/...`/`node mistral_web_test.js` 全通过。
+- 备份 `data.tgz`（`gzip -t` 通过）存 `/home/ubuntu/backups/account-pool-balancer/20261127T204218Z-mistral-reasoning-26c2048/`；**20:42:42** 切换，**20:43:27** healthy（0 重启、非 OOM），双内网别名 `{"ok":true}`、公网 200。回退 `rollback-20261127T204218Z`（= `2da50ac`）。
+- 线上功能验证（经 Balancer）：`mistral-small-latest` + `reasoning_content` → **200**（修复前必 422）；`zai-glm-5-3` + `thinking` → 200；显式 `reasoning_content:null` → 200；同值 `reasoning`+`thinking` → 200；两个**不同**真思考 → 本地 400 并说明冲突（按契约拒绝，不静默取舍）。
+- 未做：Responses 的 `input` 历史本轮未覆盖（实测问题在 Chat messages）；未验证其他客户端来源的具体字段组合。
+
 ## 账号行改读实际扣费窗口（2026-11-27 20:20 UTC，2da50ac）
 
 - 现场（用户截图）：`kevin-11.26-03-vibe-花钱` 账号行显示「号池可用（api_budget）约剩余 USD 0.00 / 30.00 · 已用 100%」，而同一行下面又写「Vibe 预算约剩余 USD 300.00」。上一版只把**概览合计与选号**改到 `UsableBudget`，**账号行仍直接读 `quota.mistral.budget`（api_budget）并把标签写死**，于是同一把号在两处给出相反的结论。
