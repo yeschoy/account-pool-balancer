@@ -38,6 +38,19 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 计划键修复的真·端到端验证（2026-11-28 03:52–03:56 UTC，未改代码，只操作配置）
+
+用户指出此前只用「池外直连」证明，没有跑过「key 进池 → Balancer → 上游」的完整链路。用用户提供的 `mstrl_Gpw4…`（与池内 `kevin-11.26-02-vibe-花钱` 同一把，org `8d8f124d`）补齐。
+
+- **Key 事实**：`whoami` = `CHAT/INDIVIDUAL`；`api_budget` 30 USD / 已用 100%；`vibe_budget` 300 USD / 已用 0.0005%。
+- **池外四组单变量对照**（同一把 key、同一模型）：裸调 `402/2303`；**只加 `client_name` 仍 `402`**；只加 `call_source` `200`；官方完整形态 `200`。与用户截图结论完全一致。
+- **端到端（关键）**：把 `kevin-11.26-03-vibe-花钱` 设为 Mistral 池内唯一启用账号并 `SIGHUP` 重载，经线上 Balancer 发 6 次全新会话 → **6/6 `200`**，请求日志 6 条全部 `accountName=kevin-11.26-03-vibe-花钱`、`mistralPlanKey=true`。该号 api_budget 同样 100% 已用、vibe 仅用 0.00015%，即「裸调必 402」的账号在号池里稳定 200。
+- **反证**：保持同一账号唯一启用、把 `mistral.chatMetadata` 改为 `off` 并重载后，请求立刻变成 `503 upstream_account_unavailable` → `503 pool_unavailable`（唯一可用号被上游 402 后进入冷却）。两组对照闭合：开关开 = 200，开关关 = 失败。
+- **干扰项排除**：期间 `smart` 一直选中 `tang-11.24-vibekey-10`，直连核查其 `api_budget` 为 **初始 0 EUR 的 FREE 计划**（不是「用尽」），裸调本就 200，与本修复无关；先前把它当成对照样本会误判，已在记录中更正。
+- **现场恢复**：探针结束后从探针前快照恢复 `config.json`——`accounts` 329→329、`clientKeys` 20→20、`kevin-11.26-02` 优先级 1→50、134 个 Mistral 号全部重新启用、`chatMetadata` 回到 `chat-key`；逐账号 diff 为 **0**。`SIGHUP` 重载（`config reloaded`），容器全程 **0 重启**、healthy、非 OOM；双内网别名 `{"ok":true}`、公网 200；恢复后 5 次真实请求全部 200。
+- 期间另有一次无效尝试：直接改 `metadata.json` 抹掉 `keyType` 造「未知类型」，但进程只在启动/SIGHUP 时加载该文件，请求仍走旧快照，该尝试**未产生有效证据**，已从备份还原并确认 `keyType=CHAT`。未知类型分支仍由 `TestMistralPlanKeyUnknownTypeIsReadOnce` 覆盖，不冒充生产已验证。
+- 未改代码、未重新部署镜像；`/tmp` 下的探针脚本与配置副本已删除。
+
 ## 当前部署：计划键作用域改为按需读取未知 Key 类型（2026-11-27 19:42 UTC，c6c1132）
 
 - 现场问题：上一版把「额度从未读过的 Key」直接当成非 Vibe，静默不注入。刚导入、还没轮询到额度的 Vibe 号（kevin 三把 11-26 导入时就是这个状态）会继续 402，而界面上开关明明是开的。用户贴的 issue 截图强调「决定记账的只有 `metadata.call_source` 一个字段」，但**前提是先认出它是 Vibe Key**。
