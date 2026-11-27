@@ -38,6 +38,19 @@
 公网验收分别记录时间。必要验收通过立即告知用户，再补最小部署记录，
 不要让写文档或提交耗时变成用户等待上线结果的时间。只改记录不重新部署。
 
+## 当前部署：计划键作用域改为按需读取未知 Key 类型（2026-11-27 19:42 UTC，c6c1132）
+
+- 现场问题：上一版把「额度从未读过的 Key」直接当成非 Vibe，静默不注入。刚导入、还没轮询到额度的 Vibe 号（kevin 三把 11-26 导入时就是这个状态）会继续 402，而界面上开关明明是开的。用户贴的 issue 截图强调「决定记账的只有 `metadata.call_source` 一个字段」，但**前提是先认出它是 Vibe Key**。
+- `c6c1132`：`mistralKeyIsVibe` 改为「已知类型直接用，未知则按需读一次」——走既有 `quota.Poller.RefreshNow`，同账号 `flightSet` 单飞、20 秒上限，读完再决定；读不到才不注入，不假装是 Vibe。判定只认 `whoami.plan_type == "CHAT"`（实测 kevin 六把：vibe=`CHAT/INDIVIDUAL`、studio=`API/FREE`，Key 长度形状一致）。新增 `TestMistralPlanKeyUnknownTypeIsReadOnce`（CHAT/API 两种答案各验一次，且第二次请求不重复读）。提交前 `gofmt`、`go vet ./...`、`go test ./internal/...`、`node mistral_web_test.js` 全部通过。
+- 预检：旧镜像 `release-3475058-20261127T085439Z` healthy、0 重启、非 OOM、1000:1000、Healthcheck 存在；`chatMetadata` 仍为 `chat-key`。
+- **19:41:38 UTC** push 后远端 `git archive` 至 `/home/ubuntu/project/account-pool-balancer-releases/20261127T194141Z-c6c1132/`，构建 `account-pool-balancer:release-c6c1132-20261127T194141Z`（`sha256:3c3be802…`）。旧镜像保留为 `rollback-20261127T194141Z`。
+- 备份 **19:41:59**：`data.tgz` 116,217,380 字节（SHA256 前16位 `d5d3830664018b82`，`gzip -t` 通过），存 `/home/ubuntu/backups/account-pool-balancer/20261127T194141Z-mistral-plan-key-type-c6c1132/`。
+- **19:42:01** 切换，**19:42:46** Docker healthy（0 重启、非 OOM、1000:1000、Healthcheck 存在）。停机约 5 秒。
+- 验收：`ai-internal` 双别名保留，从 `new-api` 请求 `account-pool-balancer:8790/healthz` 与 `opendesign-balancer:8790/healthz` 均 `{"ok":true}`；公网 `/healthz` 200；`config.json` 的 329 账号 / 20 下游 Key / 11 条 Mistral 规则 / `chatMetadata=chat-key` 全部保留（文件哈希因轮询写入而变，属正常）。
+- 功能验证：升级后经 Balancer 20 次真实 Chat 全部 200，日志 `mistralPlanKey=true`。线上三把 kevin 的类型在上一轮部署后已被轮询写入（`CHAT`/`API` 各就位），因此「未知类型」分支在生产无法自然触发；该分支由单元测试（真实 HTTP + whoami mock）覆盖。曾尝试在生产 `metadata.json` 上抹掉一个号的 `keyType` 来触发，改完意识到进程只在启动/SIGHUP 时加载而请求实际仍走旧快照，**没有产生任何有效验证**，已立刻从备份恢复 `metadata.json` 并确认 `keyType=CHAT` 复原；运行中容器未受影响（0 重启、healthy）。
+- 镜像 `account-pool-balancer:release-c6c1132-20261127T194141Z`；回退 `account-pool-balancer:rollback-20261127T194141Z`（= `3475058`），只改 image。
+- 未变：额度展示与排序口径未动（vibe_budget 仍是「仅展示」）；402/2303 冷却规则未动；`input_tokens`/FIM 仍未启用注入。
+
 ## 当前部署：Mistral 计划键元数据注入（2026-11-27 08:54 UTC，3475058）
 
 - 背景（issue `yetone/magpie#7216`）：上游按请求体里有没有 `metadata.call_source` 决定把一笔 Chat/Responses 记到 `api_budget`（$30，第三方网关默认）还是 `vibe_budget`（订阅 300 USD）。`kevin-11.26` 三把 Vibe Key 的 `api_budget` 已 100%、`vibe_budget` 为 0% 使用，所以号池固定 402/2303。
