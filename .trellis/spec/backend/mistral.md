@@ -274,3 +274,35 @@ Wrong：默认开启、对调用方 metadata 做合并、为「功能完整」�
 
 ### Wrong vs Correct
 Wrong：按 Key 类型直接假定 vibe 有钱（Studio Key 与关闭模式下会误判）、把 `vibe_budget` 无条件加进合计、把未知读成 0。Correct：以「谁扣费」为唯一依据、另一本明确标注为对照、未知保持未知。
+
+## 16. 历史推理字段对所有模型兼容（issue #7216 第二节，2026-11-28）
+
+### Scope / Trigger
+从其他供应商切到 Mistral 的会话，assistant 历史带 `reasoning_content` / `reasoning` / `thinking`。实测（Vibe Key，真实上游）：三者各自触发 `422 extra_forbidden`，任意模型都一样；原生 thinking 块则全部 200。issue 建议「剥掉这些字段」，那会静默丢弃模型自己的思考。
+
+### Signatures
+`mistralLegacyThoughtFields(message *mistralWireObject) ([]byte, error)`：消费三个别名并**返回选中的思考原文**（不再写回字段——`set()` 对 additions 里的键无法用 `get()` 读回，这是踩过的坑）；`mistralAssistantReasoning(message, reasoning, preserveNative=true)` 统一负责改写与原生去重。
+
+### Contracts
+- 对所有模型生效；三个精确模型的 effort 别名（`reasoning:{effort}`）仍不外溢。
+- 取真思考：空白/`null` 让位于真值；两个不同的真思考 → 本地 400（`conflicts with reasoning_content`），零上游尝试、不挑一个。
+- 已有原生 thinking 块且文本完全一致 → 不重复插入；保留原回答、tool_calls、数字、顺序、缓存键。
+- 显式 `null` 的最外层 `reasoning_content` 视为无思考并移除，不能转发 `null` 给上游。
+
+### Validation & Error Matrix
+| 历史形态 | 结果 |
+|---|---|
+| 仅 reasoning_content | 改为原生 thinking 块 + 原回答 |
+| 仅 reasoning / 仅 thinking | 同上 |
+| 同一思考两种写法 | 合并成一个块 |
+| 真思考 + 空白占位 | 保留真思考原始字节 |
+| 两个不同真思考 | 本地 400，不发上游 |
+| 显式 null | 移除该字段 |
+| 原生块 + 同文别名 | 只保留原生块 |
+| Responses `input` | 不变（本轮只覆盖 Chat messages） |
+
+### Tests Required
+`TestMistralThoughtFieldsConsumedForEveryModel`（5 模型 × 3 字段的真实 HTTP，上游模拟「见到即 422」，断言上行不含这些字段且含原生块）；`TestMistralNativeThoughtAliasConservative`（同/异/空白/签名/未知元数据/闭包标记）；`TestMistralReasoningWhitespace*`；模型矩阵与参数顺序回归。
+
+### Wrong vs Correct
+Wrong：直接删字段（丢思考）、只在三个精确模型上改（其余模型继续 422）、把两个不同思考强行合并。Correct：换成上游接受的原生表示、作用域覆盖所有模型、冲突就本地拒绝并说明。
